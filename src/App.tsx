@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ClerkProvider, SignedIn, SignedOut, RedirectToSignIn } from '@clerk/clerk-react';
 import { dark } from '@clerk/themes';
+import { ClerkUserBridge, NoAuthProvider } from './lib/auth';
 
 import LandingPage from './pages/LandingPage';
 import OnboardingPage from './pages/OnboardingPage';
@@ -63,7 +64,7 @@ const protectedRoutes = (
 
 export default function App() {
   if (!CLERK_KEY) {
-    return <BrowserRouter>{appRoutes}</BrowserRouter>;
+    return <NoAuthProvider><BrowserRouter>{appRoutes}</BrowserRouter></NoAuthProvider>;
   }
 
   return (
@@ -94,7 +95,9 @@ export default function App() {
         },
       }}
     >
-      <BrowserRouter>{protectedRoutes}</BrowserRouter>
+      <ClerkUserBridge>
+        <BrowserRouter>{protectedRoutes}</BrowserRouter>
+      </ClerkUserBridge>
     </ClerkProvider>
   );
 }

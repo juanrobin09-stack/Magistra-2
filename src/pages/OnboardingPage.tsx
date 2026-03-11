@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useUser } from '@clerk/clerk-react';
+import { useCurrentUser } from '@/lib/auth';
 import { useNavigate } from 'react-router-dom';
 import {
   GraduationCap, ChevronRight, School, BookOpen, Users, Sparkles, Check
@@ -30,7 +30,7 @@ const CYCLES = [
 const STEPS = ['Bienvenue', 'Établissement', 'Niveaux', 'Matières', 'C\'est prêt !'];
 
 export default function OnboardingPage() {
-  const { user } = useUser();
+  const { user } = useCurrentUser();
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [profile, setProfile] = useState<TeacherProfile>({

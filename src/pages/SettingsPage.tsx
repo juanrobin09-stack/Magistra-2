@@ -1,11 +1,11 @@
-import { useUser } from '@clerk/clerk-react';
+import { useCurrentUser } from '@/lib/auth';
 import { useNavigate } from 'react-router-dom';
 import { Settings, User, RefreshCw } from 'lucide-react';
 import { NIVEAUX, getMatieresForNiveau } from '@/types';
 import { getTeacherProfile, resetOnboarding } from '@/hooks/useTeacherProfile';
 
 export default function SettingsPage() {
-  const { user } = useUser();
+  const { user } = useCurrentUser();
   const navigate = useNavigate();
 
   return (

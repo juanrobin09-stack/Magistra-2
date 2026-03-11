@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { useUser } from '@clerk/clerk-react';
+import { useCurrentUser } from '@/lib/auth';
 import { useSearchParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -22,7 +22,7 @@ const NEEDS_SUJET = ['cours', 'exercices', 'evaluation', 'sequence', 'fiche_prep
 const NEEDS_CONTEXT = ['cours', 'exercices', 'evaluation', 'sequence', 'fiche_prep', 'progression', 'differenciation', 'appreciations', 'cahier_journal', 'corrige', 'lettre_parents'];
 
 export default function GeneratePage() {
-  const { user } = useUser();
+  const { user } = useCurrentUser();
   const [searchParams] = useSearchParams();
   const profile = getTeacherProfile();
 

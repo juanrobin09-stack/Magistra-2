@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useUser } from '@clerk/clerk-react';
+import { useCurrentUser } from '@/lib/auth';
 import ReactMarkdown from 'react-markdown';
 import { Heart, Download, Copy, Check, Loader2 } from 'lucide-react';
 import { apiGetHistory, apiToggleFavorite } from '@/lib/api';
@@ -8,7 +8,7 @@ import { getNiveauLabel, getMatiereEmoji, TYPE_CONTENU } from '@/types';
 import type { GeneratedContent } from '@/types';
 
 export default function FavoritesPage() {
-  const { user } = useUser();
+  const { user } = useCurrentUser();
   const [contents, setContents] = useState<GeneratedContent[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<GeneratedContent | null>(null);

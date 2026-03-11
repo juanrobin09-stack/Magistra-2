@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useUser } from '@clerk/clerk-react';
+import { useCurrentUser } from '@/lib/auth';
 import { Link } from 'react-router-dom';
 import {
   Sparkles, BookOpen, FileText, ClipboardCheck, Layers, FolderOpen,
@@ -58,7 +58,7 @@ function getTimeAgo(date: Date): string {
 }
 
 export default function DashboardPage() {
-  const { user } = useUser();
+  const { user } = useCurrentUser();
   const profile = getTeacherProfile();
   const [history, setHistory] = useState<GeneratedContent[]>([]);
   const [loading, setLoading] = useState(true);
