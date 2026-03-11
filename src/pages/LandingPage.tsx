@@ -4,6 +4,86 @@ import {
   Sparkles, GraduationCap, ArrowRight
 } from 'lucide-react';
 
+const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+
+function AuthNav() {
+  if (!CLERK_KEY) {
+    return (
+      <Link to="/onboarding" className="btn-primary text-sm py-2 px-5">
+        Commencer <ArrowRight size={14} />
+      </Link>
+    );
+  }
+  return (
+    <>
+      <SignedOut>
+        <SignInButton mode="modal">
+          <button className="btn-primary text-sm py-2 px-5">
+            Commencer <ArrowRight size={14} />
+          </button>
+        </SignInButton>
+      </SignedOut>
+      <SignedIn>
+        <Link to="/app" className="btn-primary text-sm py-2 px-5">
+          Mon espace <ArrowRight size={14} />
+        </Link>
+      </SignedIn>
+    </>
+  );
+}
+
+function AuthHero() {
+  if (!CLERK_KEY) {
+    return (
+      <Link to="/onboarding" className="btn-primary text-base py-3 px-8">
+        Commencer gratuitement <ArrowRight size={16} />
+      </Link>
+    );
+  }
+  return (
+    <>
+      <SignedOut>
+        <SignInButton mode="modal">
+          <button className="btn-primary text-base py-3 px-8">
+            Commencer gratuitement <ArrowRight size={16} />
+          </button>
+        </SignInButton>
+      </SignedOut>
+      <SignedIn>
+        <Link to="/app" className="btn-primary text-base py-3 px-8">
+          Accéder à Magistra <ArrowRight size={16} />
+        </Link>
+      </SignedIn>
+    </>
+  );
+}
+
+function AuthCTA() {
+  if (!CLERK_KEY) {
+    return (
+      <Link to="/onboarding" className="btn-primary text-base py-3 px-8">
+        Créer mon compte <ArrowRight size={16} />
+      </Link>
+    );
+  }
+  return (
+    <>
+      <SignedOut>
+        <SignInButton mode="modal">
+          <button className="btn-primary text-base py-3 px-8">
+            Créer mon compte <ArrowRight size={16} />
+          </button>
+        </SignInButton>
+      </SignedOut>
+      <SignedIn>
+        <Link to="/app" className="btn-primary text-base py-3 px-8">
+          Commencer maintenant <ArrowRight size={16} />
+        </Link>
+      </SignedIn>
+    </>
+  );
+}
+
 const FEATURES_CREATION = [
   { icon: '✦', title: 'Cours complets', desc: 'Entrez un sujet, un niveau, une durée. Magistra génère un cours structuré avec objectifs, déroulé minuté, trace écrite — prêt à imprimer.' },
   { icon: '◈', title: 'Exercices différenciés', desc: 'Séries progressives du facile au difficile, avec corrigé, barème, coup de pouce pour les élèves en difficulté et défi pour les avancés.' },
@@ -54,18 +134,7 @@ export default function LandingPage() {
             </span>
           </div>
           <div className="flex items-center gap-3">
-            <SignedOut>
-              <SignInButton mode="modal">
-                <button className="btn-primary text-sm py-2 px-5">
-                  Commencer <ArrowRight size={14} />
-                </button>
-              </SignInButton>
-            </SignedOut>
-            <SignedIn>
-              <Link to="/app" className="btn-primary text-sm py-2 px-5">
-                Mon espace <ArrowRight size={14} />
-              </Link>
-            </SignedIn>
+            <AuthNav />
           </div>
         </div>
       </nav>
@@ -93,18 +162,7 @@ export default function LandingPage() {
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-            <SignedOut>
-              <SignInButton mode="modal">
-                <button className="btn-primary text-base py-3 px-8">
-                  Commencer gratuitement <ArrowRight size={16} />
-                </button>
-              </SignInButton>
-            </SignedOut>
-            <SignedIn>
-              <Link to="/app" className="btn-primary text-base py-3 px-8">
-                Accéder à Magistra <ArrowRight size={16} />
-              </Link>
-            </SignedIn>
+            <AuthHero />
             <a href="https://futurai.space" target="_blank" className="btn-secondary text-base py-3 px-6">
               Découvrir FutureAI
             </a>
@@ -265,18 +323,7 @@ export default function LandingPage() {
               <p className="text-sm text-mg-300 mb-6 max-w-md mx-auto">
                 Rejoignez les enseignants qui repensent leur façon de préparer. Gratuit, sans engagement.
               </p>
-              <SignedOut>
-                <SignInButton mode="modal">
-                  <button className="btn-primary text-base py-3 px-8">
-                    Créer mon compte <ArrowRight size={16} />
-                  </button>
-                </SignInButton>
-              </SignedOut>
-              <SignedIn>
-                <Link to="/app" className="btn-primary text-base py-3 px-8">
-                  Commencer maintenant <ArrowRight size={16} />
-                </Link>
-              </SignedIn>
+              <AuthCTA />
             </div>
           </div>
         </div>
