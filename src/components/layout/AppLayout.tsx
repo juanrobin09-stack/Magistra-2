@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import { SignedIn, UserButton } from '@clerk/clerk-react';
+
+const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 import {
   Sparkles, History, Settings, LayoutDashboard,
   Menu, X, Heart, GraduationCap
@@ -84,16 +86,18 @@ export default function AppLayout() {
         {/* Bottom */}
         <div className="px-4 py-4 border-t border-white/5">
           <div className="flex items-center gap-3 px-2">
-            <SignedIn>
-              <UserButton
-                appearance={{
-                  elements: {
-                    avatarBox: 'w-8 h-8',
-                    userButtonPopoverCard: 'bg-mg-800 border-white/10',
-                  },
-                }}
-              />
-            </SignedIn>
+            {CLERK_KEY && (
+              <SignedIn>
+                <UserButton
+                  appearance={{
+                    elements: {
+                      avatarBox: 'w-8 h-8',
+                      userButtonPopoverCard: 'bg-mg-800 border-white/10',
+                    },
+                  }}
+                />
+              </SignedIn>
+            )}
             <div className="flex-1 min-w-0">
               <p className="text-xs text-mg-300 truncate">Un projet FutureAI</p>
             </div>
@@ -111,9 +115,11 @@ export default function AppLayout() {
           <span className="text-sm font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
             Magistra<span className="text-accent">.</span>
           </span>
-          <SignedIn>
-            <UserButton appearance={{ elements: { avatarBox: 'w-7 h-7' } }} />
-          </SignedIn>
+          {CLERK_KEY && (
+            <SignedIn>
+              <UserButton appearance={{ elements: { avatarBox: 'w-7 h-7' } }} />
+            </SignedIn>
+          )}
         </header>
 
         <div className="flex-1 overflow-y-auto">
