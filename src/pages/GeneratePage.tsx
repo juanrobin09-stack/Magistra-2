@@ -45,6 +45,10 @@ export default function GeneratePage() {
   const [nombreEleves, setNombreEleves] = useState(25);
   const [typeLettre, setTypeLettre] = useState('comportement');
   const [texteEleve, setTexteEleve] = useState('');
+  // Differenciation-specific
+  const [diffProfiles, setDiffProfiles] = useState<string[]>(['dys', 'standard', 'hpi']);
+  const toggleDiffProfile = (p: string) =>
+    setDiffProfiles(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]);
 
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -58,8 +62,8 @@ export default function GeneratePage() {
     if (type === 'lettre_parents') return true;
     if (type === 'appreciations') return true;
     if (type === 'cahier_journal') return true;
-    if (type === 'progression') return true; // subject is optional for annual progression
-    if (type === 'differenciation') return sujet.trim().length > 0; // needs a subject to differentiate
+    if (type === 'progression') return true;
+    if (type === 'differenciation') return sujet.trim().length > 0 && diffProfiles.length > 0;
     return sujet.trim().length > 0;
   };
 
@@ -75,7 +79,9 @@ export default function GeneratePage() {
       duree: duree || undefined,
       objectifs: objectifs || undefined,
       difficulte,
-      consignesSupplementaires: consignes || undefined,
+      consignesSupplementaires: type === 'differenciation'
+        ? `Profils à générer : ${diffProfiles.join(', ')}${consignes ? '. ' + consignes : ''}`
+        : consignes || undefined,
       trimestre: type === 'appreciations' ? trimestre : undefined,
       profilsEleves: type === 'appreciations' ? profilEleve : undefined,
       nombreEleves: type === 'appreciations' ? nombreEleves : undefined,
@@ -263,6 +269,39 @@ export default function GeneratePage() {
               </div>
             </div>
             <p className="text-xs text-mg-400">Magistra génèrera {nombreEleves} appréciations variées pour ce profil. Vous choisirez celle qui correspond le mieux à chaque élève.</p>
+          </div>
+        )}
+
+        {/* === DIFFERENCIATION specific fields === */}
+        {type === 'differenciation' && (
+          <div className="space-y-4 p-4 rounded-xl bg-mg-800/50 border border-white/5">
+            <div>
+              <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Profils à générer</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {[
+                  { v: 'dys', l: '♿ Accompagnement renforcé', d: 'DYS, allophones, ULIS' },
+                  { v: 'standard', l: '📘 Standard', d: 'Niveau attendu de la classe' },
+                  { v: 'hpi', l: '🚀 Approfondissement', d: 'HPI / élèves avancés' },
+                ].map(p => (
+                  <button key={p.v} onClick={() => toggleDiffProfile(p.v)}
+                    className={`p-3 rounded-lg text-left border transition-all ${diffProfiles.includes(p.v) ? 'bg-accent/10 border-accent/20' : 'bg-mg-700 border-white/5 hover:border-white/10'}`}>
+                    <span className={`text-sm font-medium block ${diffProfiles.includes(p.v) ? 'text-white' : 'text-mg-200'}`}>{p.l}</span>
+                    <span className="text-[10px] text-mg-400">{p.d}</span>
+                  </button>
+                ))}
+              </div>
+              {diffProfiles.length === 0 && (
+                <p className="text-xs text-warning mt-2">Sélectionnez au moins un profil.</p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">
+                Consignes supplémentaires <span className="text-mg-400 normal-case">(optionnel)</span>
+              </label>
+              <textarea value={consignes} onChange={e => setConsignes(e.target.value)} rows={2}
+                placeholder="Ex : Les élèves DYS ont accès à la calculatrice, limiter les consignes à 2 lignes..."
+                className="input-field resize-none" />
+            </div>
           </div>
         )}
 

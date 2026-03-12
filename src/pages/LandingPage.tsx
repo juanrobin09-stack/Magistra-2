@@ -36,7 +36,7 @@ function AuthHero() {
   if (!CLERK_KEY) {
     return (
       <Link to="/onboarding" className="btn-primary text-base py-3 px-8">
-        Commencer gratuitement <ArrowRight size={16} />
+        Commencer <ArrowRight size={16} />
       </Link>
     );
   }
@@ -45,7 +45,7 @@ function AuthHero() {
       <SignedOut>
         <SignInButton mode="modal">
           <button className="btn-primary text-base py-3 px-8">
-            Commencer gratuitement <ArrowRight size={16} />
+            Commencer <ArrowRight size={16} />
           </button>
         </SignInButton>
       </SignedOut>
@@ -62,7 +62,7 @@ function AuthCTA() {
   if (!CLERK_KEY) {
     return (
       <Link to="/onboarding" className="btn-primary text-base py-3 px-8">
-        Créer mon compte <ArrowRight size={16} />
+        Accéder à Magistra <ArrowRight size={16} />
       </Link>
     );
   }
@@ -71,7 +71,7 @@ function AuthCTA() {
       <SignedOut>
         <SignInButton mode="modal">
           <button className="btn-primary text-base py-3 px-8">
-            Créer mon compte <ArrowRight size={16} />
+            Accéder à Magistra <ArrowRight size={16} />
           </button>
         </SignInButton>
       </SignedOut>
@@ -108,15 +108,15 @@ const FEATURES_PLUS = [
 ];
 
 const STEPS = [
-  { num: '1', title: 'Inscrivez-vous en 30 secondes', desc: 'Créez votre compte et personnalisez votre profil : établissement, niveaux, matière. Magistra s\'adapte à vous.' },
+  { num: '1', title: 'Créez votre profil', desc: 'Personnalisez votre espace : établissement, niveaux, matière. Magistra s\'adapte à votre contexte.' },
   { num: '2', title: 'Choisissez votre outil', desc: '11 outils à disposition : cours, exercices, évaluations, appréciations, différenciation, courriers... Tout ce dont un enseignant a besoin.' },
   { num: '3', title: 'Magistra génère en secondes', desc: 'Contenu structuré, conforme au programme officiel, prêt à l\'emploi. Retouchez si besoin, exportez en PDF, enseignez.' },
 ];
 
 const STATS = [
   { value: '11', label: 'Outils pédagogiques intégrés : cours, exercices, évaluations, séquences, fiches de prep, progressions, appréciations, différenciation, courriers, cahier journal, corrigés.' },
-  { value: '8h+', label: 'C\'est le temps moyen passé chaque semaine par un enseignant à la seule préparation des cours, hors classe. Magistra réduit ça à 2-3h.' },
-  { value: '0€', label: 'Pour démarrer. L\'offre gratuite fonctionne sans limite de fonctionnalités. Aucune carte bancaire requise.' },
+  { value: '8h+', label: 'C\'est le temps moyen passé chaque semaine par un enseignant à la seule préparation des cours, hors classe. Magistra réduit ça à quelques minutes.' },
+  { value: '100%', label: 'Open-source. Code public, auditable, hébergeable soi-même. Aucune donnée élève collectée. Construit par des enseignants, pour des enseignants.' },
 ];
 
 export default function LandingPage() {
@@ -143,21 +143,21 @@ export default function LandingPage() {
       <section className="relative pt-32 pb-20 sm:pt-40 sm:pb-28 px-6">
         {/* Glow */}
         <div className="absolute top-20 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-accent/5 rounded-full blur-[120px] pointer-events-none" />
-        
+
         <div className="max-w-3xl mx-auto text-center relative z-10">
           <div className="badge badge-accent mb-6 mx-auto">
             <Sparkles size={12} /> Un projet FutureAI
           </div>
-          
+
           <h1 className="text-4xl sm:text-5xl lg:text-6xl text-white leading-[1.15] mb-6" style={{ fontFamily: 'var(--font-display)' }}>
             L'IA qui prépare{' '}
             <br className="hidden sm:block" />
             vos cours à votre{' '}
             <em className="text-accent not-italic">place</em>
           </h1>
-          
+
           <p className="text-mg-300 text-base sm:text-lg max-w-xl mx-auto mb-8 leading-relaxed">
-            Magistra est l'assistant IA conçu pour les enseignants. Générez des cours, des exercices
+            Magistra est l'assistant IA open-source conçu pour les enseignants. Générez des cours, des exercices
             et des évaluations en quelques secondes — adaptés à vos élèves, à votre programme, à votre style.
           </p>
 
@@ -321,7 +321,7 @@ export default function LandingPage() {
                 Prêt à gagner du <em className="text-accent not-italic">temps</em> ?
               </h2>
               <p className="text-sm text-mg-300 mb-6 max-w-md mx-auto">
-                Rejoignez les enseignants qui repensent leur façon de préparer. Gratuit, sans engagement.
+                Un outil open-source construit par des enseignants, pour des enseignants.
               </p>
               <AuthCTA />
             </div>
