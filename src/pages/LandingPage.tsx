@@ -102,7 +102,7 @@ const FEATURES_OUTILS = [
 ];
 
 const FEATURES_PLUS = [
-  { icon: '🏫', title: 'TPS à Doctorat', desc: 'De la Toute Petite Section de maternelle au Master 2. 30 niveaux, 40+ matières, programmes 2025-2026 intégrés.' },
+  { icon: '🏫', title: 'TPS à Doctorat', desc: 'De la Toute Petite Section de maternelle au Master 2. 30 niveaux, 40+ matières, programmes 2026 intégrés.' },
   { icon: '◉', title: 'Open-source & RGPD', desc: 'Vos données n\'appartiennent qu\'à vous. Code public, auditable. Aucune donnée élève collectée. Hébergement EU possible.' },
   { icon: '✧', title: 'Disponible partout', desc: 'France, Europe, pays francophones. Export PDF et Markdown. L\'éducation n\'a pas de frontières.' },
 ];
