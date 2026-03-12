@@ -16,62 +16,112 @@ Tu es bienveillant, professionnel et rigoureux.`;
   const typeInstructions: Partial<Record<TypeContenu, string>> = {
     cours: `${base}
 
-INSTRUCTIONS SPÉCIFIQUES POUR LA GÉNÉRATION DE COURS :
-- Commence par un titre clair et le niveau/matière
-- Inclus les objectifs pédagogiques (ce que l'élève saura faire à la fin)
-- Structure le cours en parties et sous-parties logiques
-- Intègre des définitions encadrées, des exemples concrets et des illustrations textuelles
-- Ajoute des "Points clés à retenir" en fin de chaque partie
-- Termine par un résumé et une ouverture
-- Indique la durée estimée
-- Si c'est pour la maternelle ou le primaire, utilise un langage simple et ludique`,
+GÉNÉRATION DE COURS — Structure obligatoire :
+1. En-tête : Titre, niveau, matière, durée, place dans la progression
+2. Objectifs : Ce que l'élève saura faire (verbes d'action)
+3. Compétences visées : Référence au programme officiel
+4. Prérequis
+5. Déroulé structuré : accroche (5-10 min), découverte (20-25 min), pratique (15-20 min), synthèse (5-10 min)
+6. Encadrés : Définitions, "À retenir", "Attention piège"
+7. Trace écrite
+8. Prolongement vers la séance suivante`,
 
     exercices: `${base}
 
-INSTRUCTIONS SPÉCIFIQUES POUR LA GÉNÉRATION D'EXERCICES :
-- Propose entre 5 et 10 exercices progressifs (du plus simple au plus complexe)
-- Pour chaque exercice : numéro, consigne claire, espace pour la réponse
-- Inclus des exercices de types variés (QCM, vrai/faux, rédaction, calcul, analyse, etc.)
-- Ajoute un encadré "Coup de pouce" pour les élèves en difficulté
-- Propose un "Exercice défi" pour les élèves avancés
-- Fournis le corrigé complet à la fin, séparé clairement
-- Adapte la difficulté au niveau scolaire`,
+GÉNÉRATION D'EXERCICES — Structure obligatoire :
+1. En-tête : Matière, niveau, thème, compétences travaillées
+2. 8 à 12 exercices progressifs (facile → expert) de types variés (QCM, vrai/faux, rédaction, calcul, analyse)
+3. 💡 "Coup de pouce" après les exercices difficiles
+4. 🚀 "Défi" pour les élèves avancés
+5. ♿ Adaptations possibles
+6. Corrigé complet séparé avec explication de la démarche
+7. Barème indicatif`,
 
     evaluation: `${base}
 
-INSTRUCTIONS SPÉCIFIQUES POUR LA GÉNÉRATION D'ÉVALUATIONS :
-- Commence par un en-tête formel (nom de l'établissement : à compléter, date, durée, matière, niveau)
-- Indique clairement le barème (/20 ou autre)
-- Structure en parties avec points attribués
-- Mélange les types de questions (restitution, compréhension, analyse, synthèse)
-- Inclus les compétences évaluées pour chaque partie
-- Fournis le corrigé détaillé avec le barème point par point
-- Ajoute des critères de notation pour les questions ouvertes`,
+GÉNÉRATION D'ÉVALUATION — Structure obligatoire :
+1. En-tête formel (établissement, nom, classe, date, durée, note /20)
+2. Consignes générales (matériel autorisé, barème)
+3. 3-4 parties : Connaissances → Compréhension → Application → Synthèse
+4. Compétences évaluées mentionnées pour chaque partie
+5. Corrigé détaillé avec barème point par point et critères pour questions ouvertes`,
 
     sequence: `${base}
 
-INSTRUCTIONS SPÉCIFIQUES POUR LA GÉNÉRATION DE SÉQUENCES PÉDAGOGIQUES :
-- Définis le fil conducteur et la problématique de la séquence
-- Liste les objectifs de la séquence (savoirs, savoir-faire, compétences)
-- Découpe en séances (3 à 6 séances selon le sujet)
-- Pour chaque séance : titre, durée, objectif, déroulé détaillé, supports, activités élèves
-- Inclus les modalités pédagogiques (travail individuel, en groupe, magistral)
-- Prévois une évaluation diagnostique, formative et sommative
-- Intègre la différenciation pédagogique
-- Propose des prolongements et des liens interdisciplinaires`,
+GÉNÉRATION DE SÉQUENCE PÉDAGOGIQUE — Structure obligatoire :
+1. Fiche de séquence : titre, problématique, objectifs, évaluation diagnostique
+2. Tableau synoptique des séances
+3. Détail de 4-6 séances : objectif, déroulé minuté, supports, différenciation, évaluation formative
+4. Séance d'évaluation sommative
+5. Prolongements interdisciplinaires`,
 
     fiche_prep: `${base}
 
-INSTRUCTIONS SPÉCIFIQUES POUR LA FICHE DE PRÉPARATION :
-- En-tête complet : niveau, matière, titre, durée, place dans la séquence
-- Objectif précis avec verbe d'action
-- Compétences du programme officiel
-- Matériel nécessaire
-- Déroulement en tableau minuté (phase, durée, activité enseignant, activité élève, modalité)
-- Différenciation pour élèves en difficulté ET avancés
-- Critères d'évaluation observables
-- Trace écrite prévue
-- Pour la maternelle : insister sur ateliers, manipulation, regroupements`,
+GÉNÉRATION DE FICHE DE PRÉPARATION — Structure obligatoire :
+1. En-tête : niveau, matière, titre, durée, place dans la séquence
+2. Objectif précis avec verbe d'action
+3. Compétences du programme officiel
+4. Matériel nécessaire
+5. Déroulement en tableau minuté : phase / durée / activité enseignant / activité élève / modalité / matériel
+6. Différenciation pour élèves en difficulté ET avancés
+7. Critères d'évaluation observables
+8. Trace écrite
+9. Bilan / Remarques post-séance`,
+
+    appreciations: `${base}
+
+GÉNÉRATION D'APPRÉCIATIONS DE BULLETINS SCOLAIRES :
+- Génère le nombre d'appréciations demandé pour le profil indiqué
+- Chaque appréciation : 2-3 phrases, commence par un point positif, mentionne les compétences, donne un conseil concret
+- Ton professionnel et encourageant, évite les formules bateaux
+- Numérote chaque appréciation
+Profils : excellent → félicitations + approfondissement | bon → valoriser + piste d'amélioration | moyen → encourager + pistes concrètes | fragile → bienveillant + progrès minimes | décrocheur → alerter sans décourager`,
+
+    progression: `${base}
+
+GÉNÉRATION DE PROGRESSION ANNUELLE — Structure obligatoire :
+1. En-tête : matière, niveau, heures annuelles estimées
+2. Tableau en 5-6 périodes (entre chaque vacances) : période / semaines / thème / notions clés / compétences / évaluation prévue
+3. Pour chaque période : 4-6 séquences/chapitres détaillés
+4. Repères de progressivité
+5. Liens interdisciplinaires et projets envisageables
+6. Conforme au programme officiel du Bulletin Officiel`,
+
+    differenciation: `${base}
+
+GÉNÉRATION DE CONTENU DIFFÉRENCIÉ :
+À partir du sujet fourni, produis les versions demandées parmi :
+- Version "dys" — Accompagnement renforcé (DYS, allophones, ULIS) : consignes simplifiées et découpées, aides visuelles, vocabulaire adapté, QCM/texte à trous, quantité réduite, mêmes compétences
+- Version "standard" : contenu de base donné à la classe entière
+- Version "hpi" — Approfondissement (HPI, élèves avancés) : transfert, analyse, questions ouvertes, liens interdisciplinaires, défi/problème complexe
+Chaque version travaille les MÊMES compétences, seul le chemin change.`,
+
+    lettre_parents: `${base}
+
+GÉNÉRATION DE COURRIER AUX PARENTS / RESPONSABLES LÉGAUX — Structure obligatoire :
+1. En-tête : établissement, ville, date
+2. Objet clair et factuel
+3. Corps : formule d'appel, exposé factuel sans jugement, propositions concrètes, ouverture au dialogue, formule de politesse
+4. Signature : nom de l'enseignant, fonction
+Ton : TOUJOURS professionnel, factuel et bienveillant. Jamais accusateur.`,
+
+    cahier_journal: `${base}
+
+GÉNÉRATION DE CAHIER JOURNAL — Structure obligatoire :
+Tableau horaire complet : Horaire / Domaine-Matière / Intitulé de la séance / Objectif / Déroulement résumé / Matériel / Modalité
+- Respecter les horaires officiels selon le niveau (maternelle : accueil/regroupement/ateliers ; élémentaire : ~2h30 français, ~1h maths, récréations 15 min matin + 15 min AM)
+- Inclure pour chaque créneau : objectif précis, déroulement en 1-2 phrases, matériel, modalité`,
+
+    corrige: `${base}
+
+CORRECTION ET ANNOTATION D'UN TRAVAIL D'ÉLÈVE — Structure obligatoire :
+1. Analyse globale (2-3 phrases) : impression générale, niveau de maîtrise
+2. Points positifs (toujours commencer par ça)
+3. Erreurs identifiées avec catégories : contenu, méthode, langue, présentation
+4. Pour chaque erreur : citation du passage, explication, correction proposée, règle à revoir
+5. Conseils de progression : 3 axes prioritaires
+6. Note indicative sur 20 avec justification du barème
+7. Appréciation finale (2 phrases, bienveillant + exigeant)`,
   };
 
   return typeInstructions[type] ?? base;
@@ -94,6 +144,29 @@ function buildUserPrompt(request: GenerationRequest): string {
   if (request.difficulte) {
     const diffLabels = { facile: 'Facile', moyen: 'Moyen', difficile: 'Difficile', differencie: 'Différencié (plusieurs niveaux)' };
     prompt += `\n**Niveau de difficulté :** ${diffLabels[request.difficulte]}`;
+  }
+  if (request.trimestre) {
+    prompt += `\n**Trimestre :** ${request.trimestre}`;
+  }
+  if (request.profilsEleves) {
+    prompt += `\n**Profil des élèves :** ${request.profilsEleves}`;
+  }
+  if (request.nombreEleves) {
+    prompt += `\n**Nombre d'appréciations à générer :** ${request.nombreEleves}`;
+  }
+  if (request.typeLettre) {
+    const lettreLabels: Record<string, string> = {
+      comportement: 'Signalement de comportement',
+      absence: 'Absences répétées',
+      felicitations: 'Félicitations',
+      reunion: 'Convocation réunion',
+      incident: "Signalement d'incident",
+      orientation: 'Information orientation',
+    };
+    prompt += `\n**Type de courrier :** ${lettreLabels[request.typeLettre] ?? request.typeLettre}`;
+  }
+  if (request.texteEleve) {
+    prompt += `\n\n**Travail de l'élève à corriger :**\n\`\`\`\n${request.texteEleve}\n\`\`\``;
   }
   if (request.consignesSupplementaires) {
     prompt += `\n**Consignes supplémentaires :** ${request.consignesSupplementaires}`;
