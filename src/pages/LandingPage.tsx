@@ -321,7 +321,7 @@ export default function LandingPage() {
                 Prêt à gagner du <em className="text-accent not-italic">temps</em> ?
               </h2>
               <p className="text-sm text-mg-300 mb-6 max-w-md mx-auto">
-                Un outil open-source construit par des enseignants, pour des enseignants.
+                Un outil open-source conçu pour simplifier le quotidien des enseignants.
               </p>
               <AuthCTA />
             </div>
