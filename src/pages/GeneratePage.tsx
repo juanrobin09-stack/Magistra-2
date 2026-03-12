@@ -6,6 +6,7 @@ import {
   Sparkles, Download, Copy, Check, FileText,
   Loader2, ChevronDown, Clock, AlertCircle
 } from 'lucide-react';
+import SelectField from '@/components/ui/SelectField';
 import {
   NIVEAUX, TYPE_CONTENU, SUJETS_SUGGESTIONS, getMatieresForNiveau,
   type GenerationRequest, type TypeContenu, type NiveauScolaire, type Matiere,
@@ -192,24 +193,31 @@ export default function GeneratePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Niveau</label>
-              <select value={niveau} onChange={e => {
-                const nv = e.target.value as NiveauScolaire;
-                setNiveau(nv);
-                const available = getMatieresForNiveau(nv);
-                if (!available.find(m => m.value === matiere)) setMatiere(available[0]?.value ?? 'autre');
-              }} className="select-field">
-                {Object.entries(NIVEAUX).map(([key, group]) => (
-                  <optgroup key={key} label={group.label}>
-                    {group.niveaux.map(n => <option key={n.value} value={n.value}>{n.label}</option>)}
-                  </optgroup>
-                ))}
-              </select>
+              <SelectField
+                value={niveau}
+                onChange={val => {
+                  const nv = val as NiveauScolaire;
+                  setNiveau(nv);
+                  const available = getMatieresForNiveau(nv);
+                  if (!available.find(m => m.value === matiere)) setMatiere(available[0]?.value ?? 'autre');
+                }}
+                groups={Object.entries(NIVEAUX).map(([, group]) => ({
+                  label: group.label,
+                  options: group.niveaux.map(n => ({ value: n.value, label: n.label })),
+                }))}
+              />
             </div>
             <div>
               <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Matière</label>
-              <select value={matiere} onChange={e => setMatiere(e.target.value as Matiere)} className="select-field">
-                {getMatieresForNiveau(niveau).map(m => <option key={m.value} value={m.value}>{m.emoji} {m.label}</option>)}
-              </select>
+              <SelectField
+                value={matiere}
+                onChange={val => setMatiere(val as Matiere)}
+                options={getMatieresForNiveau(niveau).map(m => ({
+                  value: m.value,
+                  label: m.label,
+                  prefix: m.emoji,
+                }))}
+              />
             </div>
           </div>
         )}
@@ -254,13 +262,17 @@ export default function GeneratePage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Profil élève</label>
-                <select value={profilEleve} onChange={e => setProfilEleve(e.target.value)} className="select-field">
-                  <option value="excellent">⭐ Excellent</option>
-                  <option value="bon">🟢 Bon élève</option>
-                  <option value="moyen">🟡 Moyen</option>
-                  <option value="fragile">🟠 Fragile / En difficulté</option>
-                  <option value="decrocheur">🔴 Décrocheur</option>
-                </select>
+                <SelectField
+                  value={profilEleve}
+                  onChange={setProfilEleve}
+                  options={[
+                    { value: 'excellent', label: 'Excellent', prefix: '⭐' },
+                    { value: 'bon', label: 'Bon élève', prefix: '🟢' },
+                    { value: 'moyen', label: 'Moyen', prefix: '🟡' },
+                    { value: 'fragile', label: 'Fragile / En difficulté', prefix: '🟠' },
+                    { value: 'decrocheur', label: 'Décrocheur', prefix: '🔴' },
+                  ]}
+                />
               </div>
               <div>
                 <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Nombre d'appréciations</label>
