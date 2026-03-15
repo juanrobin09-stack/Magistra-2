@@ -1,0 +1,45 @@
+{
+  "appId": "com.magistra.desktop",
+  "productName": "Magistra",
+  "copyright": "Copyright © 2026 FutureAI",
+  "asar": true,
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist-electron/**",
+    "!**/*.map"
+  ],
+  "extraResources": [
+    {
+      "from": "dist",
+      "to": "dist",
+      "filter": ["**/*"]
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      {
+        "target": "zip",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "public/icon.png",
+    "artifactName": "Magistra-Setup-${version}.${ext}",
+    "sign": null,
+    "signingHashAlgorithms": null
+  },
+  "nsis": {
+    "oneClick": true,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": false,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Magistra"
+  },
+  "publish": null
+}

@@ -70,6 +70,8 @@ export default function App() {
   return (
     <ClerkProvider
       publishableKey={CLERK_KEY}
+      // Allow Electron's local server to use Clerk auth
+      allowedRedirectOrigins={['http://localhost:3721', 'http://127.0.0.1:3721']}
       appearance={{
         baseTheme: dark,
         variables: {

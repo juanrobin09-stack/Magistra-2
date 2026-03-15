@@ -1,13 +1,16 @@
 {
   "name": "magistra-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
+    "dev:electron": "cross-env BUILD_TARGET=electron vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "build:electron": "cross-env BUILD_TARGET=electron CSC_IDENTITY_AUTO_DISCOVERY=false tsc -b && cross-env BUILD_TARGET=electron vite build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
+    "preview": "vite preview",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.3",
@@ -30,6 +33,10 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "concurrently": "^9.0.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
@@ -37,6 +44,7 @@
     "tailwindcss": "^4.2.1",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.48.0",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "vite-plugin-electron": "^0.29.0"
   }
 }
