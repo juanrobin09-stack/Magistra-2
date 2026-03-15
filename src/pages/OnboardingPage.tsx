@@ -8,15 +8,7 @@ import {
   NIVEAUX, getMatieresForNiveau,
   type NiveauScolaire, type Matiere
 } from '@/types';
-
-interface TeacherProfile {
-  displayName: string;
-  etablissement: string;
-  cycle: string;
-  niveaux: NiveauScolaire[];
-  matierePrincipale: Matiere;
-  matiereSecondaire?: Matiere;
-}
+import type { TeacherProfile } from '@/hooks/useTeacherProfile';
 
 const CYCLES = [
   { id: 'maternelle', label: 'Maternelle', emoji: '🧒', desc: 'TPS à GS', color: 'from-pink-500/20 to-rose-500/20', border: 'border-pink-500/30' },
@@ -294,7 +286,7 @@ export default function OnboardingPage() {
                   <div className="flex justify-between">
                     <span className="text-mg-400">Classes</span>
                     <span className="text-mg-100 font-medium">
-                      {profile.niveaux.map(n => NIVEAUX[profile.cycle]?.niveaux.find(x => x.value === n)?.label).join(', ')}
+                      {profile.niveaux.map(n => NIVEAUX[profile.cycle]?.niveaux.find(x => x.value === n)?.label ?? n).join(', ')}
                     </span>
                   </div>
                   <div className="flex justify-between">

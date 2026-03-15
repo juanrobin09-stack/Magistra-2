@@ -1,7 +1,7 @@
 import { useCurrentUser } from '@/lib/auth';
 import { useNavigate } from 'react-router-dom';
 import { Settings, User, RefreshCw } from 'lucide-react';
-import { NIVEAUX, getMatieresForNiveau } from '@/types';
+import { getMatieresForNiveau, getNiveauLabel } from '@/types';
 import { getTeacherProfile, resetOnboarding } from '@/hooks/useTeacherProfile';
 
 export default function SettingsPage() {
@@ -59,9 +59,7 @@ export default function SettingsPage() {
           return (
             <div className="space-y-2 text-sm mb-4">
               <div className="flex justify-between"><span className="text-mg-400">Établissement</span><span className="text-mg-200">{tp.etablissement}</span></div>
-              <div className="flex justify-between"><span className="text-mg-400">Classes</span><span className="text-mg-200">{tp.niveaux.map(n => {
-                for (const g of Object.values(NIVEAUX)) { const f = g.niveaux.find(x => x.value === n); if (f) return f.label; } return n;
-              }).join(', ')}</span></div>
+              <div className="flex justify-between"><span className="text-mg-400">Classes</span><span className="text-mg-200">{tp.niveaux.map(n => getNiveauLabel(n)).join(', ')}</span></div>
               <div className="flex justify-between"><span className="text-mg-400">Matière principale</span><span className="text-mg-200">{tp.niveaux[0] ? getMatieresForNiveau(tp.niveaux[0]).find(m => m.value === tp.matierePrincipale)?.label ?? tp.matierePrincipale : tp.matierePrincipale}</span></div>
             </div>
           );

@@ -389,6 +389,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
+    // Guard: ensure required env vars are set
+    if (!ANTHROPIC_API_KEY || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+      console.error('Missing environment variables');
+      return res.status(500).json({ error: 'Configuration serveur manquante. Contactez l\'administrateur.' });
+    }
+
     const body = req.body as GenerateBody;
 
     // Validate
@@ -434,8 +440,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const anthropicData = await anthropicRes.json();
-    const contenu = anthropicData.content?.[0]?.text ?? '';
-    const tokensUsed = anthropicData.usage?.output_tokens ?? 0;
+    const contenu: string = anthropicData.content?.[0]?.text ?? '';
+    const tokensUsed: number = anthropicData.usage?.output_tokens ?? 0;
+
+    if (!contenu) {
+      console.error('Empty response from Anthropic:', JSON.stringify(anthropicData));
+      return res.status(502).json({ error: 'Réponse vide de l\'IA. Réessayez dans quelques instants.' });
+    }
 
     // Save to Supabase
     const saved = await saveGeneration({

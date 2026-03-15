@@ -1,7 +1,7 @@
 import type { GenerationRequest, GeneratedContent } from '@/types';
 import { getNiveauLabel, getMatiereLabel } from '@/types';
 
-const API_BASE = import.meta.env.PROD ? '/api' : '/api';
+const API_BASE = '/api';
 
 export interface GenerateResponse {
   id: string;
@@ -49,7 +49,7 @@ export async function apiGenerate(
 }
 
 export async function apiGetHistory(userId: string): Promise<GeneratedContent[]> {
-  const res = await fetch(`${API_BASE}/history?userId=${userId}`);
+  const res = await fetch(`${API_BASE}/history?userId=${encodeURIComponent(userId)}`);
   if (!res.ok) return [];
   const data = await res.json();
   return data.map((item: Record<string, unknown>) => ({
@@ -65,17 +65,25 @@ export async function apiGetHistory(userId: string): Promise<GeneratedContent[]>
 }
 
 export async function apiToggleFavorite(userId: string, id: string, isFavorite: boolean): Promise<void> {
-  await fetch(`${API_BASE}/favorite`, {
+  const res = await fetch(`${API_BASE}/favorite`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, userId, isFavorite }),
   });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: 'Erreur réseau.' }));
+    throw new Error(data.error || 'Erreur lors de la mise à jour du favori.');
+  }
 }
 
 export async function apiDeleteGeneration(userId: string, id: string): Promise<void> {
-  await fetch(`${API_BASE}/delete`, {
+  const res = await fetch(`${API_BASE}/delete`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, userId }),
   });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: 'Erreur réseau.' }));
+    throw new Error(data.error || 'Erreur lors de la suppression.');
+  }
 }
