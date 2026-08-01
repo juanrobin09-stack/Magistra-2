@@ -1,29 +1,43 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useCurrentUser } from '@/lib/auth';
-import { apiGetHistory } from '@/lib/api';
-import { ALPHA_MODE, ALPHA_MAX_GENERATIONS } from '@/lib/alpha';
+import { ALPHA_MAX_GENERATIONS } from '@/lib/alpha';
 
-// Nombre de générations déjà utilisées et restantes pour le compte courant,
-// pendant la phase Alpha (limite totale, pas quotidienne).
+// Compteur de générations Alpha, suivi localement (localStorage) par compte —
+// volontairement sans base de données ni appel réseau.
+function storageKey(userId: string): string {
+  return `magistra_alpha_used_${userId}`;
+}
+
+function readUsed(userId?: string | null): number {
+  if (!userId) return 0;
+  try {
+    return parseInt(localStorage.getItem(storageKey(userId)) ?? '0', 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function useAlphaUsage() {
   const { user } = useCurrentUser();
-  const [used, setUsed] = useState(0);
-  const [loading, setLoading] = useState(ALPHA_MODE);
+  const [used, setUsed] = useState(() => readUsed(user?.id));
 
-  const refresh = useCallback(async () => {
-    if (!ALPHA_MODE || !user?.id) { setLoading(false); return; }
-    const history = await apiGetHistory(user.id);
-    setUsed(history.length);
-    setLoading(false);
+  useEffect(() => { setUsed(readUsed(user?.id)); }, [user?.id]);
+
+  const increment = useCallback(() => {
+    if (!user?.id) return;
+    const next = readUsed(user.id) + 1;
+    try { localStorage.setItem(storageKey(user.id), String(next)); } catch { /* storage indisponible */ }
+    setUsed(next);
   }, [user?.id]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  const refresh = useCallback(() => setUsed(readUsed(user?.id)), [user?.id]);
 
   return {
     used,
     remaining: Math.max(0, ALPHA_MAX_GENERATIONS - used),
     max: ALPHA_MAX_GENERATIONS,
-    loading,
+    loading: false,
+    increment,
     refresh,
   };
 }

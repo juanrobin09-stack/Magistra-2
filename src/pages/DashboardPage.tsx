@@ -8,7 +8,8 @@ import {
 } from 'lucide-react';
 import { getTeacherProfile } from '@/hooks/useTeacherProfile';
 import { apiGetHistory } from '@/lib/api';
-import { ALPHA_MODE, ALPHA_MAX_GENERATIONS } from '@/lib/alpha';
+import { useAlphaUsage } from '@/hooks/useAlphaUsage';
+import { ALPHA_MODE } from '@/lib/alpha';
 import {
   TYPE_CONTENU, getNiveauLabel, getMatiereEmoji, getMatiereLabel,
   SUJETS_SUGGESTIONS
@@ -63,6 +64,7 @@ export default function DashboardPage() {
   const profile = getTeacherProfile();
   const [history, setHistory] = useState<GeneratedContent[]>([]);
   const [loading, setLoading] = useState(true);
+  const alphaUsage = useAlphaUsage();
 
   const loadHistory = useCallback(async () => {
     if (!user?.id) { setLoading(false); return; }
@@ -93,10 +95,10 @@ export default function DashboardPage() {
 
   const displayName = profile?.displayName || user?.firstName || '';
   const dateStr = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
-  // En phase Alpha, la limite porte sur le total de générations du compte (pas sur la journée).
-  const quotaLeft   = ALPHA_MODE ? Math.max(0, ALPHA_MAX_GENERATIONS - totalCount) : 20 - todayCount;
+  // En phase Alpha, la limite est suivie localement (voir useAlphaUsage), pas quotidienne.
+  const quotaLeft   = ALPHA_MODE ? alphaUsage.remaining : 20 - todayCount;
   const quotaPct    = ALPHA_MODE
-    ? Math.min((totalCount / ALPHA_MAX_GENERATIONS) * 100, 100)
+    ? Math.min((alphaUsage.used / alphaUsage.max) * 100, 100)
     : Math.min((todayCount / 20) * 100, 100);
 
   return (
@@ -113,7 +115,7 @@ export default function DashboardPage() {
         <div className="shrink-0">
           <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-accent/8 border border-accent/15 text-sm font-medium text-accent">
             <Zap size={13} />
-            {ALPHA_MODE ? `${quotaLeft} / ${ALPHA_MAX_GENERATIONS} générations Alpha` : `${quotaLeft} / 20 générations`}
+            {ALPHA_MODE ? `${quotaLeft} / ${alphaUsage.max} générations Alpha` : `${quotaLeft} / 20 générations`}
           </div>
         </div>
       </div>
@@ -132,11 +134,11 @@ export default function DashboardPage() {
             </div>
           </div>
           <p className="text-5xl text-white leading-none" style={{ fontFamily: 'var(--font-display)' }}>
-            {ALPHA_MODE ? totalCount : todayCount}
+            {ALPHA_MODE ? alphaUsage.used : todayCount}
           </p>
           <div className="space-y-1.5">
             <div className="flex justify-between text-xs text-mg-400">
-              <span>{ALPHA_MODE ? `sur ${ALPHA_MAX_GENERATIONS} offertes (Alpha)` : 'sur 20 quotidiennes'}</span>
+              <span>{ALPHA_MODE ? `sur ${alphaUsage.max} offertes (Alpha)` : 'sur 20 quotidiennes'}</span>
               <span>{Math.round(quotaPct)}%</span>
             </div>
             <div className="h-1.5 bg-mg-700 rounded-full overflow-hidden">

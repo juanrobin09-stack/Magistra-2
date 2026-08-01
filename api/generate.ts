@@ -5,11 +5,6 @@ const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const MAX_GENERATIONS_PER_DAY = 20;
 
-// Alpha privée : limite totale (et non quotidienne) de générations par compte.
-// Repasser ALPHA_MODE à false pour revenir au quota quotidien standard.
-const ALPHA_MODE = true;
-const ALPHA_MAX_GENERATIONS_TOTAL = 10;
-
 interface GenerateBody {
   userId: string;
   type: string;
@@ -64,16 +59,6 @@ async function checkRateLimit(userId: string): Promise<{ allowed: boolean; remai
   );
   const count = data?.[0]?.generation_count ?? 0;
   return { allowed: count < MAX_GENERATIONS_PER_DAY, remaining: MAX_GENERATIONS_PER_DAY - count };
-}
-
-// Limite Alpha : total de générations tous jours confondus, pour un compte donné.
-// Réutilise la table `usage` existante (une ligne par jour) en sommant les compteurs.
-async function checkAlphaLimit(userId: string): Promise<{ allowed: boolean; remaining: number }> {
-  const data = await supabaseFetch(`usage?user_id=eq.${userId}&select=generation_count`);
-  const used: number = (data ?? []).reduce(
-    (sum: number, row: { generation_count?: number }) => sum + (row.generation_count ?? 0), 0
-  );
-  return { allowed: used < ALPHA_MAX_GENERATIONS_TOTAL, remaining: Math.max(0, ALPHA_MAX_GENERATIONS_TOTAL - used) };
 }
 
 async function incrementUsage(userId: string, tokens: number) {
@@ -420,18 +405,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Ensure profile exists
     await ensureProfile(body.userId);
 
-    // Rate limit — logique Alpha (total par compte) ou standard (quotidien)
-    const { allowed, remaining } = ALPHA_MODE
-      ? await checkAlphaLimit(body.userId)
-      : await checkRateLimit(body.userId);
-
+    // Rate limit
+    const { allowed, remaining } = await checkRateLimit(body.userId);
     if (!allowed) {
       return res.status(429).json({
-        error: ALPHA_MODE
-          ? `Vous avez atteint la limite de ${ALPHA_MAX_GENERATIONS_TOTAL} générations offertes pendant cette phase Alpha. Vos contenus déjà générés restent accessibles dans votre historique et vos favoris.`
-          : 'Limite quotidienne atteinte (20 générations/jour). Revenez demain !',
+        error: 'Limite quotidienne atteinte (20 générations/jour). Revenez demain !',
         remaining: 0,
-        alphaLimitReached: ALPHA_MODE,
       });
     }
 

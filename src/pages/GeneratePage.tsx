@@ -58,11 +58,9 @@ export default function GeneratePage() {
   const [error, setError] = useState<string | null>(null);
   const resultRef = useRef<HTMLDivElement>(null);
 
+  // Compteur Alpha suivi localement (aucune base de données) — voir src/lib/alpha.ts.
   const alphaUsage = useAlphaUsage();
-  // Avant la première génération de la session, on affiche le compteur calculé depuis
-  // l'historique. Après, on fait confiance à la réponse (autoritaire) du serveur.
-  const alphaRemainingDisplay = remaining !== null ? remaining : alphaUsage.remaining;
-  const alphaLimitReached = ALPHA_MODE && !!user && !alphaUsage.loading && alphaRemainingDisplay <= 0;
+  const alphaLimitReached = ALPHA_MODE && !!user && alphaUsage.remaining <= 0;
 
   const canGenerate = () => {
     if (type === 'corrige') return texteEleve.trim().length > 0;
@@ -101,6 +99,7 @@ export default function GeneratePage() {
         const response = await apiGenerate(user.id, request);
         setResult(response.contenu);
         setRemaining(response.remaining);
+        if (ALPHA_MODE) alphaUsage.increment();
       } else {
         await new Promise(r => setTimeout(r, 1500));
         setResult(generateDemoContent(request));
@@ -210,9 +209,9 @@ export default function GeneratePage() {
                 <div className="badge badge-accent">
                   <Sparkles size={12} /> Génération IA
                 </div>
-                {ALPHA_MODE && user && !alphaUsage.loading ? (
+                {ALPHA_MODE && user ? (
                   <div className="badge badge-accent">
-                    {alphaRemainingDisplay} restante{alphaRemainingDisplay > 1 ? 's' : ''} (Alpha)
+                    {alphaUsage.remaining} / {alphaUsage.max} générations restantes
                   </div>
                 ) : (
                   !ALPHA_MODE && remaining !== null && (
@@ -539,8 +538,8 @@ export default function GeneratePage() {
                     <p className="text-sm text-warning font-medium">Limite de la version Alpha atteinte</p>
                     <p className="text-xs text-mg-300 mt-0.5">
                       Vous avez utilisé vos {alphaUsage.max} générations IA offertes pour cette phase de test.
-                      Votre historique et vos favoris restent accessibles. Merci pour votre aide précieuse —
-                      dites-nous ce que vous en pensez via le bouton « Envoyer un retour ».
+                      Votre historique et vos favoris restent accessibles. Pour continuer les tests,
+                      contactez l'équipe Magistra via le bouton « Envoyer un retour ».
                     </p>
                   </div>
                 </div>
