@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import { SignedIn, UserButton } from '@clerk/clerk-react';
+import AlphaBadge from '@/components/ui/AlphaBadge';
+import FeedbackButton from '@/components/ui/FeedbackButton';
+import { useAlphaUsage } from '@/hooks/useAlphaUsage';
+import { ALPHA_MODE } from '@/lib/alpha';
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 import {
@@ -19,6 +23,7 @@ const NAV_ITEMS = [
 export default function AppLayout() {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const alphaUsage = useAlphaUsage();
 
   const isActive = (path: string, exact?: boolean) =>
     exact ? location.pathname === path : location.pathname.startsWith(path);
@@ -50,6 +55,7 @@ export default function AppLayout() {
             <span className="text-lg font-semibold tracking-tight text-white" style={{ fontFamily: 'var(--font-display)' }}>
               Magistra<span className="text-accent">.</span>
             </span>
+            <AlphaBadge />
           </Link>
           <button className="lg:hidden btn-ghost p-1" onClick={() => setSidebarOpen(false)}>
             <X size={18} />
@@ -100,6 +106,11 @@ export default function AppLayout() {
             )}
             <div className="flex-1 min-w-0">
               <p className="text-xs text-mg-300 truncate">Un projet FutureAI</p>
+              {ALPHA_MODE && !alphaUsage.loading && (
+                <p className="text-[11px] text-mg-500 truncate">
+                  {alphaUsage.remaining} / {alphaUsage.max} générations IA restantes
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -126,6 +137,8 @@ export default function AppLayout() {
           <Outlet />
         </div>
       </main>
+
+      <FeedbackButton />
     </div>
   );
 }

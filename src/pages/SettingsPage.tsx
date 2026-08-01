@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { Settings, User, RefreshCw, Key, CheckCircle, AlertCircle } from 'lucide-react';
 import { getMatieresForNiveau, getNiveauLabel } from '@/types';
 import { getTeacherProfile, resetOnboarding } from '@/hooks/useTeacherProfile';
+import { useAlphaUsage } from '@/hooks/useAlphaUsage';
+import { ALPHA_MODE } from '@/lib/alpha';
+import AlphaBadge from '@/components/ui/AlphaBadge';
 import { useState, useEffect } from 'react';
 
 const isElectron = !!window.electronAPI?.isElectron;
@@ -98,6 +101,7 @@ function ApiKeysSection() {
 export default function SettingsPage() {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
+  const alphaUsage = useAlphaUsage();
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
@@ -130,8 +134,12 @@ export default function SettingsPage() {
         <h2 className="text-base font-semibold text-white mb-3">Utilisation</h2>
         <div className="space-y-3">
           <div className="flex items-center justify-between p-3 rounded-lg bg-mg-700/50">
-            <span className="text-sm text-mg-200">Générations par jour</span>
-            <span className="badge badge-accent">20 / jour</span>
+            <span className="text-sm text-mg-200">Générations IA</span>
+            <span className="badge badge-accent">
+              {ALPHA_MODE
+                ? (alphaUsage.loading ? '… / 10 (Alpha)' : `${alphaUsage.used} / ${alphaUsage.max} (Alpha)`)
+                : '20 / jour'}
+            </span>
           </div>
           <div className="flex items-center justify-between p-3 rounded-lg bg-mg-700/50">
             <span className="text-sm text-mg-200">Types de contenu</span>
@@ -165,6 +173,11 @@ export default function SettingsPage() {
 
       {/* About */}
       <div className="mt-8 text-center animate-fade-in" style={{ animationDelay: '0.3s' }}>
+        {ALPHA_MODE && (
+          <p className="text-xs text-mg-400 mb-3 flex items-center justify-center gap-2">
+            <AlphaBadge /> Merci de tester Magistra et de nous aider à l'améliorer.
+          </p>
+        )}
         <p className="text-xs text-mg-500">
           Magistra — Un projet{' '}
           <a href="https://futurai.space" target="_blank" className="text-accent hover:underline">FutureAI</a>

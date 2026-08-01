@@ -87,3 +87,22 @@ export async function apiDeleteGeneration(userId: string, id: string): Promise<v
     throw new Error(data.error || 'Erreur lors de la suppression.');
   }
 }
+
+export type FeedbackType = 'bug' | 'idee' | 'suggestion';
+
+export async function apiSendFeedback(input: {
+  userId?: string;
+  type: FeedbackType;
+  message: string;
+  page?: string;
+}): Promise<void> {
+  const res = await fetch(`${API_BASE}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: 'Erreur réseau.' }));
+    throw new Error(data.error || 'Erreur lors de l\'envoi du retour.');
+  }
+}
