@@ -1,8 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { neon } from '@neondatabase/serverless';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY!;
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const DATABASE_URL = process.env.DATABASE_URL!;
+const sql = neon(DATABASE_URL || '');
 const MAX_GENERATIONS_PER_DAY = 20;
 
 interface GenerateBody {
@@ -22,50 +23,29 @@ interface GenerateBody {
   texteEleve?: string;
 }
 
-// ---- Supabase helpers (no SDK needed server-side, just fetch) ----
-
-async function supabaseFetch(path: string, options: RequestInit = {}) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...options,
-    headers: {
-      'apikey': SUPABASE_SERVICE_KEY,
-      'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-      'Content-Type': 'application/json',
-      'Prefer': options.method === 'POST' ? 'return=representation' : 'return=minimal',
-      ...options.headers,
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Supabase error ${res.status}: ${text}`);
-  }
-  const text = await res.text();
-  return text ? JSON.parse(text) : null;
-}
+// ---- Database helpers (Postgres via @neondatabase/serverless) ----
 
 async function ensureProfile(userId: string) {
-  // Upsert profile
-  await supabaseFetch('profiles', {
-    method: 'POST',
-    headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
-    body: JSON.stringify({ id: userId }),
-  });
+  await sql`INSERT INTO profiles (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
 }
 
 async function checkRateLimit(userId: string): Promise<{ allowed: boolean; remaining: number }> {
-  const today = new Date().toISOString().split('T')[0];
-  const data = await supabaseFetch(
-    `usage?user_id=eq.${userId}&date=eq.${today}&select=generation_count`
-  );
-  const count = data?.[0]?.generation_count ?? 0;
+  const rows = await sql`
+    SELECT generation_count FROM usage
+    WHERE user_id = ${userId} AND date = CURRENT_DATE
+  `;
+  const count = Number(rows[0]?.generation_count ?? 0);
   return { allowed: count < MAX_GENERATIONS_PER_DAY, remaining: MAX_GENERATIONS_PER_DAY - count };
 }
 
 async function incrementUsage(userId: string, tokens: number) {
-  await supabaseFetch('rpc/increment_usage', {
-    method: 'POST',
-    body: JSON.stringify({ p_user_id: userId, p_tokens: tokens }),
-  });
+  await sql`
+    INSERT INTO usage (user_id, date, generation_count, tokens_used)
+    VALUES (${userId}, CURRENT_DATE, 1, ${tokens})
+    ON CONFLICT (user_id, date) DO UPDATE SET
+      generation_count = usage.generation_count + 1,
+      tokens_used = usage.tokens_used + EXCLUDED.tokens_used
+  `;
 }
 
 async function saveGeneration(data: {
@@ -81,11 +61,14 @@ async function saveGeneration(data: {
   contenu: string;
   tokens_used: number;
 }) {
-  const result = await supabaseFetch('generations', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-  return result?.[0];
+  const rows = await sql`
+    INSERT INTO generations (user_id, type, matiere, niveau, sujet, duree, objectifs, difficulte, consignes, contenu, tokens_used)
+    VALUES (${data.user_id}, ${data.type}, ${data.matiere}, ${data.niveau}, ${data.sujet},
+            ${data.duree ?? null}, ${data.objectifs ?? null}, ${data.difficulte ?? null}, ${data.consignes ?? null},
+            ${data.contenu}, ${data.tokens_used})
+    RETURNING id
+  `;
+  return rows[0];
 }
 
 // ---- Prompt builder ----
@@ -390,7 +373,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     // Guard: ensure required env vars are set
-    if (!ANTHROPIC_API_KEY || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    if (!ANTHROPIC_API_KEY || !DATABASE_URL) {
       console.error('Missing environment variables');
       return res.status(500).json({ error: 'Configuration serveur manquante. Contactez l\'administrateur.' });
     }
@@ -448,7 +431,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(502).json({ error: 'Réponse vide de l\'IA. Réessayez dans quelques instants.' });
     }
 
-    // Save to Supabase
+    // Save to database
     const saved = await saveGeneration({
       user_id: body.userId,
       type: body.type,

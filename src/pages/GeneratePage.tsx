@@ -16,6 +16,8 @@ import { apiGenerate } from '@/lib/api';
 import { generateDemoContent } from '@/lib/ai';
 import { exportToPDF, exportToText, copyToClipboard } from '@/lib/export';
 import { getTeacherProfile } from '@/hooks/useTeacherProfile';
+import { useAlphaUsage } from '@/hooks/useAlphaUsage';
+import { ALPHA_MODE } from '@/lib/alpha';
 
 // Tools that need the subject field
 const NEEDS_SUJET = ['cours', 'exercices', 'evaluation', 'sequence', 'fiche_prep', 'progression', 'differenciation', 'cahier_journal'];
@@ -56,6 +58,10 @@ export default function GeneratePage() {
   const [error, setError] = useState<string | null>(null);
   const resultRef = useRef<HTMLDivElement>(null);
 
+  // Compteur Alpha suivi localement (aucune base de données) — voir src/lib/alpha.ts.
+  const alphaUsage = useAlphaUsage();
+  const alphaLimitReached = ALPHA_MODE && !!user && alphaUsage.remaining <= 0;
+
   const canGenerate = () => {
     if (type === 'corrige') return texteEleve.trim().length > 0;
     if (type === 'lettre_parents') return true;
@@ -93,6 +99,7 @@ export default function GeneratePage() {
         const response = await apiGenerate(user.id, request);
         setResult(response.contenu);
         setRemaining(response.remaining);
+        if (ALPHA_MODE) alphaUsage.increment();
       } else {
         await new Promise(r => setTimeout(r, 1500));
         setResult(generateDemoContent(request));
@@ -202,10 +209,16 @@ export default function GeneratePage() {
                 <div className="badge badge-accent">
                   <Sparkles size={12} /> Génération IA
                 </div>
-                {remaining !== null && (
+                {ALPHA_MODE && user ? (
                   <div className="badge badge-accent">
-                    {remaining} restante{remaining > 1 ? 's' : ''} aujourd'hui
+                    {alphaUsage.remaining} / {alphaUsage.max} générations restantes
                   </div>
+                ) : (
+                  !ALPHA_MODE && remaining !== null && (
+                    <div className="badge badge-accent">
+                      {remaining} restante{remaining > 1 ? 's' : ''} aujourd'hui
+                    </div>
+                  )
                 )}
               </div>
             </div>
@@ -517,11 +530,26 @@ export default function GeneratePage() {
                 </div>
               )}
 
+              {/* Alpha limit reached — blocks only new generations, existing content stays accessible */}
+              {alphaLimitReached && (
+                <div className="flex items-start gap-3 p-4 rounded-xl bg-warning/5 border border-warning/15">
+                  <AlertCircle size={16} className="text-warning shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-warning font-medium">Limite de la version Alpha atteinte</p>
+                    <p className="text-xs text-mg-300 mt-0.5">
+                      Vous avez utilisé vos {alphaUsage.max} générations IA offertes pour cette phase de test.
+                      Votre historique et vos favoris restent accessibles. Pour continuer les tests,
+                      contactez l'équipe Magistra via le bouton « Envoyer un retour ».
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* ── Generate button ── */}
               <div className="pt-1">
                 <button
                   onClick={handleGenerate}
-                  disabled={!canGenerate() || generating}
+                  disabled={!canGenerate() || generating || alphaLimitReached}
                   className="btn-primary w-full py-3.5 text-sm font-semibold justify-center"
                 >
                   {generating

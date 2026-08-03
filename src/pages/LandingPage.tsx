@@ -3,6 +3,8 @@ import { SignedIn, SignedOut, SignInButton } from '@clerk/clerk-react';
 import {
   Sparkles, GraduationCap, ArrowRight
 } from 'lucide-react';
+import AlphaBadge from '@/components/ui/AlphaBadge';
+import { ALPHA_MAX_GENERATIONS } from '@/lib/alpha';
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
@@ -114,9 +116,9 @@ const STEPS = [
 ];
 
 const STATS = [
-  { value: '11', label: 'Outils pédagogiques intégrés : cours, exercices, évaluations, séquences, fiches de prep, progressions, appréciations, différenciation, courriers, cahier journal, corrigés.' },
-  { value: '8h+', label: 'C\'est le temps moyen passé chaque semaine par un enseignant à la seule préparation des cours, hors classe. Magistra réduit ça à quelques minutes.' },
-  { value: '100%', label: 'Open-source. Code public, auditable, hébergeable soi-même. Aucune donnée élève collectée. Construit par des enseignants, pour des enseignants.' },
+  { value: 'Alpha', label: 'Vous testez la toute première version de Magistra, avant tout le monde. Rien n\'est figé : vos retours orientent directement les prochaines évolutions.' },
+  { value: String(ALPHA_MAX_GENERATIONS), label: `Générations IA offertes pendant cette phase de test, pour explorer librement les outils sans engagement.` },
+  { value: '100%', label: 'De vos retours sont lus par l\'équipe. Un bug, une idée, une gêne : un simple bouton "Envoyer un retour" suffit.' },
 ];
 
 export default function LandingPage() {
@@ -132,6 +134,7 @@ export default function LandingPage() {
             <span className="text-lg font-semibold tracking-tight text-white" style={{ fontFamily: 'var(--font-display)' }}>
               Magistra<span className="text-accent">.</span>
             </span>
+            <AlphaBadge />
           </div>
           <div className="flex items-center gap-3">
             <AuthNav />
@@ -146,7 +149,7 @@ export default function LandingPage() {
 
         <div className="max-w-3xl mx-auto text-center relative z-10">
           <div className="badge badge-accent mb-6 mx-auto">
-            <Sparkles size={12} /> Un projet FutureAI
+            <Sparkles size={12} /> Alpha privée · Accès sur invitation
           </div>
 
           <h1 className="text-4xl sm:text-5xl lg:text-6xl text-white leading-[1.15] mb-6" style={{ fontFamily: 'var(--font-display)' }}>
@@ -157,8 +160,9 @@ export default function LandingPage() {
           </h1>
 
           <p className="text-mg-300 text-base sm:text-lg max-w-xl mx-auto mb-8 leading-relaxed">
-            Magistra est l'assistant IA open-source conçu pour les enseignants. Générez des cours, des exercices
-            et des évaluations en quelques secondes — adaptés à vos élèves, à votre programme, à votre style.
+            Magistra est un assistant IA pensé pour les enseignants, encore en construction.
+            Vous faites partie des tout premiers enseignants invités à le tester — générez cours,
+            exercices et évaluations, et dites-nous ce qui doit changer.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -174,10 +178,10 @@ export default function LandingPage() {
       <section className="py-16 sm:py-20 px-6">
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-12">
-            <p className="text-xs uppercase tracking-widest text-accent mb-3">Le constat</p>
+            <p className="text-xs uppercase tracking-widest text-accent mb-3">La phase Alpha</p>
             <h2 className="text-2xl sm:text-3xl text-white" style={{ fontFamily: 'var(--font-display)' }}>
-              Les élèves utilisent l'IA. Les profs{' '}
-              <em className="text-accent not-italic">préparent</em> encore à la main.
+              Une version en construction,{' '}
+              <em className="text-accent not-italic">avec vous</em>
             </h2>
           </div>
 
@@ -318,10 +322,11 @@ export default function LandingPage() {
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[300px] h-[200px] bg-accent/5 rounded-full blur-[80px] pointer-events-none" />
             <div className="relative z-10">
               <h2 className="text-2xl sm:text-3xl text-white mb-3" style={{ fontFamily: 'var(--font-display)' }}>
-                Prêt à gagner du <em className="text-accent not-italic">temps</em> ?
+                Prêt à devenir <em className="text-accent not-italic">testeur</em> ?
               </h2>
               <p className="text-sm text-mg-300 mb-6 max-w-md mx-auto">
-                Un outil open-source conçu pour simplifier le quotidien des enseignants.
+                Rejoignez les premiers enseignants qui testent Magistra et aidez-nous à construire
+                un outil qui vous ressemble vraiment.
               </p>
               <AuthCTA />
             </div>
