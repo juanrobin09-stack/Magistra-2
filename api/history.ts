@@ -1,18 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { neon } from '@neondatabase/serverless';
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-async function supabaseFetch(path: string) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: {
-      'apikey': SUPABASE_SERVICE_KEY,
-      'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-    },
-  });
-  if (!res.ok) throw new Error(`Supabase error: ${res.status}`);
-  return res.json();
-}
+const DATABASE_URL = process.env.DATABASE_URL!;
+const sql = neon(DATABASE_URL || '');
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -26,10 +16,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!userId) return res.status(400).json({ error: 'userId required' });
 
   try {
-    const data = await supabaseFetch(
-      `generations?user_id=eq.${userId}&order=created_at.desc&limit=100&select=id,type,matiere,niveau,sujet,contenu,is_favorite,created_at`
-    );
-    return res.status(200).json(data);
+    if (!DATABASE_URL) {
+      console.error('Missing environment variables');
+      return res.status(500).json({ error: 'Configuration serveur manquante.' });
+    }
+
+    const rows = await sql`
+      SELECT id, type, matiere, niveau, sujet, contenu, is_favorite, created_at
+      FROM generations
+      WHERE user_id = ${userId}
+      ORDER BY created_at DESC
+      LIMIT 100
+    `;
+    return res.status(200).json(rows);
   } catch (err) {
     console.error('History error:', err);
     return res.status(500).json({ error: 'Erreur serveur.' });

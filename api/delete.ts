@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { neon } from '@neondatabase/serverless';
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const DATABASE_URL = process.env.DATABASE_URL!;
+const sql = neon(DATABASE_URL || '');
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -15,19 +16,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!id || !userId) return res.status(400).json({ error: 'id and userId required' });
 
   try {
-    const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/generations?id=eq.${id}&user_id=eq.${userId}`,
-      {
-        method: 'DELETE',
-        headers: {
-          'apikey': SUPABASE_SERVICE_KEY,
-          'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-          'Prefer': 'return=minimal',
-        },
-      }
-    );
+    if (!DATABASE_URL) {
+      console.error('Missing environment variables');
+      return res.status(500).json({ error: 'Configuration serveur manquante.' });
+    }
 
-    if (!response.ok) throw new Error(`Supabase error: ${response.status}`);
+    await sql`DELETE FROM generations WHERE id = ${id} AND user_id = ${userId}`;
     return res.status(200).json({ success: true });
   } catch (err) {
     console.error('Delete error:', err);
