@@ -24,3 +24,15 @@ release
 *.njsproj
 *.sln
 *.sw?
+
+# Environnement (ne jamais committer de secrets)
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.vercel
+.netlify
+playwright-report
+test-results
+coverage
+dist-server
