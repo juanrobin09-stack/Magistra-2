@@ -1,0 +1,464 @@
+// Référentiel métier : matières, outils de génération, suggestions.
+// Source unique partagée par l'interface, le serveur web et l'application Windows.
+
+import { getCycle, getLevelGroup, type Cycle, type LevelGroup, type NiveauScolaire } from './levels.js';
+
+export type Matiere =
+  // Fondamentales
+  | 'francais' | 'mathematiques' | 'histoire_geo' | 'emc'
+  // Vie affective
+  | 'evar' | 'evars'
+  // Sciences primaire
+  | 'sciences_primaire' | 'decouverte_monde'
+  // Sciences collège/lycée
+  | 'physique_chimie' | 'svt' | 'sciences_ingenieur' | 'nsi'
+  // Langues
+  | 'anglais' | 'espagnol' | 'allemand' | 'italien' | 'portugais' | 'chinois' | 'arabe' | 'latin' | 'grec'
+  // Sciences humaines
+  | 'philosophie' | 'ses' | 'hggsp' | 'droit_economie'
+  // Arts & culture
+  | 'arts_plastiques' | 'musique' | 'theatre' | 'cinema' | 'histoire_arts'
+  // Sport
+  | 'eps'
+  // Technologie & pro
+  | 'technologie' | 'sciences_numeriques' | 'management' | 'gestion'
+  // Maternelle
+  | 'langage_oral' | 'graphisme_ecriture' | 'nombres_formes' | 'explorer_monde' | 'activites_artistiques' | 'activites_physiques'
+  // Enseignement supérieur
+  | 'informatique' | 'systemes_information' | 'statistiques' | 'economie' | 'droit' | 'science_politique'
+  | 'sociologie' | 'psychologie' | 'sciences_education' | 'lettres' | 'linguistique' | 'histoire' | 'geographie'
+  | 'physique' | 'chimie' | 'biologie' | 'sciences_terre' | 'medecine_sante' | 'communication' | 'arts'
+  // Autre
+  | 'autre';
+
+export interface MatiereInfo {
+  value: Matiere;
+  label: string;
+  emoji: string;
+  cycles: Cycle[];
+}
+
+const ALL: Cycle[] = ['maternelle', 'cycle2', 'cycle3', 'college', 'lycee', 'lycee_pro', 'superieur'];
+
+export const ALL_MATIERES: MatiereInfo[] = [
+  // === MATERNELLE (domaines du programme) ===
+  { value: 'langage_oral', label: 'Mobiliser le langage — Oral', emoji: '🗣️', cycles: ['maternelle'] },
+  { value: 'graphisme_ecriture', label: 'Mobiliser le langage — Écrit / Graphisme', emoji: '✏️', cycles: ['maternelle'] },
+  { value: 'nombres_formes', label: 'Nombres, formes et grandeurs', emoji: '🔷', cycles: ['maternelle'] },
+  { value: 'explorer_monde', label: 'Explorer le monde', emoji: '🌱', cycles: ['maternelle'] },
+  { value: 'activites_artistiques', label: 'Activités artistiques', emoji: '🎨', cycles: ['maternelle'] },
+  { value: 'activites_physiques', label: "Agir, s'exprimer avec son corps", emoji: '🤸', cycles: ['maternelle'] },
+
+  // === FONDAMENTALES ===
+  { value: 'francais', label: 'Français', emoji: '📖', cycles: ['cycle2', 'cycle3', 'college', 'lycee', 'lycee_pro', 'superieur'] },
+  { value: 'mathematiques', label: 'Mathématiques', emoji: '🔢', cycles: ['cycle2', 'cycle3', 'college', 'lycee', 'lycee_pro', 'superieur'] },
+  { value: 'histoire_geo', label: 'Histoire-Géographie', emoji: '🌍', cycles: ['cycle2', 'cycle3', 'college', 'lycee', 'lycee_pro'] },
+  { value: 'emc', label: 'EMC (Enseignement moral et civique)', emoji: '⚖️', cycles: ['cycle2', 'cycle3', 'college', 'lycee', 'lycee_pro'] },
+
+  // === VIE AFFECTIVE ===
+  { value: 'evar', label: 'EVAR (Vie affective et relationnelle)', emoji: '💛', cycles: ['maternelle', 'cycle2', 'cycle3'] },
+  { value: 'evars', label: 'EVARS (Vie affective, relationnelle et sexualité)', emoji: '💛', cycles: ['college', 'lycee', 'lycee_pro'] },
+
+  // === SCIENCES ===
+  { value: 'decouverte_monde', label: 'Questionner le monde', emoji: '🔍', cycles: ['cycle2'] },
+  { value: 'sciences_primaire', label: 'Sciences et technologie', emoji: '🔬', cycles: ['cycle3'] },
+  { value: 'physique_chimie', label: 'Physique-Chimie', emoji: '⚛️', cycles: ['college', 'lycee', 'superieur'] },
+  { value: 'svt', label: 'SVT', emoji: '🧬', cycles: ['college', 'lycee'] },
+  { value: 'sciences_ingenieur', label: "Sciences de l'ingénieur", emoji: '🏗️', cycles: ['lycee', 'superieur'] },
+  { value: 'sciences_numeriques', label: 'SNT (Sciences numériques)', emoji: '🖥️', cycles: ['lycee'] },
+  { value: 'nsi', label: 'NSI (Numérique et sciences informatiques)', emoji: '💻', cycles: ['lycee'] },
+  { value: 'technologie', label: 'Technologie', emoji: '⚙️', cycles: ['college', 'lycee_pro'] },
+
+  // === LANGUES VIVANTES ET ANCIENNES ===
+  { value: 'anglais', label: 'Anglais', emoji: '🇬🇧', cycles: ['cycle2', 'cycle3', 'college', 'lycee', 'lycee_pro', 'superieur'] },
+  { value: 'espagnol', label: 'Espagnol', emoji: '🇪🇸', cycles: ['college', 'lycee', 'lycee_pro', 'superieur'] },
+  { value: 'allemand', label: 'Allemand', emoji: '🇩🇪', cycles: ['cycle2', 'cycle3', 'college', 'lycee', 'superieur'] },
+  { value: 'italien', label: 'Italien', emoji: '🇮🇹', cycles: ['college', 'lycee', 'superieur'] },
+  { value: 'portugais', label: 'Portugais', emoji: '🇵🇹', cycles: ['college', 'lycee', 'superieur'] },
+  { value: 'chinois', label: 'Chinois', emoji: '🇨🇳', cycles: ['college', 'lycee', 'superieur'] },
+  { value: 'arabe', label: 'Arabe', emoji: '🇸🇦', cycles: ['college', 'lycee', 'superieur'] },
+  { value: 'latin', label: 'Latin (LCA)', emoji: '🏛️', cycles: ['college', 'lycee', 'superieur'] },
+  { value: 'grec', label: 'Grec ancien (LCA)', emoji: '🏺', cycles: ['college', 'lycee', 'superieur'] },
+
+  // === SCIENCES HUMAINES (secondaire) ===
+  { value: 'philosophie', label: 'Philosophie', emoji: '🤔', cycles: ['lycee', 'superieur'] },
+  { value: 'ses', label: 'SES', emoji: '📊', cycles: ['lycee'] },
+  { value: 'hggsp', label: 'HGGSP (Géopolitique)', emoji: '🗺️', cycles: ['lycee'] },
+  { value: 'droit_economie', label: 'Droit et économie', emoji: '📜', cycles: ['lycee', 'lycee_pro'] },
+
+  // === ARTS ===
+  { value: 'arts_plastiques', label: 'Arts plastiques', emoji: '🎨', cycles: ['cycle2', 'cycle3', 'college', 'lycee'] },
+  { value: 'musique', label: 'Éducation musicale', emoji: '🎵', cycles: ['cycle2', 'cycle3', 'college', 'lycee'] },
+  { value: 'histoire_arts', label: 'Histoire des arts', emoji: '🖼️', cycles: ['college', 'lycee'] },
+  { value: 'theatre', label: 'Théâtre', emoji: '🎭', cycles: ['lycee', 'superieur'] },
+  { value: 'cinema', label: 'Cinéma-Audiovisuel', emoji: '🎬', cycles: ['lycee', 'superieur'] },
+
+  // === SPORT ===
+  { value: 'eps', label: 'EPS', emoji: '🏃', cycles: ['cycle2', 'cycle3', 'college', 'lycee', 'lycee_pro', 'superieur'] },
+
+  // === PRO / TECHNO ===
+  { value: 'management', label: 'Management', emoji: '💼', cycles: ['lycee', 'lycee_pro', 'superieur'] },
+  { value: 'gestion', label: 'Gestion, finance, comptabilité', emoji: '🧮', cycles: ['lycee', 'lycee_pro', 'superieur'] },
+
+  // === ENSEIGNEMENT SUPÉRIEUR ===
+  { value: 'informatique', label: 'Informatique', emoji: '💻', cycles: ['superieur'] },
+  { value: 'systemes_information', label: "Systèmes d'information", emoji: '🗄️', cycles: ['superieur'] },
+  { value: 'statistiques', label: 'Statistiques et science des données', emoji: '📈', cycles: ['superieur'] },
+  { value: 'economie', label: 'Économie', emoji: '💶', cycles: ['superieur'] },
+  { value: 'droit', label: 'Droit', emoji: '⚖️', cycles: ['superieur'] },
+  { value: 'science_politique', label: 'Science politique', emoji: '🏛️', cycles: ['superieur'] },
+  { value: 'sociologie', label: 'Sociologie', emoji: '👥', cycles: ['superieur'] },
+  { value: 'psychologie', label: 'Psychologie', emoji: '🧠', cycles: ['superieur'] },
+  { value: 'sciences_education', label: "Sciences de l'éducation", emoji: '🎓', cycles: ['superieur'] },
+  { value: 'lettres', label: 'Lettres et littératures', emoji: '📚', cycles: ['superieur'] },
+  { value: 'linguistique', label: 'Linguistique', emoji: '🔤', cycles: ['superieur'] },
+  { value: 'histoire', label: 'Histoire', emoji: '📜', cycles: ['superieur'] },
+  { value: 'geographie', label: 'Géographie', emoji: '🗺️', cycles: ['superieur'] },
+  { value: 'physique', label: 'Physique', emoji: '🔭', cycles: ['superieur'] },
+  { value: 'chimie', label: 'Chimie', emoji: '🧪', cycles: ['superieur'] },
+  { value: 'biologie', label: 'Biologie', emoji: '🧬', cycles: ['superieur'] },
+  { value: 'sciences_terre', label: 'Sciences de la Terre et environnement', emoji: '🌋', cycles: ['superieur'] },
+  { value: 'medecine_sante', label: 'Médecine et santé', emoji: '🩺', cycles: ['superieur'] },
+  { value: 'communication', label: 'Information et communication', emoji: '📣', cycles: ['superieur'] },
+  { value: 'arts', label: 'Arts et esthétique', emoji: '🎨', cycles: ['superieur'] },
+
+  // === AUTRE ===
+  { value: 'autre', label: 'Autre matière', emoji: '📝', cycles: ALL },
+];
+
+export function isMatiere(value: unknown): value is Matiere {
+  return typeof value === 'string' && ALL_MATIERES.some(m => m.value === value);
+}
+
+/** Matières proposées pour un niveau donné. */
+export function getMatieresForNiveau(niveau: NiveauScolaire): { value: Matiere; label: string; emoji: string }[] {
+  const cycle = getCycle(niveau);
+  return ALL_MATIERES.filter(m => m.cycles.includes(cycle)).map(({ value, label, emoji }) => ({ value, label, emoji }));
+}
+
+export function isMatiereAvailableFor(matiere: Matiere, niveau: NiveauScolaire): boolean {
+  return getMatieresForNiveau(niveau).some(m => m.value === matiere);
+}
+
+/** Première matière disponible pour ce niveau (utile quand la matière courante n'existe pas à ce niveau). */
+export function defaultMatiereFor(niveau: NiveauScolaire, preferred?: Matiere): Matiere {
+  if (preferred && isMatiereAvailableFor(preferred, niveau)) return preferred;
+  // Dans le supérieur, aucune discipline n'est « naturelle » : « Autre » + discipline libre plutôt que « Français ».
+  if (getCycle(niveau) === 'superieur') return 'autre';
+  return getMatieresForNiveau(niveau)[0]?.value ?? 'autre';
+}
+
+export const MATIERES = ALL_MATIERES.map(({ value, label, emoji }) => ({ value, label, emoji }));
+
+/** Accepte un code (« francais ») ou un ancien libellé stocké (« Français »). */
+/**
+ * Anciens libellés enregistrés par la première version de Magistra (qui stockait le libellé, pas la clé)
+ * et qui diffèrent des libellés actuels. Les autres anciens libellés sont identiques aux libellés actuels.
+ */
+const LEGACY_MATIERE_LABELS: Record<string, Matiere> = {
+  "sciences de l'ingénieur (si)": 'sciences_ingenieur',
+  'arts plastiques': 'arts_plastiques',
+  'management / stmg': 'management',
+  'gestion-finance / compta': 'gestion',
+};
+
+const normalizeLabel = (label: string) => label.trim().toLowerCase().replaceAll('’', "'");
+
+/** Clé de matière à partir d'une clé, d'un libellé actuel ou d'un ancien libellé stocké. */
+export function resolveMatiere(value: Matiere | string): Matiere | undefined {
+  if (isMatiere(value)) return value;
+  const label = normalizeLabel(String(value));
+  return ALL_MATIERES.find(m => normalizeLabel(m.label) === label)?.value ?? LEGACY_MATIERE_LABELS[label];
+}
+
+export function getMatiereLabel(matiere: Matiere | string): string {
+  const key = resolveMatiere(matiere);
+  return ALL_MATIERES.find(m => m.value === key)?.label ?? String(matiere);
+}
+
+export function getMatiereEmoji(matiere: Matiere | string): string {
+  const key = resolveMatiere(matiere);
+  return ALL_MATIERES.find(m => m.value === key)?.emoji ?? '📝';
+}
+
+// =============================================
+// OUTILS DE GÉNÉRATION
+// =============================================
+
+export type TypeContenu =
+  | 'cours' | 'exercices' | 'evaluation' | 'sequence' | 'fiche_prep'
+  | 'appreciations' | 'progression' | 'differenciation' | 'lettre_parents' | 'cahier_journal' | 'corrige';
+
+export const ALL_TYPES: TypeContenu[] = [
+  'cours', 'exercices', 'evaluation', 'sequence', 'fiche_prep', 'progression',
+  'appreciations', 'differenciation', 'lettre_parents', 'cahier_journal', 'corrige',
+];
+
+export function isTypeContenu(value: unknown): value is TypeContenu {
+  return typeof value === 'string' && (ALL_TYPES as string[]).includes(value);
+}
+
+export interface TypeContenuInfo {
+  value: TypeContenu;
+  label: string;
+  description: string;
+  icon: string;
+  category: 'creation' | 'outils';
+}
+
+export const TYPE_CONTENU: TypeContenuInfo[] = [
+  { value: 'cours', label: 'Cours', description: 'Un cours structuré et complet', icon: '✦', category: 'creation' },
+  { value: 'exercices', label: 'Exercices', description: "Série d'exercices progressifs avec corrigé", icon: '◈', category: 'creation' },
+  { value: 'evaluation', label: 'Évaluation', description: 'Sujet + corrigé + barème', icon: '◎', category: 'creation' },
+  { value: 'sequence', label: 'Séquence', description: 'Séquence multi-séances', icon: '⬡', category: 'creation' },
+  { value: 'fiche_prep', label: 'Fiche de prep', description: 'Fiche de préparation de séance', icon: '◇', category: 'creation' },
+  { value: 'progression', label: 'Progression', description: 'Progression annuelle', icon: '📅', category: 'creation' },
+  { value: 'appreciations', label: 'Appréciations', description: 'Appréciations de bulletins', icon: '💬', category: 'outils' },
+  { value: 'differenciation', label: 'Différenciation', description: 'Adapter un exercice à plusieurs profils', icon: '🎯', category: 'outils' },
+  { value: 'lettre_parents', label: 'Courrier parents', description: 'Lettres et communications aux familles', icon: '✉️', category: 'outils' },
+  { value: 'cahier_journal', label: 'Cahier journal', description: 'Journée de classe détaillée', icon: '📓', category: 'outils' },
+  { value: 'corrige', label: 'Corrigé annoté', description: "Corriger un travail d'élève", icon: '🔍', category: 'outils' },
+];
+
+/** Libellés adaptés à l'enseignement supérieur (la terminologie scolaire n'y a pas de sens). */
+const SUP_TOOL_TEXT: Record<TypeContenu, { label: string; description: string }> = {
+  cours: { label: 'Cours', description: 'Cours magistral (CM) structuré et problématisé' },
+  exercices: { label: 'TD / Exercices', description: "Sujets de TD progressifs avec éléments de correction" },
+  evaluation: { label: 'Examen', description: 'Sujet de partiel ou d’examen + corrigé + grille' },
+  sequence: { label: 'Plan de module', description: 'Organisation d’une UE en séances (CM, TD, TP)' },
+  fiche_prep: { label: 'Fiche de séance', description: 'Déroulé d’une séance de CM, TD ou TP' },
+  progression: { label: 'Syllabus', description: 'Plan de cours semestriel (syllabus)' },
+  appreciations: { label: 'Commentaires', description: "Commentaires d'évaluation pour les étudiants" },
+  differenciation: { label: 'Adaptations', description: 'Parcours différenciés et aménagements' },
+  lettre_parents: { label: 'Message étudiants', description: 'Message ou courrier aux étudiants' },
+  cahier_journal: { label: 'Planning de séances', description: 'Planning détaillé d’une journée d’enseignement' },
+  corrige: { label: 'Correction de copie', description: "Correction annotée d'une copie d'étudiant" },
+};
+
+const SECONDARY_TOOL_TEXT: Partial<Record<TypeContenu, { label: string; description: string }>> = {
+  cahier_journal: { label: 'Planning de journée', description: 'Journée de cours détaillée' },
+};
+
+export function getToolInfo(type: TypeContenu, niveau?: NiveauScolaire): TypeContenuInfo {
+  const base = TYPE_CONTENU.find(t => t.value === type) ?? TYPE_CONTENU[0];
+  if (!niveau) return base;
+  const group = getLevelGroup(niveau);
+  if (['bts_but', 'cpge', 'licence', 'master', 'doctorat'].includes(group)) {
+    return { ...base, ...SUP_TOOL_TEXT[type] };
+  }
+  if (group !== 'maternelle' && group !== 'elementaire' && SECONDARY_TOOL_TEXT[type]) {
+    return { ...base, ...SECONDARY_TOOL_TEXT[type]! };
+  }
+  return base;
+}
+
+export function getToolLabel(type: TypeContenu | string, niveau?: NiveauScolaire): string {
+  if (!isTypeContenu(type)) return String(type);
+  return getToolInfo(type, niveau).label;
+}
+
+// =============================================
+// SUGGESTIONS DE SUJETS (filtrées par classe)
+// =============================================
+
+/** Suggestion réservée à certaines classes (un groupe comme « collège » couvre plusieurs années de programme). */
+type Suggestion = string | { sujet: string; niveaux: readonly NiveauScolaire[] };
+type SuggestionMap = Partial<Record<Matiere, Suggestion[]>>;
+
+const only = (niveaux: readonly NiveauScolaire[], sujet: string): Suggestion => ({ sujet, niveaux });
+// Classes, d'après les programmes en vigueur (cycle 2 : CP-CE2 ; cycle 3 : CM1-6e ; cycle 4 : 5e-3e).
+const CE = ['ce1', 'ce2'] as const;
+const CM = ['cm1', 'cm2'] as const;
+const CYCLE_2 = ['cp', 'ce1', 'ce2'] as const;
+const CYCLE_4 = ['5eme', '4eme', '3eme'] as const;
+const SECONDE = ['2nde_gt'] as const;
+const PREMIERE = ['1ere_gen', '1ere_techno'] as const;
+const TERMINALE = ['terminale_gen', 'terminale_techno'] as const;
+
+const SUGGESTIONS: Partial<Record<LevelGroup, SuggestionMap>> = {
+  maternelle: {
+    langage_oral: ['Les comptines et jeux de doigts', 'Raconter une histoire', 'Le vocabulaire des émotions', 'Décrire une image'],
+    nombres_formes: ["Compter jusqu'à 10", 'Les formes géométriques', 'Petit / moyen / grand', 'Algorithmes et suites logiques'],
+    explorer_monde: ['Les 5 sens', 'Les saisons', 'Les animaux de la ferme', "Se repérer dans l'espace"],
+    graphisme_ecriture: ['Les lignes droites et courbes', 'Écrire son prénom', 'Les boucles'],
+  },
+  elementaire: {
+    francais: [
+      only(['ce2', ...CM], 'La conjugaison du passé composé'), only([...CE, ...CM], 'Les types de phrases'), "Étude d'un conte",
+      only(['cp', ...CE], 'Le nom et le déterminant'), only(['cp'], 'Les sons et les syllabes'),
+    ],
+    mathematiques: [
+      only(CM, 'Les fractions simples'), only(CE, 'La soustraction posée'), only(CM, 'Les nombres décimaux'), only(CM, 'Le périmètre'),
+      only(['cp', 'ce1'], "Les nombres jusqu'à 100"), only(CYCLE_2, 'Se repérer sur un quadrillage'),
+    ],
+    histoire_geo: [only(['cm1'], 'Les Gaulois'), only(CM, 'Se repérer sur une carte'), only(['cm1'], 'Le Moyen Âge'), only(['cm1'], 'Mon quartier, ma ville')],
+    sciences_primaire: [only(CM, 'Les états de la matière'), only(CM, 'Le cycle de l’eau'), only(CM, 'Les chaînes alimentaires')],
+    decouverte_monde: [only(CYCLE_2, 'Les saisons'), only(CYCLE_2, 'Le vivant et le non-vivant'), only(CYCLE_2, 'Les objets techniques du quotidien')],
+    emc: ['Les règles de la classe', "Les droits de l'enfant", "L'égalité filles-garçons"],
+    anglais: [only(CYCLE_2, 'Colours and numbers'), only(['ce2', ...CM], 'Daily routine'), only([...CE, ...CM], 'Describing animals')],
+  },
+  college: {
+    francais: [
+      only(CYCLE_4, "L'accord du participe passé"), only(['6eme', '5eme'], 'Le récit d’aventure'), only(['4eme', '3eme'], 'La poésie lyrique'),
+      'Argumenter à l’oral', only(['6eme'], 'Les contes et récits merveilleux'),
+    ],
+    mathematiques: [
+      only(['4eme', '3eme'], 'Le théorème de Pythagore'), 'La proportionnalité', only(['3eme'], 'Les fonctions affines'),
+      only(['5eme', '4eme'], 'Les nombres relatifs'), only(['6eme'], 'Les nombres décimaux'), only(['6eme', '5eme'], 'Les fractions'),
+    ],
+    histoire_geo: [
+      only(['4eme'], 'La Révolution française'), only(['3eme'], 'La Première Guerre mondiale'), only(['3eme'], 'Les espaces productifs'),
+      only(['4eme'], 'La mondialisation'), only(['6eme'], 'Les premiers États, les premières écritures'), only(['5eme'], 'Le monde byzantin et le monde musulman'),
+    ],
+    physique_chimie: [only(CYCLE_4, "L'énergie électrique"), only(['4eme', '3eme'], "La structure de l'atome"), only(['4eme', '3eme'], 'Les forces'), only(['4eme', '3eme'], 'Les réactions chimiques')],
+    svt: [only(['6eme', '5eme'], 'La cellule'), only(['4eme'], 'La reproduction humaine'), only(['6eme', '5eme'], 'La photosynthèse'), only(['3eme'], 'Le système immunitaire')],
+    emc: ['Le harcèlement scolaire', 'Les symboles de la République', 'La laïcité'],
+    anglais: [only(['4eme', '3eme'], 'Present perfect vs simple past'), 'Describing a picture', 'Writing an email'],
+    technologie: [only(CYCLE_4, 'Les objets connectés'), only(CYCLE_4, 'La chaîne d’énergie'), only(CYCLE_4, 'Programmer un robot')],
+  },
+  lycee: {
+    francais: [
+      only([...SECONDE, ...PREMIERE], 'La dissertation'), only([...SECONDE, ...PREMIERE], 'Le commentaire littéraire'),
+      only([...SECONDE, ...PREMIERE], 'Le théâtre classique'), only([...SECONDE, ...PREMIERE], 'La poésie du XIXe siècle'),
+    ],
+    mathematiques: [
+      only([...PREMIERE, ...TERMINALE], 'Les suites numériques'), only([...PREMIERE, ...TERMINALE], 'La dérivation'),
+      only([...PREMIERE, ...TERMINALE], 'Les probabilités conditionnelles'), only([...SECONDE, ...PREMIERE], 'Les vecteurs'),
+      only(SECONDE, 'Les fonctions de référence'),
+    ],
+    histoire_geo: [
+      only(TERMINALE, 'La guerre froide'), only(TERMINALE, 'La décolonisation'), only(PREMIERE, 'Les métropoles mondiales'),
+      only(SECONDE, 'La Méditerranée antique'),
+    ],
+    physique_chimie: [only([...PREMIERE, ...TERMINALE], 'Les ondes'), only(TERMINALE, 'La mécanique de Newton'), only([...PREMIERE, ...TERMINALE], 'Les dosages'), only(SECONDE, 'La lumière et les spectres')],
+    svt: ["L'évolution", only(PREMIERE, 'La génétique'), only(TERMINALE, 'Le climat et ses variations')],
+    philosophie: [only(TERMINALE, 'La liberté'), only(TERMINALE, 'La justice'), only(TERMINALE, 'Le bonheur'), only(TERMINALE, 'La conscience'), only(TERMINALE, "L'art")],
+    ses: [
+      only([...SECONDE, ...PREMIERE], 'Le marché et la formation des prix'), only(TERMINALE, 'Les inégalités sociales'),
+      only(TERMINALE, 'Le chômage'), only([...SECONDE, ...PREMIERE], 'La socialisation'),
+    ],
+    nsi: [only(PREMIERE, 'Les listes et dictionnaires en Python'), only(TERMINALE, 'La récursivité'), only(TERMINALE, 'Les bases de données')],
+    anglais: ['Debating pros and cons', 'Identities and exchanges', 'Art and power'],
+  },
+  lycee_pro: {
+    francais: ['Écrire une lettre de motivation', 'Lire un récit contemporain', 'Argumenter à l’écrit'],
+    mathematiques: ['Les pourcentages', 'Les statistiques à une variable', 'Les fonctions linéaires'],
+    gestion: ['Le bilan comptable', 'La facturation', 'Le budget prévisionnel'],
+    management: ['La motivation au travail', 'La communication en entreprise'],
+  },
+  bts_but: {
+    gestion: ['Le seuil de rentabilité', "L'analyse financière", 'La gestion de trésorerie'],
+    management: ["Le pilotage de la performance", 'La conduite du changement'],
+    informatique: ['Les API REST', 'La modélisation UML', 'La sécurité des applications web'],
+    mathematiques: ['Les matrices', 'Les probabilités et lois usuelles'],
+  },
+  cpge: {
+    mathematiques: ['Les espaces vectoriels', 'Les séries entières', 'La réduction des endomorphismes'],
+    physique: ['La mécanique du point', 'Les circuits électriques en régime transitoire'],
+    philosophie: ['Le travail', 'La parole', 'Le temps'],
+  },
+  licence: {
+    economie: ['Le multiplicateur keynésien', 'La théorie du consommateur', 'Les défaillances de marché'],
+    droit: ['Les sources du droit', 'La responsabilité civile délictuelle', 'Le contrat : formation et effets'],
+    informatique: ['Les algorithmes de tri', 'Les graphes et parcours', 'Les bases de données relationnelles'],
+    systemes_information: ["L'urbanisation des SI", 'La modélisation des processus (BPMN)'],
+    psychologie: ['La mémoire de travail', 'Le développement cognitif selon Piaget'],
+    sociologie: ['La socialisation', 'Les classes sociales', 'Durkheim et le suicide'],
+    histoire: ['La Révolution française : historiographie', "L'empire romain"],
+    biologie: ['La mitose et la méiose', 'La régulation de l’expression génique'],
+    mathematiques: ['Les intégrales généralisées', 'Les espaces vectoriels normés'],
+  },
+  master: {
+    systemes_information: ['La gouvernance des SI', 'COBIT et ITIL : comparaison critique', 'La transformation numérique des organisations'],
+    economie: ["L'économie de l'innovation", 'Les politiques monétaires non conventionnelles'],
+    droit: ['Le RGPD et ses contentieux', 'La responsabilité des plateformes numériques'],
+    management: ['La gouvernance d’entreprise', 'Le management stratégique'],
+    sciences_education: ["L'évaluation formative", 'Les inégalités scolaires'],
+    informatique: ["L'apprentissage automatique supervisé", 'Les systèmes distribués'],
+    sociologie: ['Les méthodes qualitatives', 'La sociologie des organisations'],
+  },
+  doctorat: {
+    sciences_education: ["Méthodologie de l'état de l'art", 'Épistémologie des sciences de l’éducation'],
+    informatique: ["Reproductibilité en apprentissage automatique", 'Méthodologie d’évaluation expérimentale'],
+    economie: ['Méthodes économétriques d’évaluation des politiques publiques'],
+    autre: ["Construire une revue systématique de la littérature", 'Rédiger une problématique de thèse', 'Éthique de la recherche'],
+  },
+};
+
+/** Suggestions de sujets adaptées à la classe exacte (jamais « Pythagore » en CP, ni en 6e). */
+export function getSujetSuggestions(matiere: Matiere, niveau: NiveauScolaire): string[] {
+  const group = getLevelGroup(niveau);
+  return (SUGGESTIONS[group]?.[matiere] ?? [])
+    .filter(s => typeof s === 'string' || s.niveaux.includes(niveau))
+    .map(s => (typeof s === 'string' ? s : s.sujet));
+}
+
+// =============================================
+// PARAMÈTRES SPÉCIFIQUES AUX OUTILS
+// =============================================
+
+export type DifficulteExercice = 'facile' | 'moyen' | 'difficile' | 'differencie';
+export type FormatSeance = 'cm' | 'td' | 'tp' | 'seminaire';
+export type TypeLettre = 'comportement' | 'absence' | 'felicitations' | 'reunion' | 'incident' | 'orientation' | 'information';
+export type ProfilEleve = 'excellent' | 'bon' | 'moyen' | 'fragile' | 'decrocheur';
+export type ProfilDifferenciation = 'renforce' | 'standard' | 'approfondissement';
+
+export const DIFFICULTES: { value: DifficulteExercice; label: string }[] = [
+  { value: 'facile', label: 'Facile' },
+  { value: 'moyen', label: 'Moyen' },
+  { value: 'difficile', label: 'Difficile' },
+  { value: 'differencie', label: 'Différencié (3 niveaux)' },
+];
+
+export const FORMATS_SEANCE: { value: FormatSeance; label: string }[] = [
+  { value: 'cm', label: 'Cours magistral (CM)' },
+  { value: 'td', label: 'Travaux dirigés (TD)' },
+  { value: 'tp', label: 'Travaux pratiques (TP)' },
+  { value: 'seminaire', label: 'Séminaire' },
+];
+
+export const TYPES_LETTRE: { value: TypeLettre; label: string; description: string }[] = [
+  { value: 'comportement', label: 'Comportement', description: 'Signalement de comportement' },
+  { value: 'absence', label: 'Absences', description: 'Absences répétées' },
+  { value: 'felicitations', label: 'Félicitations', description: 'Encouragements' },
+  { value: 'reunion', label: 'Réunion', description: 'Proposition de rendez-vous' },
+  { value: 'incident', label: 'Incident', description: "Signalement d'un incident" },
+  { value: 'orientation', label: 'Orientation', description: 'Information orientation' },
+  { value: 'information', label: 'Information', description: 'Sortie, projet, organisation' },
+];
+
+export const PROFILS_ELEVE: { value: ProfilEleve; label: string }[] = [
+  { value: 'excellent', label: 'Excellent' },
+  { value: 'bon', label: 'Bon niveau' },
+  { value: 'moyen', label: 'Moyen' },
+  { value: 'fragile', label: 'Fragile / en difficulté' },
+  { value: 'decrocheur', label: 'Décrocheur' },
+];
+
+export const PROFILS_DIFFERENCIATION: { value: ProfilDifferenciation; label: string; description: string }[] = [
+  { value: 'renforce', label: 'Accompagnement renforcé', description: 'Besoins particuliers, DYS, allophones, ULIS' },
+  { value: 'standard', label: 'Standard', description: 'Niveau attendu du groupe' },
+  { value: 'approfondissement', label: 'Approfondissement', description: 'Élèves avancés, HPI' },
+];
+
+/** Champs de formulaire pertinents par outil : tout autre champ est ignoré (pas de paramètres fantômes). */
+export const TOOL_FIELDS: Record<TypeContenu, readonly string[]> = {
+  cours: ['sujet', 'duree', 'objectifs', 'consignes', 'format'],
+  exercices: ['sujet', 'objectifs', 'consignes', 'difficulte', 'format'],
+  evaluation: ['sujet', 'duree', 'objectifs', 'consignes', 'difficulte'],
+  sequence: ['sujet', 'duree', 'objectifs', 'consignes'],
+  fiche_prep: ['sujet', 'duree', 'objectifs', 'consignes', 'format'],
+  progression: ['sujet', 'consignes'],
+  appreciations: ['sujet', 'trimestre', 'profilEleve', 'nombreAppreciations', 'consignes'],
+  differenciation: ['sujet', 'contenuSource', 'profilsDifferenciation', 'consignes'],
+  lettre_parents: ['typeLettre', 'consignes'],
+  cahier_journal: ['sujet', 'duree', 'consignes'],
+  corrige: ['sujet', 'texteEleve', 'consignes'],
+};
+
+/** L'outil exige-t-il un sujet saisi par l'enseignant ? */
+export const TOOL_REQUIRES_SUJET: Record<TypeContenu, boolean> = {
+  cours: true, exercices: true, evaluation: true, sequence: true, fiche_prep: true,
+  progression: false, appreciations: false, differenciation: false, lettre_parents: false,
+  cahier_journal: false, corrige: false,
+};
