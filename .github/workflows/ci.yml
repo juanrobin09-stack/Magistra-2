@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, typecheck, tests, build web
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck (src, shared, server, api, electron, tests)
+        run: npm run typecheck
+      - name: Tests unitaires et d'intégration
+        run: npm test
+      - name: Build web
+        run: npx vite build
+      - name: Build serveur autonome
+        run: npm run build:server
+      - name: Audit des dépendances de production
+        run: npm audit --omit=dev --audit-level=high
+      # Electron est livré aux utilisateurs (moteur Chromium + Node.js de l'application Windows) mais déclaré en
+      # devDependencies, comme l'exige electron-builder : l'étape précédente ne le voit pas. Un `npm audit` complet
+      # rendrait la CI rouge pour des outils de développement sans effet sur l'application installée (vite, eslint…).
+      # Ce script échoue uniquement sur un avis « high »/« critical » portant sur electron lui-même, et se contente
+      # d'avertir pour ses dépendances d'installation et la chaîne electron-builder (machine de construction).
+      - name: Audit d'Electron (livré avec l'application Windows)
+        run: node scripts/audit-electron.mjs
+      - name: Licences des dépendances
+        run: npm run licenses
+
+  e2e-web:
+    name: E2E web (démo)
+    runs-on: ubuntu-latest
+    needs: checks
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx vite build
+      - run: npm run test:e2e -- --project=web
+
+  electron:
+    name: Electron (démarrage réel + E2E local avec Ollama simulé)
+    runs-on: ubuntu-latest
+    needs: checks
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx vite build
+      - run: node scripts/build-electron.mjs
+      - name: Test de démarrage (fenêtre, preload, rendu)
+        run: xvfb-run -a node scripts/electron-smoke.mjs
+      - name: E2E application Windows (IPC + Ollama simulé)
+        run: xvfb-run -a npm run test:e2e -- --project=electron
+
+  windows-package:
+    name: Empaquetage Windows (sans installeur)
+    runs-on: windows-latest
+    needs: checks
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx vite build
+      - run: node scripts/build-electron.mjs
+      # Depuis les sources (`electron .`) : l'application empaquetée ignore --smoke-test et les variables
+      # MAGISTRA_* (electron/devOptions.ts), aucune exception n'est prévue pour elle.
+      - name: Test de démarrage sous Windows
+        run: node scripts/electron-smoke.mjs
+      - name: Empaquetage (dossier, sans NSIS)
+        run: npx electron-builder --win --x64 --dir
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
