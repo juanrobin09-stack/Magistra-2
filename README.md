@@ -150,6 +150,18 @@ La CI (GitHub Actions) exécute sur chaque push et chaque PR :
 - le démarrage réel d'Electron et les tests de bout en bout de l'application avec Ollama simulé ;
 - l'empaquetage Windows (sans installeur) sur `windows-latest`.
 
+### Tester sur un vrai PC Windows (avec Ollama réel)
+
+Les tests automatisés utilisent un Ollama simulé. Pour valider l'application avec le vrai moteur :
+
+1. Sous Windows 10/11 (16 Go de mémoire conseillés), avec Node 22 : `npm ci`, puis `npm run build:electron:dir`, et lancez `release\win-unpacked\Magistra.exe` ; ou bien `npm run build:electron` et installez `release\Magistra-Setup-*.exe`.
+2. **Sans Ollama installé** : l'assistant affiche « Installer le moteur IA », avec la taille et l'espace disque. Cliquez : l'installateur officiel est vérifié (SHA-256) puis lancé. Vérifiez qu'aucune fenêtre PowerShell n'apparaît et que Magistra détecte seul la fin de l'installation.
+3. **Installer Magistra Standard** : la progression s'affiche. Coupez le réseau pendant le téléchargement : un message clair apparaît, et « Reprendre » repart du point atteint. Attendez « ✓ Intelligence artificielle prête », puis **Commencer**.
+4. Créez un profil (par exemple Master 1), puis dans **Générer** : choisissez « Cours », ajoutez un PDF et un DOCX, « Mes documents uniquement ». Vérifiez le texte progressif, puis « Sources utilisées » avec les pages ou sections exactes. Recommencez en cliquant sur **Arrêter** en cours de route.
+5. Coupez Internet et relancez une génération : elle doit aboutir. En mode « Internet », l'application doit signaler que la recherche est indisponible.
+6. Vérifiez l'historique (recherche, favori, suppression), l'export PDF (accents, « x > 3 », « H₂O », tableaux), puis Réglages : changement de niveau (Léger / Qualité), « Rechercher une mise à jour ».
+7. Quittez Ollama (icône de la barre des tâches), puis relancez une génération : Magistra doit redémarrer le moteur, ou afficher « Moteur IA non démarré. ».
+
 ### Structure
 
 ```
