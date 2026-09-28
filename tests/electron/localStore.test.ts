@@ -1,0 +1,235 @@
+// Stockage local : écritures atomiques, récupération des fichiers corrompus, historique illimité,
+// favoris, suppression, statistiques, documents.
+
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { promises as fsp } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_PREFERENCES, type StoredDocument } from '../../shared/ipc.js';
+import type { NewGenerationRecord } from '../../shared/pipeline.js';
+import { writeJsonAtomic } from '../../electron/jsonFile.js';
+import { excerptOf, LocalStore } from '../../electron/localStore.js';
+
+let dir: string;
+let now: Date;
+let counter = 0;
+
+function makeStore(): LocalStore {
+  return new LocalStore(dir, {
+    now: () => now,
+    idFactory: () => `id-${String(++counter).padStart(5, '0')}`,
+    warn: () => undefined,
+  });
+}
+
+function record(i: number, matiere = 'mathematiques'): NewGenerationRecord {
+  return {
+    type: 'cours',
+    niveau: 'licence_1',
+    matiere,
+    sujet: `Sujet ${i}`,
+    contenu: `# Titre ${i}\n\nContenu **important** numéro ${i}. ${'Lorem ipsum dolor sit amet. '.repeat(20)}`,
+    sources: [],
+    params: { researchMode: 'documents' },
+    model: 'ministral-3:14b',
+  };
+}
+
+beforeEach(() => {
+  dir = mkdtempSync(path.join(os.tmpdir(), 'magistra-store-'));
+  now = new Date(2026, 8, 28, 15, 0, 0); // lundi 28 septembre 2026, 15 h (heure locale)
+  counter = 0;
+});
+
+afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+describe('écriture atomique', () => {
+  it('ne laisse jamais de fichier partiel ni de fichier temporaire', async () => {
+    const file = path.join(dir, 'prefs.json');
+    await writeJsonAtomic(file, { a: 1 });
+    // Écriture impossible (valeur non sérialisable) : l'ancien contenu reste intact.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    await expect(writeJsonAtomic(file, circular)).rejects.toThrow();
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ a: 1 });
+    // Écritures concurrentes : sérialisées, le fichier final est complet et valide.
+    await Promise.all(Array.from({ length: 20 }, (_, i) => writeJsonAtomic(file, { i, pad: 'x'.repeat(10_000) })));
+    expect(JSON.parse(readFileSync(file, 'utf8')).i).toBe(19);
+    expect(readdirSync(dir).filter(n => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('passe par un fichier temporaire puis un renommage', async () => {
+    const renameSpy = vi.spyOn(fsp, 'rename');
+    const file = path.join(dir, 'x.json');
+    await writeJsonAtomic(file, { ok: true });
+    expect(renameSpy).toHaveBeenCalledWith(expect.stringMatching(/x\.json\.\d+\.[0-9a-f]+\.tmp$/), file);
+    renameSpy.mockRestore();
+  });
+
+  it('supprime au démarrage les fichiers temporaires d’une écriture interrompue', async () => {
+    writeFileSync(path.join(dir, 'preferences.json.123.abc.tmp'), '{"trunc');
+    await makeStore().init();
+    expect(existsSync(path.join(dir, 'preferences.json.123.abc.tmp'))).toBe(false);
+  });
+});
+
+describe('fichiers corrompus', () => {
+  it('préférences illisibles : mises de côté, valeurs par défaut, autres réglages intacts', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.setProfile({ displayName: 'Mme Martin', etablissement: 'Université de Lyon', cycle: 'superieur', niveaux: ['licence_1'], matierePrincipale: 'mathematiques' });
+    writeFileSync(path.join(dir, 'ai-config.json'), '{"mode":"local","tier":"qualite"}');
+    writeFileSync(path.join(dir, 'preferences.json'), '{ "setupCompleted": tru');
+
+    const fresh = makeStore();
+    await fresh.init();
+    expect(await fresh.getPreferences()).toEqual(DEFAULT_PREFERENCES);
+    const names = readdirSync(dir);
+    expect(names.some(n => /^preferences\.json\.corrupt-\d{4}-\d{2}-\d{2}T/.test(n))).toBe(true);
+    expect((await fresh.getProfile())?.displayName).toBe('Mme Martin');
+    expect(readFileSync(path.join(dir, 'ai-config.json'), 'utf8')).toBe('{"mode":"local","tier":"qualite"}');
+    // Un nouvel enregistrement fonctionne ensuite normalement.
+    await fresh.setPreferences({ setupCompleted: true });
+    expect((await makeStore().getPreferences()).setupCompleted).toBe(true);
+  });
+
+  it('préférences partiellement invalides : chaque champ invalide reprend sa valeur par défaut', async () => {
+    writeFileSync(path.join(dir, 'preferences.json'), JSON.stringify({ setupCompleted: true, academicEnabled: 'oui', defaultResearchMode: 'n-importe-quoi', searxngUrl: 'javascript:1' }));
+    const prefs = await makeStore().getPreferences();
+    expect(prefs.setupCompleted).toBe(true);
+    expect(prefs.academicEnabled).toBe(DEFAULT_PREFERENCES.academicEnabled);
+    expect(prefs.defaultResearchMode).toBe(DEFAULT_PREFERENCES.defaultResearchMode);
+    expect(prefs.searxngUrl).toBeUndefined();
+  });
+
+  it('génération illisible : ignorée et mise de côté, les autres restent listées', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.saveGeneration(record(1));
+    await store.saveGeneration(record(2));
+    writeFileSync(path.join(dir, 'generations', 'broken-1.json'), '{"id":"broken-1", "contenu": ');
+    const fresh = makeStore();
+    await fresh.init();
+    const page = await fresh.list({ favoritesOnly: false, limit: 50 });
+    expect(page.items.map(i => i.sujet).sort()).toEqual(['Sujet 1', 'Sujet 2']);
+    expect(readdirSync(path.join(dir, 'generations')).some(n => n.startsWith('broken-1.json.corrupt-'))).toBe(true);
+  });
+});
+
+describe('historique', () => {
+  it('pagination par curseur, sans limite de taille, plus récent d’abord', async () => {
+    const store = makeStore();
+    await store.init();
+    const total = 257;
+    for (let i = 0; i < total; i++) {
+      now = new Date(2026, 0, 1, 8, 0, i); // une seconde d'écart
+      await store.saveGeneration(record(i));
+    }
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = await store.list({ favoritesOnly: false, limit: 40, cursor });
+      seen.push(...page.items.map(i => i.sujet));
+      cursor = page.nextCursor;
+      pages++;
+    } while (cursor);
+    expect(seen).toHaveLength(total);
+    expect(new Set(seen).size).toBe(total);
+    expect(seen[0]).toBe('Sujet 256');
+    expect(seen[total - 1]).toBe('Sujet 0');
+    expect(pages).toBe(Math.ceil(total / 40));
+    // L'index est reconstruit à partir des fichiers au redémarrage.
+    const fresh = makeStore();
+    await fresh.init();
+    expect((await fresh.stats()).total).toBe(total);
+  });
+
+  it('résumés avec un extrait d’environ 240 caractères, sans Markdown', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.saveGeneration(record(1));
+    const [item] = (await store.list({ favoritesOnly: false, limit: 10 })).items;
+    expect(item.excerpt.length).toBeLessThanOrEqual(241);
+    expect(item.excerpt).not.toMatch(/[#*]/);
+    expect(item.excerpt.startsWith('Titre 1 Contenu important numéro 1.')).toBe(true);
+    expect(excerptOf('[lien](https://x.fr) et `code`')).toBe('lien et code');
+  });
+
+  it('favoris, lecture, suppression', async () => {
+    const store = makeStore();
+    await store.init();
+    const { id: a } = await store.saveGeneration(record(1));
+    const { id: b } = await store.saveGeneration(record(2));
+    await store.setFavorite(a, true);
+    expect((await store.get(a))?.isFavorite).toBe(true);
+    expect((await store.list({ favoritesOnly: true, limit: 10 })).items.map(i => i.id)).toEqual([a]);
+    await store.delete(b);
+    expect(await store.get(b)).toBeNull();
+    expect((await store.list({ favoritesOnly: false, limit: 10 })).items.map(i => i.id)).toEqual([a]);
+    await expect(store.setFavorite('inexistant', true)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(await store.get('../ai-config')).toBeNull();
+  });
+
+  it('statistiques exactes selon l’heure locale', async () => {
+    const store = makeStore();
+    await store.init();
+    const at = async (d: Date, matiere = 'mathematiques') => {
+      now = d;
+      return store.saveGeneration(record(0, matiere));
+    };
+    await at(new Date(2026, 8, 28, 0, 5)); // aujourd'hui, juste après minuit
+    await at(new Date(2026, 8, 28, 14, 0), 'physique');
+    await at(new Date(2026, 8, 27, 23, 59)); // hier soir
+    await at(new Date(2026, 8, 22, 0, 1)); // il y a 6 jours → dans la semaine
+    await at(new Date(2026, 8, 21, 23, 59), 'physique'); // il y a 7 jours → hors semaine
+    const { id } = await at(new Date(2026, 5, 1, 10, 0));
+    await store.setFavorite(id, true);
+    now = new Date(2026, 8, 28, 15, 0);
+    expect(await store.stats()).toEqual({ total: 6, favorites: 1, today: 2, week: 4, topMatiere: { matiere: 'mathematiques', count: 4 } });
+  });
+
+  it('clearAll efface historique, profil et documents mais garde les préférences', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.saveGeneration(record(1));
+    await store.setProfile({ displayName: 'M. Durand', etablissement: '', cycle: '', niveaux: [], matierePrincipale: 'autre' });
+    await store.setPreferences({ setupCompleted: true, keepDocuments: true });
+    await store.clearAll();
+    expect((await store.stats()).total).toBe(0);
+    expect(await store.getProfile()).toBeNull();
+    expect((await store.getPreferences()).setupCompleted).toBe(true);
+  });
+});
+
+describe('documents conservés (texte extrait uniquement)', () => {
+  const doc: StoredDocument = {
+    id: 'doc-1',
+    name: 'cours.pdf',
+    kind: 'pdf',
+    description: 'Cours de L1',
+    savedAt: '2026-09-28T10:00:00.000Z',
+    units: [{ locator: { type: 'pages', start: 1, end: 1 }, text: 'Texte de la page 1' }],
+    chars: 18,
+  };
+
+  it("n'enregistre rien si l'enseignant n'a pas choisi de conserver ses documents", async () => {
+    const store = makeStore();
+    await store.init();
+    expect(await store.saveDocument(doc)).toBe(false);
+    expect(await store.listDocuments()).toEqual([]);
+  });
+
+  it('enregistre, liste, recharge, et efface tout quand la conservation est désactivée', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.setPreferences({ keepDocuments: true });
+    expect(await store.saveDocument(doc)).toBe(true);
+    expect(await store.listDocuments()).toEqual([{ id: 'doc-1', name: 'cours.pdf', kind: 'pdf', description: 'Cours de L1', savedAt: doc.savedAt, chars: 18 }]);
+    expect((await makeStore().loadDocument('doc-1'))?.units[0].text).toBe('Texte de la page 1');
+    await store.setPreferences({ keepDocuments: false });
+    expect(await store.listDocuments()).toEqual([]);
+    expect(await makeStore().loadDocument('doc-1')).toBeNull();
+  });
+});
