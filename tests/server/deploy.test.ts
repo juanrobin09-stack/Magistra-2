@@ -1,0 +1,115 @@
+// Cohérence des fichiers de déploiement (Vercel, serveur autonome, Supabase, .env.example).
+
+import { execFileSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import { ROUTE_METHODS } from '../../server/handlers.js';
+import { securityHeaders } from '../../server/standalone.js';
+import { COMMERCIAL_VENDOR } from '../vendor';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const read = (p: string) => readFileSync(path.join(root, p), 'utf8');
+
+interface VercelConfig {
+  rewrites: { source: string; destination: string }[];
+  functions: Record<string, { maxDuration?: number }>;
+  headers: { source: string; headers: { key: string; value: string }[] }[];
+}
+
+describe('déploiement', () => {
+  const vercel = JSON.parse(read('vercel.json')) as VercelConfig;
+
+  it('vercel.json : réécriture SPA hors /api et durée longue pour la génération', () => {
+    expect(vercel.rewrites).toEqual([{ source: '/((?!api/).*)', destination: '/index.html' }]);
+    const spa = new RegExp(`^${vercel.rewrites[0].source}$`);
+    expect(spa.test('/app/generate')).toBe(true);
+    expect(spa.test('/api/generate')).toBe(false);
+    expect(vercel.functions['api/generate.ts'].maxDuration).toBe(300);
+    for (const file of Object.keys(vercel.functions)) expect(existsSync(path.join(root, file)), file).toBe(true);
+  });
+
+  it('vercel.json et le serveur autonome envoient les mêmes en-têtes de sécurité', () => {
+    const global = vercel.headers.find(h => h.source === '/(.*)')!;
+    const fromVercel = Object.fromEntries(global.headers.map(h => [h.key, h.value]));
+    expect(fromVercel).toEqual(securityHeaders());
+    expect(JSON.stringify(vercel)).not.toContain('Access-Control-Allow-Origin');
+  });
+
+  it('une fonction Vercel par route du contrat, et plus aucune ancienne route', () => {
+    const files = readdirSync(path.join(root, 'api')).sort();
+    expect(files).toEqual(['account.ts', 'clerk-webhook.ts', 'generate.ts', 'generation.ts', 'history.ts', 'profile.ts', 'stats.ts', 'status.ts']);
+    // Chaque route du serveur a sa fonction Vercel, servie hors de la réécriture vers l'interface.
+    for (const route of Object.keys(ROUTE_METHODS)) {
+      expect(files, route).toContain(`${route}.ts`);
+      expect(vercel.functions[`api/${route}.ts`], route).toBeDefined();
+      expect(new RegExp(`^${vercel.rewrites[0].source}$`).test(`/api/${route}`), route).toBe(false);
+    }
+    expect(existsSync(path.join(root, 'netlify.toml'))).toBe(false);
+  });
+
+  it('aucune mention d’un fournisseur d’IA commercial imposé ni de quota', () => {
+    const files = [
+      '.env.example', 'vercel.json', 'supabase-schema.sql', 'scripts/build-server.mjs',
+      ...readdirSync(path.join(root, 'server')).map(f => `server/${f}`),
+      ...readdirSync(path.join(root, 'api')).map(f => `api/${f}`),
+    ];
+    for (const file of files) {
+      const text = read(file);
+      expect(text, file).not.toMatch(COMMERCIAL_VENDOR);
+      expect(text, file).not.toMatch(/générations\s*\/\s*jour|MAX_GENERATIONS_PER_DAY/i);
+    }
+  });
+
+  it('dépôt entier : aucun fournisseur d’IA commercial, hors documents d’audit', () => {
+    let tracked: string[];
+    try {
+      tracked = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean);
+    } catch {
+      return; // archive sans git : les autres tests couvrent les fichiers du serveur
+    }
+    const AUDIT_DOCS = new Set(['ANALYSE.md', 'CORRECTIONS.md']);
+    const BINARY = /\.(png|ico|jpe?g|gif|webp|woff2?|ttf|otf|pdf|zip)$/i;
+    const offenders = tracked
+      .filter(f => !AUDIT_DOCS.has(f) && !BINARY.test(f) && existsSync(path.join(root, f)))
+      .filter(f => COMMERCIAL_VENDOR.test(read(f)));
+    expect(offenders).toEqual([]);
+  });
+
+  it('.env.example : seule VITE_CLERK_PUBLISHABLE_KEY est publique, aucune valeur secrète', () => {
+    const env = read('.env.example');
+    const vars = [...env.matchAll(/^([A-Z0-9_]+)=(.*)$/gm)].map(m => ({ name: m[1], value: m[2] }));
+    expect(vars.filter(v => v.name.startsWith('VITE_')).map(v => v.name)).toEqual(['VITE_CLERK_PUBLISHABLE_KEY']);
+    for (const secret of ['CLERK_SECRET_KEY', 'CLERK_JWT_KEY', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_SERVICE_ROLE_KEY', 'AI_API_KEY']) {
+      expect(vars.find(v => v.name === secret)?.value, secret).toBe('');
+    }
+    for (const name of ['AI_PROVIDER', 'AI_BASE_URL', 'AI_MODEL', 'AI_SERVER_LABEL', 'AI_CONTEXT_TOKENS', 'AI_MAX_OUTPUT_TOKENS',
+      'AI_TIMEOUT_SECONDS', 'SEARXNG_URL', 'CROSSREF_MAILTO', 'RESEARCH_ACADEMIC', 'RESEARCH_WIKIPEDIA', 'RATE_LIMIT_PER_MINUTE',
+      'RATE_LIMIT_GLOBAL_PER_MINUTE', 'MAX_CONCURRENT_GENERATIONS_PER_USER', 'MAX_CONCURRENT_GENERATIONS',
+      'CLERK_AUTHORIZED_PARTIES', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_URL', 'PORT', 'CSP_EXTRA_ORIGINS']) {
+      expect(vars.some(v => v.name === name), name).toBe(true);
+    }
+  });
+
+  it('supabase-schema.sql : aucune politique permissive active, fonctions protégées', () => {
+    const sql = read('supabase-schema.sql');
+    const active = sql.split('\n').filter(line => !line.trim().startsWith('--')).join('\n');
+    expect(active).not.toMatch(/CREATE POLICY/i);
+    expect(active).not.toMatch(/USING\s*\(\s*true\s*\)/i);
+    expect(active).toMatch(/DROP TABLE IF EXISTS public\.usage/);
+    expect(active).toMatch(/REVOKE ALL ON TABLE public\.profiles, public\.generations, public\.api_requests, public\.active_generations FROM PUBLIC, anon, authenticated/);
+    for (const table of ['profiles', 'generations', 'api_requests', 'active_generations']) {
+      expect(active).toMatch(new RegExp(`ALTER TABLE public\\.${table}\\s+ENABLE ROW LEVEL SECURITY`));
+    }
+    for (const fn of ['magistra_register_request', 'magistra_begin_generation', 'magistra_end_generation', 'magistra_stats']) {
+      expect(active).toMatch(new RegExp(`FUNCTION public\\.${fn}\\([^)]*\\)\\s*RETURNS[\\s\\S]*?SECURITY DEFINER\\s*SET search_path = public`));
+      expect(active).toMatch(new RegExp(`REVOKE ALL ON FUNCTION public\\.${fn}\\([^)]*\\) FROM PUBLIC, anon, authenticated`));
+      expect(active).toMatch(new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${fn}\\([^)]*\\) TO service_role`));
+    }
+    expect(active).toMatch(/pg_advisory_xact_lock/);
+    // Réexécutable : aucune création qui échouerait la seconde fois.
+    expect(active).toMatch(/CREATE TABLE IF NOT EXISTS public\.active_generations/);
+    expect(active).not.toMatch(/CREATE FUNCTION/i);
+  });
+});
