@@ -1,105 +1,123 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ClerkProvider, SignedIn, SignedOut, RedirectToSignIn } from '@clerk/clerk-react';
-import { dark } from '@clerk/themes';
-import { ClerkUserBridge, NoAuthProvider } from './lib/auth';
+import { lazy, Suspense, type ReactNode } from 'react';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { ClerkFailed, ClerkLoaded, ClerkLoading, ClerkProvider, RedirectToSignIn, useAuth } from '@clerk/react';
+import ErrorBoundary from '@/components/ErrorBoundary';
+import { AuthUnavailable, FullPageSpinner, ProfileGuard, LocalSetupGuard } from '@/components/guards';
+import { CLERK_PUBLISHABLE_KEY, detectMode } from '@/lib/runtime/context';
+import { DemoRuntimeProvider, LocalRuntimeProvider, WebRuntimeProvider } from '@/lib/runtime/RuntimeProvider';
 
-import LandingPage from './pages/LandingPage';
-import OnboardingPage from './pages/OnboardingPage';
-import DashboardPage from './pages/DashboardPage';
-import GeneratePage from './pages/GeneratePage';
-import HistoryPage from './pages/HistoryPage';
-import FavoritesPage from './pages/FavoritesPage';
-import SettingsPage from './pages/SettingsPage';
-import AppLayout from './components/layout/AppLayout';
-import { isOnboardingDone } from './hooks/useTeacherProfile';
+// Chargement différé : la page d'accueil ne télécharge ni l'éditeur, ni l'export PDF, ni pdf.js.
+const LandingPage = lazy(() => import('@/pages/LandingPage'));
+const OnboardingPage = lazy(() => import('@/pages/OnboardingPage'));
+const SetupPage = lazy(() => import('@/pages/SetupPage'));
+const AppLayout = lazy(() => import('@/components/layout/AppLayout'));
+const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
+const GeneratePage = lazy(() => import('@/pages/GeneratePage'));
+const HistoryPage = lazy(() => import('@/pages/HistoryPage'));
+const FavoritesPage = lazy(() => import('@/pages/FavoritesPage'));
+const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 
-const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+const mode = detectMode();
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+function SignedInGate({ children }: { children: ReactNode }) {
+  const { isLoaded, isSignedIn } = useAuth();
+  if (!isLoaded) return <FullPageSpinner label="Connexion…" />;
+  if (!isSignedIn) return <RedirectToSignIn />;
+  return <>{children}</>;
+}
+
+/** Site web : connexion obligatoire ; message explicite si le service de connexion ne se charge pas. */
+function WebAuthGuard({ children }: { children: ReactNode }) {
   return (
     <>
-      <SignedIn>{children}</SignedIn>
-      <SignedOut><RedirectToSignIn /></SignedOut>
+      <ClerkLoading><FullPageSpinner label="Connexion…" /></ClerkLoading>
+      <ClerkFailed><AuthUnavailable /></ClerkFailed>
+      <ClerkLoaded><SignedInGate>{children}</SignedInGate></ClerkLoaded>
     </>
   );
 }
 
-function AppEntry() {
-  // Redirect to onboarding if not completed
-  if (!isOnboardingDone()) {
-    return <Navigate to="/onboarding" replace />;
-  }
-  return <AppLayout />;
+/** Protection des pages de l'application selon le mode d'exécution. */
+function Protected({ children }: { children: ReactNode }) {
+  if (mode === 'web') return <WebAuthGuard>{children}</WebAuthGuard>;
+  return <>{children}</>;
 }
 
-const appRoutes = (
-  <Routes>
-    <Route path="/" element={<LandingPage />} />
-    <Route path="/onboarding" element={<OnboardingPage />} />
-    <Route path="/app" element={<AppEntry />}>
-      <Route index element={<DashboardPage />} />
-      <Route path="generate" element={<GeneratePage />} />
-      <Route path="history" element={<HistoryPage />} />
-      <Route path="favorites" element={<FavoritesPage />} />
-      <Route path="settings" element={<SettingsPage />} />
-    </Route>
-    <Route path="*" element={<Navigate to="/" />} />
-  </Routes>
-);
-
-const protectedRoutes = (
-  <Routes>
-    <Route path="/" element={<LandingPage />} />
-    <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
-    <Route path="/app" element={<ProtectedRoute><AppEntry /></ProtectedRoute>}>
-      <Route index element={<DashboardPage />} />
-      <Route path="generate" element={<GeneratePage />} />
-      <Route path="history" element={<HistoryPage />} />
-      <Route path="favorites" element={<FavoritesPage />} />
-      <Route path="settings" element={<SettingsPage />} />
-    </Route>
-    <Route path="*" element={<Navigate to="/" />} />
-  </Routes>
-);
+function AppRoutes() {
+  return (
+    <Suspense fallback={<FullPageSpinner />}>
+      <Routes>
+        <Route path="/" element={mode === 'local' ? <Navigate to="/app" replace /> : <LandingPage />} />
+        {mode === 'local' && <Route path="/setup" element={<SetupPage />} />}
+        <Route path="/onboarding" element={<Protected><OnboardingPage /></Protected>} />
+        <Route
+          path="/app"
+          element={
+            <Protected>
+              <LocalSetupGuard enabled={mode === 'local'}>
+                <ProfileGuard>
+                  <AppLayout />
+                </ProfileGuard>
+              </LocalSetupGuard>
+            </Protected>
+          }
+        >
+          <Route index element={<DashboardPage />} />
+          <Route path="generate" element={<GeneratePage />} />
+          <Route path="history" element={<HistoryPage />} />
+          <Route path="favorites" element={<FavoritesPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
+  );
+}
 
 export default function App() {
-  if (!CLERK_KEY) {
-    return <NoAuthProvider><BrowserRouter>{appRoutes}</BrowserRouter></NoAuthProvider>;
+  const routes = (
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
+  );
+
+  if (mode === 'local') {
+    return (
+      <ErrorBoundary>
+        <LocalRuntimeProvider>{routes}</LocalRuntimeProvider>
+      </ErrorBoundary>
+    );
+  }
+
+  if (mode === 'demo' || !CLERK_PUBLISHABLE_KEY) {
+    return (
+      <ErrorBoundary>
+        <DemoRuntimeProvider>{routes}</DemoRuntimeProvider>
+      </ErrorBoundary>
+    );
   }
 
   return (
-    <ClerkProvider
-      publishableKey={CLERK_KEY}
-      // Allow Electron's local server to use Clerk auth
-      allowedRedirectOrigins={['http://localhost:3721', 'http://127.0.0.1:3721']}
-      appearance={{
-        baseTheme: dark,
-        variables: {
-          colorPrimary: '#c8b6ff',
-          colorBackground: '#111118',
-          colorInputBackground: '#1a1a24',
-          colorInputText: '#d4d4e4',
-          colorText: '#d4d4e4',
-          colorTextSecondary: '#7a7a8e',
-          borderRadius: '0.75rem',
-          fontFamily: '"DM Sans", system-ui, sans-serif',
-        },
-        elements: {
-          card: 'bg-mg-800 border border-white/10 shadow-2xl',
-          headerTitle: 'font-display text-white',
-          headerSubtitle: 'text-mg-300',
-          socialButtonsBlockButton: 'bg-mg-700 border-white/10 text-mg-100 hover:bg-mg-600',
-          formButtonPrimary: 'bg-gradient-to-r from-accent-dim to-accent text-mg-900 hover:opacity-90',
-          footerActionLink: 'text-accent hover:text-accent-bright',
-          identityPreview: 'bg-mg-700 border-white/10',
-          formFieldInput: 'bg-mg-700 border-white/10 text-mg-100',
-          formFieldLabel: 'text-mg-300',
-        },
-      }}
-    >
-      <ClerkUserBridge>
-        <BrowserRouter>{protectedRoutes}</BrowserRouter>
-      </ClerkUserBridge>
-    </ClerkProvider>
+    <ErrorBoundary>
+      <ClerkProvider
+        publishableKey={CLERK_PUBLISHABLE_KEY}
+        appearance={{
+          variables: {
+            colorPrimary: '#c8b6ff',
+            colorPrimaryForeground: '#0a0a0f',
+            colorBackground: '#111118',
+            colorForeground: '#d4d4e4',
+            colorMutedForeground: '#a8a8be',
+            colorInput: '#1a1a24',
+            colorInputForeground: '#d4d4e4',
+            colorNeutral: '#d4d4e4',
+            borderRadius: '0.75rem',
+            fontFamily: '"DM Sans", system-ui, sans-serif',
+          },
+        }}
+      >
+        <WebRuntimeProvider>{routes}</WebRuntimeProvider>
+      </ClerkProvider>
+    </ErrorBoundary>
   );
 }

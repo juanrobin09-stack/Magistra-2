@@ -1,602 +1,226 @@
-import { useState, useRef } from 'react';
-import { useCurrentUser } from '@/lib/auth';
-import { useSearchParams } from 'react-router-dom';
-import ReactMarkdown from 'react-markdown';
-import {
-  Sparkles, Download, Copy, Check, FileText,
-  Loader2, ChevronDown, Clock, AlertCircle, Settings2
-} from 'lucide-react';
-import SelectField from '@/components/ui/SelectField';
-import {
-  NIVEAUX, TYPE_CONTENU, SUJETS_SUGGESTIONS, getMatieresForNiveau,
-  type GenerationRequest, type TypeContenu, type NiveauScolaire, type Matiere,
-  type DifficulteExercice, getNiveauLabel, getMatiereLabel, getMatiereEmoji
-} from '@/types';
-import { apiGenerate } from '@/lib/api';
-import { generateDemoContent } from '@/lib/ai';
-import { exportToPDF, exportToText, copyToClipboard } from '@/lib/export';
-import { getTeacherProfile } from '@/hooks/useTeacherProfile';
+// Page « Générer » : 11 outils, formulaire propre à chaque outil, sources (documents + recherche),
+// confidentialité honnête, génération en flux avec arrêt / reprise.
+// Mise en page : sélecteur d'outils en haut (onglets défilants) sous `lg`, barre latérale au-dessus.
 
-// Tools that need the subject field
-const NEEDS_SUJET = ['cours', 'exercices', 'evaluation', 'sequence', 'fiche_prep', 'progression', 'differenciation', 'cahier_journal'];
-// Tools that need matiere + niveau
-const NEEDS_CONTEXT = ['cours', 'exercices', 'evaluation', 'sequence', 'fiche_prep', 'progression', 'differenciation', 'appreciations', 'cahier_journal', 'corrige', 'lettre_parents'];
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
+import { Loader2, Settings2, Sparkles } from 'lucide-react';
+import { getToolInfo, type TypeContenu } from '@shared/catalog';
+import { toMagistraError } from '@shared/errors';
+import type { NiveauScolaire } from '@shared/levels';
+import { modeUsesDocuments, type DocumentPassage, type ResearchMode } from '@shared/types';
+import AiNotReadyCard from '@/components/generate/AiNotReadyCard';
+import GenerateFormFields from '@/components/generate/GenerateFormFields';
+import PrivacyNotice from '@/components/generate/PrivacyNotice';
+import ResearchModePicker from '@/components/generate/ResearchModePicker';
+import ResultPanel from '@/components/generate/ResultPanel';
+import SourcesPanel from '@/components/generate/SourcesPanel';
+import ToolPicker from '@/components/generate/ToolPicker';
+import { useLocalPreferences, useSourceDocuments } from '@/components/generate/useSourceDocuments';
+import { FOCUS_RING } from '@/components/generate/fieldUtils';
+import { useCapabilities, useGeneration } from '@/hooks/useGeneration';
+import { selectPassages } from '@/lib/documents';
+import {
+  buildGenerationRequest, buildPassageQuery, createInitialForm, DEFAULT_DOCUMENT_BUDGET, validateForm, withNiveau,
+  type GenerateForm,
+} from '@/lib/generation/request';
+import {
+  describeResearchOptions, effectiveResearchMode, privacyNotes, researchHints,
+} from '@/lib/generation/research';
+import { formFromRecord, type ReusableRecord } from '@/lib/generation/reuse';
+import { useRuntime } from '@/lib/runtime/context';
+
+const FIELD_IDS: Record<string, string> = {
+  sujet: 'gen-sujet',
+  discipline: 'gen-discipline',
+  nombreAppreciations: 'gen-nombre',
+  contenuSource: 'gen-contenu',
+  texteEleve: 'gen-copie',
+  objectifs: 'gen-objectifs',
+  consignes: 'gen-consignes',
+};
 
 export default function GeneratePage() {
-  const { user } = useCurrentUser();
+  const { mode, client, store, profile } = useRuntime();
   const [searchParams] = useSearchParams();
-  const profile = getTeacherProfile();
+  // « Reprendre cette demande » (historique) : formulaire prérempli avec les paramètres enregistrés.
+  const location = useLocation();
+  const [reused] = useState(() => {
+    const reuse = (location.state as { reuse?: ReusableRecord } | null)?.reuse;
+    return reuse ? formFromRecord(reuse, profile) : null;
+  });
+  const [form, setForm] = useState<GenerateForm>(() =>
+    reused?.form ?? createInitialForm(profile, { type: searchParams.get('type'), sujet: searchParams.get('sujet') }),
+  );
+  const [showErrors, setShowErrors] = useState(false);
+  const [submitNotice, setSubmitNotice] = useState<string | null>(null);
+  const [chosenMode, setChosenMode] = useState<ResearchMode | null>(reused?.researchMode ?? null);
 
-  const initialType = (searchParams.get('type') as TypeContenu) || 'cours';
-  const initialSujet = searchParams.get('sujet') || '';
+  const capabilities = useCapabilities(client);
+  const caps = capabilities.caps;
+  const prefs = useLocalPreferences(mode);
+  const sources = useSourceDocuments(mode, prefs);
+  const generation = useGeneration(client);
+  const resultRef = useRef<HTMLElement>(null);
 
-  const [type, setType] = useState<TypeContenu>(initialType);
-  const [matiere, setMatiere] = useState<Matiere>(profile?.matierePrincipale ?? 'francais');
-  const [niveau, setNiveau] = useState<NiveauScolaire>(profile?.niveaux[0] ?? '6eme');
-  const [sujet, setSujet] = useState(initialSujet);
-  const [duree, setDuree] = useState('');
-  const [objectifs, setObjectifs] = useState('');
-  const [difficulte, setDifficulte] = useState<DifficulteExercice>('moyen');
-  const [consignes, setConsignes] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const tool = getToolInfo(form.type, form.niveau);
+  const problems = useMemo(() => validateForm(form), [form]);
 
-  const [trimestre, setTrimestre] = useState<'1' | '2' | '3'>('1');
-  const [profilEleve, setProfilEleve] = useState('bon');
-  const [nombreEleves, setNombreEleves] = useState(25);
-  const [typeLettre, setTypeLettre] = useState('comportement');
-  const [texteEleve, setTexteEleve] = useState('');
-  const [diffProfiles, setDiffProfiles] = useState<string[]>(['dys', 'standard', 'hpi']);
-  const toggleDiffProfile = (p: string) =>
-    setDiffProfiles(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]);
+  // Recherche : préférence locale par défaut, sinon « Mes documents uniquement » (fonctionne hors ligne).
+  const researchOptions = useMemo(() => describeResearchOptions(caps, mode, form.niveau), [caps, mode, form.niveau]);
+  const researchMode = effectiveResearchMode(chosenMode ?? prefs?.defaultResearchMode ?? 'documents', researchOptions);
+  const hints = researchHints(researchMode, sources.docs.filter(d => d.status !== 'error').length, form.niveau, researchOptions, mode);
+  const privacy = privacyNotes(caps, researchMode);
 
-  const [generating, setGenerating] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [remaining, setRemaining] = useState<number | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const resultRef = useRef<HTMLDivElement>(null);
+  // Le résultat apparaît sous le formulaire : on l'amène à l'écran à chaque nouvelle génération.
+  const runId = generation.state.runId;
+  useEffect(() => {
+    if (runId > 0) resultRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [runId]);
 
-  const canGenerate = () => {
-    if (type === 'corrige') return texteEleve.trim().length > 0;
-    if (type === 'lettre_parents') return true;
-    if (type === 'appreciations') return true;
-    if (type === 'cahier_journal') return true;
-    if (type === 'progression') return true;
-    if (type === 'differenciation') return sujet.trim().length > 0 && diffProfiles.length > 0;
-    return sujet.trim().length > 0;
+  const update = (patch: Partial<GenerateForm>) => {
+    setForm(f => ({ ...f, ...patch }));
+    setSubmitNotice(null);
+  };
+  const changeTool = (type: TypeContenu) => {
+    setForm(f => ({ ...f, type }));
+    setShowErrors(false);
+    setSubmitNotice(null);
+  };
+  const changeNiveau = (niveau: NiveauScolaire) => {
+    setForm(f => withNiveau(f, niveau, profile));
+    setSubmitNotice(null);
   };
 
-  const handleGenerate = async () => {
-    if (!canGenerate()) return;
-    setGenerating(true);
-    setResult(null);
-    setError(null);
-
-    const request: GenerationRequest = {
-      type, matiere, niveau,
-      sujet: sujet.trim() || `${TYPE_CONTENU.find(t => t.value === type)?.label} — ${getMatiereLabel(matiere)} ${getNiveauLabel(niveau)}`,
-      duree: duree || undefined,
-      objectifs: objectifs || undefined,
-      difficulte,
-      consignesSupplementaires: type === 'differenciation'
-        ? `Profils à générer : ${diffProfiles.join(', ')}${consignes ? '. ' + consignes : ''}`
-        : consignes || undefined,
-      trimestre: type === 'appreciations' ? trimestre : undefined,
-      profilsEleves: type === 'appreciations' ? profilEleve : undefined,
-      nombreEleves: type === 'appreciations' ? nombreEleves : undefined,
-      typeLettre: type === 'lettre_parents' ? typeLettre as GenerationRequest['typeLettre'] : undefined,
-      texteEleve: type === 'corrige' ? texteEleve : undefined,
-    };
-
-    try {
-      if (user?.id) {
-        const response = await apiGenerate(user.id, request);
-        setResult(response.contenu);
-        setRemaining(response.remaining);
-      } else {
-        await new Promise(r => setTimeout(r, 1500));
-        setResult(generateDemoContent(request));
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Une erreur est survenue.');
-    } finally {
-      setGenerating(false);
-      setTimeout(() => {
-        resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 200);
+  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    // La touche Entrée ne relance jamais une génération en cours.
+    if (generation.isRunning) return;
+    if (problems.length > 0) {
+      setShowErrors(true);
+      setSubmitNotice(problems[0].message);
+      const id = FIELD_IDS[problems[0].field];
+      if (id) document.getElementById(id)?.focus();
+      return;
     }
+    if (sources.analyzing) {
+      setSubmitNotice("Attendez la fin de l'analyse des documents (ou retirez le document en cours d'analyse).");
+      return;
+    }
+    let passages: DocumentPassage[] | undefined;
+    try {
+      passages = modeUsesDocuments(researchMode) && sources.readyDocs.length > 0
+        ? selectPassages(sources.readyDocs, buildPassageQuery(form, form.type), {
+          budgetChars: caps?.maxDocumentChars ?? DEFAULT_DOCUMENT_BUDGET,
+        })
+        : undefined;
+    } catch (err) {
+      setSubmitNotice(toMagistraError(err, 'DOCUMENT_UNREADABLE').message);
+      return;
+    }
+    setShowErrors(false);
+    setSubmitNotice(null);
+    generation.start(buildGenerationRequest(form, form.type, profile, passages, researchMode));
   };
 
-  const handleCopy = async () => {
-    if (!result) return;
-    await copyToClipboard(result);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const creationTypes = TYPE_CONTENU.filter(t => t.category === 'creation');
-  const outilTypes = TYPE_CONTENU.filter(t => t.category === 'outils');
-  const currentTool = TYPE_CONTENU.find(t => t.value === type);
+  const running = generation.isRunning;
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 py-6 lg:py-8 lg:grid lg:grid-cols-[13.5rem_minmax(0,1fr)] lg:gap-8 xl:gap-10">
+      <ToolPicker value={form.type} niveau={form.niveau} onChange={changeTool} />
 
-      {/* ── Left sidebar: tool picker ── */}
-      <aside className="w-[220px] shrink-0 border-r border-white/5 overflow-y-auto flex flex-col bg-mg-800/30">
-        <div className="p-4 border-b border-white/5">
-          <p className="text-xs font-semibold text-white tracking-wide">Générer</p>
-          <p className="text-[11px] text-mg-400 mt-0.5">Choisissez un type</p>
+      <div className="min-w-0 max-w-3xl">
+        {/* En-tête */}
+        <header className="mb-6">
+          <div className="badge badge-accent mb-3">
+            <Sparkles size={12} aria-hidden="true" /> Génération IA
+          </div>
+          <h1 className="text-2xl sm:text-3xl text-white" style={{ fontFamily: 'var(--font-display)' }}>
+            {profile?.displayName
+              ? <>{profile.displayName}, que souhaitez-vous <em className="text-accent not-italic">créer</em> ?</>
+              : <>Que souhaitez-vous <em className="text-accent not-italic">créer</em> ?</>}
+          </h1>
+        </header>
+
+        {reused && (
+          <div role="note" className="mb-6 p-4 rounded-xl bg-white/[0.03] border border-white/10 text-sm text-mg-100">
+            <p className="text-white font-medium">Demande reprise depuis l’historique : vérifiez les paramètres avant de générer.</p>
+            {reused.notes.length > 0 && (
+              <ul className="mt-1.5 list-disc pl-5 space-y-0.5 text-mg-200 [overflow-wrap:anywhere]">
+                {reused.notes.map(note => <li key={note}>{note}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* Outil choisi */}
+        <div className="mb-6 flex items-center gap-3.5 p-4 rounded-xl bg-accent/5 border border-accent/15">
+          <div aria-hidden="true" className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/15 flex items-center justify-center text-xl shrink-0 select-none">
+            {tool.icon}
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-white leading-tight">{tool.label}</p>
+            <p className="text-xs text-mg-200 mt-0.5 leading-relaxed">{tool.description}</p>
+          </div>
         </div>
 
-        <nav className="flex-1 p-3 space-y-5 overflow-y-auto">
-          {/* Contenu pédagogique */}
-          <div>
-            <p className="px-2 mb-1.5 text-[10px] font-semibold text-mg-500 uppercase tracking-widest">
-              Pédagogie
-            </p>
-            <div className="space-y-0.5">
-              {creationTypes.map(t => (
-                <button
-                  key={t.value}
-                  onClick={() => setType(t.value)}
-                  className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition-all duration-150 text-left ${
-                    type === t.value
-                      ? 'bg-accent/10 text-white shadow-[inset_0_0_0_1px_rgba(200,182,255,0.12)]'
-                      : 'text-mg-400 hover:text-mg-100 hover:bg-white/5'
-                  }`}
-                >
-                  <span className={`text-base shrink-0 transition-all ${type === t.value ? 'opacity-100' : 'opacity-50'}`}>
-                    {t.icon}
-                  </span>
-                  <span className={`text-[13px] font-medium truncate ${type === t.value ? 'text-white' : ''}`}>
-                    {t.label}
-                  </span>
-                  {type === t.value && (
-                    <span className="ml-auto w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
+        <div className="space-y-6">
+          <AiNotReadyCard
+            mode={mode}
+            caps={caps}
+            checkError={capabilities.error}
+            checking={capabilities.loading}
+            onRecheck={capabilities.refresh}
+          />
 
-          {/* Outils enseignant */}
-          <div>
-            <p className="px-2 mb-1.5 text-[10px] font-semibold text-mg-500 uppercase tracking-widest">
-              Outils
-            </p>
-            <div className="space-y-0.5">
-              {outilTypes.map(t => (
-                <button
-                  key={t.value}
-                  onClick={() => setType(t.value)}
-                  className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition-all duration-150 text-left ${
-                    type === t.value
-                      ? 'bg-accent/10 text-white shadow-[inset_0_0_0_1px_rgba(200,182,255,0.12)]'
-                      : 'text-mg-400 hover:text-mg-100 hover:bg-white/5'
-                  }`}
-                >
-                  <span className={`text-base shrink-0 transition-all ${type === t.value ? 'opacity-100' : 'opacity-50'}`}>
-                    {t.icon}
-                  </span>
-                  <span className={`text-[13px] font-medium truncate ${type === t.value ? 'text-white' : ''}`}>
-                    {t.label}
-                  </span>
-                  {type === t.value && (
-                    <span className="ml-auto w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-        </nav>
-      </aside>
-
-      {/* ── Right panel: form + result ── */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="px-6 lg:px-10 py-8 max-w-3xl">
-
-          {/* Header */}
-          <div className="mb-6 animate-fade-in">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <div className="badge badge-accent">
-                  <Sparkles size={12} /> Génération IA
-                </div>
-                {remaining !== null && (
-                  <div className="badge badge-accent">
-                    {remaining} restante{remaining > 1 ? 's' : ''} aujourd'hui
-                  </div>
-                )}
+          <form onSubmit={handleSubmit} noValidate aria-label="Demande de génération" className="space-y-6">
+            <section aria-labelledby="gen-params-title" className="card p-5 sm:p-6">
+              <div className="flex items-center gap-2 mb-5 pb-4 border-b border-white/6">
+                <Settings2 size={14} className="text-mg-200" aria-hidden="true" />
+                <h2 id="gen-params-title" className="text-xs font-semibold text-mg-200 uppercase tracking-widest">
+                  Paramètres de génération
+                </h2>
               </div>
-            </div>
-            <h1 className="text-2xl sm:text-3xl text-white" style={{ fontFamily: 'var(--font-display)' }}>
-              {profile?.displayName
-                ? <>{profile.displayName}, que souhaitez-vous <em className="text-accent not-italic">créer</em> ?</>
-                : <>Que souhaitez-vous <em className="text-accent not-italic">créer</em> ?</>
-              }
-            </h1>
-          </div>
+              <GenerateFormFields
+                form={form}
+                onChange={update}
+                onNiveauChange={changeNiveau}
+                problems={problems}
+                showErrors={showErrors}
+              />
+            </section>
 
-          {/* ── Tool description ── */}
-          {currentTool && (
-            <div className="mb-6 flex items-center gap-3.5 p-4 rounded-xl bg-accent/5 border border-accent/12 animate-fade-in">
-              <div className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/15 flex items-center justify-center text-xl shrink-0 select-none">
-                {currentTool.icon}
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-white leading-tight">{currentTool.label}</p>
-                <p className="text-xs text-mg-300 mt-0.5 leading-relaxed">{currentTool.description}</p>
-              </div>
-            </div>
-          )}
+            <SourcesPanel sources={sources} mode={mode} keepPreference={prefs ? prefs.keepDocuments : null}>
+              <ResearchModePicker options={researchOptions} value={researchMode} onChange={setChosenMode} hints={hints} />
+            </SourcesPanel>
 
-          {/* ── Generation form ── */}
-          <div className="card p-5 sm:p-6 animate-fade-in" style={{ animationDelay: '0.1s' }}>
+            <PrivacyNotice notes={privacy} />
 
-            {/* Form header */}
-            <div className="flex items-center gap-2 mb-5 pb-4 border-b border-white/6">
-              <Settings2 size={14} className="text-mg-400" />
-              <p className="text-xs font-semibold text-mg-400 uppercase tracking-widest">
-                Paramètres de génération
+            <div>
+              <button
+                type="submit"
+                disabled={running}
+                className={`btn-primary w-full py-3.5 text-sm font-semibold justify-center ${FOCUS_RING}`}
+              >
+                {running
+                  ? <><Loader2 size={17} className="animate-spin" aria-hidden="true" /> Génération en cours…</>
+                  : <><Sparkles size={17} aria-hidden="true" /> Générer : {tool.label}</>}
+              </button>
+              <p id="gen-submit-status" role="status" aria-live="polite" className="mt-2 text-xs text-warning min-h-[1rem]">
+                {submitNotice ?? (sources.analyzing ? 'Analyse des documents en cours…' : '')}
               </p>
             </div>
-
-            <div className="space-y-5">
-
-              {/* Matière + Niveau */}
-              {NEEDS_CONTEXT.includes(type) && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">
-                      Niveau
-                    </label>
-                    <SelectField
-                      value={niveau}
-                      onChange={val => {
-                        const nv = val as NiveauScolaire;
-                        setNiveau(nv);
-                        const available = getMatieresForNiveau(nv);
-                        if (!available.find(m => m.value === matiere)) setMatiere(available[0]?.value ?? 'autre');
-                      }}
-                      groups={Object.entries(NIVEAUX).map(([, group]) => ({
-                        label: group.label,
-                        options: group.niveaux.map(n => ({ value: n.value, label: n.label })),
-                      }))}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">
-                      Matière
-                    </label>
-                    <SelectField
-                      value={matiere}
-                      onChange={val => setMatiere(val as Matiere)}
-                      options={getMatieresForNiveau(niveau).map(m => ({
-                        value: m.value,
-                        label: m.label,
-                        prefix: m.emoji,
-                      }))}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Sujet */}
-              {NEEDS_SUJET.includes(type) && (
-                <div>
-                  <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">
-                    {type === 'cahier_journal'
-                      ? 'Jour / Thème de la journée'
-                      : type === 'progression'
-                      ? 'Précisions (optionnel)'
-                      : 'Sujet / Thème'}
-                  </label>
-                  <input
-                    type="text"
-                    value={sujet}
-                    onChange={e => setSujet(e.target.value)}
-                    placeholder={
-                      type === 'cahier_journal'
-                        ? 'Ex : Lundi 15 mars, semaine des maths...'
-                        : type === 'progression'
-                        ? 'Ex : Progression incluant un projet théâtre au T2...'
-                        : 'Ex : La Révolution française, Les fractions...'
-                    }
-                    className="input-field text-base"
-                    onKeyDown={e => e.key === 'Enter' && handleGenerate()}
-                  />
-                  {!sujet && SUJETS_SUGGESTIONS[matiere] && type !== 'cahier_journal' && type !== 'progression' && (
-                    <div className="flex flex-wrap gap-1.5 mt-2.5">
-                      {SUJETS_SUGGESTIONS[matiere]!.slice(0, 4).map(s => (
-                        <button key={s} onClick={() => setSujet(s)}
-                          className="text-xs px-2.5 py-1 rounded-lg bg-mg-700 text-mg-300 hover:text-accent hover:bg-accent/5 border border-white/5 hover:border-accent/20 transition-all">
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* APPRECIATIONS */}
-              {type === 'appreciations' && (
-                <div className="space-y-4 p-4 rounded-xl bg-mg-800/60 border border-white/6">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Trimestre</label>
-                      <div className="flex gap-2">
-                        {(['1', '2', '3'] as const).map(t => (
-                          <button key={t} onClick={() => setTrimestre(t)}
-                            className={`flex-1 py-2 rounded-lg text-sm border transition-all ${trimestre === t ? 'bg-accent/10 text-accent border-accent/20' : 'bg-mg-700 text-mg-300 border-white/5 hover:border-white/12'}`}>
-                            T{t}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Profil élève</label>
-                      <SelectField
-                        value={profilEleve}
-                        onChange={setProfilEleve}
-                        options={[
-                          { value: 'excellent', label: 'Excellent', prefix: '⭐' },
-                          { value: 'bon', label: 'Bon élève', prefix: '🟢' },
-                          { value: 'moyen', label: 'Moyen', prefix: '🟡' },
-                          { value: 'fragile', label: 'Fragile / En difficulté', prefix: '🟠' },
-                          { value: 'decrocheur', label: 'Décrocheur', prefix: '🔴' },
-                        ]}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Nombre d'appréciations</label>
-                      <input type="number" value={nombreEleves} onChange={e => setNombreEleves(parseInt(e.target.value) || 10)}
-                        min={1} max={35} className="input-field" />
-                    </div>
-                  </div>
-                  <p className="text-xs text-mg-400 flex items-center gap-1.5">
-                    <span className="text-accent">✦</span>
-                    Magistra génèrera {nombreEleves} appréciations variées pour ce profil.
-                  </p>
-                </div>
-              )}
-
-              {/* DIFFERENCIATION */}
-              {type === 'differenciation' && (
-                <div className="space-y-4 p-4 rounded-xl bg-mg-800/60 border border-white/6">
-                  <div>
-                    <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Profils à générer</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      {[
-                        { v: 'dys', l: '♿ Accompagnement renforcé', d: 'DYS, allophones, ULIS' },
-                        { v: 'standard', l: '📘 Standard', d: 'Niveau attendu de la classe' },
-                        { v: 'hpi', l: '🚀 Approfondissement', d: 'HPI / élèves avancés' },
-                      ].map(p => (
-                        <button key={p.v} onClick={() => toggleDiffProfile(p.v)}
-                          className={`p-3 rounded-lg text-left border transition-all ${diffProfiles.includes(p.v) ? 'bg-accent/10 border-accent/20' : 'bg-mg-700 border-white/5 hover:border-white/10'}`}>
-                          <span className={`text-sm font-medium block ${diffProfiles.includes(p.v) ? 'text-white' : 'text-mg-200'}`}>{p.l}</span>
-                          <span className="text-[10px] text-mg-400">{p.d}</span>
-                        </button>
-                      ))}
-                    </div>
-                    {diffProfiles.length === 0 && (
-                      <p className="text-xs text-warning mt-2">Sélectionnez au moins un profil.</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">
-                      Consignes supplémentaires <span className="text-mg-400 normal-case font-normal">(optionnel)</span>
-                    </label>
-                    <textarea value={consignes} onChange={e => setConsignes(e.target.value)} rows={2}
-                      placeholder="Ex : Les élèves DYS ont accès à la calculatrice, limiter les consignes à 2 lignes..."
-                      className="input-field resize-none" />
-                  </div>
-                </div>
-              )}
-
-              {/* LETTRE PARENTS */}
-              {type === 'lettre_parents' && (
-                <div className="space-y-4 p-4 rounded-xl bg-mg-800/60 border border-white/6">
-                  <div>
-                    <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Type de courrier</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {[
-                        { v: 'comportement', l: '⚠️ Comportement', d: 'Signalement de comportement' },
-                        { v: 'absence', l: '📋 Absences', d: 'Absences répétées' },
-                        { v: 'felicitations', l: '🌟 Félicitations', d: 'Encouragements' },
-                        { v: 'reunion', l: '🤝 Réunion', d: 'Convocation RDV' },
-                        { v: 'incident', l: '🚨 Incident', d: 'Signalement' },
-                        { v: 'orientation', l: '🎯 Orientation', d: 'Information' },
-                      ].map(lt => (
-                        <button key={lt.v} onClick={() => setTypeLettre(lt.v)}
-                          className={`p-2.5 rounded-lg text-left border transition-all ${typeLettre === lt.v ? 'bg-accent/10 border-accent/20' : 'bg-mg-700 border-white/5 hover:border-white/10'}`}>
-                          <span className={`text-sm block ${typeLettre === lt.v ? 'text-white' : 'text-mg-200'}`}>{lt.l}</span>
-                          <span className="text-[10px] text-mg-400">{lt.d}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Contexte / détails</label>
-                    <textarea value={consignes} onChange={e => setConsignes(e.target.value)} rows={2}
-                      placeholder="Ex : L'élève a été absent 5 fois ce mois sans justificatif..."
-                      className="input-field resize-none" />
-                  </div>
-                </div>
-              )}
-
-              {/* CORRIGE */}
-              {type === 'corrige' && (
-                <div className="space-y-4 p-4 rounded-xl bg-mg-800/60 border border-white/6">
-                  <div>
-                    <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">
-                      Travail de l'élève à corriger
-                    </label>
-                    <textarea value={texteEleve} onChange={e => setTexteEleve(e.target.value)} rows={8}
-                      placeholder={"Collez ici le texte de l'élève (copie, rédaction, réponse à une question...)\n\nExemple :\nLa révolution française a commencer en 1789 quand les gens étaient pas content du roi..."}
-                      className="input-field resize-none font-mono text-sm" />
-                    <p className="text-xs text-mg-400 mt-1.5">
-                      Tapez ou collez le travail de l'élève. Magistra l'analysera et produira un corrigé détaillé avec annotations.
-                    </p>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Consigne de l'exercice</label>
-                    <input type="text" value={sujet} onChange={e => setSujet(e.target.value)}
-                      placeholder="Ex : Rédiger un paragraphe sur les causes de la Révolution française"
-                      className="input-field" />
-                  </div>
-                </div>
-              )}
-
-              {/* Duration */}
-              {['cours', 'fiche_prep', 'sequence', 'cahier_journal'].includes(type) && (
-                <div>
-                  <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">
-                    Durée <span className="text-mg-400 normal-case font-normal">(optionnel)</span>
-                  </label>
-                  <div className="relative">
-                    <Clock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-mg-400 pointer-events-none" />
-                    <input type="text" value={duree} onChange={e => setDuree(e.target.value)}
-                      placeholder={type === 'cahier_journal' ? 'Ex : Journée complète 8h30-16h30' : 'Ex : 55 minutes, 2 heures...'}
-                      className="input-field pl-9" />
-                  </div>
-                </div>
-              )}
-
-              {/* Advanced options */}
-              {['cours', 'exercices', 'evaluation', 'sequence', 'fiche_prep'].includes(type) && (
-                <div>
-                  <button onClick={() => setShowAdvanced(!showAdvanced)}
-                    className="btn-ghost text-xs uppercase tracking-wider gap-1.5">
-                    <ChevronDown size={13} className={`transition-transform duration-200 ${showAdvanced ? 'rotate-180' : ''}`} />
-                    Options avancées
-                  </button>
-                  {showAdvanced && (
-                    <div className="mt-4 space-y-4 animate-fade-in pl-1">
-                      <div>
-                        <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Objectifs pédagogiques</label>
-                        <textarea value={objectifs} onChange={e => setObjectifs(e.target.value)} rows={2}
-                          placeholder="Ex : Savoir identifier les causes de la Révolution, maîtriser la chronologie..."
-                          className="input-field resize-none" />
-                      </div>
-                      {(type === 'exercices' || type === 'evaluation') && (
-                        <div>
-                          <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Difficulté</label>
-                          <div className="flex gap-2 flex-wrap">
-                            {(['facile', 'moyen', 'difficile', 'differencie'] as DifficulteExercice[]).map(d => (
-                              <button key={d} onClick={() => setDifficulte(d)}
-                                className={`px-3 py-1.5 rounded-lg text-sm transition-all border ${
-                                  difficulte === d
-                                    ? 'bg-accent/10 text-accent border-accent/20'
-                                    : 'bg-mg-700 text-mg-300 border-white/5 hover:border-white/12'
-                                }`}>
-                                {d === 'facile' ? '🟢 Facile' : d === 'moyen' ? '🟡 Moyen' : d === 'difficile' ? '🔴 Difficile' : '🔀 Différencié'}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      <div>
-                        <label className="block text-xs font-medium text-mg-300 mb-2 uppercase tracking-wider">Consignes supplémentaires</label>
-                        <textarea value={consignes} onChange={e => setConsignes(e.target.value)} rows={2}
-                          placeholder="Ex : Inclure un exercice sur document, adapter pour des élèves allophones..."
-                          className="input-field resize-none" />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* No-auth notice */}
-              {!user && (
-                <div className="flex items-start gap-3 p-4 rounded-xl bg-warning/5 border border-warning/15">
-                  <AlertCircle size={16} className="text-warning shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm text-warning font-medium">Mode démonstration</p>
-                    <p className="text-xs text-mg-300 mt-0.5">Connectez-vous pour générer du vrai contenu pédagogique avec l'IA.</p>
-                  </div>
-                </div>
-              )}
-
-              {/* ── Generate button ── */}
-              <div className="pt-1">
-                <button
-                  onClick={handleGenerate}
-                  disabled={!canGenerate() || generating}
-                  className="btn-primary w-full py-3.5 text-sm font-semibold justify-center"
-                >
-                  {generating
-                    ? <><Loader2 size={17} className="animate-spin" /> Génération en cours…</>
-                    : <><Sparkles size={17} /> Générer {currentTool?.label ?? 'le contenu'}</>
-                  }
-                </button>
-              </div>
-
-            </div>
-          </div>
-
-          {/* Error */}
-          {error && (
-            <div className="mt-6 p-4 rounded-xl bg-danger/5 border border-danger/20 animate-fade-in">
-              <p className="text-sm text-danger">{error}</p>
-            </div>
-          )}
-
-          {/* Result */}
-          {(result || generating) && (
-            <div ref={resultRef} className="mt-10 animate-fade-in">
-              <div className="glow-line mb-8" />
-              <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-lg">{getMatiereEmoji(matiere)}</span>
-                    <h2 className="text-xl text-white" style={{ fontFamily: 'var(--font-display)' }}>
-                      {TYPE_CONTENU.find(t => t.value === type)?.label}
-                    </h2>
-                  </div>
-                  <p className="text-xs text-mg-400">
-                    {getNiveauLabel(niveau)} · {getMatiereLabel(matiere)}
-                    {sujet && ` · ${sujet}`}
-                  </p>
-                </div>
-                {result && !generating && (
-                  <div className="flex items-center gap-2">
-                    <button onClick={handleCopy} className="btn-ghost text-xs">
-                      {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
-                      {copied ? 'Copié' : 'Copier'}
-                    </button>
-                    <button onClick={() => exportToText(result, sujet || type)} className="btn-ghost text-xs">
-                      <FileText size={14} /> Markdown
-                    </button>
-                    <button onClick={() => exportToPDF(result, sujet || type)} className="btn-secondary text-xs py-2 px-3">
-                      <Download size={14} /> PDF
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <div className="card p-6 sm:p-8">
-                {generating ? (
-                  <div className="space-y-4">
-                    {[75, 100, 85, 65, 50, 100, 80].map((w, i) => (
-                      <div key={i} className={`h-${i === 0 || i === 4 ? 6 : 4} rounded animate-shimmer`} style={{ width: `${w}%` }} />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="prose-content">
-                    <ReactMarkdown>{result || ''}</ReactMarkdown>
-                  </div>
-                )}
-              </div>
-
-              {result && !generating && (
-                <p className="text-xs text-success mt-4 flex items-center gap-1.5">
-                  <Check size={12} /> Sauvegardé dans votre historique
-                </p>
-              )}
-            </div>
-          )}
-
+          </form>
         </div>
+
+        <ResultPanel
+          state={generation.state}
+          mode={mode}
+          store={store}
+          onStop={generation.stop}
+          onRestart={generation.restart}
+          containerRef={resultRef}
+        />
       </div>
     </div>
   );

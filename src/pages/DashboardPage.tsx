@@ -1,229 +1,265 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useCurrentUser } from '@/lib/auth';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Sparkles, BookOpen, FileText, ClipboardCheck, Layers,
-  ArrowRight, TrendingUp, Star, Zap, Heart,
-  GraduationCap, Loader2, MessageSquare, Users, PenLine
+  ArrowRight, BookOpen, CalendarRange, ClipboardCheck, FileText, GraduationCap, Heart, Layers, Mail,
+  MessageSquare, NotebookPen, PenLine, Search, Sparkles, Star, TrendingUp, Users, Zap, type LucideIcon,
 } from 'lucide-react';
-import { getTeacherProfile } from '@/hooks/useTeacherProfile';
-import { apiGetHistory } from '@/lib/api';
-import {
-  TYPE_CONTENU, getNiveauLabel, getMatiereEmoji, getMatiereLabel,
-  SUJETS_SUGGESTIONS
-} from '@/types';
-import type { GeneratedContent, Matiere } from '@/types';
+import { ALL_TYPES, getMatiereEmoji, getMatiereLabel, getSujetSuggestions, getToolInfo, type TypeContenu } from '@shared/catalog';
+import { getNiveauLabel, isSuperieur } from '@shared/levels';
+import type { GenerationSummary, UsageStats } from '@shared/types';
+import { useRuntime } from '@/lib/runtime/context';
+import ErrorBanner from '@/components/ui/ErrorBanner';
+import { errorMessage, niveauLabelFor, timeAgo, toolLabelFor } from '@/components/history/logic';
 
-const TYPE_ICONS: Record<string, typeof BookOpen> = {
+type Loadable<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'error'; error: string };
+
+const TYPE_ICONS: Record<TypeContenu, LucideIcon> = {
   cours: BookOpen,
-  exercices: ClipboardCheck,
-  evaluation: FileText,
+  exercices: PenLine,
+  evaluation: ClipboardCheck,
   sequence: Layers,
   fiche_prep: FileText,
   appreciations: MessageSquare,
-  progression: TrendingUp,
+  progression: CalendarRange,
   differenciation: Users,
-  lettre_parents: FileText,
-  cahier_journal: FileText,
-  corrige: ClipboardCheck,
+  lettre_parents: Mail,
+  cahier_journal: NotebookPen,
+  corrige: Search,
 };
 
-const QUICK_TOOLS = [
-  { type: 'cours',         label: 'Cours',           desc: 'Cours complets',     Icon: BookOpen,      iconBg: 'bg-violet-500/10', iconColor: 'text-violet-400' },
-  { type: 'exercices',     label: 'Exercices',        desc: 'Avec corrigés',      Icon: PenLine,       iconBg: 'bg-emerald-500/10', iconColor: 'text-emerald-400' },
-  { type: 'evaluation',    label: 'Évaluation',       desc: 'Barèmes officiels',  Icon: ClipboardCheck,iconBg: 'bg-amber-500/10',   iconColor: 'text-amber-400' },
-  { type: 'sequence',      label: 'Séquences',        desc: 'Multi-séances',      Icon: Layers,        iconBg: 'bg-pink-500/10',    iconColor: 'text-pink-400' },
-  { type: 'appreciations', label: 'Appréciations',    desc: '180+ bulletins',     Icon: MessageSquare, iconBg: 'bg-blue-500/10',    iconColor: 'text-blue-400' },
-  { type: 'differenciation',label: 'Différenciation', desc: '3 niveaux',          Icon: Users,         iconBg: 'bg-teal-500/10',    iconColor: 'text-teal-400' },
-];
+const TOOL_STYLE: Record<TypeContenu, { iconBg: string; iconColor: string }> = {
+  cours: { iconBg: 'bg-violet-500/10', iconColor: 'text-violet-300' },
+  exercices: { iconBg: 'bg-emerald-500/10', iconColor: 'text-emerald-300' },
+  evaluation: { iconBg: 'bg-amber-500/10', iconColor: 'text-amber-300' },
+  sequence: { iconBg: 'bg-pink-500/10', iconColor: 'text-pink-300' },
+  fiche_prep: { iconBg: 'bg-sky-500/10', iconColor: 'text-sky-300' },
+  appreciations: { iconBg: 'bg-blue-500/10', iconColor: 'text-blue-300' },
+  progression: { iconBg: 'bg-indigo-500/10', iconColor: 'text-indigo-300' },
+  differenciation: { iconBg: 'bg-teal-500/10', iconColor: 'text-teal-300' },
+  lettre_parents: { iconBg: 'bg-rose-500/10', iconColor: 'text-rose-300' },
+  cahier_journal: { iconBg: 'bg-orange-500/10', iconColor: 'text-orange-300' },
+  corrige: { iconBg: 'bg-cyan-500/10', iconColor: 'text-cyan-300' },
+};
 
-function getGreeting(): string {
-  const h = new Date().getHours();
+/** Outils mis en avant selon le public : le supérieur privilégie TD, examens, syllabus et corrections. */
+const QUICK_TOOLS_SCOLAIRE: TypeContenu[] = ['cours', 'exercices', 'evaluation', 'sequence', 'appreciations', 'differenciation'];
+const QUICK_TOOLS_SUPERIEUR: TypeContenu[] = ['cours', 'exercices', 'evaluation', 'sequence', 'progression', 'corrige'];
+
+function greetingFor(date: Date): string {
+  const h = date.getHours();
+  if (h < 5) return 'Bonsoir';
   if (h < 12) return 'Bonjour';
   if (h < 18) return 'Bon après-midi';
   return 'Bonsoir';
 }
 
-function getTimeAgo(date: Date): string {
-  const diff = Date.now() - date.getTime();
-  const min = Math.floor(diff / 60000);
-  if (min < 1)  return "À l'instant";
-  if (min < 60) return `Il y a ${min} min`;
-  const h = Math.floor(min / 60);
-  if (h < 24)   return `Il y a ${h}h`;
-  const d = Math.floor(h / 24);
-  if (d === 1)  return 'Hier';
-  if (d < 7)    return `Il y a ${d} jours`;
-  return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n > 1 ? 's' : ''}`;
+}
+
+function StatValue({ state, pick }: { state: Loadable<UsageStats>; pick: (s: UsageStats) => number }) {
+  if (state.status === 'ready') {
+    return (
+      <p className="text-5xl text-white leading-none" style={{ fontFamily: 'var(--font-display)' }}>
+        {pick(state.data)}
+      </p>
+    );
+  }
+  return (
+    <p className="text-5xl text-mg-300 leading-none" style={{ fontFamily: 'var(--font-display)' }} aria-label={state.status === 'loading' ? 'Chargement' : 'Indisponible'}>
+      –
+    </p>
+  );
 }
 
 export default function DashboardPage() {
-  const { user } = useCurrentUser();
-  const profile = getTeacherProfile();
-  const [history, setHistory] = useState<GeneratedContent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { store, profile, user, mode } = useRuntime();
+  // L'heure est lue une seule fois, à l'ouverture de la page (jamais pendant le rendu).
+  const [now] = useState(() => new Date());
 
-  const loadHistory = useCallback(async () => {
-    if (!user?.id) { setLoading(false); return; }
-    const data = await apiGetHistory(user.id);
-    setHistory(data);
-    setLoading(false);
-  }, [user?.id]);
+  const [stats, setStats] = useState<Loadable<UsageStats>>({ status: 'loading' });
+  const [statsKey, setStatsKey] = useState(0);
+  const [recent, setRecent] = useState<Loadable<GenerationSummary[]>>({ status: 'loading' });
+  const [recentKey, setRecentKey] = useState(0);
 
-  useEffect(() => { loadHistory(); }, [loadHistory]);
+  useEffect(() => {
+    let cancelled = false;
+    store.getStats().then(
+      data => {
+        if (!cancelled) setStats({ status: 'ready', data });
+      },
+      err => {
+        if (!cancelled) setStats({ status: 'error', error: errorMessage(err) });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [store, statsKey]);
 
-  const today = new Date().toDateString();
-  const todayCount  = history.filter(h => new Date(h.createdAt).toDateString() === today).length;
-  const thisWeek    = history.filter(h => new Date(h.createdAt) >= new Date(Date.now() - 7 * 86400000)).length;
-  const favCount    = history.filter(h => h.isFavorite).length;
-  const totalCount  = history.length;
+  useEffect(() => {
+    let cancelled = false;
+    store.listGenerations({ limit: 5 }).then(
+      page => {
+        if (!cancelled) setRecent({ status: 'ready', data: page.items.slice(0, 5) });
+      },
+      err => {
+        if (!cancelled) setRecent({ status: 'error', error: errorMessage(err) });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [store, recentKey]);
 
-  const matiereCounts: Record<string, number> = {};
-  history.forEach(h => { if (h.matiere) matiereCounts[h.matiere as string] = (matiereCounts[h.matiere as string] || 0) + 1; });
-  const topMatiereKey   = Object.entries(matiereCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-  const topMatiereLabel = topMatiereKey ? getMatiereLabel(topMatiereKey as Matiere) : null;
+  const retryStats = () => {
+    setStats({ status: 'loading' });
+    setStatsKey(k => k + 1);
+  };
+  const retryRecent = () => {
+    setRecent({ status: 'loading' });
+    setRecentKey(k => k + 1);
+  };
 
-  const typeCounts: Record<string, number> = {};
-  history.forEach(h => { typeCounts[h.type] = (typeCounts[h.type] || 0) + 1; });
-
-  const recent     = history.slice(0, 5);
-  const matiereKey = profile?.matierePrincipale as Matiere | undefined;
-  const suggestions = matiereKey ? (SUJETS_SUGGESTIONS[matiereKey] ?? []).slice(0, 3) : [];
+  const niveau = profile?.niveaux?.[0];
+  const superieur = niveau ? isSuperieur(niveau) : false;
+  const quickTools = superieur ? QUICK_TOOLS_SUPERIEUR : QUICK_TOOLS_SCOLAIRE;
+  const matiere = profile?.matierePrincipale;
+  const suggestions = matiere && niveau ? getSujetSuggestions(matiere, niveau).slice(0, 3) : [];
 
   const displayName = profile?.displayName || user?.firstName || '';
-  const dateStr = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
-  const quotaLeft   = 20 - todayCount;
-  const quotaPct    = Math.min((todayCount / 20) * 100, 100);
+  const dateStr = now.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+  const nowMs = now.getTime();
+  const top = stats.status === 'ready' ? stats.data.topMatiere : undefined;
 
   return (
     <div className="px-6 lg:px-10 py-8 space-y-8 animate-fade-in">
-
-      {/* ── Header ── */}
+      {/* ── En-tête ── */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl sm:text-4xl text-white mb-1.5 leading-tight" style={{ fontFamily: 'var(--font-display)' }}>
-            {getGreeting()}{displayName ? `, ${displayName}` : ''} ✨
+            {greetingFor(now)}{displayName ? `, ${displayName}` : ''} <span aria-hidden="true">✨</span>
           </h1>
-          <p className="text-sm text-mg-400 capitalize">{dateStr}</p>
+          <p className="text-sm text-mg-300 first-letter:uppercase">{dateStr}</p>
         </div>
-        <div className="shrink-0">
-          <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-accent/8 border border-accent/15 text-sm font-medium text-accent">
-            <Zap size={13} />
-            {quotaLeft} / 20 générations
-          </div>
-        </div>
+        <Link
+          to="/app/generate"
+          className="shrink-0 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-accent/8 border border-accent/15 text-sm font-medium text-accent hover:bg-accent/15 transition-colors self-start"
+        >
+          <Sparkles size={13} aria-hidden="true" /> Nouveau contenu
+        </Link>
       </div>
 
-      {/* ── Stats ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {mode === 'demo' && (
+        <div className="rounded-xl border border-accent/15 bg-accent/5 px-4 py-3 text-sm text-mg-100" role="note">
+          <strong className="text-accent font-semibold">Mode démonstration.</strong>{' '}
+          Les contenus sont des exemples pré-rédigés : aucune IA n’est utilisée. Votre historique et vos favoris restent dans ce navigateur.
+        </div>
+      )}
 
-        {/* Aujourd'hui */}
-        <div className="card p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-mg-400 uppercase tracking-wider">Aujourd'hui</p>
-            <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center">
-              <Zap size={13} className="text-accent" />
+      {/* ── Statistiques ── */}
+      <section aria-labelledby="stats-title" className="space-y-3">
+        <h2 id="stats-title" className="sr-only">Statistiques</h2>
+        {stats.status === 'error' && (
+          <ErrorBanner message={`Statistiques indisponibles. ${stats.error}`} onRetry={retryStats} />
+        )}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" aria-busy={stats.status === 'loading'}>
+          {/* Aujourd'hui */}
+          <div className="card p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-mg-200 uppercase tracking-wider">Aujourd'hui</p>
+              <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center">
+                <Zap size={13} className="text-accent" aria-hidden="true" />
+              </div>
             </div>
+            <StatValue state={stats} pick={s => s.today} />
+            <p className="text-xs text-mg-300">
+              {stats.status === 'ready' ? `contenu${stats.data.today > 1 ? 's' : ''} généré${stats.data.today > 1 ? 's' : ''} · ${plural(stats.data.total, 'contenu')} au total` : 'contenus générés'}
+            </p>
           </div>
-          <p className="text-5xl text-white leading-none" style={{ fontFamily: 'var(--font-display)' }}>
-            {todayCount}
-          </p>
-          <div className="space-y-1.5">
-            <div className="flex justify-between text-xs text-mg-400">
-              <span>sur 20 quotidiennes</span>
-              <span>{Math.round(quotaPct)}%</span>
+
+          {/* Cette semaine */}
+          <div className="card p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-mg-200 uppercase tracking-wider">7 derniers jours</p>
+              <div className="w-7 h-7 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                <TrendingUp size={13} className="text-emerald-300" aria-hidden="true" />
+              </div>
             </div>
-            <div className="h-1.5 bg-mg-700 rounded-full overflow-hidden">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-accent-dim to-accent transition-all duration-700"
-                style={{ width: `${quotaPct}%` }}
-              />
+            <StatValue state={stats} pick={s => s.week} />
+            <p className="text-xs text-emerald-300 flex items-center gap-1">
+              <TrendingUp size={11} aria-hidden="true" />
+              contenus générés
+            </p>
+          </div>
+
+          {/* Matière phare (vrai nombre) ou favoris */}
+          <div className="card p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-mg-200 uppercase tracking-wider">{top ? 'Matière phare' : 'Favoris'}</p>
+              <div className="w-7 h-7 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                <Star size={13} className="text-amber-300" aria-hidden="true" />
+              </div>
             </div>
+            {top ? (
+              <p className="text-3xl text-white leading-snug" style={{ fontFamily: 'var(--font-display)' }}>
+                <span aria-hidden="true">{getMatiereEmoji(top.matiere)} </span>
+                {getMatiereLabel(top.matiere)}
+              </p>
+            ) : (
+              <StatValue state={stats} pick={s => s.favorites} />
+            )}
+            <p className="text-xs text-mg-300">
+              {top && stats.status === 'ready'
+                ? `${plural(top.count, 'génération')} · ${plural(stats.data.favorites, 'favori')}`
+                : 'contenus favoris'}
+            </p>
           </div>
         </div>
+      </section>
 
-        {/* Cette semaine */}
-        <div className="card p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-mg-400 uppercase tracking-wider">Cette semaine</p>
-            <div className="w-7 h-7 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-              <TrendingUp size={13} className="text-emerald-400" />
-            </div>
-          </div>
-          <p className="text-5xl text-white leading-none" style={{ fontFamily: 'var(--font-display)' }}>
-            {thisWeek}
-          </p>
-          <p className="text-xs text-emerald-400 flex items-center gap-1">
-            <TrendingUp size={11} />
-            contenus générés
-          </p>
-        </div>
-
-        {/* Matière phare ou Favoris */}
-        <div className="card p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-mg-400 uppercase tracking-wider">
-              {topMatiereLabel ? 'Matière phare' : 'Favoris'}
-            </p>
-            <div className="w-7 h-7 rounded-lg bg-amber-500/10 flex items-center justify-center">
-              <Star size={13} className="text-amber-400" />
-            </div>
-          </div>
-          {topMatiereLabel ? (
-            <p className="text-3xl text-white leading-snug" style={{ fontFamily: 'var(--font-display)' }}>
-              {topMatiereLabel}
-            </p>
-          ) : (
-            <p className="text-5xl text-white leading-none" style={{ fontFamily: 'var(--font-display)' }}>
-              {favCount}
-            </p>
-          )}
-          <p className="text-xs text-mg-400">
-            {topMatiereLabel
-              ? `${typeCounts[topMatiereKey!] ?? 0} générations`
-              : 'contenus favoris'}
-          </p>
-        </div>
-      </div>
-
-      {/* ── Main grid ── */}
+      {/* ── Grille principale ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* Left 2/3 */}
+        {/* Colonne gauche (2/3) */}
         <div className="lg:col-span-2 space-y-6">
-
-          {/* Quick tools */}
-          <div>
+          {/* Outils rapides */}
+          <section aria-labelledby="tools-title">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-mg-200">Outils rapides</h2>
+              <h2 id="tools-title" className="text-sm font-semibold text-mg-100">Outils rapides</h2>
               <Link to="/app/generate" className="text-xs text-accent hover:underline flex items-center gap-1">
-                Voir tous <ArrowRight size={10} />
+                Voir les {ALL_TYPES.length} outils <ArrowRight size={10} aria-hidden="true" />
               </Link>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {QUICK_TOOLS.map(tool => (
-                <Link
-                  key={tool.type}
-                  to={`/app/generate?type=${tool.type}`}
-                  className="card p-4 hover:border-white/12 hover:-translate-y-0.5 group flex flex-col gap-3 transition-all duration-200"
-                >
-                  <div className={`w-9 h-9 rounded-xl ${tool.iconBg} flex items-center justify-center group-hover:scale-110 transition-transform duration-200`}>
-                    <tool.Icon size={17} className={tool.iconColor} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-mg-100 group-hover:text-white transition-colors">{tool.label}</p>
-                    <p className="text-xs text-mg-400 mt-0.5">{tool.desc}</p>
-                  </div>
-                </Link>
-              ))}
+              {quickTools.map(type => {
+                const info = getToolInfo(type, niveau);
+                const Icon = TYPE_ICONS[type];
+                const style = TOOL_STYLE[type];
+                return (
+                  <Link
+                    key={type}
+                    to={`/app/generate?type=${type}`}
+                    className="card p-4 hover:border-white/12 hover:-translate-y-0.5 group flex flex-col gap-3 transition-all duration-200"
+                  >
+                    <div className={`w-9 h-9 rounded-xl ${style.iconBg} flex items-center justify-center group-hover:scale-110 transition-transform duration-200`}>
+                      <Icon size={17} className={style.iconColor} aria-hidden="true" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-mg-100 group-hover:text-white transition-colors">{info.label}</p>
+                      <p className="text-xs text-mg-300 mt-0.5">{info.description}</p>
+                    </div>
+                  </Link>
+                );
+              })}
             </div>
-          </div>
+          </section>
 
-          {/* Suggestions */}
-          {suggestions.length > 0 && (
-            <div>
-              <h2 className="text-xs font-medium text-mg-400 uppercase tracking-wider mb-3">
-                Idées pour {matiereKey ? getMatiereLabel(matiereKey) : 'vous'}
+          {/* Idées de sujets */}
+          {matiere && suggestions.length > 0 && (
+            <section aria-labelledby="ideas-title">
+              <h2 id="ideas-title" className="text-xs font-medium text-mg-200 uppercase tracking-wider mb-3">
+                Idées en {getMatiereLabel(matiere)}
+                {niveau ? ` · ${getNiveauLabel(niveau)}` : ''}
               </h2>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {suggestions.map(s => (
@@ -233,117 +269,145 @@ export default function DashboardPage() {
                     className="card p-3.5 hover:border-accent/15 group transition-all"
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-base">{matiereKey ? getMatiereEmoji(matiereKey) : '📝'}</span>
+                      <span className="text-base" aria-hidden="true">{getMatiereEmoji(matiere)}</span>
                       <div className="min-w-0">
-                        <p className="text-sm text-mg-200 group-hover:text-white transition-colors truncate">{s}</p>
-                        <p className="text-xs text-accent opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 mt-0.5">
-                          Générer <ArrowRight size={9} />
+                        <p className="text-sm text-mg-100 group-hover:text-white transition-colors">{s}</p>
+                        <p className="text-xs text-accent opacity-80 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 mt-0.5">
+                          Générer <ArrowRight size={9} aria-hidden="true" />
                         </p>
                       </div>
                     </div>
                   </Link>
                 ))}
               </div>
-            </div>
+            </section>
           )}
         </div>
 
-        {/* Right 1/3 */}
+        {/* Colonne droite (1/3) */}
         <div className="space-y-5">
-
-          {/* Recent */}
-          <div>
+          {/* Récent */}
+          <section aria-labelledby="recent-title">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-mg-200">Récent</h2>
-              {history.length > 0 && (
+              <h2 id="recent-title" className="text-sm font-semibold text-mg-100">Récent</h2>
+              {recent.status === 'ready' && recent.data.length > 0 && (
                 <Link to="/app/history" className="text-xs text-accent hover:underline flex items-center gap-1">
-                  Tout voir <ArrowRight size={10} />
+                  Tout voir <ArrowRight size={10} aria-hidden="true" />
                 </Link>
               )}
             </div>
 
-            {loading ? (
-              <div className="card p-6 flex items-center justify-center">
-                <Loader2 size={20} className="animate-spin text-mg-400" />
-              </div>
-            ) : recent.length === 0 ? (
-              <div className="card p-6 text-center">
-                <Sparkles size={26} className="text-mg-500 mx-auto mb-3" />
-                <p className="text-sm text-mg-300 mb-3">Aucune génération</p>
-                <Link to="/app/generate" className="btn-primary text-xs py-2 px-4 inline-flex">
-                  <Sparkles size={12} /> Commencer
-                </Link>
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                {recent.map(item => {
-                  const Icon = TYPE_ICONS[item.type] || FileText;
-                  return (
-                    <Link
-                      key={item.id}
-                      to="/app/history"
-                      className="flex items-center gap-3 p-2.5 rounded-xl border border-white/5 hover:border-accent/12 hover:bg-mg-800/60 group transition-all"
-                    >
-                      <div className="w-7 h-7 rounded-lg bg-mg-700 flex items-center justify-center shrink-0 group-hover:bg-accent/10 transition-colors">
-                        <Icon size={13} className="text-mg-300 group-hover:text-accent transition-colors" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-mg-100 truncate">{item.sujet}</p>
-                        <p className="text-[10px] text-mg-500">
-                          {TYPE_CONTENU.find(t => t.value === item.type)?.label} · {typeof item.niveau === 'string' ? item.niveau : getNiveauLabel(item.niveau)}
-                        </p>
-                      </div>
-                      <p className="text-[10px] text-mg-500 shrink-0">{getTimeAgo(new Date(item.createdAt))}</p>
-                    </Link>
-                  );
-                })}
+            {recent.status === 'loading' && (
+              <div className="space-y-1.5" role="status" aria-label="Chargement des contenus récents">
+                {[0, 1, 2].map(i => (
+                  <div key={i} className="h-[52px] rounded-xl animate-shimmer" aria-hidden="true" />
+                ))}
               </div>
             )}
-          </div>
 
-          {/* Profile card */}
+            {recent.status === 'error' && (
+              <ErrorBanner message={`Contenus récents indisponibles. ${recent.error}`} onRetry={retryRecent} />
+            )}
+
+            {recent.status === 'ready' && recent.data.length === 0 && (
+              <div className="card p-6 text-center">
+                <Sparkles size={26} className="text-mg-300 mx-auto mb-3" aria-hidden="true" />
+                <p className="text-sm text-mg-200 mb-3">Aucune génération pour le moment</p>
+                <Link to="/app/generate" className="btn-primary text-xs py-2 px-4 inline-flex">
+                  <Sparkles size={12} aria-hidden="true" /> Commencer
+                </Link>
+              </div>
+            )}
+
+            {recent.status === 'ready' && recent.data.length > 0 && (
+              <ul className="space-y-1.5">
+                {recent.data.map(item => {
+                  const Icon = TYPE_ICONS[item.type] ?? FileText;
+                  return (
+                    <li key={item.id}>
+                      <Link
+                        to={`/app/history?id=${encodeURIComponent(item.id)}`}
+                        className="flex items-center gap-3 p-2.5 rounded-xl border border-white/5 hover:border-accent/12 hover:bg-mg-800/60 group transition-all"
+                      >
+                        <div className="w-7 h-7 rounded-lg bg-mg-700 flex items-center justify-center shrink-0 group-hover:bg-accent/10 transition-colors">
+                          <Icon size={13} className="text-mg-200 group-hover:text-accent transition-colors" aria-hidden="true" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-mg-100 truncate">{item.sujet}</p>
+                          <p className="text-[11px] text-mg-300 truncate">
+                            {toolLabelFor(item)} · {niveauLabelFor(item)}
+                          </p>
+                        </div>
+                        <p className="text-[11px] text-mg-300 shrink-0">
+                          <time dateTime={item.createdAt}>{timeAgo(item.createdAt, nowMs)}</time>
+                        </p>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          {/* Carte profil */}
           {profile && (
-            <div className="card p-4">
+            <section aria-labelledby="profile-title" className="card p-4">
               <div className="flex items-center gap-3 mb-3.5">
                 <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-accent-dim to-accent flex items-center justify-center shrink-0">
-                  <GraduationCap size={16} className="text-mg-900" />
+                  <GraduationCap size={16} className="text-mg-900" aria-hidden="true" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white truncate">{profile.displayName || 'Enseignant'}</p>
-                  <p className="text-[11px] text-mg-400 truncate">{profile.etablissement}</p>
+                  <h2 id="profile-title" className="text-sm font-semibold text-white truncate">{profile.displayName || 'Mon profil'}</h2>
+                  {profile.etablissement && <p className="text-[11px] text-mg-300 truncate">{profile.etablissement}</p>}
                 </div>
               </div>
-              <div className="space-y-2 pt-3 border-t border-white/5">
-                <div className="flex justify-between text-xs">
-                  <span className="text-mg-400">Classes</span>
-                  <span className="text-mg-200 text-right max-w-[55%] truncate">
-                    {profile.niveaux.map(n => getNiveauLabel(n)).join(', ')}
-                  </span>
+              <dl className="space-y-2 pt-3 border-t border-white/5 text-xs">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-mg-300">Classes</dt>
+                  <dd className="text-mg-100 text-right">{(profile.niveaux ?? []).map(n => getNiveauLabel(n)).join(', ')}</dd>
                 </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-mg-400">Total généré</span>
-                  <span className="text-accent font-semibold">{totalCount}</span>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-mg-300">Matière</dt>
+                  <dd className="text-mg-100 text-right">
+                    <span aria-hidden="true">{getMatiereEmoji(profile.matierePrincipale)} </span>
+                    {getMatiereLabel(profile.matierePrincipale)}
+                    {profile.matiereSecondaire ? `, ${getMatiereLabel(profile.matiereSecondaire)}` : ''}
+                  </dd>
                 </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-mg-400">Favoris</span>
-                  <span className="text-pink-400 font-semibold flex items-center gap-1">
-                    <Heart size={10} className="fill-pink-400" /> {favCount}
-                  </span>
+                {profile.discipline && (
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-mg-300">Discipline</dt>
+                    <dd className="text-mg-100 text-right">{profile.discipline}</dd>
+                  </div>
+                )}
+                <div className="flex justify-between gap-3">
+                  <dt className="text-mg-300">Total généré</dt>
+                  <dd className="text-accent font-semibold">{stats.status === 'ready' ? stats.data.total : '–'}</dd>
                 </div>
-              </div>
-              <Link to="/app/settings" className="btn-ghost text-xs mt-3.5 w-full justify-center py-1.5">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-mg-300">Favoris</dt>
+                  <dd>
+                    <Link to="/app/favorites" className="text-pink-300 font-semibold flex items-center gap-1 hover:underline">
+                      <Heart size={10} className="fill-pink-300" aria-hidden="true" /> {stats.status === 'ready' ? stats.data.favorites : '–'}
+                    </Link>
+                  </dd>
+                </div>
+              </dl>
+              <Link to="/onboarding?edit=1" className="btn-ghost text-xs mt-3.5 w-full justify-center py-1.5">
                 Modifier le profil
               </Link>
-            </div>
+            </section>
           )}
 
-          {/* Tip */}
+          {/* Astuce */}
           <div className="p-4 rounded-xl bg-accent/4 border border-accent/10">
             <p className="text-xs font-semibold text-accent mb-1.5 flex items-center gap-1.5">
-              <Sparkles size={11} /> Astuce
+              <Sparkles size={11} aria-hidden="true" /> Astuce
             </p>
-            <p className="text-xs text-mg-300 leading-relaxed">
-              Utilisez les "Options avancées" dans le générateur pour cibler les objectifs pédagogiques et le programme officiel.
+            <p className="text-xs text-mg-200 leading-relaxed">
+              {superieur
+                ? 'Ajoutez vos supports (cours, polycopiés, articles) dans le générateur : Magistra s’appuie dessus et cite les pages utilisées. Relisez et adaptez toujours le résultat.'
+                : 'Ajoutez vos propres documents dans le générateur : Magistra s’appuie dessus et cite ses sources. Relisez et adaptez toujours le résultat à vos élèves.'}
             </p>
           </div>
         </div>

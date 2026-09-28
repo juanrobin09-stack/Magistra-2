@@ -1,13 +1,20 @@
 @import "tailwindcss";
 
+/*
+ * Jetons de couleur. Contraste du texte (WCAG AA, 4,5:1 minimum) sur les fonds mg-900 / mg-800 / mg-700 :
+ *   mg-400 #8a8a9e → 5,84 / 5,56 / 5,10   (texte secondaire, textes d'aide, placeholders)
+ *   mg-300 #9d9db2 → 7,43 / 7,07 / 6,49
+ *   mg-200 #a8a8be → 8,47 / 8,06 / 7,40   (inchangé)
+ * mg-500, mg-600 et mg-700 sont des couleurs de fond et de bordure : ne pas les utiliser pour du texte.
+ */
 @theme {
   --color-mg-900: #0a0a0f;
   --color-mg-800: #111118;
   --color-mg-700: #1a1a24;
   --color-mg-600: #23232f;
   --color-mg-500: #2d2d3a;
-  --color-mg-400: #4a4a5a;
-  --color-mg-300: #7a7a8e;
+  --color-mg-400: #8a8a9e;
+  --color-mg-300: #9d9db2;
   --color-mg-200: #a8a8be;
   --color-mg-100: #d4d4e4;
   --color-mg-50: #ededf4;
@@ -19,7 +26,7 @@
   --color-danger: #f87171;
   --font-display: "Instrument Serif", Georgia, serif;
   --font-body: "DM Sans", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 
 @layer base {
@@ -32,9 +39,19 @@
     min-height: 100vh;
   }
   ::selection { background-color: rgba(200,182,255,0.3); color: white; }
-  ::-webkit-scrollbar { width: 6px; }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  ::-webkit-scrollbar { width: 6px; height: 8px; }
   ::-webkit-scrollbar-track { background: var(--color-mg-900); }
   ::-webkit-scrollbar-thumb { background: var(--color-mg-500); border-radius: 3px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
 @layer components {
@@ -94,7 +111,7 @@
     font-family: var(--font-body); font-size: 0.95rem;
     transition: all 0.2s ease; outline: none;
     appearance: none; cursor: pointer;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237a7a8e' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239d9db2' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 1rem center;
     padding-right: 2.5rem;
@@ -123,19 +140,147 @@
     opacity: 0.3;
   }
 
-  /* Prose styling for generated content */
-  .prose-content h1 { font-family: var(--font-display); font-size: 1.75rem; font-weight: 400; margin-bottom: 1rem; color: white; }
-  .prose-content h2 { font-family: var(--font-display); font-size: 1.35rem; font-weight: 400; margin-top: 1.5rem; margin-bottom: 0.75rem; color: var(--color-mg-50); }
-  .prose-content h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: 0.5rem; color: var(--color-accent-bright); }
-  .prose-content p { margin-bottom: 0.75rem; line-height: 1.7; color: var(--color-mg-200); }
-  .prose-content ul, .prose-content ol { margin-bottom: 0.75rem; padding-left: 1.5rem; }
-  .prose-content li { margin-bottom: 0.35rem; line-height: 1.6; color: var(--color-mg-200); }
-  .prose-content strong { color: white; font-weight: 600; }
+  /* ─── Contenu généré (MarkdownView) ───────────────────────────────────────
+     Le preflight de Tailwind retire puces, numéros, marges et tailles de titres :
+     tout est redéfini ici pour le contenu Markdown. */
+  .prose-content {
+    color: var(--color-mg-200);
+    font-size: 0.975rem;
+    line-height: 1.7;
+    /* « anywhere » (et non « break-word ») : une URL ou une référence sans espace se coupe aussi
+       dans les conteneurs flex/grid, sans élargir la page sur mobile. */
+    overflow-wrap: anywhere;
+    min-width: 0;
+  }
+  .prose-content > :first-child { margin-top: 0; }
+  .prose-content > :last-child { margin-bottom: 0; }
+
+  .prose-content h1, .prose-content h2, .prose-content h3,
+  .prose-content h4, .prose-content h5, .prose-content h6 { scroll-margin-top: 5rem; }
+  .prose-content h1 { font-family: var(--font-display); font-size: 1.85rem; line-height: 1.2; font-weight: 400; margin: 1.75rem 0 0.9rem; color: #fff; }
+  .prose-content h2 {
+    font-family: var(--font-display); font-size: 1.45rem; line-height: 1.25; font-weight: 400;
+    margin: 1.6rem 0 0.75rem; padding-bottom: 0.3rem; color: var(--color-mg-50);
+    border-bottom: 1px solid rgba(200,182,255,0.12);
+  }
+  .prose-content h3 { font-size: 1.15rem; line-height: 1.35; font-weight: 600; margin: 1.35rem 0 0.5rem; color: var(--color-accent-bright); }
+  .prose-content h4 { font-size: 1.02rem; line-height: 1.4; font-weight: 600; margin: 1.15rem 0 0.4rem; color: var(--color-mg-50); }
+  .prose-content h5 { font-size: 0.95rem; font-weight: 600; font-style: italic; margin: 1rem 0 0.35rem; color: var(--color-mg-100); }
+  .prose-content h6 { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin: 1rem 0 0.35rem; color: var(--color-mg-300); }
+
+  .prose-content p { margin: 0 0 0.85rem; }
+  .prose-content strong { color: #fff; font-weight: 600; }
   .prose-content em { color: var(--color-accent); font-style: italic; }
-  .prose-content blockquote { border-left: 3px solid var(--color-accent); padding-left: 1rem; margin: 1rem 0; color: var(--color-mg-300); }
-  .prose-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
-  .prose-content th, .prose-content td { padding: 0.5rem 0.75rem; border: 1px solid var(--color-mg-600); text-align: left; font-size: 0.9rem; }
-  .prose-content th { background: var(--color-mg-700); color: var(--color-accent); font-weight: 600; }
+  .prose-content del { color: var(--color-mg-300); text-decoration: line-through; }
+  .prose-content sup, .prose-content sub { font-size: 0.75em; line-height: 0; }
+
+  /* Listes : puces et numéros visibles malgré le preflight. */
+  .prose-content ul { list-style: disc; padding-left: 1.5rem; margin: 0 0 0.85rem; }
+  .prose-content ul ul { list-style: circle; }
+  .prose-content ul ul ul { list-style: square; }
+  .prose-content ol { list-style: decimal; padding-left: 1.75rem; margin: 0 0 0.85rem; }
+  .prose-content li { margin: 0.25rem 0; padding-left: 0.2rem; }
+  .prose-content li::marker { color: var(--color-accent-dim); }
+  .prose-content ol > li::marker { font-variant-numeric: tabular-nums; }
+  .prose-content li > p { margin-bottom: 0.4rem; }
+  .prose-content li > ul, .prose-content li > ol { margin: 0.25rem 0; }
+  /* Listes de tâches */
+  .prose-content ul.contains-task-list { list-style: none; padding-left: 0.25rem; }
+  .prose-content li.task-list-item { list-style: none; padding-left: 0; }
+  .prose-content li.task-list-item > input[type="checkbox"] {
+    width: 1rem; height: 1rem; margin: 0 0.55rem 0 0; vertical-align: -0.15rem;
+    accent-color: var(--color-accent); cursor: default;
+  }
+  .prose-content li.task-list-item > ul.contains-task-list { padding-left: 1.6rem; }
+
+  /* Liens : visibles (soulignés) et identifiables au clavier. */
+  .prose-content a {
+    color: var(--color-accent-bright);
+    text-decoration: underline;
+    text-decoration-color: rgba(224,212,255,0.55);
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+  }
+  .prose-content a:hover { color: #fff; text-decoration-color: currentColor; }
+  .prose-content a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 2px; }
+  .prose-content .md-link-disabled { text-decoration: underline dotted; text-underline-offset: 2px; }
+  .prose-content .md-image { color: var(--color-mg-300); font-style: italic; }
+
+  /* Code */
+  .prose-content code {
+    font-family: var(--font-mono); font-size: 0.86em;
+    background: rgba(200,182,255,0.1); color: var(--color-accent-bright);
+    border: 1px solid rgba(200,182,255,0.12); border-radius: 0.3rem;
+    padding: 0.08em 0.35em; overflow-wrap: anywhere;
+  }
+  .prose-content pre {
+    font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6;
+    background: var(--color-mg-900); color: var(--color-mg-100);
+    border: 1px solid var(--color-mg-500); border-radius: 0.6rem;
+    padding: 0.9rem 1rem; margin: 0 0 1rem;
+    max-width: 100%; overflow-x: auto; tab-size: 4;
+  }
+  .prose-content pre code {
+    background: none; border: 0; padding: 0; border-radius: 0;
+    color: inherit; font-size: inherit; white-space: pre; overflow-wrap: normal;
+  }
+
+  .prose-content blockquote {
+    margin: 1rem 0; padding: 0.35rem 0 0.35rem 1rem;
+    border-left: 3px solid var(--color-accent-dim);
+    background: rgba(200,182,255,0.04); border-radius: 0 0.5rem 0.5rem 0;
+    color: var(--color-mg-200);
+  }
+  .prose-content blockquote > :last-child { margin-bottom: 0; }
+
+  .prose-content hr { border: 0; border-top: 1px solid rgba(200,182,255,0.15); margin: 1.5rem 0; }
+
+  /* Tableaux : défilement horizontal dans leur conteneur, lisibles sur mobile. */
+  .table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 1rem 0;
+    border: 1px solid var(--color-mg-500);
+    border-radius: 0.6rem;
+  }
+  .table-wrap:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .prose-content table {
+    width: max-content; min-width: 100%;
+    border-collapse: collapse; font-size: 0.9rem; line-height: 1.5;
+  }
+  .prose-content th, .prose-content td {
+    padding: 0.55rem 0.8rem; text-align: left; vertical-align: top;
+    max-width: 28rem; border-bottom: 1px solid var(--color-mg-500);
+  }
+  .prose-content th + th, .prose-content td + td { border-left: 1px solid var(--color-mg-600); }
+  .prose-content thead th { background: var(--color-mg-700); color: var(--color-accent-bright); font-weight: 600; }
+  .prose-content tbody tr:nth-child(even) { background: rgba(200,182,255,0.035); }
+  .prose-content tbody tr:last-child td { border-bottom: 0; }
+
+  /* Mathématiques (KaTeX) : les formules longues défilent au lieu de déborder. */
+  .prose-content .katex { font-size: 1.08em; }
+  .prose-content .math-display {
+    max-width: 100%; overflow-x: auto; overflow-y: hidden;
+    margin: 1rem 0; padding: 0.25rem 0;
+  }
+  .prose-content .math-display > .katex-display { margin: 0; }
+  /* Formule en ligne très longue : elle défile dans sa ligne au lieu d'élargir la page. */
+  .prose-content .math-inline { display: inline-block; max-width: 100%; overflow-x: auto; overflow-y: hidden; vertical-align: middle; }
+  .prose-content .math-source { font-family: var(--font-mono); font-size: 0.86em; white-space: pre-wrap; }
+
+  /* Notes de bas de page */
+  .prose-content section.footnotes {
+    margin-top: 2rem; padding-top: 1rem;
+    border-top: 1px solid rgba(200,182,255,0.12);
+    font-size: 0.875rem; color: var(--color-mg-300);
+  }
+
+  /* Zone d'impression (printDocument) : mise en page hors écran, visible seulement à l'impression. */
+  .print-root {
+    position: absolute; left: -10000px; top: 0; width: 180mm;
+    visibility: hidden; pointer-events: none;
+  }
 
   @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes pulse-glow { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
@@ -146,4 +291,58 @@
     background-size: 200% 100%;
     animation: shimmer 1.5s infinite;
   }
+}
+
+/* ─── Impression ───────────────────────────────────────────────────────────
+   - `.no-print` : éléments d'interface jamais imprimés (menus, boutons…).
+   - printDocument() ajoute `mg-printing` sur <html> : seule la zone .print-root est imprimée.
+   - Sans printDocument (Ctrl+P), la page est imprimée sans son interface, en noir sur blanc. */
+@media print {
+  @page { size: A4; margin: 16mm 15mm 18mm; }
+
+  html, body { background: #fff !important; color: #111 !important; min-height: 0; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-shadow: none !important; text-shadow: none !important; }
+  .no-print { display: none !important; }
+
+  html.mg-printing body > *:not(.print-root) { display: none !important; }
+  html.mg-printing .print-root { position: static; left: auto; width: auto; visibility: visible; pointer-events: auto; }
+  html:not(.mg-printing) .print-root { display: none !important; }
+
+  .print-document { font-family: var(--font-body); color: #111; }
+  .print-header { border-bottom: 2px solid #6d5bd0; padding-bottom: 8pt; margin-bottom: 14pt; }
+  .print-title { font-family: var(--font-display); font-size: 24pt; line-height: 1.15; font-weight: 400; color: #1a1033; margin: 0 0 4pt; }
+  .print-meta { font-size: 9.5pt; color: #444; margin: 0; }
+
+  .card { background: #fff !important; border-color: #ccc !important; }
+
+  .prose-content { color: #111 !important; font-size: 11pt; line-height: 1.5; }
+  .prose-content h1, .prose-content h2, .prose-content h3,
+  .prose-content h4, .prose-content h5, .prose-content h6 {
+    color: #1a1033 !important; break-after: avoid; page-break-after: avoid;
+  }
+  .prose-content h2 { border-bottom-color: #ccc; }
+  .prose-content p, .prose-content li { orphans: 3; widows: 3; }
+  .prose-content strong { color: #000 !important; }
+  .prose-content em { color: #222 !important; }
+  .prose-content del { color: #555 !important; }
+  .prose-content li::marker { color: #333; }
+  .prose-content a { color: #1a3fb0 !important; text-decoration: underline; }
+  .prose-content a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 0.85em; color: #444; overflow-wrap: anywhere; }
+  .prose-content code { background: #f1eff8 !important; color: #222 !important; border-color: #ddd !important; }
+  .prose-content pre {
+    background: #f6f5fb !important; color: #111 !important; border-color: #ddd !important;
+    overflow: visible; white-space: pre-wrap; break-inside: avoid;
+  }
+  .prose-content pre code { white-space: pre-wrap; overflow-wrap: anywhere; color: #111 !important; }
+  .prose-content blockquote { background: none !important; color: #333 !important; border-left-color: #888; break-inside: avoid; }
+  .prose-content hr { border-top-color: #bbb; }
+  .table-wrap { overflow: visible !important; border-color: #bbb !important; }
+  .prose-content table { width: 100%; min-width: 0; font-size: 9.5pt; }
+  .prose-content thead { display: table-header-group; }
+  .prose-content tr { break-inside: avoid; page-break-inside: avoid; }
+  .prose-content th, .prose-content td { max-width: none; border-color: #bbb !important; color: #111 !important; }
+  .prose-content thead th { background: #ecebf4 !important; color: #111 !important; }
+  .prose-content tbody tr:nth-child(even) { background: #f7f7fa !important; }
+  .prose-content .math-display, .prose-content .math-inline { overflow: visible; }
+  .prose-content section.footnotes { color: #333 !important; border-top-color: #bbb; }
 }
