@@ -8,7 +8,7 @@
 import {
   app, BrowserWindow, dialog, Menu, net, protocol, safeStorage, session, shell, type MenuItemConstructorOptions, type Session,
 } from 'electron';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, promises as fsp, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -329,9 +329,10 @@ async function start(): Promise<void> {
       child.on('error', err => console.warn('[magistra] Lancement impossible :', file, err.message));
       child.unref();
     },
-    runInstaller: (file, args, signal) =>
+    // L'installateur lance Ollama à la fin : il reçoit l'environnement préparé (proxy du système en HTTPS_PROXY).
+    runInstaller: (file, args, signal, env) =>
       new Promise<number>((resolve, reject) => {
-        const child = spawn(file, args, { windowsHide: true, stdio: 'ignore' });
+        const child = spawn(file, args, { windowsHide: true, stdio: 'ignore', ...(env ? { env } : {}) });
         const timer = setTimeout(() => {
           child.kill();
           reject(new Error('délai d’installation dépassé'));
@@ -360,6 +361,21 @@ async function start(): Promise<void> {
     emit: (event: AIProgressEvent) => {
       sendToWindow(IPC.aiProgress, event);
     },
+    // Proxy du système (celui que suit net.fetch) : transmis à Ollama, qui ne lit que HTTPS_PROXY. Jamais journalisé.
+    resolveProxy: url => session.defaultSession.resolveProxy(url),
+    // Relance du moteur (Windows) : arrêt de « ollama app.exe » et ollama.exe, comme le fait l'installateur officiel.
+    ...(process.platform === 'win32'
+      ? {
+        killProcesses: async (names: readonly string[]) => {
+          for (const name of names) {
+            await new Promise<void>(resolve => {
+              // Code de sortie non nul si le processus n'existe pas : sans importance, l'arrêt est vérifié ensuite.
+              execFile('taskkill', ['/f', '/t', '/im', name], { windowsHide: true, timeout: 10_000 }, () => resolve());
+            });
+          }
+        },
+      }
+      : {}),
   });
 
   const generation = new GenerationManager({

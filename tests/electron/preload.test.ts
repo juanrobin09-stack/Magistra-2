@@ -45,9 +45,12 @@ describe('pont window.magistra', () => {
       [() => bridge.ai.status(), IPC.aiStatus, []],
       [() => bridge.ai.refresh(), IPC.aiRefresh, []],
       [() => bridge.ai.installEngine(), IPC.aiInstallEngine, []],
+      // Mise à jour d'un moteur trop ancien : même canal, argument transmis tel quel.
+      [() => bridge.ai.installEngine({ update: true }), IPC.aiInstallEngine, [{ update: true }]],
       [() => bridge.ai.cancelEngineInstall(), IPC.aiCancelEngineInstall, []],
       [() => bridge.ai.openEngineDownload(), IPC.aiOpenEngineDownload, []],
       [() => bridge.ai.startEngine(), IPC.aiStartEngine, []],
+      [() => bridge.ai.startEngine({ restart: true }), IPC.aiStartEngine, [{ restart: true }]],
       [() => bridge.ai.pullModel({ tier: 'leger' }), IPC.aiPullModel, [{ tier: 'leger' }]],
       [() => bridge.ai.cancelPull(), IPC.aiCancelPull, []],
       [() => bridge.ai.setConfig({ tier: 'qualite' }), IPC.aiSetConfig, [{ tier: 'qualite' }]],
@@ -70,7 +73,8 @@ describe('pont window.magistra', () => {
     for (const [fn, channel, args] of calls) {
       invoke.mockClear();
       await fn();
-      expect(invoke).toHaveBeenCalledWith(channel, ...args);
+      // Arguments exacts : aucun argument supplémentaire (installEngine() reste un appel sans argument).
+      expect(invoke.mock.calls).toEqual([[channel, ...args]]);
     }
     bridge.app.ready();
     expect(send).toHaveBeenCalledWith(IPC.appReady);

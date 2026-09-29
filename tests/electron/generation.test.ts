@@ -6,10 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MockProvider } from '../../shared/ai/mock.js';
-import type { AIProvider } from '../../shared/ai/provider.js';
+import type { AIProvider, PreloadOptions } from '../../shared/ai/provider.js';
 import { MagistraError } from '../../shared/errors.js';
 import type { GenerationEvent, PrivacyInfo } from '../../shared/types.js';
-import { GenerationManager, maxDocumentCharsFor, type GenerationPayload } from '../../electron/generation.js';
+import { GenerationManager, maxDocumentCharsFor, type GenerationDeps, type GenerationPayload } from '../../electron/generation.js';
 import { LocalStore } from '../../electron/localStore.js';
 
 let dir: string;
@@ -31,7 +31,9 @@ const REQUEST = {
   documents: [{ docId: 'd1', docName: 'poly.pdf', kind: 'pdf', locator: { type: 'pages', start: 3, end: 4 }, text: 'Un espace vectoriel est un ensemble muni de deux lois.' }],
 };
 
-function manager(provider: AIProvider | (() => Promise<AIProvider>), opts: { privacy?: PrivacyInfo; windowOpen?: () => boolean } = {}) {
+type Active = Awaited<ReturnType<GenerationDeps['describeActive']>>;
+
+function manager(provider: AIProvider | (() => Promise<AIProvider>), opts: { privacy?: PrivacyInfo; windowOpen?: () => boolean; active?: Partial<Active> } = {}) {
   const payloads: GenerationPayload[] = [];
   const gm = new GenerationManager({
     store,
@@ -39,7 +41,7 @@ function manager(provider: AIProvider | (() => Promise<AIProvider>), opts: { pri
       onStatus('Démarrage du moteur IA…');
       return typeof provider === 'function' ? provider() : provider;
     },
-    describeActive: async () => ({ label: 'Magistra Standard', contextTokens: 12_288, ready: true, privacy: opts.privacy ?? { level: 'local', message: 'IA locale' } }),
+    describeActive: async () => ({ label: 'Magistra Standard', contextTokens: 12_288, ready: true, privacy: opts.privacy ?? { level: 'local', message: 'IA locale' }, ...opts.active }),
     send: payload => {
       if (opts.windowOpen && !opts.windowOpen()) return false;
       payloads.push(payload);
@@ -140,6 +142,30 @@ describe('GenerationManager', () => {
     expect((await finished(jobId)).at(-1)).toMatchObject({ type: 'error', code: 'OUT_OF_MEMORY', retryable: true });
   });
 
+  it('moteur local : le modèle est préchargé (« Chargement du modèle… ») avant la rédaction ; serveur distant : non', async () => {
+    const order: string[] = [];
+    class PreloadingProvider extends MockProvider {
+      async preload(options?: PreloadOptions): Promise<void> {
+        void options;
+        order.push('preload');
+      }
+    }
+    const local = new PreloadingProvider({ reply: 'Texte [S1].', local: true });
+    const { gm, finished } = manager(local);
+    const events = await finished(gm.start(REQUEST).jobId);
+    expect(order).toEqual(['preload']);
+    const statuses = events.filter((e): e is Extract<GenerationEvent, { type: 'status' }> => e.type === 'status');
+    expect(statuses.map(e => e.message)).toContain('Chargement du modèle…');
+    expect(statuses.find(e => e.message === 'Chargement du modèle…')?.stage).toBe('loading_model');
+    expect(events.at(-1)?.type).toBe('done');
+
+    order.length = 0;
+    const remote = new PreloadingProvider({ reply: 'Texte.', local: false });
+    const other = manager(remote);
+    await other.finished(other.gm.start(REQUEST).jobId);
+    expect(order).toEqual([]);
+  });
+
   it('fenêtre fermée pendant la génération : le travail est interrompu', async () => {
     let open = true;
     const provider = new MockProvider({ reply: 'z'.repeat(3_000), chunkSize: 10, delayMs: 5 });
@@ -166,5 +192,14 @@ describe('capacités', () => {
       engineLabel: 'Magistra Standard',
       ready: true,
     });
+  });
+
+  it('IA non prête : cause précise (notReady) ; serveur distant : prestataire annoncé (providerInfo)', async () => {
+    const notReady = { code: 'ENGINE_OUTDATED' as const, message: 'Le moteur IA installé (Ollama 0.12.3) est trop ancien.' };
+    const providerInfo = { label: 'Mistral AI (La Plateforme)', thirdParty: true };
+    const { gm } = manager(new MockProvider(), { active: { ready: false, notReady, providerInfo } });
+    expect(await gm.capabilities()).toMatchObject({ ready: false, notReady, providerInfo });
+    const ok = manager(new MockProvider(), { active: { ready: true, notReady } });
+    expect((await ok.gm.capabilities()).notReady).toBeUndefined();
   });
 });

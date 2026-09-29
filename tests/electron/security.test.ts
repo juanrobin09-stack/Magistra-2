@@ -142,6 +142,40 @@ describe('enregistrement des canaux IPC', () => {
     expect(String((err as Error).message)).toBe('INTERNAL|Erreur inattendue. Réessayez.');
   });
 
+  it('moteur IA : options { update } et { restart } validées puis transmises, expéditeur étranger refusé', async () => {
+    const ai = {
+      installEngine: vi.fn(async () => undefined),
+      startEngineOrExplain: vi.fn(async () => true as const),
+      restartEngine: vi.fn(async () => true as const),
+    };
+    handlers.clear();
+    registerIpcHandlers({
+      getWindow: () => win,
+      trustedOrigins: trustedOrigins(null),
+      store: store as unknown as IpcContext['store'],
+      ai: ai as unknown as IpcContext['ai'],
+      generation: {} as IpcContext['generation'],
+      appInfo: () => ({ version: '2.0.0', platform: 'win32', userDataPath: 'C:/x', isPackaged: true }),
+      openExternal,
+      onAppReady,
+    });
+    const install = handlers.get(IPC.aiInstallEngine)!;
+    await install(event('app://magistra/'));
+    await install(event('app://magistra/'), { update: true });
+    expect(ai.installEngine.mock.calls).toEqual([[{}], [{ update: true }]]);
+    await expect(install(event('app://magistra/'), { update: true, url: 'https://evil.example/x.exe' })).rejects.toThrow(/^INVALID_REQUEST\|/);
+    await expect(install(event('https://evil.example/'), { update: true })).rejects.toThrow(/^FORBIDDEN\|/);
+    expect(ai.installEngine).toHaveBeenCalledTimes(2);
+
+    const start = handlers.get(IPC.aiStartEngine)!;
+    await expect(start(event('app://magistra/'))).resolves.toBe(true);
+    await expect(start(event('app://magistra/'), { restart: true })).resolves.toBe(true);
+    await expect(start(event('app://magistra/'), { restart: 'oui' })).rejects.toThrow(/^INVALID_REQUEST\|/);
+    await expect(start(event('https://evil.example/'), { restart: true })).rejects.toThrow(/^FORBIDDEN\|/);
+    expect(ai.startEngineOrExplain).toHaveBeenCalledTimes(1);
+    expect(ai.restartEngine).toHaveBeenCalledTimes(1);
+  });
+
   it('shell:open-external refuse les schémas dangereux', async () => {
     const open = handlers.get(IPC.openExternal)!;
     await expect(open(event('app://magistra/'), 'file:///etc/passwd')).resolves.toBe(false);

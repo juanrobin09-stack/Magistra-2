@@ -34,10 +34,11 @@ const bridge: MagistraBridge = {
   ai: {
     status: () => ipcRenderer.invoke(IPC.aiStatus),
     refresh: () => ipcRenderer.invoke(IPC.aiRefresh),
-    installEngine: () => ipcRenderer.invoke(IPC.aiInstallEngine),
+    // Argument transmis seulement s'il est fourni : installEngine() reste un appel sans argument.
+    installEngine: options => ipcRenderer.invoke(IPC.aiInstallEngine, ...(options ? [options] : [])),
     cancelEngineInstall: () => ipcRenderer.invoke(IPC.aiCancelEngineInstall),
     openEngineDownload: () => ipcRenderer.invoke(IPC.aiOpenEngineDownload),
-    startEngine: () => ipcRenderer.invoke(IPC.aiStartEngine),
+    startEngine: options => ipcRenderer.invoke(IPC.aiStartEngine, ...(options ? [options] : [])),
     pullModel: target => ipcRenderer.invoke(IPC.aiPullModel, target),
     cancelPull: () => ipcRenderer.invoke(IPC.aiCancelPull),
     setConfig: update => ipcRenderer.invoke(IPC.aiSetConfig, update),

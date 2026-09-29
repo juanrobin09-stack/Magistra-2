@@ -8,82 +8,15 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FetchLike } from '../../shared/ai/provider.js';
 import type { AIProgressEvent } from '../../shared/ipc.js';
-import { AIConfigStore, type SecretCipher } from '../../electron/aiConfig.js';
 import {
-  AIManager, INSTALLER_ARGS, INSTALLER_MISMATCH_MESSAGE, INSTALLER_UNVERIFIABLE_MESSAGE, LIGHTEST_OUT_OF_MEMORY_MESSAGE, OLLAMA_DOWNLOAD_PAGE,
-  PRIVACY_LOCAL_MESSAGE, PullAggregator, noRedirects, parseSha256Sums, type AIManagerDeps,
+  ENGINE_APPROX_SIZE_MB, ENGINE_REQUIRED_DISK_GB, INSTALLER_ARGS, INSTALLER_MISMATCH_MESSAGE, INSTALLER_UNVERIFIABLE_MESSAGE,
+  LIGHTEST_OUT_OF_MEMORY_MESSAGE, OLLAMA_APP_ARGS, OLLAMA_DOWNLOAD_PAGE, PRIVACY_LOCAL_MESSAGE, PullAggregator, noRedirects, parseSha256Sums,
 } from '../../electron/ollamaSetup.js';
-
-const GB = 1024 ** 3;
-const cipher: SecretCipher = {
-  isAvailable: () => true,
-  encrypt: s => Buffer.from(s).reverse().toString('base64'),
-  decrypt: s => Buffer.from(s, 'base64').reverse().toString(),
-};
-
-// ─── Faux Ollama ────────────────────────────────────────────────────────────
-
-interface FakeOllama {
-  running: boolean;
-  models: string[];
-  pullRequests: string[];
-  /** Script du prochain /api/pull. */
-  pull?: (model: string, signal?: AbortSignal) => Response;
-}
-
-function ndjsonResponse(lines: unknown[], opts: { hangAfter?: number; signal?: AbortSignal } = {}): Response {
-  const encoder = new TextEncoder();
-  let i = 0;
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (opts.hangAfter !== undefined && i >= opts.hangAfter) {
-        return new Promise<void>(resolve => {
-          const fail = () => {
-            controller.error(new DOMException('Opération annulée', 'AbortError'));
-            resolve();
-          };
-          if (opts.signal?.aborted) fail();
-          else opts.signal?.addEventListener('abort', fail, { once: true });
-        });
-      }
-      if (i >= lines.length) {
-        controller.close();
-        return;
-      }
-      controller.enqueue(encoder.encode(`${JSON.stringify(lines[i++])}\n`));
-    },
-  });
-  return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
-}
-
-function pullLines(model: string, from = 0): unknown[] {
-  const total = 9_000_000_000;
-  const lines: unknown[] = [{ status: 'pulling manifest' }];
-  for (let c = from; c <= total; c += total / 20) lines.push({ status: 'pulling aaaa1111', digest: 'sha256:aaaa1111', total, completed: c });
-  lines.push({ status: 'pulling bbbb2222', digest: 'sha256:bbbb2222', total: 12_000, completed: 12_000 });
-  lines.push({ status: 'verifying sha256 digest' }, { status: 'writing manifest' }, { status: 'success' });
-  void model;
-  return lines;
-}
-
-function makeFetch(o: FakeOllama, extra?: (url: string, init?: RequestInit) => Response | undefined): FetchLike {
-  return async (input, init) => {
-    const url = String(input);
-    const custom = extra?.(url, init);
-    if (custom) return custom;
-    if (!o.running) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
-    const u = new URL(url);
-    if (u.pathname === '/api/version') return Response.json({ version: '0.12.3' });
-    if (u.pathname === '/api/tags') return Response.json({ models: o.models.map(name => ({ name, size: 9_100_000_000 })) });
-    if (u.pathname === '/api/pull') {
-      const model = JSON.parse(String(init?.body)).model as string;
-      o.pullRequests.push(model);
-      if (o.pull) return o.pull(model, init?.signal ?? undefined);
-      return ndjsonResponse(pullLines(model));
-    }
-    return new Response('not found', { status: 404 });
-  };
-}
+import { REMOTE_MODEL_REFUSED } from '../../shared/ai/ollamaRemote.js';
+import { sanitizeAIConfigUpdate, sanitizePullTarget } from '../../electron/validate.js';
+import {
+  APP_EXE, CLI_EXE, RECENT_VERSION, makeFetch, makeManager as makeManagerIn, ndjsonResponse, pullLines, type FakeOllama, type ManagerOptions,
+} from './fakeOllama.js';
 
 // ─── Fabrique du gestionnaire ───────────────────────────────────────────────
 
@@ -94,59 +27,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-async function makeManager(opts: {
-  ollama: FakeOllama;
-  platform?: NodeJS.Platform;
-  existing?: string[];
-  env?: NodeJS.ProcessEnv;
-  freeGB?: number;
-  netFetch?: FetchLike;
-  runInstaller?: AIManagerDeps['runInstaller'];
-  onSpawn?: (file: string, args: string[]) => void;
-  clock?: () => number;
-  /** Réponses supplémentaires du faux Ollama (ex. /api/chat). */
-  extra?: (url: string, init?: RequestInit) => Response | undefined;
-}) {
-  const events: AIProgressEvent[] = [];
-  const detections = { hardware: 0 };
-  const spawned: { file: string; args: string[] }[] = [];
-  const opened: string[] = [];
-  const config = new AIConfigStore(path.join(dir, 'ai-config.json'), cipher);
-  await config.load();
-  const existing = new Set(opts.existing ?? []);
-  const fetchImpl = makeFetch(opts.ollama, opts.extra);
-  const manager = new AIManager({
-    config,
-    localFetch: fetchImpl,
-    netFetch: opts.netFetch ?? fetchImpl,
-    platform: opts.platform ?? 'win32',
-    env: opts.env ?? { LOCALAPPDATA: 'C:\\Users\\prof\\AppData\\Local', Path: 'C:\\Windows\\System32' },
-    homedir: 'C:\\Users\\prof',
-    tmpdir: dir,
-    fileExists: async p => existing.has(p),
-    spawnDetached: (file, args) => {
-      spawned.push({ file, args });
-      opts.onSpawn?.(file, args);
-    },
-    runInstaller: opts.runInstaller ?? (async () => 0),
-    openExternal: async url => {
-      opened.push(url);
-    },
-    detectHardware: async () => {
-      detections.hardware++;
-      return { totalRamGB: 16, cpuCores: 8, gpus: [], freeDiskGB: 120, platform: 'win32' };
-    },
-    freeDiskBytes: async () => (opts.freeGB ?? 120) * GB,
-    modelsDir: 'C:\\Users\\prof\\.ollama\\models',
-    emit: e => events.push(e),
-    ...(opts.clock ? { now: opts.clock } : {}),
-    timings: { startPollMs: 1, startTimeoutMs: 200, installWaitMs: 500, installPollMs: 5, watchIntervalMs: 5, watchTimeoutMs: 2_000, progressThrottleMs: 250 },
-  });
-  return { manager, events, spawned, opened, config, detections };
-}
-
-const APP_EXE = 'C:\\Users\\prof\\AppData\\Local\\Programs\\Ollama\\ollama app.exe';
-const CLI_EXE = 'C:\\Users\\prof\\AppData\\Local\\Programs\\Ollama\\ollama.exe';
+const makeManager = (opts: ManagerOptions) => makeManagerIn(dir, opts);
 
 // ─── Détection et état ──────────────────────────────────────────────────────
 
@@ -157,7 +38,7 @@ describe('détection du moteur', () => {
     const { manager } = await makeManager({ ollama, existing: [APP_EXE, CLI_EXE] });
     expect(await manager.engineState()).toEqual({ state: 'installed_stopped', executable: APP_EXE });
     ollama.running = true;
-    expect(await manager.engineState()).toMatchObject({ state: 'running', version: '0.12.3' });
+    expect(await manager.engineState()).toMatchObject({ state: 'running', version: RECENT_VERSION });
   });
 
   it('trouve ollama.exe dans le PATH', async () => {
@@ -176,11 +57,14 @@ describe('détection du moteur', () => {
     expect(await mac.manager.detectExecutable()).toEqual({ app: '/Applications/Ollama.app', cli: '/Applications/Ollama.app/Contents/Resources/ollama' });
   });
 
-  it('démarre automatiquement « ollama app.exe » (sans fenêtre) quand il est arrêté', async () => {
+  it('démarre automatiquement « ollama app.exe » sans fenêtre (--hide --fast-startup) quand il est arrêté', async () => {
     const ollama: FakeOllama = { running: false, models: [], pullRequests: [] };
     const { manager, spawned } = await makeManager({ ollama, existing: [APP_EXE, CLI_EXE], onSpawn: () => { ollama.running = true; } });
     await manager.autoStart();
-    expect(spawned).toEqual([{ file: APP_EXE, args: [] }]);
+    // Sans ces arguments, le vrai Ollama ouvre sa fenêtre d'accueil (connexion à un compte) par-dessus Magistra :
+    // windowsHide ne masque que les consoles. Ce sont ceux de la ligne de commande officielle d'Ollama.
+    expect(OLLAMA_APP_ARGS).toEqual(['--hide', '--fast-startup']);
+    expect(spawned.map(s => ({ file: s.file, args: s.args }))).toEqual([{ file: APP_EXE, args: ['--hide', '--fast-startup'] }]);
     expect(ollama.running).toBe(true);
   });
 
@@ -188,7 +72,7 @@ describe('détection du moteur', () => {
     const ollama: FakeOllama = { running: false, models: [], pullRequests: [] };
     const { manager, spawned } = await makeManager({ ollama, platform: 'linux', env: { PATH: '/usr/local/bin' }, existing: ['/usr/local/bin/ollama'], onSpawn: () => { ollama.running = true; } });
     expect(await manager.startEngine()).toBe(true);
-    expect(spawned).toEqual([{ file: '/usr/local/bin/ollama', args: ['serve'] }]);
+    expect(spawned.map(s => ({ file: s.file, args: s.args }))).toEqual([{ file: '/usr/local/bin/ollama', args: ['serve'] }]);
   });
 });
 
@@ -198,7 +82,9 @@ describe('état agrégé (ai:status)', () => {
     const { manager, config } = await makeManager({ ollama, existing: [] });
     let status = await manager.status();
     expect(status.headline).toBe('Moteur IA non installé');
-    expect(status.engineDownload).toMatchObject({ approxSizeMB: 1200, requiredDiskGB: 5, platformSupported: true });
+    // Taille réelle de OllamaSetup.exe (1,6 Go en v0.34) et place pour l'installateur + les binaires (≥ 4 Go).
+    expect(status.engineDownload).toMatchObject({ approxSizeMB: 1700, requiredDiskGB: 7, platformSupported: true });
+    expect([ENGINE_APPROX_SIZE_MB, ENGINE_REQUIRED_DISK_GB]).toEqual([1700, 7]);
     // Premier démarrage : le niveau recommandé (16 Go → Standard) est retenu.
     expect(status.selectedTier).toBe('standard');
     expect(config.get().tier).toBe('standard');
@@ -222,10 +108,48 @@ describe('état agrégé (ai:status)', () => {
     expect(status.installedModels).toEqual([{ name: 'ministral-3:14b', sizeGB: 9.1 }]);
   });
 
+  it('niveau recommandé absent mais Magistra Léger déjà installé (alias ministral-3:8b) : prête, sans téléchargement (non-régression)', async () => {
+    // Constaté avec un vrai Ollama 0.34.4 : machine de 16 Go (Standard recommandé), seul « ministral-3:8b » installé.
+    // L'assistant proposait de télécharger 9 Go au lieu d'utiliser le modèle déjà présent.
+    const ollama: FakeOllama = { running: true, models: ['ministral-3:8b', 'qwen3:0.6b'], pullRequests: [] };
+    const { manager, config } = await makeManager({ ollama });
+    const status = await manager.status();
+    expect(status).toMatchObject({ ready: true, headline: 'Prête', selectedTier: 'leger', activeModel: 'ministral-3:8b', activeLabel: 'Magistra Léger' });
+    expect(status.recommendation.tier).toBe('standard');
+    expect(status.engine).toMatchObject({ state: 'running', version: RECENT_VERSION });
+    expect(status.engine.outdated).toBeUndefined();
+    // Choix automatique : il ne compte pas comme un choix de l'enseignant (qui peut passer à Standard ensuite).
+    expect(config.get()).toMatchObject({ tier: 'leger', tierChosen: false });
+    expect(ollama.pullRequests).toEqual([]);
+    const provider = await manager.resolveProvider();
+    expect(provider).toMatchObject({ kind: 'ollama', model: 'ministral-3:8b', label: 'Magistra Léger' });
+
+    // Un niveau CHOISI par l'enseignant n'est jamais remplacé, même s'il n'est pas (encore) installé.
+    await config.update({ tier: 'standard' });
+    const chosen = await manager.status();
+    expect(chosen).toMatchObject({ ready: false, selectedTier: 'standard', headline: 'Modèle Magistra Standard non installé' });
+    await expect(manager.resolveProvider()).rejects.toMatchObject({ code: 'MODEL_NOT_INSTALLED' });
+  });
+
+  it('plusieurs niveaux installés, aucun n’est celui retenu : le mieux adapté à l’ordinateur est utilisé', async () => {
+    // 16 Go sans carte graphique : Qualité est « très lent », Léger convient → Léger plutôt que Qualité.
+    const ollama: FakeOllama = { running: true, models: ['mistral-small3.2:24b', 'ministral-3:8b'], pullRequests: [] };
+    const { manager } = await makeManager({ ollama });
+    expect(await manager.status()).toMatchObject({ ready: true, selectedTier: 'leger', activeModel: 'ministral-3:8b' });
+  });
+
+  it('niveau non installé et génération lancée sans passer par l’assistant : le niveau installé est utilisé', async () => {
+    const ollama: FakeOllama = { running: true, models: ['ministral-3:latest'], pullRequests: [] };
+    const { manager, config } = await makeManager({ ollama });
+    const provider = await manager.resolveProvider();
+    expect(provider).toMatchObject({ kind: 'ollama', model: 'ministral-3:latest', label: 'Magistra Léger' });
+    expect(config.get()).toMatchObject({ tier: 'leger', tierChosen: false });
+  });
+
   it('affiche la taille réelle de l’installateur (API GitHub) quand elle est joignable', async () => {
     const ollama: FakeOllama = { running: false, models: [], pullRequests: [] };
     const github = makeFetch(ollama, url => url.startsWith('https://api.github.com/')
-      ? Response.json({ tag_name: 'v0.12.3', assets: [{ name: 'OllamaSetup.exe', size: 1_300 * 1024 * 1024, browser_download_url: 'https://github.com/ollama/ollama/releases/download/v0.12.3/OllamaSetup.exe' }] })
+      ? Response.json({ tag_name: 'v0.34.4', assets: [{ name: 'OllamaSetup.exe', size: 1_300 * 1024 * 1024, browser_download_url: 'https://github.com/ollama/ollama/releases/download/v0.34.4/OllamaSetup.exe' }] })
       : undefined);
     const { manager } = await makeManager({ ollama, netFetch: github });
     expect((await manager.status()).engineDownload.sizeMB).toBe(1300);
@@ -263,7 +187,7 @@ describe('nouvelle vérification (ai:refresh)', () => {
     const ollama: FakeOllama = { running: false, models: [], pullRequests: [] };
     const netFetch: FetchLike = async input => {
       releaseCalls.push(String(input));
-      return Response.json({ tag_name: 'v0.12.3', assets: [] });
+      return Response.json({ tag_name: 'v0.34.4', assets: [] });
     };
     const { manager, detections } = await makeManager({ ollama, netFetch, clock: () => clock });
     expect((await manager.status()).engine.state).toBe('not_installed');
@@ -389,7 +313,7 @@ describe('fournisseur de génération', () => {
     const pending = manager.resolveProvider(controller.signal);
     setTimeout(() => controller.abort(), 20);
     await expect(pending).rejects.toMatchObject({ code: 'GENERATION_ABORTED' });
-    // Rejet à l'annulation, sans attendre la fin du délai de démarrage (200 ms ici, 30 s en réel).
+    // Rejet à l'annulation, sans attendre la fin du délai de démarrage (200 ms ici, 120 s en réel).
     expect(Date.now() - started).toBeLessThan(150);
     expect(spawned.map(s => s.file)).toContain(APP_EXE);
   });
@@ -416,8 +340,8 @@ describe('fournisseur de génération', () => {
 describe('installation du moteur (Windows)', () => {
   const installer = randomBytes(300_000);
   const sha = createHash('sha256').update(installer).digest('hex');
-  const SETUP_URL = 'https://github.com/ollama/ollama/releases/download/v0.12.3/OllamaSetup.exe';
-  const SUMS_URL = 'https://github.com/ollama/ollama/releases/download/v0.12.3/sha256sum.txt';
+  const SETUP_URL = 'https://github.com/ollama/ollama/releases/download/v0.34.4/OllamaSetup.exe';
+  const SUMS_URL = 'https://github.com/ollama/ollama/releases/download/v0.34.4/sha256sum.txt';
 
   /**
    * Faux GitHub. `sums` : empreinte publiée normalement (par défaut), absente de la version (« missing »),
@@ -427,7 +351,7 @@ describe('installation du moteur (Windows)', () => {
     return (url: string, init?: RequestInit): Response | undefined => {
       if (url.startsWith('https://api.github.com/')) {
         return Response.json({
-          tag_name: 'v0.12.3',
+          tag_name: 'v0.34.4',
           assets: [
             { name: 'OllamaSetup.exe', size: installer.length, browser_download_url: SETUP_URL },
             ...(opts.sums === 'missing' ? [] : [{ name: 'sha256sum.txt', size: 200, browser_download_url: SUMS_URL }]),
@@ -462,7 +386,7 @@ describe('installation du moteur (Windows)', () => {
     const ranges: string[] = [];
     // Téléchargement précédent interrompu à 100 000 octets.
     mkdirSync(path.join(dir, 'magistra-ollama'), { recursive: true });
-    writeFileSync(path.join(dir, 'magistra-ollama', 'OllamaSetup-v0.12.3.exe.part'), installer.subarray(0, 100_000));
+    writeFileSync(path.join(dir, 'magistra-ollama', 'OllamaSetup-v0.34.4.exe.part'), installer.subarray(0, 100_000));
     let installed: { args: string[]; sha: string } | null = null;
     const { manager, events } = await makeManager({
       ollama,
@@ -480,9 +404,9 @@ describe('installation du moteur (Windows)', () => {
     const kinds = events.map(e => e.kind);
     expect(kinds[0]).toBe('engine-download');
     expect(kinds).toEqual(expect.arrayContaining(['engine-install', 'engine-waiting']));
-    expect(events.at(-1)).toEqual({ kind: 'engine-ready', version: '0.12.3' });
+    expect(events.at(-1)).toEqual({ kind: 'engine-ready', version: RECENT_VERSION });
     // L'installateur est supprimé après usage.
-    expect(existsSync(path.join(dir, 'magistra-ollama', 'OllamaSetup-v0.12.3.exe'))).toBe(false);
+    expect(existsSync(path.join(dir, 'magistra-ollama', 'OllamaSetup-v0.34.4.exe'))).toBe(false);
   });
 
   it('connexion coupée en cours de route : erreur reprenable, puis reprise au bon octet', async () => {
@@ -526,7 +450,7 @@ describe('installation du moteur (Windows)', () => {
     await manager.installEngine();
     expect(ranges).toEqual([]);
     expect(spawned).toHaveLength(1);
-    expect(events).toEqual([{ kind: 'engine-ready', version: '0.12.3' }]);
+    expect(events).toEqual([{ kind: 'engine-ready', version: RECENT_VERSION }]);
   });
 
   it('empreinte SHA-256 incorrecte : fichier supprimé, rien n’est lancé', async () => {
@@ -544,7 +468,7 @@ describe('installation du moteur (Windows)', () => {
     expect(INSTALLER_MISMATCH_MESSAGE).toContain('SHA-256');
     expect(launched).toBe(false);
     expect(events.at(-1)).toMatchObject({ kind: 'engine-error' });
-    expect(existsSync(path.join(dir, 'magistra-ollama', 'OllamaSetup-v0.12.3.exe.part'))).toBe(false);
+    expect(existsSync(path.join(dir, 'magistra-ollama', 'OllamaSetup-v0.34.4.exe.part'))).toBe(false);
   });
 
   it('empreinte officielle indisponible : installation refusée, rien n’est téléchargé ni lancé', async () => {
@@ -594,7 +518,7 @@ describe('installation du moteur (Windows)', () => {
 
   it('installateur déjà téléchargé : jamais lancé sans empreinte, réutilisé seulement s’il correspond', async () => {
     const setupDir = path.join(dir, 'magistra-ollama');
-    const finalPath = path.join(setupDir, 'OllamaSetup-v0.12.3.exe');
+    const finalPath = path.join(setupDir, 'OllamaSetup-v0.34.4.exe');
     mkdirSync(setupDir, { recursive: true });
 
     // 1. Fichier présent mais empreinte injoignable : refus, le fichier n'est pas lancé.
@@ -658,7 +582,7 @@ describe('installation du moteur (Windows)', () => {
     const ollama: FakeOllama = { running: false, models: [], pullRequests: [] };
     const ranges: string[] = [];
     const { manager } = await makeManager({ ollama, freeGB: 2, netFetch: makeFetch(ollama, github(ranges)) });
-    await expect(manager.installEngine()).rejects.toMatchObject({ code: 'STORAGE_ERROR', message: expect.stringContaining('5 Go') });
+    await expect(manager.installEngine()).rejects.toMatchObject({ code: 'STORAGE_ERROR', message: expect.stringContaining('7 Go') });
     expect(ranges).toEqual([]);
   });
 
@@ -691,7 +615,7 @@ describe('installation du moteur (Windows)', () => {
       };
       check();
     });
-    expect(events.at(-1)).toEqual({ kind: 'engine-ready', version: '0.12.3' });
+    expect(events.at(-1)).toEqual({ kind: 'engine-ready', version: RECENT_VERSION });
   });
 
   it('lit sha256sum.txt', () => {
@@ -728,5 +652,56 @@ describe('messages d’installation du moteur', () => {
     const referenced = new Set([...setup.matchAll(/utilisez « ([^»]+) »/gi)].map(m => m[1].trim()));
     expect(referenced.size).toBeGreaterThan(0);
     for (const label of referenced) expect(panel.replaceAll('\'', '’'), label).toContain(label.replaceAll('\'', '’'));
+  });
+});
+
+// ─── Modèles « en ligne » d'Ollama (Ollama Cloud, hôte distant) ─────────────
+
+describe('modèles en ligne d’Ollama : jamais proposés ni utilisés par l’application', () => {
+  it('liste « Modèle personnalisé » : seuls les modèles de cet ordinateur ; un niveau copié d’un modèle cloud est ignoré', async () => {
+    const ollama: FakeOllama = {
+      running: true, pullRequests: [],
+      models: ['gpt-oss:120b-cloud', 'ministral-3:3b', 'assistant:latest', 'llama3.1:8b'],
+      remote: { 'gpt-oss:120b-cloud': 'https://ollama.com:443', 'assistant:latest': 'https://ollama.com:443', 'ministral-3:3b': 'https://ollama.com:443' },
+    };
+    const { manager } = await makeManager({ ollama, existing: [APP_EXE, CLI_EXE] });
+    const status = await manager.status();
+    expect(status.installedModels.map(m => m.name)).toEqual(['llama3.1:8b']);
+    expect(status.tiers.find(t => t.id === 'leger')?.installed).toBe(false);
+  });
+
+  it('nom « cloud » refusé à l’enregistrement et au téléchargement, message clair', () => {
+    expect(() => sanitizeAIConfigUpdate({ customModel: 'gpt-oss:120b-cloud' })).toThrow(REMOTE_MODEL_REFUSED);
+    expect(() => sanitizeAIConfigUpdate({ customModel: 'kimi-k2.6:cloud' })).toThrow(REMOTE_MODEL_REFUSED);
+    expect(() => sanitizePullTarget({ model: 'glm-5.1:cloud' })).toThrow(REMOTE_MODEL_REFUSED);
+    expect(sanitizeAIConfigUpdate({ customModel: 'llama3.1:8b' })).toEqual({ customModel: 'llama3.1:8b' });
+  });
+
+  it('modèle personnalisé relayé (remote_host) : jamais « IA locale », génération refusée sans rien envoyer', async () => {
+    const ollama: FakeOllama = { running: true, pullRequests: [], models: ['assistant:latest'], remote: { 'assistant:latest': 'https://ollama.com:443' } };
+    const { manager, config } = await makeManager({ ollama, existing: [APP_EXE, CLI_EXE] });
+    // Configuration enregistrée par une version antérieure (sans contrôle).
+    await config.update({ customModel: 'assistant:latest' });
+    const active = await manager.describeActive();
+    expect(active.ready).toBe(false);
+    expect(active.notReady).toMatchObject({ code: 'MODEL_NOT_INSTALLED', message: REMOTE_MODEL_REFUSED });
+    expect((await manager.status()).headline).toContain('en ligne');
+    await expect(manager.resolveProvider()).rejects.toMatchObject({ code: 'MODEL_NOT_INSTALLED', message: REMOTE_MODEL_REFUSED });
+    expect(ollama.chats ?? []).toEqual([]);
+  });
+
+  it('Ollama démarré par Magistra : OLLAMA_NO_CLOUD=1, sauf choix déjà présent dans l’environnement', async () => {
+    const ollama: FakeOllama = { running: false, models: [], pullRequests: [] };
+    const first = await makeManager({ ollama, existing: [APP_EXE, CLI_EXE], onSpawn: () => { ollama.running = true; } });
+    await first.manager.startEngine();
+    expect(first.spawned[0].env?.OLLAMA_NO_CLOUD).toBe('1');
+    ollama.running = false;
+    const second = await makeManager({
+      ollama, existing: [APP_EXE, CLI_EXE], env: { LOCALAPPDATA: 'C:\\Users\\prof\\AppData\\Local', Path: 'C:\\Windows', ollama_no_cloud: '0' },
+      onSpawn: () => { ollama.running = true; },
+    });
+    await second.manager.startEngine();
+    expect(second.spawned[0].env?.ollama_no_cloud).toBe('0');
+    expect(second.spawned[0].env?.OLLAMA_NO_CLOUD).toBeUndefined();
   });
 });

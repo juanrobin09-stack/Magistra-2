@@ -33,9 +33,13 @@ const TECHNICAL = /ECONNREFUSED|fetch failed|TypeError|Error:|stack|at \w+ \(|12
 interface MockOptions {
   port?: number;
   models?: string[];
+  /** Version annoncée par /api/version (défaut récent ; « 0.12.0 » = moteur trop ancien pour les modèles Magistra). */
+  version?: string;
   missingModel?: boolean;
   oom?: boolean;
   unknownPull?: boolean;
+  /** Le registre répond 412 (« requires a newer version of Ollama ») au téléchargement. */
+  pull412?: boolean;
   pullMs?: number;
   chatDelayMs?: number;
 }
@@ -476,8 +480,8 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     await expect(page.getByRole('heading', { name: 'Installer le moteur IA' })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole('listitem').filter({ hasText: 'Moteur IA installé' })).toContainText(': non');
     const consent = page.getByRole('region', { name: 'Avant de commencer' });
-    await expect(consent).toContainText(/Téléchargement\s*environ\s1,2\sGo/);
-    await expect(consent).toContainText(/Espace disque nécessaire\s*5\sGo/);
+    await expect(consent).toContainText(/Téléchargement\s*environ\s1,7\sGo/);
+    await expect(consent).toContainText(/Espace disque nécessaire\s*7\sGo/);
     await expect(consent).toContainText("site officiel d'Ollama");
     await expect(page.getByText("Rien n'est téléchargé tant que vous n'avez pas cliqué.")).toBeVisible();
     const status = await page.evaluate(() => (window as unknown as { magistra: import('../shared/ipc').MagistraBridge }).magistra.ai.status());
@@ -574,6 +578,76 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
         }
       }
     }
+  });
+
+  test('3d. moteur trop ancien → « Mettre à jour le moteur IA » (aucun modèle téléchargé) → moteur à jour → modèle installé', async () => {
+    mock = await startMock({ models: [], version: '0.12.0', pullMs: 1_500 });
+    userData = newUserDataDir();
+    session = await launchApp(userData, mock.url);
+    const { page } = session;
+
+    await expect(page.getByRole('heading', { name: 'Mettre à jour le moteur IA' })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/Le moteur IA installé \(version 0\.12\.0\) est trop ancien.*0\.13\.1 minimum/)).toBeVisible();
+    await expect(page.getByRole('listitem').filter({ hasText: 'Moteur IA à jour' })).toContainText(': non');
+    const update = page.getByRole('button', { name: 'Mettre à jour le moteur IA' });
+    await expect(update).toBeVisible();
+    await expect(page.getByText("Rien n'est téléchargé tant que vous n'avez pas cliqué.")).toBeVisible();
+    await shot(page, '03g-moteur-trop-ancien');
+
+    // Même par le pont, aucun modèle ne part au registre avec un moteur trop ancien (il répondrait 412).
+    const direct = await page.evaluate(async () => {
+      const m = (window as unknown as { magistra: import('../shared/ipc').MagistraBridge }).magistra;
+      try {
+        await m.ai.pullModel({ tier: 'leger' });
+        return 'ok';
+      } catch (e) {
+        return String((e as Error).message);
+      }
+    });
+    expect(direct).toMatch(/ENGINE_OUTDATED\|Le moteur IA installé \(Ollama 0\.12\.0\) est trop ancien/);
+    expect(mock.state.requests.filter(r => r === 'POST /api/pull')).toHaveLength(0);
+
+    if (process.platform !== 'win32') {
+      // Hors Windows, la mise à jour automatique n'existe pas : message clair, sans détail technique.
+      await update.click();
+      const error = page.getByText("La mise à jour du moteur IA n'a pas abouti.");
+      await expect(error).toBeVisible();
+      await expect(page.getByText(/disponible sous Windows/)).toBeVisible();
+      await shot(page, '03h-mise-a-jour-hors-windows');
+    }
+
+    // Ollama mis à jour (installateur officiel, ou service informatique) : détecté au retour dans la fenêtre.
+    // (L'interface ne revérifie pas plus d'une fois toutes les 3 s au retour dans la fenêtre.)
+    mock.options.version = '0.34.4';
+    const choose = page.getByRole('heading', { name: "Choisissez la version de l'IA" });
+    await expect.poll(async () => {
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      return choose.isVisible();
+    }, { timeout: 30_000, intervals: [1_000] }).toBe(true);
+    const install = page.getByRole('button', { name: /^Installer Magistra / });
+    await install.click();
+    const confirm = page.getByRole('button', { name: 'Installer quand même' });
+    if (await confirm.isVisible().catch(() => false)) await confirm.click();
+    await expect(page.getByRole('heading', { name: /Intelligence artificielle prête/ })).toBeVisible({ timeout: 60_000 });
+    expect(mock.state.requests.filter(r => r === 'POST /api/pull')).toHaveLength(1);
+    await shot(page, '03i-moteur-a-jour-modele-installe');
+  });
+
+  test('3e. registre « requires a newer version of Ollama » (412) → mise à jour proposée, pas « Reprendre le téléchargement »', async () => {
+    mock = await startMock({ models: [], pull412: true });
+    userData = newUserDataDir();
+    session = await launchApp(userData, mock.url);
+    const { page } = session;
+    await expect(page.getByRole('heading', { name: "Choisissez la version de l'IA" })).toBeVisible({ timeout: 30_000 });
+    await page.getByRole('button', { name: /^Installer Magistra / }).click();
+    const confirm = page.getByRole('button', { name: 'Installer quand même' });
+    if (await confirm.isVisible().catch(() => false)) await confirm.click();
+    await expect(page.getByText("Le moteur IA doit d'abord être mis à jour.")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/nécessite une version plus récente du moteur IA/)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Mettre à jour le moteur IA' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reprendre le téléchargement' })).toHaveCount(0);
+    expect(await visibleText(page.locator('#root'))).not.toMatch(/\b412\b|pull model manifest|ollama\.com\/download/);
+    await shot(page, '03j-registre-412');
   });
 
   test('4. génération réelle par IPC avec un document → sources citées → historique → favori → suppression → persistance', async () => {

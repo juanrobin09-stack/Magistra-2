@@ -15,8 +15,8 @@ import type { AIManager } from './ollamaSetup.js';
 import { isSafeExternalUrl, isTrustedSender, type TrustedWindowLike } from './security.js';
 import { UPDATE_CHECK_UNAVAILABLE_MESSAGE } from './updateCheck.js';
 import {
-  requireBoolean, requireId, sanitizeAIConfigUpdate, sanitizeListQuery, sanitizePreferencesUpdate, sanitizeProfile,
-  sanitizePullTarget, sanitizeStoredDocument,
+  requireBoolean, requireId, sanitizeAIConfigUpdate, sanitizeEngineInstallOptions, sanitizeEngineStartOptions, sanitizeListQuery,
+  sanitizePreferencesUpdate, sanitizeProfile, sanitizePullTarget, sanitizeStoredDocument,
 } from './validate.js';
 
 export interface IpcContext {
@@ -96,10 +96,15 @@ export function registerIpcHandlers(ctx: IpcContext): () => void {
   // ─── IA locale ────────────────────────────────────────────────────────────
   handle(IPC.aiStatus, () => ctx.ai.status());
   handle(IPC.aiRefresh, () => ctx.ai.refresh());
-  handle(IPC.aiInstallEngine, () => ctx.ai.installEngine());
+  // Installation, ou mise à jour d'un moteur trop ancien avec { update: true } (même canal, argument validé).
+  handle(IPC.aiInstallEngine, (_e, options) => ctx.ai.installEngine(sanitizeEngineInstallOptions(options)));
   handle(IPC.aiCancelEngineInstall, () => ctx.ai.cancelEngineInstall());
   handle(IPC.aiOpenEngineDownload, () => ctx.ai.openEngineDownload());
-  handle(IPC.aiStartEngine, () => ctx.ai.startEngine());
+  // Démarrage (cause probable en cas d'échec), ou relance avec le proxy du système avec { restart: true }.
+  handle(IPC.aiStartEngine, (_e, options) => {
+    const { restart } = sanitizeEngineStartOptions(options);
+    return restart ? ctx.ai.restartEngine() : ctx.ai.startEngineOrExplain();
+  });
   handle(IPC.aiPullModel, (_e, target) => ctx.ai.pullModel(sanitizePullTarget(target)));
   handle(IPC.aiCancelPull, () => ctx.ai.cancelPull());
   handle(IPC.aiSetConfig, (_e, update) => ctx.ai.setConfig(sanitizeAIConfigUpdate(update)));

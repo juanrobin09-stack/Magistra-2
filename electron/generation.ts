@@ -10,7 +10,7 @@ import { MagistraError, toMagistraError } from '../shared/errors.js';
 import type { LocalPreferences } from '../shared/ipc.js';
 import { runGeneration } from '../shared/pipeline.js';
 import type { FetchedPage, ResearchConfig, ResearchDeps } from '../shared/research/index.js';
-import type { Capabilities, GenerationEvent, PrivacyInfo } from '../shared/types.js';
+import type { AINotice, Capabilities, GenerationEvent, PrivacyInfo, ProviderInfo } from '../shared/types.js';
 import { validateGenerationRequest } from '../shared/validation.js';
 import type { LocalStore } from './localStore.js';
 
@@ -23,8 +23,16 @@ export interface GenerationDeps {
   store: Pick<LocalStore, 'saveGeneration' | 'getPreferences'>;
   /** Prépare le fournisseur d'IA actif (démarre le moteur si besoin, vérifie le modèle). */
   resolveProvider: (signal: AbortSignal, onStatus: (message: string) => void) => Promise<AIProvider>;
-  /** Description du moteur actif (capacités). */
-  describeActive: () => Promise<{ label: string; contextTokens: number; privacy: PrivacyInfo; ready: boolean }>;
+  /** Description du moteur actif (capacités) : cause précise s'il n'est pas prêt, prestataire s'il est distant. */
+  describeActive: () => Promise<{
+    label: string;
+    contextTokens: number;
+    privacy: PrivacyInfo;
+    ready: boolean;
+    notReady?: AINotice;
+    aiWarning?: AINotice;
+    providerInfo?: ProviderInfo;
+  }>;
   /** Envoi d'un évènement à la fenêtre ; renvoie faux si la fenêtre n'existe plus. */
   send: (payload: GenerationPayload) => boolean;
   fetch: ResearchDeps['fetch'];
@@ -103,6 +111,9 @@ export class GenerationManager {
           deps: { fetch: this.deps.fetch, ...(this.deps.fetchPage ? { fetchPage: this.deps.fetchPage } : {}) },
         },
         save: record => this.deps.store.saveGeneration(record),
+        // Moteur de cet ordinateur : le modèle est d'abord chargé en mémoire (« Chargement du modèle… », délai long),
+        // pour que l'attente du premier mot ne compte plus ce chargement (PC sans carte graphique).
+        preloadModel: provider.local,
       });
       for await (const event of events) {
         emit(event);
@@ -125,6 +136,9 @@ export class GenerationManager {
       privacy: active.privacy,
       engineLabel: active.label,
       ready: active.ready,
+      ...(!active.ready && active.notReady ? { notReady: active.notReady } : {}),
+      ...(active.ready && active.aiWarning ? { aiWarning: active.aiWarning } : {}),
+      ...(active.providerInfo ? { providerInfo: active.providerInfo } : {}),
     };
   }
 }

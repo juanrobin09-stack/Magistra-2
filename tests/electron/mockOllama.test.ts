@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { AIProgressEvent } from '../../shared/ipc.js';
 import type { GenerationEvent } from '../../shared/types.js';
@@ -108,7 +108,8 @@ describe('faux serveur Ollama (HTTP réel)', () => {
     const { ai, store, progress, generation, run } = await setup(url);
 
     let status = await ai.status();
-    expect(status.engine).toMatchObject({ state: 'running', version: '0.12.3-mock', url });
+    expect(status.engine).toMatchObject({ state: 'running', version: '0.34.4-mock', url, minVersion: '0.13.1' });
+    expect(status.engine.outdated).toBeUndefined();
     expect(status.installedModels.map(m => m.name)).toEqual(['ministral-3:14b']);
     expect(status.selectedTier).toBe('leger'); // 8 Go → Léger recommandé au premier démarrage
     expect(status.headline).toBe('Modèle Magistra Léger non installé');
@@ -147,5 +148,66 @@ describe('faux serveur Ollama (HTTP réel)', () => {
 
     const unknown = await setup(await startMock(['--unknown-pull']));
     await expect(unknown.ai.pullModel({ tier: 'leger' })).rejects.toMatchObject({ message: expect.stringContaining('introuvable') });
+  });
+
+  it('moteur trop ancien (--version 0.12.0) : signalé, et aucun téléchargement lancé', async () => {
+    const old = await setup(await startMock(['--version', '0.12.0', '--no-models']));
+    expect((await old.ai.status()).engine).toMatchObject({ version: '0.12.0', outdated: true, minVersion: '0.13.1' });
+    await expect(old.ai.pullModel({ tier: 'leger' })).rejects.toMatchObject({ code: 'ENGINE_OUTDATED' });
+    expect(old.progress.filter(e => e.kind === 'model-pull')).toEqual([]);
+  });
+
+  it('412 du registre (--pull-412) : ENGINE_OUTDATED au lieu de « reprendre le téléchargement »', async () => {
+    const reg = await setup(await startMock(['--pull-412', '--no-models']));
+    await expect(reg.ai.pullModel({ tier: 'leger' })).rejects.toMatchObject({ code: 'ENGINE_OUTDATED', message: expect.stringContaining('version plus récente') });
+  });
+});
+
+describe('faux serveur Ollama en module (formats d’Ollama v0.34)', () => {
+  type Mock = { url: string; state: { requests: string[]; chats: { model: string; think?: unknown; messages: number }[] }; close(): Promise<void> };
+  const servers: Mock[] = [];
+  afterAll(async () => {
+    for (const s of servers) await s.close();
+  });
+  async function mock(options: Record<string, unknown>): Promise<Mock> {
+    const mod = (await import(pathToFileURL(path.join(root, 'scripts/mock-ollama.mjs')).href)) as { startMockOllama(o: Record<string, unknown>): Promise<Mock> };
+    const server = await mod.startMockOllama({ port: 0, pullMs: 60, chatDelayMs: 0, ...options });
+    servers.push(server);
+    return server;
+  }
+
+  it('alias installé (ministral-3:latest) : Léger utilisé tel quel, préchargé (done_reason « load »), think: false, sans /api/pull', async () => {
+    const server = await mock({ models: ['ministral-3:latest'] });
+    const { ai, progress, run } = await setup(server.url);
+    expect((await ai.status()).tiers.find(t => t.id === 'leger')?.installed).toBe(true);
+    await ai.pullModel({ tier: 'leger' });
+    expect(server.state.requests).not.toContain('POST /api/pull');
+    expect(progress.at(-1)).toEqual({ kind: 'model-ready', model: 'ministral-3:8b' });
+
+    const events = await run(REQUEST);
+    expect(events.at(-1)).toMatchObject({ type: 'done', model: 'ministral-3:latest' });
+    expect(events.filter(e => e.type === 'status').map(e => (e as { message: string }).message)).toContain('Chargement du modèle…');
+    // Préchargement (aucun message) puis rédaction, toujours avec le nom réellement installé et sans « réflexion ».
+    expect(server.state.chats.map(c => [c.model, c.messages > 0, c.think])).toEqual([
+      ['ministral-3:latest', false, undefined],
+      ['ministral-3:latest', true, false],
+    ]);
+  });
+
+  it('erreurs mémoire au format llama-server et « unable to load full model on GPU » : conseil adapté', async () => {
+    for (const oomFormat of ['llama-server', 'gpu']) {
+      const server = await mock({ models: ['ministral-3:14b'], oomFormat });
+      const { ai, run } = await setup(server.url);
+      await ai.setConfig({ tier: 'standard' });
+      const last = (await run(REQUEST)).at(-1);
+      expect(last, oomFormat).toMatchObject({ type: 'error', code: 'OUT_OF_MEMORY', message: expect.stringContaining('Essayez « Magistra Léger »') });
+    }
+  });
+
+  it('think: true est refusé comme par le vrai Ollama (ministral ne « réfléchit » pas)', async () => {
+    const server = await mock({ models: ['ministral-3:14b'] });
+    const res = await fetch(`${server.url}/api/chat`, { method: 'POST', body: JSON.stringify({ model: 'ministral-3:14b', messages: [{ role: 'user', content: 'x' }], think: true }) });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: '"ministral-3:14b" does not support thinking' });
   });
 });

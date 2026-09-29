@@ -6,7 +6,7 @@
 // - Une clé est liée à l'origine du serveur : changer d'adresse de serveur sans ressaisir la clé l'efface
 //   (elle ne peut jamais être envoyée à un autre serveur que celui pour lequel elle a été saisie).
 
-import { DEFAULT_TIER, getTier, type TierId } from '../shared/ai/models.js';
+import { CUSTOM_OLLAMA_MODEL_CONTEXT, DEFAULT_TIER, getTier, type TierId } from '../shared/ai/models.js';
 import { DEFAULT_OLLAMA_URL } from '../shared/ai/ollama.js';
 import { MagistraError } from '../shared/errors.js';
 import type { AIConfigPublic, AIConfigUpdate } from '../shared/ipc.js';
@@ -153,7 +153,7 @@ export class AIConfigStore {
   activeLocalModel(): { model: string; label: string; contextTokens: number; tier: TierId; custom: boolean } {
     const tier = getTier(this.config.tier);
     if (this.config.customModel) {
-      return { model: this.config.customModel, label: this.config.customModel, contextTokens: 12_288, tier: tier.id, custom: true };
+      return { model: this.config.customModel, label: this.config.customModel, contextTokens: CUSTOM_OLLAMA_MODEL_CONTEXT, tier: tier.id, custom: true };
     }
     return { model: tier.model, label: tier.label, contextTokens: tier.contextTokens, tier: tier.id, custom: false };
   }
@@ -186,6 +186,18 @@ export class AIConfigStore {
   async applyRecommendedTier(tier: TierId): Promise<void> {
     if (this.existed || this.config.tierChosen) return;
     await this.persist({ ...this.config, tier });
+  }
+
+  /**
+   * Niveau retenu automatiquement (jamais choisi par l'enseignant) mais non installé, alors qu'un autre niveau l'est :
+   * Magistra passe au niveau installé. Ce choix reste automatique (tierChosen inchangé) : l'enseignant peut passer à
+   * un autre niveau ensuite, et un niveau qu'il a lui-même choisi n'est jamais remplacé.
+   */
+  async adoptInstalledTier(tier: TierId): Promise<boolean> {
+    const c = this.config;
+    if (c.tierChosen || c.customModel || c.mode !== 'local' || c.tier === tier) return false;
+    await this.persist({ ...c, tier });
+    return true;
   }
 
   async update(update: AIConfigUpdate): Promise<AIConfigPublic> {

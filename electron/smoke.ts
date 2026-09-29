@@ -89,6 +89,8 @@ function rendererCheckScript(generate: boolean): string {
               ok: last.type === 'done',
               events: events.reduce((acc, e) => { acc[e.type] = (acc[e.type] || 0) + 1; return acc; }, {}),
               saved: last.type === 'done' ? last.saved : false,
+              // Moteur local : le modèle doit être préchargé (« Chargement du modèle… ») avant la rédaction.
+              preloaded: events.some(e => e.type === 'status' && e.stage === 'loading_model' && e.message === 'Chargement du modèle…'),
               sources: last.type === 'done' ? last.sources.length : 0,
               chars: last.type === 'done' ? last.content.length : 0,
               error: last.type === 'error' ? last.code + ' — ' + last.message : undefined,
@@ -157,8 +159,9 @@ export class SmokeTest {
         failures.push(`moteur « ${ai?.engine ?? 'inconnu'} » au lieu de « ${this.options.expectEngine} »`);
       }
       if (this.options.generate) {
-        const gen = checks.generation as { ok?: boolean; error?: string; reason?: string } | undefined;
+        const gen = checks.generation as { ok?: boolean; error?: string; reason?: string; preloaded?: boolean } | undefined;
         if (!gen?.ok) failures.push(`génération : ${gen?.error ?? gen?.reason ?? 'échec'}`);
+        else if (ai?.engine === 'running' && !gen.preloaded) failures.push('génération : modèle local non préchargé (« Chargement du modèle… » absent)');
       }
       // Rechargement réel (Ctrl+R) sur la route courante : jamais d'écran blanc.
       const reload = await this.reloadCheck();

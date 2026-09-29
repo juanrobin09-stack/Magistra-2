@@ -2,9 +2,12 @@
 // Toute erreur devient MagistraError('INVALID_REQUEST') avec un message en français.
 
 import { MODEL_TIERS, type TierId } from '../shared/ai/models.js';
+import { isOllamaCloudName, REMOTE_MODEL_REFUSED } from '../shared/ai/ollamaRemote.js';
 import { isMatiere } from '../shared/catalog.js';
 import { MagistraError } from '../shared/errors.js';
-import { DEFAULT_PREFERENCES, type AIConfigUpdate, type LocalPreferences, type StoredDocument } from '../shared/ipc.js';
+import {
+  DEFAULT_PREFERENCES, type AIConfigUpdate, type EngineInstallOptions, type EngineStartOptions, type LocalPreferences, type StoredDocument,
+} from '../shared/ipc.js';
 import { isNiveau } from '../shared/levels.js';
 import { isResearchMode, type TeacherProfile } from '../shared/types.js';
 import { validateLocatorLabels } from '../shared/validation.js';
@@ -204,6 +207,8 @@ export function sanitizeAIConfigUpdate(raw: unknown): AIConfigUpdate {
   if ('customModel' in u && u.customModel !== undefined) {
     if (u.customModel === null || u.customModel === '') out.customModel = null;
     else if (!isValidModelName(u.customModel)) throw new MagistraError('INVALID_REQUEST', 'Nom de modèle invalide.');
+    // Modèle « cloud » d'Ollama : les textes partiraient sur Internet alors que l'application annonce une IA locale.
+    else if (isOllamaCloudName(u.customModel)) throw new MagistraError('INVALID_REQUEST', REMOTE_MODEL_REFUSED);
     else out.customModel = u.customModel;
   }
   if ('ollamaUrl' in u && u.ollamaUrl !== undefined) out.ollamaUrl = requireHttpUrl(u.ollamaUrl, 'adresse d’Ollama');
@@ -237,8 +242,33 @@ export function sanitizePullTarget(raw: unknown): { tier?: TierId; model?: strin
   }
   if (t.model !== undefined) {
     if (!isValidModelName(t.model)) throw new MagistraError('INVALID_REQUEST', 'Nom de modèle invalide.');
+    if (isOllamaCloudName(t.model)) throw new MagistraError('INVALID_REQUEST', REMOTE_MODEL_REFUSED);
     out.model = t.model;
   }
   if (!out.tier && !out.model) throw new MagistraError('INVALID_REQUEST', 'Indiquez le modèle à installer.');
   return out;
+}
+
+/**
+ * Options booléennes d'une action du moteur (argument facultatif venant de la fenêtre) : absent → {} ;
+ * sinon un objet ne contenant QUE la clé attendue, booléenne. Tout autre contenu est refusé.
+ */
+function booleanOption<K extends string>(raw: unknown, key: K, what: string): Partial<Record<K, true>> {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new MagistraError('INVALID_REQUEST', `Options invalides : ${what}.`);
+  const o = raw as Record<string, unknown>;
+  if (Object.keys(o).some(k => k !== key) || (o[key] !== undefined && typeof o[key] !== 'boolean')) {
+    throw new MagistraError('INVALID_REQUEST', `Options invalides : ${what}.`);
+  }
+  return o[key] === true ? ({ [key]: true } as Partial<Record<K, true>>) : {};
+}
+
+/** Options de ai:install-engine : { update?: boolean } (mise à jour d'un moteur trop ancien). */
+export function sanitizeEngineInstallOptions(raw: unknown): EngineInstallOptions {
+  return booleanOption(raw, 'update', 'installation du moteur IA');
+}
+
+/** Options de ai:start-engine : { restart?: boolean } (relance avec le proxy du système). */
+export function sanitizeEngineStartOptions(raw: unknown): EngineStartOptions {
+  return booleanOption(raw, 'restart', 'démarrage du moteur IA');
 }
