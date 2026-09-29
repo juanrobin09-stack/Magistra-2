@@ -3,8 +3,12 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ClerkFailed, ClerkLoaded, ClerkLoading, ClerkProvider, RedirectToSignIn, useAuth } from '@clerk/react';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { AuthUnavailable, FullPageSpinner, ProfileGuard, LocalSetupGuard } from '@/components/guards';
-import { CLERK_PUBLISHABLE_KEY, detectMode } from '@/lib/runtime/context';
-import { DemoRuntimeProvider, LocalRuntimeProvider, WebRuntimeProvider } from '@/lib/runtime/RuntimeProvider';
+import { PersonalAccessGate } from '@/components/PersonalAccess';
+import { getRuntimeConfig, type RuntimeConfig } from '@/lib/runtime/mode';
+import {
+  DemoRuntimeProvider, LocalRuntimeProvider, PersonalRuntimeProvider, WebRuntimeProvider,
+} from '@/lib/runtime/RuntimeProvider';
+import type { RuntimeMode } from '@/lib/runtime/types';
 
 // Chargement différé : la page d'accueil ne télécharge ni l'éditeur, ni l'export PDF, ni pdf.js.
 const LandingPage = lazy(() => import('@/pages/LandingPage'));
@@ -16,8 +20,6 @@ const GeneratePage = lazy(() => import('@/pages/GeneratePage'));
 const HistoryPage = lazy(() => import('@/pages/HistoryPage'));
 const FavoritesPage = lazy(() => import('@/pages/FavoritesPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
-
-const mode = detectMode();
 
 function SignedInGate({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
@@ -38,22 +40,24 @@ function WebAuthGuard({ children }: { children: ReactNode }) {
 }
 
 /** Protection des pages de l'application selon le mode d'exécution. */
-function Protected({ children }: { children: ReactNode }) {
+function Protected({ mode, children }: { mode: RuntimeMode; children: ReactNode }) {
   if (mode === 'web') return <WebAuthGuard>{children}</WebAuthGuard>;
+  // Mode personnel : code d'accès affiché dans le terminal (aucun compte, aucun service de connexion en ligne).
+  if (mode === 'personal') return <PersonalAccessGate>{children}</PersonalAccessGate>;
   return <>{children}</>;
 }
 
-function AppRoutes() {
+function AppRoutes({ mode }: { mode: RuntimeMode }) {
   return (
     <Suspense fallback={<FullPageSpinner />}>
       <Routes>
         <Route path="/" element={mode === 'local' ? <Navigate to="/app" replace /> : <LandingPage />} />
         {mode === 'local' && <Route path="/setup" element={<SetupPage />} />}
-        <Route path="/onboarding" element={<Protected><OnboardingPage /></Protected>} />
+        <Route path="/onboarding" element={<Protected mode={mode}><OnboardingPage /></Protected>} />
         <Route
           path="/app"
           element={
-            <Protected>
+            <Protected mode={mode}>
               <LocalSetupGuard enabled={mode === 'local'}>
                 <ProfileGuard>
                   <AppLayout />
@@ -74,10 +78,15 @@ function AppRoutes() {
   );
 }
 
-export default function App() {
+/**
+ * `config` : mode découvert au démarrage (main.tsx, GET /api/mode). Par défaut : détection statique
+ * (pont Electron, clé Clerk du build).
+ */
+export default function App({ config = getRuntimeConfig() }: { config?: RuntimeConfig }) {
+  const { mode, clerkPublishableKey } = config;
   const routes = (
     <BrowserRouter>
-      <AppRoutes />
+      <AppRoutes mode={mode} />
     </BrowserRouter>
   );
 
@@ -89,7 +98,15 @@ export default function App() {
     );
   }
 
-  if (mode === 'demo' || !CLERK_PUBLISHABLE_KEY) {
+  if (mode === 'personal') {
+    return (
+      <ErrorBoundary>
+        <PersonalRuntimeProvider>{routes}</PersonalRuntimeProvider>
+      </ErrorBoundary>
+    );
+  }
+
+  if (mode === 'demo' || !clerkPublishableKey) {
     return (
       <ErrorBoundary>
         <DemoRuntimeProvider>{routes}</DemoRuntimeProvider>
@@ -100,7 +117,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ClerkProvider
-        publishableKey={CLERK_PUBLISHABLE_KEY}
+        publishableKey={clerkPublishableKey}
         appearance={{
           variables: {
             colorPrimary: '#c8b6ff',

@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom';
 import { ClerkFailed, ClerkLoading, Show, SignInButton } from '@clerk/react';
-import { ArrowRight, GraduationCap, Sparkles } from 'lucide-react';
+import { ArrowRight, Download, GraduationCap, Sparkles } from 'lucide-react';
 import { ALL_MATIERES, ALL_TYPES } from '@shared/catalog';
 import { ALL_NIVEAUX } from '@shared/levels';
+import { useCapabilities } from '@/hooks/useAIStatus';
+import { WINDOWS_DOWNLOAD_URL } from '@/lib/links';
 import { detectMode, useOptionalRuntime } from '@/lib/runtime/context';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
@@ -22,7 +24,8 @@ const CTA_CLASS: Record<CtaSize, string> = {
  * Bouton d'accès à l'application :
  * - web : connexion (fenêtre Clerk) si déconnecté, « Mon espace » si connecté, « Réessayer » si le
  *   service de connexion n'a pas pu être chargé ;
- * - démonstration / Windows : l'espace si un profil existe, sinon la création du profil.
+ * - démonstration / Windows : l'espace si un profil existe, sinon la création du profil ;
+ * - mode personnel : l'application (le code d'accès est demandé s'il manque, puis le profil).
  */
 function AccessButton({ size, signedOutLabel = 'Commencer' }: { size: CtaSize; signedOutLabel?: string }) {
   const runtime = useOptionalRuntime();
@@ -65,7 +68,7 @@ function AccessButton({ size, signedOutLabel = 'Commencer' }: { size: CtaSize; s
 
   const hasProfile = Boolean(runtime?.profile);
   return (
-    <Link to={hasProfile || mode === 'local' ? '/app' : '/onboarding'} className={CTA_CLASS[size]}>
+    <Link to={hasProfile || mode === 'local' || mode === 'personal' ? '/app' : '/onboarding'} className={CTA_CLASS[size]}>
       {hasProfile ? 'Mon espace' : signedOutLabel} {icon}
     </Link>
   );
@@ -88,10 +91,15 @@ const FEATURES_OUTILS = [
   { icon: '🔍', title: 'Corrigé annoté', desc: 'Collez un travail d’élève ou une copie : Magistra repère les erreurs et propose une correction commentée. Avec l’IA locale, la copie reste sur votre ordinateur.' },
 ];
 
-const FEATURES_PLUS = [
+const FEATURES_PLUS: { icon: string; title: string; desc: string; link?: { href: string; label: string } }[] = [
   { icon: '🏫', title: 'De la maternelle au doctorat', desc: `${NB_NIVEAUX} niveaux et ${NB_MATIERES} matières, avec un accent sur le supérieur : CM, TD, examens, syllabus, vocabulaire universitaire.` },
-  { icon: '💻', title: 'IA locale gratuite sur Windows', desc: 'L’application Windows fait tourner un modèle open weights sur votre ordinateur (Ollama) : vos documents restent sur votre ordinateur.' },
-  { icon: '🏛️', title: 'Le serveur IA de votre établissement', desc: 'Sur le web, Magistra fonctionne avec le serveur d’IA compatible OpenAI configuré par votre établissement ou votre administrateur.' },
+  {
+    icon: '💻',
+    title: 'IA locale gratuite sur Windows',
+    desc: 'L’application Windows fait tourner un modèle open weights sur votre ordinateur (Ollama) : vos documents restent sur votre ordinateur.',
+    link: { href: WINDOWS_DOWNLOAD_URL, label: 'Télécharger pour Windows' },
+  },
+  { icon: '🏛️', title: 'Sur le web, une IA annoncée clairement', desc: 'Sur le site, Magistra utilise le serveur d’IA compatible OpenAI configuré par votre établissement ou un service en ligne choisi par l’administrateur : l’application indique toujours à qui vos textes sont envoyés.' },
   { icon: '📚', title: 'Sources vérifiables', desc: 'Vos documents (PDF, Word, PowerPoint…), HAL, Crossref et le web : les citations renvoient aux sources réellement utilisées.' },
   { icon: '◉', title: 'Open source, licence MIT', desc: 'Code public et auditable, projet non lucratif : pas d’abonnement, pas de quota commercial.' },
   { icon: '✧', title: 'À relire et adapter', desc: 'Magistra propose des brouillons structurés ; vous restez l’auteur. Relisez et vérifiez, puis copiez ou exportez (Markdown, PDF) pour adapter le texte dans votre traitement de texte. Besoin d’un autre angle ? Précisez vos consignes et relancez.' },
@@ -109,10 +117,27 @@ const STATS = [
   { value: 'MIT', label: 'Open source sous licence MIT : code public et auditable, projet non lucratif. Les contenus produits sont à relire et adapter par l’enseignant.' },
 ];
 
+/**
+ * Mode personnel : ce qui arrive réellement aux textes, selon l'IA branchée sur le serveur de ce poste
+ * (fiche prestataire de /api/status). Sans code d'accès, message générique.
+ */
+function PersonalNote() {
+  const runtime = useOptionalRuntime();
+  const caps = useCapabilities({ enabled: runtime?.mode === 'personal' });
+  const message = caps.capabilities?.privacy.message;
+  return (
+    <p className="text-xs text-mg-300 mt-6 max-w-md mx-auto" role="note">
+      Mode personnel : Magistra fonctionne avec le serveur démarré sur cet ordinateur, sans compte.
+      {message ? ` ${message}` : ' L’intelligence artificielle utilisée est indiquée dans l’application (Générer, Réglages).'}
+    </p>
+  );
+}
+
 export default function LandingPage() {
   useDocumentTitle(null);
   const runtime = useOptionalRuntime();
-  const isDemo = (runtime?.mode ?? detectMode()) === 'demo';
+  const mode = runtime?.mode ?? detectMode();
+  const isDemo = mode === 'demo';
 
   return (
     <div className="min-h-screen bg-mg-900 overflow-x-hidden">
@@ -155,12 +180,23 @@ export default function LandingPage() {
               avec des sources vérifiables — des brouillons solides, à relire et adapter.
             </p>
 
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <div className="flex flex-col sm:flex-row sm:flex-wrap items-center justify-center gap-3">
               <AccessButton size="hero" />
               <a href="https://futurai.space" target="_blank" rel="noopener noreferrer" className="btn-secondary text-base py-3 px-6">
                 Découvrir FutureAI
               </a>
             </div>
+            <p className="mt-4 text-sm">
+              <a
+                href={WINDOWS_DOWNLOAD_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-accent hover:underline underline-offset-4"
+              >
+                <Download size={14} aria-hidden="true" /> Télécharger pour Windows
+              </a>
+              <span className="text-mg-300"> · IA locale gratuite, sans compte</span>
+            </p>
 
             {isDemo && (
               <p className="text-xs text-mg-300 mt-6 max-w-md mx-auto" role="note">
@@ -168,6 +204,7 @@ export default function LandingPage() {
                 et vos données restent dans ce navigateur.
               </p>
             )}
+            {mode === 'personal' && <PersonalNote />}
           </div>
         </section>
 
@@ -255,6 +292,16 @@ export default function LandingPage() {
                   <span className="text-2xl text-accent block mb-3 mx-auto group-hover:scale-110 transition-transform" aria-hidden="true">{f.icon}</span>
                   <h3 className="text-sm font-semibold text-white mb-2">{f.title}</h3>
                   <p className="text-sm text-mg-200 leading-relaxed">{f.desc}</p>
+                  {f.link && (
+                    <a
+                      href={f.link.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-3 inline-flex items-center gap-1 text-sm text-accent hover:underline underline-offset-4"
+                    >
+                      {f.link.label} <ArrowRight size={13} aria-hidden="true" />
+                    </a>
+                  )}
                 </div>
               ))}
             </div>

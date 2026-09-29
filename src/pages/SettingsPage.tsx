@@ -13,17 +13,21 @@ import { isMagistraError } from '@shared/errors';
 import type { AppInfo, LocalPreferences } from '@shared/ipc';
 import { getNiveauLabel } from '@shared/levels';
 import { RESEARCH_MODES, type ResearchMode } from '@shared/types';
+import AdminContactLine from '@/components/ai/AdminContactLine';
 import AdvancedAIOptions from '@/components/ai/AdvancedAIOptions';
+import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import EngineSetupPanel from '@/components/ai/EngineSetupPanel';
 import ModelSetupPanel from '@/components/ai/ModelSetupPanel';
 import { ErrorBox, SuccessNote, WarningNote } from '@/components/ai/Notices';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import UpdateCheck from '@/components/UpdateCheck';
 import { useAIStatus, useCapabilities, type AIController, type CapabilitiesState } from '@/hooks/useAIStatus';
+import { providerPolicyUrl, serverAIView, type ServerMode } from '@/lib/ai-ui/server';
 import { aiPhase, engineHostIfRemote, phaseInfo, phaseLine } from '@/lib/ai-ui/status';
-import { useRuntime } from '@/lib/runtime/context';
+import { adminContact, useRuntime } from '@/lib/runtime/context';
 import { fromIpcError, getBridge } from '@/lib/runtime/local';
-import type { RuntimeMode } from '@/lib/runtime/types';
+import { usePersonalAccess } from '@/lib/runtime/personal';
+import { usesServerApi, type RuntimeMode } from '@/lib/runtime/types';
 
 const ROW_LABEL = 'text-mg-200';
 const ROW_VALUE = 'min-w-0 text-mg-50 [overflow-wrap:anywhere]';
@@ -135,11 +139,13 @@ export default function SettingsPage() {
       </header>
 
       <Section id="settings-ai" icon={Cpu} title="Intelligence artificielle">
-        {mode === 'local' && ai ? <LocalAISettings ai={ai} /> : mode === 'web' ? <WebAISettings caps={caps} /> : <DemoAISettings />}
+        {mode === 'local' && ai
+          ? <LocalAISettings ai={ai} />
+          : mode === 'web' || mode === 'personal' ? <ServerAISettings caps={caps} mode={mode} /> : <DemoAISettings />}
       </Section>
 
       <Section id="settings-research" icon={Search} title="Recherche">
-        {mode === 'local' ? <LocalResearchSettings state={prefsState} /> : mode === 'web' ? <WebResearchSettings caps={caps} /> : (
+        {mode === 'local' ? <LocalResearchSettings state={prefsState} /> : usesServerApi(mode) ? <WebResearchSettings caps={caps} /> : (
           <p className="text-sm text-mg-100">La recherche en ligne n'est pas disponible en mode démonstration.</p>
         )}
       </Section>
@@ -155,7 +161,7 @@ export default function SettingsPage() {
       </Section>
 
       <Section id="settings-account" icon={UserCog} title="Compte et données">
-        {mode === 'web' ? <WebAccountSettings /> : mode === 'local' ? (
+        {mode === 'web' ? <WebAccountSettings /> : mode === 'personal' ? <PersonalAccountSettings /> : mode === 'local' ? (
           <DeleteDataBlock
             description="Efface l'historique, les favoris, votre profil enseignant et les documents conservés sur cet ordinateur. Le moteur IA et les modèles installés sont conservés."
             buttonLabel="Effacer toutes les données locales"
@@ -232,7 +238,8 @@ function LocalAISettings({ ai }: { ai: AIController }) {
         </button>
       </div>
 
-      {(phase === 'engine_missing' || phase === 'engine_stopped') && <EngineSetupPanel ai={ai} status={status} />}
+      {(phase === 'engine_missing' || phase === 'engine_stopped' || phase === 'engine_outdated'
+        || (!remote && status.engine.state === 'running' && status.engine.outdated)) && <EngineSetupPanel ai={ai} status={status} />}
 
       {phase === 'remote_unavailable' && (
         <WarningNote>
@@ -264,30 +271,36 @@ function LocalAISettings({ ai }: { ai: AIController }) {
   );
 }
 
-function WebAISettings({ caps }: { caps: CapabilitiesState }) {
+/** Site web et mode personnel : IA du serveur Magistra, avec la vraie cause quand elle n'est pas prête. */
+function ServerAISettings({ caps, mode }: { caps: CapabilitiesState; mode: ServerMode }) {
   const c = caps.capabilities;
-  if (caps.loading && !c) {
+  const view = serverAIView(c, { mode, loading: caps.loading, checkError: caps.error?.message ?? null });
+  if (view.state === 'checking') {
     return (
       <p className="flex items-center gap-2 text-sm text-mg-100" role="status">
         <Loader2 size={15} className="animate-spin text-accent" aria-hidden="true" /> Vérification du serveur IA…
       </p>
     );
   }
-  const ok = c?.ready === true;
+  const ok = view.state === 'ready';
+  const line = ok ? `● ${view.badge}` : view.state === 'unverified' ? `◆ ${view.badge}` : `○ ${view.title}`;
+  const tone = ok ? 'text-success' : view.state === 'unverified' ? 'text-mg-50' : 'text-warning';
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div role="status" aria-live="polite">
-        <p className={`text-base font-semibold ${ok ? 'text-success' : 'text-warning'}`}>
-          {ok ? '● Serveur IA disponible' : '○ Serveur IA indisponible'}
-        </p>
-        {c?.engineLabel && <p className="text-sm text-mg-100 mt-0.5">{c.engineLabel}</p>}
-        {!ok && (
-          <p className="text-sm text-mg-100 mt-1">
-            La génération est momentanément impossible. Réessayez dans quelques instants ; si le problème continue,
-            contactez l'administrateur du site.
+      <div role="status" aria-live="polite" className="min-w-0 flex-1">
+        <p className={`text-base font-semibold ${tone}`}>{line}</p>
+        {c?.engineLabel && <p className="text-sm text-mg-100 mt-0.5 [overflow-wrap:anywhere]">{c.engineLabel}</p>}
+        {view.detail && <p className="text-sm text-mg-100 mt-1 [overflow-wrap:anywhere]">{view.detail}</p>}
+        {view.warning && <p className="text-sm text-mg-200 mt-1">{view.warning}</p>}
+        {view.advice && <p className="text-sm text-mg-200 mt-1">{view.advice}</p>}
+        {view.code && (
+          <p className="text-sm text-mg-200 mt-1">
+            {mode === 'personal' ? 'Code d’erreur' : 'Code à transmettre à l’administrateur'} :{' '}
+            <span className="font-mono text-mg-50">{view.code}</span>
           </p>
         )}
-        {caps.error && <p className="text-sm text-mg-200 mt-1">{caps.error.message}</p>}
+        {mode === 'web' && !ok && <AdminContactLine contact={adminContact()} className="text-sm text-mg-200 mt-1" />}
+        {caps.error && c && <p className="text-sm text-mg-200 mt-1">{caps.error.message}</p>}
       </div>
       <button type="button" className="btn-ghost text-sm" onClick={caps.reload} disabled={caps.loading}>
         <RefreshCw size={15} className={caps.loading ? 'animate-spin' : ''} aria-hidden="true" /> Vérifier à nouveau
@@ -298,12 +311,13 @@ function WebAISettings({ caps }: { caps: CapabilitiesState }) {
 
 function DemoAISettings() {
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <p className="text-base font-semibold text-mg-50">Mode démonstration</p>
       <p className="text-sm text-mg-100">
         Les contenus proposés sont des exemples pré-rédigés : aucune intelligence artificielle n'est utilisée. Ils
         montrent le fonctionnement de Magistra, sans s'adapter réellement à votre demande.
       </p>
+      <ConnectRealAICard />
     </div>
   );
 }
@@ -638,6 +652,36 @@ function WebAccountSettings() {
   );
 }
 
+/** Mode personnel : aucun compte ; données sur le serveur Magistra démarré sur ce poste. */
+function PersonalAccountSettings() {
+  const access = usePersonalAccess();
+  return (
+    <>
+      <p className="text-sm text-mg-100">
+        Mode personnel : aucun compte. Magistra utilise le serveur démarré sur cet ordinateur ; l'accès est protégé par le
+        code affiché dans le terminal au démarrage.
+      </p>
+      <DeleteDataBlock
+        description="Supprime définitivement votre historique, vos favoris et votre profil enseignant du serveur Magistra de cet ordinateur."
+        buttonLabel="Supprimer toutes mes données Magistra"
+        confirmTitle="Supprimer toutes vos données Magistra ?"
+        confirmMessage="Votre historique, vos favoris et votre profil enseignant seront définitivement supprimés du serveur Magistra. Cette action est irréversible."
+        confirmLabel="Tout supprimer"
+      />
+      {access && (
+        <div className="border-t border-white/5 pt-4">
+          <button type="button" className="btn-secondary text-sm py-2 px-4" onClick={access.forget}>
+            Oublier le code d'accès sur ce navigateur
+          </button>
+          <p className="text-xs text-mg-200 mt-1.5">
+            Pour revenir, ouvrez à nouveau le lien affiché dans le terminal où Magistra a démarré.
+          </p>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Confidentialité ───────────────────────────────────────────────────────
 
 function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: CapabilitiesState }) {
@@ -658,9 +702,18 @@ function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: Capabilities
       </>
     );
   }
+  const provider = caps.capabilities?.providerInfo;
+  const policy = providerPolicyUrl(provider);
+  // Prestataire tiers (service d'IA en ligne) : annonce mise en avant, jamais « restent chez vous ».
+  const prominent = privacy.level === 'remote' || provider?.thirdParty === true;
   return (
     <>
-      {privacy.level === 'remote' ? <WarningNote>{privacy.message}</WarningNote> : <p className="text-sm text-mg-100">{privacy.message}</p>}
+      {prominent ? <WarningNote>{privacy.message}</WarningNote> : <p className="text-sm text-mg-100">{privacy.message}</p>}
+      {policy && (
+        <p className="text-sm">
+          <ExternalAnchor href={policy}>Engagements annoncés par le prestataire ({provider?.label})</ExternalAnchor>
+        </p>
+      )}
       {mode !== 'demo' && <p className="text-sm text-mg-100">{RESEARCH_PRIVACY}</p>}
     </>
   );

@@ -7,6 +7,9 @@ import EngineSetupPanel from '@/components/ai/EngineSetupPanel';
 import ModelSetupPanel from '@/components/ai/ModelSetupPanel';
 import SetupChecklist from '@/components/ai/SetupChecklist';
 import TierPicker from '@/components/ai/TierPicker';
+import { MagistraError } from '@shared/errors';
+import { ENGINE_STARTING_MESSAGE } from '@shared/ipc';
+import { PROXY_RESTART_MESSAGE } from '../../electron/ollamaSetup';
 import type { AIController } from '@/hooks/useAIStatus';
 import { EMPTY_PROGRESS, type AIProgressState } from '@/lib/ai-ui/progress';
 import { setupChecks } from '@/lib/ai-ui/status';
@@ -120,13 +123,18 @@ describe('SetupChecklist', () => {
 });
 
 /** Contrôleur factice : état fixe, actions sans effet. */
-function fakeController(status: ReturnType<typeof makeStatus>, progress: AIProgressState = EMPTY_PROGRESS): AIController {
+function fakeController(
+  status: ReturnType<typeof makeStatus>,
+  progress: AIProgressState = EMPTY_PROGRESS,
+  extra: Partial<Pick<AIController, 'errors' | 'engineUpdate' | 'pending'>> = {},
+): AIController {
   const noop = async () => undefined;
   return {
     status,
     progress,
-    errors: {},
-    pending: { status: false, engine: false, start: false, model: false, config: false },
+    errors: extra.errors ?? {},
+    ...(extra.engineUpdate !== undefined ? { engineUpdate: extra.engineUpdate } : {}),
+    pending: extra.pending ?? { status: false, engine: false, start: false, model: false, config: false },
     manualInstall: false,
     loadedAt: 1,
     refresh: async () => status,
@@ -244,5 +252,104 @@ describe('EngineSetupPanel (moteur IA absent ou arrêté)', () => {
     expect(html).toContain('Démarrer le moteur IA');
     expect(html).not.toContain('Avant de commencer');
     expect(html).not.toMatch(/<button[^>]*>.*Installer le moteur IA<\/button>/);
+    expect(html).not.toContain(ENGINE_STARTING_MESSAGE);
+  });
+
+  it('pendant le démarrage : « Démarrage… » et message d’attente (jusqu’à 2 minutes au premier lancement)', () => {
+    const stopped = makeStatus({ engine: 'installed_stopped', installed: [] });
+    const pending = { status: false, engine: false, start: true, model: false, config: false };
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(stopped, EMPTY_PROGRESS, { pending }), status: stopped }));
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>.*Démarrage…<\/button>/);
+    expect(html).toContain('Le moteur IA démarre, cela peut prendre une minute au premier lancement…');
+    expect(html).toMatch(/role="status"[^>]*>Le moteur IA démarre/);
+  });
+});
+
+describe('EngineSetupPanel (moteur trop ancien)', () => {
+  const outdated = makeStatus({ engine: 'running', installed: [], engineVersion: '0.12.3', outdated: true });
+
+  it('message avec les versions et bouton « Mettre à jour le moteur IA » (taille annoncée, consentement)', () => {
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(outdated), status: outdated }));
+    expect(html).toContain('Le moteur IA installé (version 0.12.3) est trop ancien pour ce modèle (version 0.13.1 minimum).');
+    expect(html).toMatch(/<button[^>]*>.*Mettre à jour le moteur IA<\/button>/);
+    expect(html).toMatch(/Téléchargement<\/dt><dd[^>]*>environ 1,1 Go<\/dd>/);
+    expect(html).toContain('Rien n&#x27;est téléchargé tant que vous n&#x27;avez pas cliqué.');
+    expect(html).not.toContain('Démarrer le moteur IA');
+    expect(html).not.toContain('Reprendre le téléchargement');
+  });
+
+  it('installé par le service informatique : « demandez-lui », sans bouton', () => {
+    const managed = makeStatus({ engine: 'running', installed: [], engineVersion: '0.12.3', outdated: true, managedByAdmin: true });
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(managed), status: managed }));
+    expect(html).toContain('Ollama a été installé par le service informatique : demandez-lui de le mettre à jour');
+    expect(html).not.toContain('Mettre à jour le moteur IA</button>');
+    expect(html).not.toMatch(/<button/);
+  });
+
+  it('pendant l’installation : aucune « demande d’autorisation », fenêtre Ollama annoncée', () => {
+    const missing = makeStatus({ engine: 'not_installed', installed: [] });
+    const progress: AIProgressState = { engine: { stage: 'install', message: 'Installation du moteur IA…' }, model: null };
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(missing, progress), status: missing }));
+    expect(html).toContain('Une fenêtre Ollama peut s&#x27;ouvrir : vous pouvez la fermer, aucun compte n&#x27;est nécessaire.');
+    expect(html).not.toMatch(/autorisation/);
+  });
+
+  it('pendant la mise à jour : titre « Mise à jour du moteur IA »', () => {
+    const progress: AIProgressState = { engine: { stage: 'download', receivedMB: 100, totalMB: 1200 }, model: null };
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(outdated, progress, { engineUpdate: true }), status: outdated }));
+    expect(html).toContain('Mise à jour du moteur IA');
+    expect(html).toContain('Annuler la mise à jour');
+  });
+
+  it('échec réseau de l’installation : conseil pour un proxy d’établissement', () => {
+    const missing = makeStatus({ engine: 'not_installed', installed: [] });
+    const ai = fakeController(missing, EMPTY_PROGRESS, { errors: { engine: new MagistraError('NETWORK_ERROR', 'Téléchargement impossible.') } });
+    const html = render(createElement(EngineSetupPanel, { ai, status: missing }));
+    expect(html).toContain('un proxy ou un filtrage peut bloquer le téléchargement');
+  });
+});
+
+describe('ModelSetupPanel (erreur ENGINE_OUTDATED)', () => {
+  const progress: AIProgressState = {
+    engine: null,
+    model: { stage: 'error', model: 'ministral-3:14b', tier: 'standard', message: 'Le moteur IA (Ollama) est trop ancien pour ce modèle : mettez-le à jour.' },
+  };
+  const errors = { model: new MagistraError('ENGINE_OUTDATED') };
+
+  it('jamais « Reprendre le téléchargement » : mise à jour du moteur proposée', () => {
+    const status = makeStatus({ engine: 'running', installed: [] });
+    const html = render(createElement(ModelSetupPanel, { ai: fakeController(status, progress, { errors }), status, variant: 'setup' }));
+    expect(html).toContain('Le moteur IA doit d&#x27;abord être mis à jour.');
+    expect(html).toContain('trop ancien pour ce modèle');
+    expect(html).not.toContain('Reprendre le téléchargement');
+    expect(html).toMatch(/<button[^>]*>.*Mettre à jour le moteur IA<\/button>/);
+  });
+
+  it('moteur géré par le service informatique : message, sans bouton de mise à jour', () => {
+    const status = makeStatus({ engine: 'running', installed: [], managedByAdmin: true });
+    const html = render(createElement(ModelSetupPanel, { ai: fakeController(status, progress, { errors }), status, variant: 'setup' }));
+    expect(html).toContain('demandez-lui de le mettre à jour');
+    expect(html).not.toContain('Mettre à jour le moteur IA</button>');
+    expect(html).not.toContain('Reprendre le téléchargement');
+  });
+
+  it('erreur réseau du téléchargement : reprise possible et conseil proxy', () => {
+    const status = makeStatus({ engine: 'running', installed: [] });
+    const net = { model: new MagistraError('NETWORK_ERROR', 'Connexion perdue pendant le téléchargement.') };
+    const html = render(createElement(ModelSetupPanel, { ai: fakeController(status, progress, { errors: net }), status, variant: 'setup' }));
+    expect(html).toContain('Reprendre le téléchargement');
+    expect(html).toContain('registry.ollama.ai');
+  });
+
+  it('proxy d’établissement ignoré par le moteur : le message annonce la relance, sans conseil contradictoire', () => {
+    const base = makeStatus({ engine: 'running', installed: [] });
+    const status = { ...base, engine: { ...base.engine, proxyRestart: true } };
+    // Message réel de l'application Windows (electron/ollamaSetup.ts) : il cite le bouton « Reprendre le téléchargement ».
+    const net = { model: new MagistraError('NETWORK_ERROR', PROXY_RESTART_MESSAGE) };
+    const html = render(createElement(ModelSetupPanel, { ai: fakeController(status, progress, { errors: net }), status, variant: 'setup' }));
+    expect(html).toContain('vous autorisez Magistra à relancer le moteur IA avec le proxy');
+    expect(html).toMatch(/<button[^>]*>.*Reprendre le téléchargement<\/button>/);
+    expect(html).not.toContain('demandez au service informatique');
+    expect(html).not.toContain('Vérifiez votre connexion Internet');
   });
 });

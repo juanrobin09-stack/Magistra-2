@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Download, ExternalLink, Loader2, Play, RefreshCw, X } from 'lucide-react';
-import type { AIStatus } from '@shared/ipc';
+import { ArrowUpCircle, CheckCircle2, Download, ExternalLink, Loader2, Play, RefreshCw, X } from 'lucide-react';
+import { ENGINE_STARTING_MESSAGE, type AIStatus } from '@shared/ipc';
 import type { AIController } from '@/hooks/useAIStatus';
 import { engineDownloadText, formatGB, formatTransfer, progressPercent } from '@/lib/ai-ui/format';
 import { isEngineBusy } from '@/lib/ai-ui/progress';
-import { recommendedTier } from '@/lib/ai-ui/status';
+import {
+  engineManagedByAdminText, engineOutdatedText, networkHint, recommendedTier,
+} from '@/lib/ai-ui/status';
 import { ErrorBox, WarningNote } from './Notices';
 import ProgressBar from './ProgressBar';
 
@@ -13,9 +15,13 @@ interface EngineSetupPanelProps {
   status: AIStatus;
 }
 
+/** Texte affiché pendant l'installation : l'installateur d'Ollama ne demande aucune autorisation, mais peut ouvrir sa fenêtre. */
+export const ENGINE_WINDOW_NOTE = "Une fenêtre Ollama peut s'ouvrir : vous pouvez la fermer, aucun compte n'est nécessaire.";
+
 /**
  * Étape « moteur IA » : installation (avec consentement explicite avant tout téléchargement),
- * installation manuelle depuis la page officielle avec détection automatique, ou démarrage.
+ * installation manuelle depuis la page officielle avec détection automatique, démarrage,
+ * ou mise à jour d'un moteur trop ancien.
  */
 export default function EngineSetupPanel({ ai, status }: EngineSetupPanelProps) {
   const [wantInstall, setWantInstall] = useState(false);
@@ -23,6 +29,7 @@ export default function EngineSetupPanel({ ai, status }: EngineSetupPanelProps) 
   const installing = ai.pending.engine || isEngineBusy(progress);
   const waiting = !installing && progress?.stage === 'waiting';
   const errorMessage = ai.errors.engine?.message ?? (progress?.stage === 'error' ? progress.message : undefined);
+  const errorHint = errorMessage ? networkHint(ai.errors.engine?.code, errorMessage, 'engine') : null;
   const engineState = status.engine.state;
   const stopped = engineState === 'installed_stopped' || engineState === 'unknown';
   const refresh = ai.refresh;
@@ -36,7 +43,7 @@ export default function EngineSetupPanel({ ai, status }: EngineSetupPanelProps) 
     return () => window.clearInterval(id);
   }, [waiting, refresh]);
 
-  if (installing) return <InstallingView ai={ai} />;
+  if (installing) return <InstallingView ai={ai} update={ai.engineUpdate === true} />;
   if (waiting) return <WaitingView ai={ai} manual={ai.manualInstall} message={progress?.message} />;
 
   if (progress?.stage === 'ready') {
@@ -47,6 +54,11 @@ export default function EngineSetupPanel({ ai, status }: EngineSetupPanelProps) 
         </p>
       </div>
     );
+  }
+
+  // Moteur en marche mais trop ancien : mise à jour (ou service informatique si installé pour toute la machine).
+  if (engineState === 'running' && status.engine.outdated) {
+    return <OutdatedView ai={ai} status={status} errorMessage={errorMessage} errorHint={errorHint} />;
   }
 
   if (stopped && !wantInstall) {
@@ -65,6 +77,8 @@ export default function EngineSetupPanel({ ai, status }: EngineSetupPanelProps) 
             {ai.pending.start ? 'Démarrage…' : errorMessage ? 'Réessayer' : 'Démarrer le moteur IA'}
           </button>
         </div>
+        {/* Le démarrage peut durer jusqu'à 2 minutes au premier lancement (cartes graphiques, antivirus). */}
+        {ai.pending.start && <p className="text-sm text-mg-200" role="status" aria-live="polite">{ENGINE_STARTING_MESSAGE}</p>}
         {(engineState === 'unknown' || errorMessage) && (
           <p className="text-sm text-mg-200">
             Le moteur IA n'est peut-être pas installé.{' '}
@@ -77,10 +91,58 @@ export default function EngineSetupPanel({ ai, status }: EngineSetupPanelProps) 
     );
   }
 
-  return <ConsentView ai={ai} status={status} errorMessage={errorMessage} cancelled={progress?.stage === 'cancelled'} />;
+  return <ConsentView ai={ai} status={status} errorMessage={errorMessage} errorHint={errorHint} cancelled={progress?.stage === 'cancelled'} />;
 }
 
-function ConsentView({ ai, status, errorMessage, cancelled }: { ai: AIController; status: AIStatus; errorMessage?: string; cancelled: boolean }) {
+/**
+ * Action « Mettre à jour le moteur IA » (consentement explicite, taille annoncée), ou message pour le service
+ * informatique si Ollama est installé pour toute la machine. Réutilisée par le choix du modèle (erreur ENGINE_OUTDATED).
+ */
+export function EngineUpdateAction({ ai, status }: { ai: AIController; status: AIStatus }) {
+  if (status.engine.managedByAdmin) {
+    return <p className="text-sm text-mg-100">{engineManagedByAdminText(status)}</p>;
+  }
+  const dl = status.engineDownload;
+  return (
+    <div className="space-y-3">
+      <dl className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+        <dt className="text-mg-200">Téléchargement</dt>
+        <dd className="text-mg-50 mb-1 sm:mb-0">{engineDownloadText(dl)}</dd>
+        <dt className="text-mg-200">Provenance</dt>
+        <dd className="text-mg-50 mb-1 sm:mb-0">site officiel d'Ollama</dd>
+        <dt className="text-mg-200">Vos modèles d'IA</dt>
+        <dd className="text-mg-50">conservés (rien à retélécharger)</dd>
+      </dl>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" className="btn-primary" onClick={() => void ai.installEngine({ update: true })} disabled={ai.pending.engine}>
+          <ArrowUpCircle size={16} aria-hidden="true" /> Mettre à jour le moteur IA
+        </button>
+      </div>
+      <p className="text-xs text-mg-200">Rien n'est téléchargé tant que vous n'avez pas cliqué.</p>
+    </div>
+  );
+}
+
+function OutdatedView({ ai, status, errorMessage, errorHint }: {
+  ai: AIController; status: AIStatus; errorMessage?: string; errorHint: string | null;
+}) {
+  return (
+    <div className="card space-y-4">
+      <h2 className="text-lg text-white" style={{ fontFamily: 'var(--font-display)' }}>Mettre à jour le moteur IA</h2>
+      <p className="text-sm text-mg-100">{engineOutdatedText(status)}</p>
+      {errorMessage && (
+        <ErrorBox title="La mise à jour du moteur IA n'a pas abouti." message={errorMessage}>
+          {errorHint && <p className="mt-2 text-mg-200">{errorHint}</p>}
+        </ErrorBox>
+      )}
+      <EngineUpdateAction ai={ai} status={status} />
+    </div>
+  );
+}
+
+function ConsentView({ ai, status, errorMessage, errorHint, cancelled }: {
+  ai: AIController; status: AIStatus; errorMessage?: string; errorHint: string | null; cancelled: boolean;
+}) {
   const dl = status.engineDownload;
   const freeDisk = status.hardware.freeDiskGB;
   const diskTooSmall = typeof freeDisk === 'number' && freeDisk < dl.requiredDiskGB;
@@ -135,6 +197,7 @@ function ConsentView({ ai, status, errorMessage, cancelled }: { ai: AIController
 
       {errorMessage && (
         <ErrorBox title="L'installation du moteur IA n'a pas abouti." message={errorMessage}>
+          {errorHint && <p className="mt-2 text-mg-200">{errorHint}</p>}
           <p className="mt-2 text-mg-200">
             Vous pouvez réessayer, ou installer le moteur vous-même depuis la page officielle : Magistra détectera
             automatiquement la fin de l'installation.
@@ -168,19 +231,21 @@ function ConsentView({ ai, status, errorMessage, cancelled }: { ai: AIController
   );
 }
 
-function InstallingView({ ai }: { ai: AIController }) {
+function InstallingView({ ai, update }: { ai: AIController; update: boolean }) {
   const p = ai.progress.engine;
   const stage = p?.stage ?? 'starting';
   const percent = stage === 'download' ? progressPercent({ completed: p?.receivedMB, total: p?.totalMB }) : null;
   const title = stage === 'download'
     ? 'Téléchargement du moteur IA…'
     : stage === 'install'
-      ? (p?.message || 'Installation du moteur IA…')
+      ? (p?.message || (update ? 'Mise à jour du moteur IA…' : 'Installation du moteur IA…'))
       : 'Préparation du téléchargement…';
   const canCancel = stage === 'starting' || stage === 'download';
   return (
     <div className="card space-y-4">
-      <h2 className="text-lg text-white" style={{ fontFamily: 'var(--font-display)' }}>Installation du moteur IA</h2>
+      <h2 className="text-lg text-white" style={{ fontFamily: 'var(--font-display)' }}>
+        {update ? 'Mise à jour du moteur IA' : 'Installation du moteur IA'}
+      </h2>
       <p className="flex items-center gap-2 text-mg-50" role="status" aria-live="polite">
         <Loader2 size={16} className="animate-spin text-accent" aria-hidden="true" /> {title}
       </p>
@@ -195,15 +260,11 @@ function InstallingView({ ai }: { ai: AIController }) {
           {percent !== null && ` · ${percent} %`}
         </p>
       )}
-      {stage === 'install' && (
-        <p className="text-sm text-mg-200">
-          Si une fenêtre d'installation ou une demande d'autorisation de Windows apparaît, acceptez-la pour continuer.
-        </p>
-      )}
+      {stage === 'install' && <p className="text-sm text-mg-200">{ENGINE_WINDOW_NOTE}</p>}
       <p className="text-xs text-mg-200">Vous pouvez continuer à utiliser votre ordinateur pendant ce temps.</p>
       {canCancel && (
         <button type="button" className="btn-secondary text-sm py-2 px-4" onClick={() => void ai.cancelEngineInstall()}>
-          <X size={15} aria-hidden="true" /> Annuler l'installation
+          <X size={15} aria-hidden="true" /> {update ? 'Annuler la mise à jour' : "Annuler l'installation"}
         </button>
       )}
     </div>

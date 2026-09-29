@@ -5,6 +5,7 @@ import { ALL_NIVEAUX } from '@shared/levels';
 import LandingPage from '@/pages/LandingPage';
 import { RuntimeContext } from '@/lib/runtime/context';
 import type { RuntimeValue } from '@/lib/runtime/types';
+import { WINDOWS_DOWNLOAD_URL } from '@/lib/links';
 import { cleanup, fakeRuntime, MemoryStore, PROFILE_COLLEGE, render } from './helpers';
 import { COMMERCIAL_VENDOR } from '../vendor';
 
@@ -87,5 +88,31 @@ describe('Landing — affirmations', () => {
     const external = Array.from(container.querySelectorAll<HTMLAnchorElement>('a[target="_blank"]'));
     expect(external.length).toBeGreaterThan(0);
     for (const a of external) expect(a.rel).toContain('noopener');
+  });
+});
+
+describe('Landing — application Windows et IA du site', () => {
+  it('lien « Télécharger pour Windows » vers la page des versions (nouvel onglet sûr)', async () => {
+    const { container } = await mount(fakeRuntime(new MemoryStore()));
+    const links = Array.from(container.querySelectorAll<HTMLAnchorElement>(`a[href="${WINDOWS_DOWNLOAD_URL}"]`));
+    expect(links.length).toBeGreaterThanOrEqual(1);
+    expect(links.some(a => a.textContent?.includes('Télécharger pour Windows'))).toBe(true);
+    for (const a of links) expect(a.rel).toContain('noopener');
+    // Le bouton principal reste le seul « btn-primary » : l'accès à l'application n'est pas modifié.
+    for (const a of Array.from(container.querySelectorAll('a.btn-primary'))) expect(a.getAttribute('href')).toBe('/onboarding');
+  });
+
+  it('le site n’affirme plus que l’IA est forcément celle de l’établissement : le prestataire est annoncé', async () => {
+    const { container } = await mount(fakeRuntime(new MemoryStore()));
+    expect(container.textContent).toMatch(/l’application indique toujours à qui vos textes sont envoyés/);
+  });
+
+  it('mode personnel : « Commencer » mène à l’application, sans connexion', async () => {
+    const { container } = await mount(fakeRuntime(new MemoryStore(), { mode: 'personal' }));
+    const links = Array.from(container.querySelectorAll<HTMLAnchorElement>('a.btn-primary'));
+    expect(links.length).toBeGreaterThanOrEqual(3);
+    for (const a of links) expect(a.getAttribute('href')).toBe('/app');
+    expect(container.textContent).toContain('Mode personnel');
+    expect(container.textContent).not.toContain('Vous êtes sur la démonstration');
   });
 });

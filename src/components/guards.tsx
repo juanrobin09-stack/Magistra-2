@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useRuntime } from '@/lib/runtime/context';
 import { getBridge } from '@/lib/runtime/local';
+import { PersonalAccessScreen } from './PersonalAccess';
 
 // Chargé seulement sur le site web (dépend de Clerk, absent de l'application Windows et de la démo).
 const WebSignOutButton = lazy(() => import('./WebSignOutButton'));
@@ -43,6 +44,8 @@ export function ProfileGuard({ children }: { children: ReactNode }) {
   const { mode, profile, profileStatus, profileError, reloadProfile } = useRuntime();
   if (profileStatus === 'loading') return <FullPageSpinner label="Chargement de votre profil…" />;
   if (profileStatus === 'error') {
+    // Mode personnel : code d'accès absent ou refusé → écran de saisie du code (pas de « session expirée »).
+    if (mode === 'personal' && profileError?.code === 'UNAUTHENTICATED') return <PersonalAccessScreen rejected />;
     // Cause réelle (session expirée, serveur indisponible, stockage illisible…), sans détail technique.
     const sessionExpired = profileError?.code === 'UNAUTHENTICATED' || profileError?.code === 'FORBIDDEN';
     const detail = profileError && profileError.code !== 'INTERNAL' ? profileError.message : 'Réessayez dans quelques instants.';

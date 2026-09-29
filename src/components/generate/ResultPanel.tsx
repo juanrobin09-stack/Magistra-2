@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import MarkdownView from '@/components/MarkdownView';
 import { copyText, exportMarkdown, exportPdf, printDocument, type ExportDoc } from '@/lib/export';
-import { buildExportDoc, resultHeading, saveStatus } from '@/lib/generation/result';
+import { buildExportDoc, resultHeading, saveStatus, unwrapDocumentFence } from '@/lib/generation/result';
 import { ABORTED_MESSAGE, type GenerationState } from '@/lib/generation/state';
 import type { DataStore, RuntimeMode } from '@/lib/runtime/types';
 import type { GenerationRequest } from '@shared/types';
@@ -25,7 +25,11 @@ interface ResultPanelProps {
   containerRef?: Ref<HTMLElement>;
 }
 
-const SETUP_CODES: ErrorCode[] = ['ENGINE_NOT_INSTALLED', 'ENGINE_NOT_RUNNING', 'MODEL_NOT_INSTALLED', 'OUT_OF_MEMORY'];
+const SETUP_CODES: ErrorCode[] = ['ENGINE_NOT_INSTALLED', 'ENGINE_NOT_RUNNING', 'ENGINE_OUTDATED', 'MODEL_NOT_INSTALLED', 'OUT_OF_MEMORY'];
+
+/** Étape « Chargement du modèle… » : le premier chargement peut être long sur un ordinateur sans carte graphique. */
+export const LOADING_MODEL_HINT =
+  'Le premier chargement du modèle peut prendre quelques minutes, surtout sur un ordinateur sans carte graphique.';
 
 /**
  * Tableaux, code et formules défilent horizontalement au lieu d'élargir la page (390 px compris) :
@@ -46,7 +50,8 @@ export default function ResultPanel({ state, mode, store, onStop, onRestart, con
   const heading = resultHeading(req);
   const running = state.phase === 'running';
   const result = state.result;
-  const text = state.text;
+  // Document entier entouré d'un bloc « ```markdown » par le modèle : affiché (et copié, exporté) comme un document.
+  const text = unwrapDocumentFence(state.text);
   const visibleWarnings = state.warnings.filter(w => w.code !== 'STORAGE_ERROR');
   const save = result ? saveStatus(result, state.warnings, mode) : null;
   const internetUsed = result ? result.internetUsed : state.internetUsed;
@@ -103,6 +108,7 @@ export default function ResultPanel({ state, mode, store, onStop, onRestart, con
             <span>{state.status ?? 'Préparation de la génération…'}</span>
           </p>
         )}
+        {running && state.stage === 'loading_model' && <p className="mt-1 text-xs text-mg-200">{LOADING_MODEL_HINT}</p>}
         {/* Fin de génération annoncée aux lecteurs d'écran (l'état visuel est affiché plus bas). */}
         {state.phase === 'done' && save && (
           <p className="sr-only">{save.saved ? 'Génération terminée, contenu enregistré.' : 'Génération terminée, contenu non enregistré.'}</p>

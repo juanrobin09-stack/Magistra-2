@@ -1,7 +1,8 @@
 // Libellés simples de l'état de l'IA locale (pour un enseignant qui ne connaît rien à l'IA).
 // Fonctions pures, testées dans tests/ai-ui.
 
-import type { TierFit, TierId } from '@shared/ai/models';
+import { MIN_OLLAMA_VERSION, type TierFit, type TierId } from '@shared/ai/models';
+import type { ErrorCode } from '@shared/errors';
 import type { AIStatus, TierStatus } from '@shared/ipc';
 
 // ─── Badges d'adéquation d'un niveau à l'ordinateur ─────────────────────────
@@ -39,7 +40,7 @@ export function toneBadgeClass(tone: Tone): string {
 
 // ─── Phase globale ──────────────────────────────────────────────────────────
 
-export type AIPhase = 'ready' | 'engine_missing' | 'engine_stopped' | 'model_missing' | 'remote_unavailable';
+export type AIPhase = 'ready' | 'engine_missing' | 'engine_stopped' | 'engine_outdated' | 'model_missing' | 'remote_unavailable';
 
 export function aiPhase(status: AIStatus): AIPhase {
   if (status.ready) return 'ready';
@@ -48,7 +49,8 @@ export function aiPhase(status: AIStatus): AIPhase {
     case 'not_installed':
       return 'engine_missing';
     case 'running':
-      return 'model_missing';
+      // Moteur trop ancien : les modèles Magistra ne pourraient pas s'installer (erreur du registre).
+      return status.engine.outdated ? 'engine_outdated' : 'model_missing';
     case 'installed_stopped':
     case 'unknown':
     default:
@@ -77,6 +79,11 @@ export function phaseInfo(phase: AIPhase): PhaseInfo {
       };
     case 'engine_stopped':
       return { ok: false, label: 'Moteur arrêté', badge: 'Moteur arrêté', description: "Le moteur IA est installé, mais il n'est pas démarré." };
+    case 'engine_outdated':
+      return {
+        ok: false, label: 'Moteur trop ancien', badge: 'Moteur IA à mettre à jour',
+        description: 'Le moteur IA installé est trop ancien pour les modèles de Magistra : il doit être mis à jour.',
+      };
     case 'model_missing':
       return {
         ok: false, label: 'Modèle non installé', badge: 'Modèle non installé',
@@ -152,6 +159,14 @@ export function setupChecks(status: AIStatus): SetupCheck[] {
       label: 'Moteur IA en marche',
       state: running ? 'ok' : installed || engine === 'unknown' ? 'missing' : 'waiting',
     },
+    ...(running && status.engine.outdated
+      ? [{
+        id: 'engine-version',
+        label: 'Moteur IA à jour',
+        state: 'missing' as const,
+        detail: engineVersionDetail(status),
+      }]
+      : []),
     {
       id: 'models',
       label: "Modèles d'IA disponibles",
@@ -170,6 +185,48 @@ export function setupChecks(status: AIStatus): SetupCheck[] {
     });
   }
   return checks;
+}
+
+// ─── Moteur trop ancien ─────────────────────────────────────────────────────
+
+/** Version minimale annoncée par l'application (ou celle du catalogue des modèles). */
+export function engineMinVersion(status: AIStatus): string {
+  return status.engine.minVersion || MIN_OLLAMA_VERSION;
+}
+
+/** « version 0.12.3, 0.13.1 minimum » (détail de la vérification). */
+function engineVersionDetail(status: AIStatus): string {
+  const min = engineMinVersion(status);
+  return status.engine.version ? `version ${status.engine.version}, ${min} minimum` : `version ${min} minimum`;
+}
+
+/** Explication pour l'enseignant, avec les versions quand elles sont connues. */
+export function engineOutdatedText(status: AIStatus): string {
+  const min = engineMinVersion(status);
+  const installed = status.engine.version ? ` (version ${status.engine.version})` : '';
+  if (status.ready) {
+    return `Le moteur IA installé${installed} est trop ancien pour les modèles récents de Magistra (version ${min} minimum) : mettez-le à jour avant d'installer une autre version de l'IA.`;
+  }
+  return `Le moteur IA installé${installed} est trop ancien pour ce modèle (version ${min} minimum).`;
+}
+
+/** Ollama installé pour toute la machine (Program Files) : seul le service informatique peut le mettre à jour. */
+export function engineManagedByAdminText(status: AIStatus): string {
+  return `Ollama a été installé par le service informatique : demandez-lui de le mettre à jour (version ${engineMinVersion(status)} minimum).`;
+}
+
+// ─── Réseau d'établissement (proxy, filtrage) ───────────────────────────────
+
+const PROXY_RE = /proxy|\b407\b|tunnel|pare-feu|firewall|filtr|certificat|certificate|ECONNRESET|ETIMEDOUT|ENOTFOUND|getaddrinfo/i;
+
+/**
+ * Conseil pour un réseau d'établissement quand un téléchargement échoue pour une raison réseau
+ * (code NETWORK_ERROR, ou message qui évoque un proxy, un filtrage ou un certificat). null sinon.
+ */
+export function networkHint(code: ErrorCode | undefined, message: string | undefined, target: 'engine' | 'model'): string | null {
+  if (code !== 'NETWORK_ERROR' && !(message && PROXY_RE.test(message))) return null;
+  const hosts = target === 'engine' ? 'github.com et ollama.com' : 'ollama.com et registry.ollama.ai';
+  return `Sur un réseau d'établissement, un proxy ou un filtrage peut bloquer le téléchargement : demandez au service informatique d'autoriser l'accès à ${hosts}.`;
 }
 
 // ─── Téléchargement d'un modèle ─────────────────────────────────────────────

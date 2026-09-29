@@ -2,8 +2,10 @@ import { Link } from 'react-router-dom';
 import { useAIStatus, useCapabilities } from '@/hooks/useAIStatus';
 import { progressPercent } from '@/lib/ai-ui/format';
 import { isEngineBusy, isModelPulling } from '@/lib/ai-ui/progress';
+import { serverAIView } from '@/lib/ai-ui/server';
 import { aiPhase, phaseInfo } from '@/lib/ai-ui/status';
 import { useOptionalRuntime } from '@/lib/runtime/context';
+import { usesServerApi } from '@/lib/runtime/types';
 
 const BASE = 'flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors border border-white/5 hover:border-accent/20 hover:bg-white/3';
 
@@ -31,13 +33,14 @@ function Badge({ to, ok, text, title }: BadgeView) {
 
 /**
  * Petit indicateur d'état de l'IA pour la barre latérale.
- * Windows : IA locale ; site web : serveur IA ; démonstration : aucune IA.
+ * Windows : IA locale ; site web et mode personnel : serveur IA (avec la vraie cause) ; démonstration : aucune IA.
  */
 export default function AIStatusBadge() {
   const runtime = useOptionalRuntime();
   const mode = runtime?.mode ?? null;
   const ai = useAIStatus();
-  const web = useCapabilities({ enabled: mode === 'web' });
+  const server = mode !== null && usesServerApi(mode);
+  const web = useCapabilities({ enabled: server });
 
   if (!runtime) return null;
 
@@ -45,10 +48,14 @@ export default function AIStatusBadge() {
     return <Badge to="/app/settings" ok={null} text="Démonstration" title="Exemples pré-rédigés, aucune IA n'est utilisée" />;
   }
 
-  if (mode === 'web') {
-    if (web.loading && !web.capabilities) return <Badge to="/app/settings" ok={null} text="Vérification du serveur IA…" />;
-    const ok = web.capabilities?.ready === true;
-    return <Badge to="/app/settings" ok={ok} text={ok ? 'Serveur IA disponible' : 'Serveur IA indisponible'} />;
+  if (mode === 'web' || mode === 'personal') {
+    const view = serverAIView(web.capabilities, { mode, loading: web.loading, checkError: web.error?.message ?? null });
+    if (view.state === 'checking') return <Badge to="/app/settings" ok={null} text={view.badge} />;
+    // État non vérifié : ni vert ni orange, la génération reste possible.
+    if (view.state === 'unverified') return <Badge to="/app/settings" ok={null} text={view.badge} title={view.detail ?? undefined} />;
+    const ok = view.state === 'ready';
+    const title = ok ? undefined : [view.detail, view.code ? `(code ${view.code})` : null].filter(Boolean).join(' ');
+    return <Badge to="/app/settings" ok={ok} text={view.badge} title={title || undefined} />;
   }
 
   // Application Windows : IA locale (ou serveur distant choisi dans les options avancées).

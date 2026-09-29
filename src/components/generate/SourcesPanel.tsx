@@ -13,6 +13,10 @@ interface SourcesPanelProps {
   mode: RuntimeMode;
   /** Préférence « conserver les documents » (application Windows) ; null ailleurs. */
   keepPreference: boolean | null;
+  /** Prestataire tiers (service d'IA en ligne) qui reçoit les passages, s'il y en a un : il est nommé. */
+  aiRecipient?: string;
+  /** Destinataire pas encore connu (vérification du service d'IA en cours ou en échec) : annonce prudente. */
+  aiRecipientUnknown?: boolean;
   /** Emplacement du sélecteur de recherche. */
   children?: ReactNode;
 }
@@ -42,7 +46,7 @@ function DocStatus({ doc }: { doc: SourceDoc }) {
   );
 }
 
-export default function SourcesPanel({ sources, mode, keepPreference, children }: SourcesPanelProps) {
+export default function SourcesPanel({ sources, mode, keepPreference, aiRecipient, aiRecipientUnknown, children }: SourcesPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [toDelete, setToDelete] = useState<{ id: string; name: string } | null>(null);
@@ -100,7 +104,10 @@ export default function SourcesPanel({ sources, mode, keepPreference, children }
         />
         <p className="text-xs text-mg-300 mt-3 leading-relaxed">
           PDF, DOCX, PPTX, TXT, MD — jusqu'à {sources.maxDocuments} documents. L'analyse se fait {where(mode)} : le fichier
-          original n'est jamais envoyé, seuls les passages utiles sont transmis au moment de générer.
+          original n'est jamais envoyé, seuls les passages utiles sont transmis{aiRecipient
+            ? ` à « ${aiRecipient} »`
+            : aiRecipientUnknown ? ` au service d'IA ${mode === 'personal' ? 'de votre serveur Magistra' : "configuré par l'administrateur"}` : ''} au
+          moment de générer.
         </p>
       </div>
 

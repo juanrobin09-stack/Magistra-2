@@ -14,6 +14,8 @@ import '@fontsource/jetbrains-mono/500.css';
 import './index.css';
 import App from './App';
 import { getBridge } from '@/lib/runtime/local';
+import { discoverRuntimeConfig, getRuntimeConfig, setRuntimeConfig, type RuntimeConfig } from '@/lib/runtime/mode';
+import { captureAccessFromUrl } from '@/lib/runtime/personal';
 
 const container = document.getElementById('root')!;
 
@@ -33,8 +35,27 @@ const observer = new MutationObserver(() => {
 });
 observer.observe(container, { childList: true });
 
-createRoot(container).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+/**
+ * Démarrage : le mode (Windows, site avec comptes, mode personnel, démonstration) est découvert à
+ * l'exécution (GET /api/mode, 3 s au plus) et non figé au build.
+ */
+async function start(): Promise<void> {
+  // Mode personnel : le code d'accès du lien affiché dans le terminal (#acces=…) est mémorisé puis
+  // effacé de l'adresse AVANT tout rendu (ni l'historique, ni un favori, ni une redirection ne le gardent).
+  if (!getBridge()) captureAccessFromUrl();
+  let config: RuntimeConfig;
+  try {
+    config = await discoverRuntimeConfig();
+  } catch {
+    // Découverte impossible (cas imprévu) : comportement historique (pont Electron, clé du build, démonstration).
+    config = getRuntimeConfig();
+  }
+  setRuntimeConfig(config);
+  createRoot(container).render(
+    <StrictMode>
+      <App config={config} />
+    </StrictMode>,
+  );
+}
+
+void start();

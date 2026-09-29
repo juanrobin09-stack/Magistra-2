@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  aiPhase, fitBadge, initialTierChoice, phaseInfo, phaseLine, pullStatusText, setupChecks, tierActionLabel, tierLabelFor, toneBadgeClass,
+  aiPhase, engineManagedByAdminText, engineOutdatedText, fitBadge, initialTierChoice, networkHint, phaseInfo, phaseLine, pullStatusText,
+  setupChecks, tierActionLabel, tierLabelFor, toneBadgeClass,
 } from '@/lib/ai-ui/status';
 import { makeStatus } from './fixtures';
 
@@ -130,5 +131,45 @@ describe('libellés des niveaux', () => {
     // Un niveau déjà installé n'est pas remplacé par la recommandation.
     const installed = makeStatus({ installed: ['leger'], selectedTier: 'leger' });
     expect(initialTierChoice(installed, 'setup')).toBe('leger');
+  });
+});
+
+describe('moteur trop ancien (engine_outdated)', () => {
+  const outdated = () => makeStatus({ engine: 'running', installed: [], engineVersion: '0.12.3', outdated: true });
+
+  it('phase dédiée, distincte de « modèle non installé »', () => {
+    expect(aiPhase(outdated())).toBe('engine_outdated');
+    expect(phaseInfo('engine_outdated')).toMatchObject({ ok: false, badge: 'Moteur IA à mettre à jour' });
+    expect(phaseLine('engine_outdated')).toBe('○ Moteur trop ancien');
+    // Version suffisante ou inconnue : phase habituelle.
+    expect(aiPhase(makeStatus({ engine: 'running', installed: [], outdated: false }))).toBe('model_missing');
+    // Modèle déjà installé et fonctionnel : l'IA reste prête.
+    expect(aiPhase(makeStatus({ engine: 'running', installed: ['standard'], engineVersion: '0.12.3', outdated: true }))).toBe('ready');
+  });
+
+  it('vérification supplémentaire « Moteur IA à jour » avec les versions', () => {
+    const checks = setupChecks(outdated());
+    const version = checks.find(c => c.id === 'engine-version');
+    expect(version).toMatchObject({ label: 'Moteur IA à jour', state: 'missing', detail: 'version 0.12.3, 0.13.1 minimum' });
+    expect(setupChecks(makeStatus({ engine: 'running', installed: [] })).some(c => c.id === 'engine-version')).toBe(false);
+  });
+
+  it('textes : versions installée et minimale ; service informatique', () => {
+    expect(engineOutdatedText(outdated())).toBe('Le moteur IA installé (version 0.12.3) est trop ancien pour ce modèle (version 0.13.1 minimum).');
+    expect(engineManagedByAdminText(outdated())).toBe(
+      'Ollama a été installé par le service informatique : demandez-lui de le mettre à jour (version 0.13.1 minimum).',
+    );
+  });
+});
+
+describe('networkHint (proxy, filtrage)', () => {
+  it('erreur réseau ou message évoquant un proxy : conseil pour le service informatique', () => {
+    expect(networkHint('NETWORK_ERROR', 'Téléchargement impossible.', 'model')).toContain('registry.ollama.ai');
+    expect(networkHint('INTERNAL', 'Proxy Authentication Required (407)', 'engine')).toContain('github.com');
+  });
+
+  it('autre cause : aucun conseil de proxy', () => {
+    expect(networkHint('OUT_OF_MEMORY', 'Mémoire insuffisante.', 'model')).toBeNull();
+    expect(networkHint('ENGINE_OUTDATED', 'Le moteur IA est trop ancien.', 'model')).toBeNull();
   });
 });

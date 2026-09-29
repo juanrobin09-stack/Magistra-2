@@ -6,7 +6,8 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import type { AIController } from '@/hooks/useAIStatus';
 import { formatGB, formatTransfer, progressPercent } from '@/lib/ai-ui/format';
 import { isModelPulling } from '@/lib/ai-ui/progress';
-import { initialTierChoice, pullStatusText, tierActionLabel, tierLabelFor } from '@/lib/ai-ui/status';
+import { initialTierChoice, networkHint, pullStatusText, tierActionLabel, tierLabelFor } from '@/lib/ai-ui/status';
+import { EngineUpdateAction } from './EngineSetupPanel';
 import HardwareSummary from './HardwareSummary';
 import { ErrorBox, SuccessNote, WarningNote } from './Notices';
 import ProgressBar from './ProgressBar';
@@ -35,10 +36,16 @@ export default function ModelSetupPanel({ ai, status, variant }: ModelSetupPanel
   const selectedTier = status.tiers.find(t => t.id === status.selectedTier);
   const currentTier = status.config.mode === 'local' && !status.config.customModel && selectedTier?.installed ? selectedTier.id : null;
   const errorMessage = ai.errors.model?.message ?? (progress?.stage === 'error' ? progress.message : undefined);
+  // Moteur trop ancien (erreur 412 du registre) : reprendre le téléchargement ne servirait à rien.
+  const engineOutdated = ai.errors.model?.code === 'ENGINE_OUTDATED';
+  // Proxy d'établissement ignoré par le moteur : le message explique déjà que « Reprendre le téléchargement » relance
+  // le moteur avec le proxy (accord de l'enseignant) ; les conseils génériques le contrediraient.
+  const proxyRestart = Boolean(errorMessage) && !engineOutdated && status.engine.proxyRestart === true;
+  const errorHint = errorMessage && !engineOutdated && !proxyRestart ? networkHint(ai.errors.model?.code, errorMessage, 'model') : null;
   const cancelled = progress?.stage === 'cancelled';
   const resumeTier: TierId | undefined = progress ? progress.tier ?? tierForModel(progress.model)?.id : undefined;
   // Après une interruption, « Reprendre » remplace le bouton d'installation du même niveau.
-  const resumeShown = (cancelled || Boolean(errorMessage)) && resumeTier !== undefined;
+  const resumeShown = (cancelled || (Boolean(errorMessage) && !engineOutdated)) && resumeTier !== undefined;
 
   function run(id: TierId) {
     const target = status.tiers.find(t => t.id === id);
@@ -105,9 +112,21 @@ export default function ModelSetupPanel({ ai, status, variant }: ModelSetupPanel
               </button>
             </div>
           )}
-          {errorMessage && (
+          {errorMessage && engineOutdated && (
+            <ErrorBox title="Le moteur IA doit d'abord être mis à jour." message={errorMessage}>
+              <div className="mt-3">
+                {status.engine.outdated && !status.engine.managedByAdmin
+                  ? <p className="text-mg-200">Utilisez le bouton « Mettre à jour le moteur IA » ci-dessus, puis installez de nouveau cette version.</p>
+                  : <EngineUpdateAction ai={ai} status={status} />}
+              </div>
+            </ErrorBox>
+          )}
+          {errorMessage && !engineOutdated && (
             <ErrorBox title="Le téléchargement n'a pas abouti." message={errorMessage}>
-              <p className="mt-2 text-mg-200">Vérifiez votre connexion Internet et l'espace disque, puis reprenez : le téléchargement repartira là où il s'est arrêté.</p>
+              {errorHint && <p className="mt-2 text-mg-200">{errorHint}</p>}
+              {!proxyRestart && (
+                <p className="mt-2 text-mg-200">Vérifiez votre connexion Internet et l'espace disque, puis reprenez : le téléchargement repartira là où il s'est arrêté.</p>
+              )}
               {resumeTier && (
                 <button type="button" className="btn-primary text-sm py-2 px-4 mt-3" onClick={() => run(resumeTier)}>
                   <RefreshCw size={15} aria-hidden="true" /> Reprendre le téléchargement

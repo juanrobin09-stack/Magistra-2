@@ -6,6 +6,7 @@ import { toMagistraError } from '@shared/errors';
 import { ALL_NIVEAUX, NIVEAUX, getNiveauLabel, isNiveau, isSuperieur, type NiveauScolaire } from '@shared/levels';
 import type { TeacherProfile } from '@shared/types';
 import { FullPageSpinner } from '@/components/guards';
+import { PersonalAccessScreen } from '@/components/PersonalAccess';
 import SelectField from '@/components/ui/SelectField';
 import { useOptionalRuntime } from '@/lib/runtime/context';
 import type { RuntimeValue } from '@/lib/runtime/types';
@@ -96,6 +97,7 @@ function buildProfile(draft: Draft): TeacherProfile | null {
 function storageNotice(mode: RuntimeValue['mode']): string {
   if (mode === 'web') return 'Votre profil est enregistré dans votre compte : il n’est partagé avec aucun autre utilisateur.';
   if (mode === 'local') return 'Votre profil est enregistré sur cet ordinateur uniquement.';
+  if (mode === 'personal') return 'Mode personnel : votre profil est enregistré par le serveur Magistra démarré sur cet ordinateur, sans compte.';
   return 'Mode démonstration : votre profil est enregistré dans ce navigateur uniquement.';
 }
 
@@ -107,6 +109,7 @@ export default function OnboardingPage() {
 
   if (!runtime || runtime.profileStatus === 'loading') return <FullPageSpinner label="Chargement de votre profil…" />;
   if (runtime.profileStatus === 'error') {
+    if (runtime.mode === 'personal' && runtime.profileError?.code === 'UNAUTHENTICATED') return <PersonalAccessScreen rejected />;
     return (
       <div className="min-h-screen flex items-center justify-center bg-mg-900 px-6" role="alert">
         <div className="card max-w-md text-center p-8">

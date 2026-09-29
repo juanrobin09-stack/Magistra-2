@@ -161,7 +161,7 @@ function SetupStep({ ai, status, finishing, onStart }: {
     return <RemoteUnavailable ai={ai} status={status} />;
   }
 
-  if (phase === 'engine_missing' || phase === 'engine_stopped') {
+  if (phase === 'engine_missing' || phase === 'engine_stopped' || phase === 'engine_outdated') {
     return <EngineSetupPanel ai={ai} status={status} />;
   }
 

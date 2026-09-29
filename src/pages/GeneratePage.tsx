@@ -9,6 +9,7 @@ import { getToolInfo, type TypeContenu } from '@shared/catalog';
 import { toMagistraError } from '@shared/errors';
 import type { NiveauScolaire } from '@shared/levels';
 import { modeUsesDocuments, type DocumentPassage, type ResearchMode } from '@shared/types';
+import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import AiNotReadyCard from '@/components/generate/AiNotReadyCard';
 import GenerateFormFields from '@/components/generate/GenerateFormFields';
 import PrivacyNotice from '@/components/generate/PrivacyNotice';
@@ -25,10 +26,11 @@ import {
   type GenerateForm,
 } from '@/lib/generation/request';
 import {
-  describeResearchOptions, effectiveResearchMode, privacyNotes, researchHints,
+  describeResearchOptions, effectiveResearchMode, privacyNotes, providerAnnounced, researchHints,
 } from '@/lib/generation/research';
 import { formFromRecord, type ReusableRecord } from '@/lib/generation/reuse';
-import { useRuntime } from '@/lib/runtime/context';
+import { adminContact, configuredProvider, useRuntime } from '@/lib/runtime/context';
+import { usesServerApi } from '@/lib/runtime/types';
 
 const FIELD_IDS: Record<string, string> = {
   sujet: 'gen-sujet',
@@ -70,7 +72,15 @@ export default function GeneratePage() {
   const researchOptions = useMemo(() => describeResearchOptions(caps, mode, form.niveau), [caps, mode, form.niveau]);
   const researchMode = effectiveResearchMode(chosenMode ?? prefs?.defaultResearchMode ?? 'documents', researchOptions);
   const hints = researchHints(researchMode, sources.docs.filter(d => d.status !== 'error').length, form.niveau, researchOptions, mode);
-  const privacy = privacyNotes(caps, researchMode);
+  // Destinataire des textes : fiche de /api/status, sinon celle annoncée au démarrage par /api/mode, sinon annonce
+  // prudente. Pendant la première vérification, sans prestataire annoncé, la génération attend (quelques secondes).
+  const fallbackProvider = configuredProvider();
+  const privacyContext = { runtimeMode: mode, fallbackProvider };
+  const privacy = privacyNotes(caps, researchMode, privacyContext);
+  const verifying = !providerAnnounced(caps, privacyContext) && capabilities.loading;
+  const aiRecipient = caps?.providerInfo?.thirdParty
+    ? caps.providerInfo.label
+    : !caps && fallbackProvider?.thirdParty ? fallbackProvider.label : undefined;
 
   // Le résultat apparaît sous le formulaire : on l'amène à l'écran à chaque nouvelle génération.
   const runId = generation.state.runId;
@@ -96,6 +106,11 @@ export default function GeneratePage() {
     e.preventDefault();
     // La touche Entrée ne relance jamais une génération en cours.
     if (generation.isRunning) return;
+    // Destinataire des textes pas encore annoncé : on attend la vérification (la touche Entrée contourne le bouton).
+    if (verifying) {
+      setSubmitNotice("Vérification du service d'IA en cours : la génération sera possible dans quelques secondes.");
+      return;
+    }
     if (problems.length > 0) {
       setShowErrors(true);
       setSubmitNotice(problems[0].message);
@@ -171,7 +186,10 @@ export default function GeneratePage() {
             checkError={capabilities.error}
             checking={capabilities.loading}
             onRecheck={capabilities.refresh}
+            adminContact={adminContact()}
           />
+
+          {mode === 'demo' && <ConnectRealAICard />}
 
           <form onSubmit={handleSubmit} noValidate aria-label="Demande de génération" className="space-y-6">
             <section aria-labelledby="gen-params-title" className="card p-5 sm:p-6">
@@ -190,7 +208,13 @@ export default function GeneratePage() {
               />
             </section>
 
-            <SourcesPanel sources={sources} mode={mode} keepPreference={prefs ? prefs.keepDocuments : null}>
+            <SourcesPanel
+              sources={sources}
+              mode={mode}
+              keepPreference={prefs ? prefs.keepDocuments : null}
+              aiRecipient={aiRecipient}
+              aiRecipientUnknown={usesServerApi(mode) && !caps && !aiRecipient}
+            >
               <ResearchModePicker options={researchOptions} value={researchMode} onChange={setChosenMode} hints={hints} />
             </SourcesPanel>
 
@@ -199,12 +223,14 @@ export default function GeneratePage() {
             <div>
               <button
                 type="submit"
-                disabled={running}
+                disabled={running || verifying}
                 className={`btn-primary w-full py-3.5 text-sm font-semibold justify-center ${FOCUS_RING}`}
               >
                 {running
                   ? <><Loader2 size={17} className="animate-spin" aria-hidden="true" /> Génération en cours…</>
-                  : <><Sparkles size={17} aria-hidden="true" /> Générer : {tool.label}</>}
+                  : verifying
+                    ? <><Loader2 size={17} className="animate-spin" aria-hidden="true" /> Vérification du service d'IA…</>
+                    : <><Sparkles size={17} aria-hidden="true" /> Générer : {tool.label}</>}
               </button>
               <p id="gen-submit-status" role="status" aria-live="polite" className="mt-2 text-xs text-warning min-h-[1rem]">
                 {submitNotice ?? (sources.analyzing ? 'Analyse des documents en cours…' : '')}

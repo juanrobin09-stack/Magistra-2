@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
+import { defaultMessage, type ErrorCode } from '@shared/errors';
 import type { Capabilities, TeacherProfile } from '@shared/types';
 import AiNotReadyCard from '@/components/generate/AiNotReadyCard';
 import GenerateFormFields from '@/components/generate/GenerateFormFields';
@@ -143,11 +144,15 @@ describe('PrivacyNotice', () => {
 });
 
 describe('AiNotReadyCard', () => {
-  const render = (mode: 'local' | 'web', caps: Capabilities | null, error: string | null = null) => renderToStaticMarkup(
-    <MemoryRouter>
-      <AiNotReadyCard mode={mode} caps={caps} checkError={error} checking={false} onRecheck={noop} />
-    </MemoryRouter>,
-  );
+  const render = (mode: 'local' | 'web' | 'personal', caps: Capabilities | null, error: string | null = null, adminContact?: string) =>
+    renderToStaticMarkup(
+      <MemoryRouter>
+        <AiNotReadyCard mode={mode} caps={caps} checkError={error} checking={false} onRecheck={noop} adminContact={adminContact} />
+      </MemoryRouter>,
+    ).replace(/&#x27;/g, "'");
+  const server = (code: ErrorCode, message: string): Capabilities => ({
+    ...CAPS, ready: false, privacy: { level: 'server', message: '' }, notReady: { code, message },
+  });
 
   it('rien si l’IA est prête', () => {
     expect(render('local', CAPS)).toBe('');
@@ -155,15 +160,97 @@ describe('AiNotReadyCard', () => {
 
   it('local : lien vers la configuration de l’IA', () => {
     const html = render('local', { ...CAPS, ready: false });
-    expect(html).toContain("Configurer l&#x27;intelligence artificielle");
+    expect(html).toContain("Configurer l'intelligence artificielle");
     expect(html).toContain('href="/setup"');
     expect(html).toContain('href="/app/settings"');
   });
 
   it('web : serveur indisponible, sans lien /setup', () => {
     const html = render('web', { ...CAPS, ready: false, privacy: { level: 'server', message: '' } });
-    expect(html).toContain("Le serveur d&#x27;IA est indisponible");
+    expect(html).toContain("Le serveur d'IA est indisponible");
     expect(html).not.toContain('href="/setup"');
+  });
+
+  it('web, aucune IA branchée : texte dédié (préréglage gratuit, vérification) et code à transmettre', () => {
+    const html = render('web', server('AI_NOT_CONFIGURED', defaultMessage('AI_NOT_CONFIGURED')));
+    expect(html).toContain("Aucune intelligence artificielle n'est encore branchée sur ce site. L'administrateur doit choisir un fournisseur (par exemple AI_PRESET=ovhcloud, gratuit, sans clé) — vérification : npm run ai:check");
+    expect(html).toContain('AI_NOT_CONFIGURED');
+    expect(html).not.toContain('ne répond pas pour le moment');
+    expect(html).not.toContain('quelques instants');
+  });
+
+  it('web : chaque cause affiche son message précis et son code (plus jamais « ne répond pas » pour tout)', () => {
+    const cases: [ErrorCode, string, string][] = [
+      ['AI_AUTH_FAILED', "Le service d'IA refuse l'accès", "L'administrateur doit vérifier AI_API_KEY."],
+      ['MODEL_NOT_INSTALLED', "Modèle d'IA introuvable", 'Le modèle « x » n’est pas disponible sur le serveur d’IA.'],
+      ['AI_SERVER_UNREACHABLE', "Le serveur d'IA est injoignable", "Le serveur d'IA est injoignable à l'adresse configurée."],
+      ['AI_QUOTA_EXCEEDED', "Quota du service d'IA atteint", 'Quota atteint : nouvel essai possible vers 14 h 05.'],
+    ];
+    for (const [code, title, message] of cases) {
+      const html = render('web', server(code, message));
+      expect(html).toContain(title);
+      expect(html).toContain(message);
+      expect(html).toContain(`Code à transmettre à l’administrateur : <span class="font-mono text-mg-50">${code}</span>`);
+      expect(html).not.toContain('ne répond pas pour le moment');
+    }
+  });
+
+  it('web : contact de l’administrateur affiché s’il est configuré', () => {
+    const html = render('web', server('AI_AUTH_FAILED', 'Accès refusé.'), null, 'dsi@lycee.fr');
+    expect(html).toContain('href="mailto:dsi@lycee.fr"');
+    expect(render('web', server('AI_AUTH_FAILED', 'Accès refusé.'))).not.toContain('Contact de l’administrateur');
+  });
+
+  it('mode personnel : texte adapté (l’enseignant administre son serveur)', () => {
+    const html = render('personal', server('AI_NOT_CONFIGURED', defaultMessage('AI_NOT_CONFIGURED')));
+    expect(html).toContain("Aucune intelligence artificielle n'est encore branchée sur ce serveur Magistra.");
+    expect(html).toContain('Ollama');
+    expect(html).toContain('Code d’erreur');
+    expect(html).toContain('npm run ai:check -- --dev');
+  });
+
+  it('cause précise d’AI_NOT_CONFIGURED (préréglage sans clé) : affichée telle quelle, jamais remplacée', () => {
+    const cause = "Le service d'IA « Mistral AI (La Plateforme) » exige une clé d'accès : l'administrateur doit renseigner AI_API_KEY.";
+    for (const mode of ['web', 'personal'] as const) {
+      const html = render(mode, server('AI_NOT_CONFIGURED', cause));
+      expect(html).toContain(cause);
+      expect(html).not.toContain('Installez Ollama');
+      expect(html).not.toContain('choisir un fournisseur');
+    }
+  });
+
+  it('état non vérifié (AI_STATUS_UNKNOWN) : simple note, la génération reste possible', () => {
+    const html = render('web', { ...CAPS, privacy: { level: 'server', message: '' }, aiWarning: { code: 'AI_STATUS_UNKNOWN', message: 'x' } });
+    expect(html).toContain('role="note"');
+    expect(html).toContain('la génération reste possible');
+    expect(html).not.toContain('role="status"');
+    expect(html).not.toContain('Vérifier à nouveau');
+  });
+});
+
+describe('PrivacyNotice — prestataire tiers', () => {
+  const thirdParty: Capabilities = {
+    ...CAPS,
+    privacy: { level: 'server', message: 'Les demandes et les extraits de vos documents sont envoyés à « OVHcloud AI Endpoints » (France) pour la génération.' },
+    providerInfo: { label: 'OVHcloud AI Endpoints', thirdParty: true, country: 'France', privacyUrl: 'https://docs.ovhcloud.com/x' },
+  };
+
+  it('annonce l’envoi au prestataire, lien vers ses engagements, jamais « restent sur cet ordinateur »', () => {
+    const html = renderToStaticMarkup(<PrivacyNotice notes={privacyNotes(thirdParty, 'documents')} />);
+    expect(html).toContain('envoyés à « OVHcloud AI Endpoints » (France)');
+    expect(html).toContain('href="https://docs.ovhcloud.com/x"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).not.toContain('restent sur cet ordinateur');
+  });
+
+  it('même si le moteur se déclare « local », un tiers n’est jamais présenté comme local', () => {
+    const notes = privacyNotes({ ...thirdParty, privacy: { level: 'local', message: 'x' } }, 'documents');
+    expect(notes.local).toBeNull();
+  });
+
+  it('lien non https : ignoré', () => {
+    const notes = privacyNotes({ ...thirdParty, providerInfo: { ...thirdParty.providerInfo!, privacyUrl: 'javascript:alert(1)' } }, 'documents');
+    expect(renderToStaticMarkup(<PrivacyNotice notes={notes} />)).not.toContain('javascript:');
   });
 });
 

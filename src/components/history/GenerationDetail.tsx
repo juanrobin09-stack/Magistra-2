@@ -86,12 +86,14 @@ export default function GenerationDetail({
 
   const record = state.record;
   const doc = exportDocFor(record);
+  // Même contenu que l'export (document entier entouré d'un bloc « ```markdown » par le modèle : retiré).
+  const content = doc.content;
   const busy = exporting !== null;
 
   const handleCopy = async () => {
     let ok: boolean;
     try {
-      ok = await copyText(record.contenu);
+      ok = await copyText(content);
     } catch {
       ok = false;
     }
@@ -253,7 +255,7 @@ export default function GenerationDetail({
             <RotateCcw size={13} aria-hidden="true" /> Reprendre cette demande
           </button>
         </div>
-        <MarkdownView content={record.contenu} className="max-w-3xl" />
+        <MarkdownView content={content} className="max-w-3xl" />
         <p className="text-xs text-mg-300 mt-8 pt-4 border-t border-white/5 max-w-3xl">
           {isDemo
             ? 'Exemple pré-rédigé de la démonstration : aucune IA n’a été utilisée.'

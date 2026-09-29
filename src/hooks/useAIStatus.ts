@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { TierId } from '@shared/ai/models';
 import { MagistraError } from '@shared/errors';
-import type { AIConfigUpdate, AIProgressEvent, AIStatus, Unsubscribe } from '@shared/ipc';
+import type { AIConfigUpdate, AIProgressEvent, AIStatus, EngineInstallOptions, Unsubscribe } from '@shared/ipc';
 import type { Capabilities } from '@shared/types';
 import { EMPTY_PROGRESS, reduceProgress, type AIProgressState, type ProgressAction } from '@/lib/ai-ui/progress';
 import { useOptionalRuntime } from '@/lib/runtime/context';
@@ -30,13 +30,16 @@ export interface AISnapshot {
   pending: AIPending;
   /** L'enseignant installe le moteur lui-même depuis la page officielle : Magistra attend la fin. */
   manualInstall: boolean;
+  /** L'installation en cours est une MISE À JOUR du moteur (moteur trop ancien). */
+  engineUpdate?: boolean;
   loadedAt: number;
 }
 
 export interface AIActions {
   /** Relit l'état (moteur, modèles, ordinateur). */
   refresh(): Promise<AIStatus | null>;
-  installEngine(): Promise<void>;
+  /** Installe le moteur IA, ou le met à jour avec `{ update: true }` (toujours après un clic). */
+  installEngine(options?: EngineInstallOptions): Promise<void>;
   cancelEngineInstall(): Promise<void>;
   openEngineDownload(): Promise<void>;
   startEngine(): Promise<boolean>;
@@ -203,15 +206,17 @@ function isAbort(err: MagistraError): boolean {
 const actions: AIActions = {
   refresh: () => refreshAfterAction(),
 
-  async installEngine() {
+  async installEngine(options) {
     const bridge = getBridge();
     if (!bridge) return;
+    const isUpdate = options?.update === true;
     engineCancelRequested = false;
-    update(s => ({ manualInstall: false, errors: { ...s.errors, engine: undefined } }));
+    update(s => ({ manualInstall: false, engineUpdate: isUpdate, errors: { ...s.errors, engine: undefined } }));
     setPending('engine', true);
     dispatch({ kind: 'engine-start' });
     try {
-      await bridge.ai.installEngine();
+      // Sans option : appel inchangé (aucun argument transmis au pont).
+      await (isUpdate ? bridge.ai.installEngine({ update: true }) : bridge.ai.installEngine());
     } catch (err) {
       const e = fromIpcError(err);
       if (!engineCancelRequested && !isAbort(e)) {

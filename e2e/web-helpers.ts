@@ -57,6 +57,14 @@ export const test = base.extend<{ monitor: Monitor }>({
   monitor: [
     async ({ page }, use) => {
       const monitor: Monitor = { errors: [], external: [] };
+      // « vite preview » ne sert que les fichiers statiques (aucune API) : GET /api/mode, lu au démarrage de
+      // l'interface, y répondrait par une erreur (message dans la console). On répond comme un serveur Magistra
+      // sans authentification configurée : l'interface reste en démonstration, comme avant.
+      await page.route('**/api/mode', route => route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify({ auth: 'none' }),
+      }));
       await page.route(url => !isLocal(url.toString()), route => {
         monitor.external.push(route.request().url());
         return route.abort();

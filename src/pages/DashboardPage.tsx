@@ -9,6 +9,7 @@ import { getNiveauLabel, isSuperieur } from '@shared/levels';
 import type { GenerationSummary, UsageStats } from '@shared/types';
 import { useRuntime } from '@/lib/runtime/context';
 import ErrorBanner from '@/components/ui/ErrorBanner';
+import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import { errorMessage, niveauLabelFor, timeAgo, toolLabelFor } from '@/components/history/logic';
 
 type Loadable<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'error'; error: string };
@@ -151,9 +152,12 @@ export default function DashboardPage() {
       </div>
 
       {mode === 'demo' && (
-        <div className="rounded-xl border border-accent/15 bg-accent/5 px-4 py-3 text-sm text-mg-100" role="note">
-          <strong className="text-accent font-semibold">Mode démonstration.</strong>{' '}
-          Les contenus sont des exemples pré-rédigés : aucune IA n’est utilisée. Votre historique et vos favoris restent dans ce navigateur.
+        <div className="space-y-2">
+          <div className="rounded-xl border border-accent/15 bg-accent/5 px-4 py-3 text-sm text-mg-100" role="note">
+            <strong className="text-accent font-semibold">Mode démonstration.</strong>{' '}
+            Les contenus sont des exemples pré-rédigés : aucune IA n’est utilisée. Votre historique et vos favoris restent dans ce navigateur.
+          </div>
+          <ConnectRealAICard />
         </div>
       )}
 

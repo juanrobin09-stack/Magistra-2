@@ -1,6 +1,6 @@
 // État factice de l'IA locale, construit avec la vraie logique de recommandation.
 
-import { MODEL_TIERS, recommendTier, type HardwareInfo, type TierId } from '@shared/ai/models';
+import { MIN_OLLAMA_VERSION, MODEL_TIERS, recommendTier, type HardwareInfo, type TierId } from '@shared/ai/models';
 import type { AIStatus, EngineState, TierStatus } from '@shared/ipc';
 
 export interface StatusOptions {
@@ -11,6 +11,12 @@ export interface StatusOptions {
   ready?: boolean;
   mode?: 'local' | 'remote';
   customModel?: string;
+  /** Version du moteur en marche (par défaut : version récente, suffisante). */
+  engineVersion?: string;
+  /** Moteur trop ancien pour les modèles Magistra (AIStatus.engine.outdated). */
+  outdated?: boolean;
+  /** Ollama installé pour toute la machine (Program Files). */
+  managedByAdmin?: boolean;
 }
 
 export function makeStatus(opts: StatusOptions = {}): AIStatus {
@@ -45,7 +51,13 @@ export function makeStatus(opts: StatusOptions = {}): AIStatus {
   const active = MODEL_TIERS.find(t => t.id === selectedTier)!;
   const ready = opts.ready ?? (engine === 'running' && installed.has(selectedTier));
   return {
-    engine: { state: engine, version: engine === 'running' ? '0.12.3' : undefined, url: 'http://127.0.0.1:11434' },
+    engine: {
+      state: engine,
+      version: engine === 'running' ? opts.engineVersion ?? '0.34.4' : undefined,
+      url: 'http://127.0.0.1:11434',
+      ...(opts.outdated !== undefined ? { outdated: opts.outdated, minVersion: MIN_OLLAMA_VERSION } : {}),
+      ...(opts.managedByAdmin !== undefined ? { managedByAdmin: opts.managedByAdmin } : {}),
+    },
     installedModels: engine === 'running'
       ? MODEL_TIERS.filter(t => installed.has(t.id)).map(t => ({ name: t.model, sizeGB: t.downloadGB }))
       : [],

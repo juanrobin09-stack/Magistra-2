@@ -7,6 +7,16 @@ import type { GenerationRequest } from '@shared/types';
 import type { RuntimeMode } from '@/lib/runtime/types';
 import type { GenerationWarning, DoneEvent } from './state';
 
+// ─── Document entier entouré d'un bloc de code ─────────────────────────────
+
+/**
+ * Certains modèles (surtout les petits) entourent TOUT le document d'un bloc « ```markdown … ``` » :
+ * sans correction, le cours s'afficherait comme du code brut. La règle est celle du cœur (shared/markdownFence.ts),
+ * que la pipeline applique aussi avant de vérifier les citations : une seule implémentation pour l'affichage
+ * (y compris pendant le flux, avant l'arrivée de la clôture), l'historique et les citations.
+ */
+export { unwrapDocumentFence } from '@shared/markdownFence';
+
 export interface ResultHeading {
   icon: string;
   emoji: string;

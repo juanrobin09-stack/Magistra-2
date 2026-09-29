@@ -1,6 +1,7 @@
 import { useId, useState, type FormEvent } from 'react';
 import { ChevronRight, Loader2, Server } from 'lucide-react';
 import { getTier } from '@shared/ai/models';
+import { isOllamaCloudName } from '@shared/ai/ollamaRemote';
 import type { AIStatus } from '@shared/ipc';
 import type { AIController } from '@/hooks/useAIStatus';
 import { formatGB } from '@/lib/ai-ui/format';
@@ -190,14 +191,17 @@ function CustomModelForm({ ai, status }: AdvancedAIOptionsProps) {
         <>
           <select id={id} className="select-field text-sm" value={choice} onChange={e => { setChoice(e.target.value); setDone(false); }}>
             <option value="">Aucun : utiliser {tierLabel}</option>
-            {current && !names.includes(current) && <option value={current}>{current} (non installé)</option>}
+            {current && !names.includes(current) && (
+              <option value={current}>{current} ({isOllamaCloudName(current) ? 'modèle en ligne : non utilisé' : 'non installé'})</option>
+            )}
             {status.installedModels.map(m => (
               <option key={m.name} value={m.name}>{m.name} ({formatGB(m.sizeGB)})</option>
             ))}
           </select>
           <p className="text-xs text-mg-200">
             Choisissez un autre modèle déjà installé dans le moteur IA. Il remplace la version choisie ({tierLabel}).
-            La qualité des contenus n'est pas garantie avec un modèle personnalisé.
+            La qualité des contenus n'est pas garantie avec un modèle personnalisé. Les modèles en ligne d'Ollama
+            (« cloud ») ne sont pas proposés : les textes partiraient sur Internet.
           </p>
           <button type="submit" className="btn-secondary text-sm py-2 px-4" disabled={ai.pending.config || choice === current}>
             Utiliser ce choix

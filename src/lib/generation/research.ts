@@ -1,8 +1,11 @@
 // Sources de recherche et confidentialité : ce qui est RÉELLEMENT disponible, dit honnêtement.
 
 import { getLevelGroup, isSuperieur, type NiveauScolaire } from '@shared/levels';
-import { RESEARCH_MODES, type Capabilities, type ResearchMode } from '@shared/types';
-import type { RuntimeMode } from '@/lib/runtime/types';
+import { RESEARCH_MODES, type Capabilities, type ProviderInfo, type ResearchMode } from '@shared/types';
+import {
+  providerPolicyUrl, serverPrivacyMessage, UNVERIFIED_PROVIDER_PERSONAL_TEXT, UNVERIFIED_PROVIDER_TEXT,
+} from '@/lib/ai-ui/server';
+import { usesServerApi, type RuntimeMode } from '@/lib/runtime/types';
 
 export interface ResearchOption {
   value: ResearchMode;
@@ -115,12 +118,51 @@ export interface PrivacyNotes {
   network: string | null;
   /** Affiché uniquement si tout reste réellement sur l'ordinateur. */
   local: string | null;
+  /** Les textes partent chez un prestataire tiers (service d'IA en ligne) : annonce mise en avant. */
+  thirdParty?: boolean;
+  /** Page publique du prestataire d'IA (https uniquement). */
+  providerUrl?: string | null;
 }
 
-export function privacyNotes(caps: Capabilities | null, mode: ResearchMode): PrivacyNotes {
+export interface PrivacyContext {
+  /** Mode d'exécution : site web ou mode personnel = textes transmis au serveur Magistra. */
+  runtimeMode?: RuntimeMode;
+  /** Prestataire annoncé au démarrage par le serveur (GET /api/mode), avant la réponse de /api/status. */
+  fallbackProvider?: ProviderInfo;
+}
+
+/**
+ * Le prestataire qui recevra les textes est-il annoncé ? Faux seulement sur le site web ou en mode personnel, tant que
+ * /api/status n'a pas répondu et qu'aucun prestataire tiers n'a été annoncé par /api/mode.
+ */
+export function providerAnnounced(caps: Capabilities | null, context: PrivacyContext = {}): boolean {
+  if (caps || !context.runtimeMode || !usesServerApi(context.runtimeMode)) return true;
+  return context.fallbackProvider?.thirdParty === true;
+}
+
+export function privacyNotes(caps: Capabilities | null, mode: ResearchMode, context: PrivacyContext = {}): PrivacyNotes {
+  if (!caps && context.runtimeMode && usesServerApi(context.runtimeMode)) {
+    // Vérification en cours ou en échec : jamais de silence sur le destinataire des textes. Prestataire tiers annoncé
+    // par /api/mode : il est nommé ; sinon (inconnu, ou une IA locale qu'un relais pourrait contredire) : annonce prudente.
+    const fallback = context.fallbackProvider?.thirdParty ? context.fallbackProvider : undefined;
+    return {
+      message: fallback
+        ? serverPrivacyMessage(fallback.label, fallback)
+        : context.runtimeMode === 'personal' ? UNVERIFIED_PROVIDER_PERSONAL_TEXT : UNVERIFIED_PROVIDER_TEXT,
+      network: modeUsesNetwork(mode) ? NETWORK_PRIVACY_NOTE : null,
+      local: null,
+      thirdParty: true,
+      ...(fallback ? { providerUrl: providerPolicyUrl(fallback) } : {}),
+    };
+  }
+  const provider = caps?.providerInfo;
+  const thirdParty = provider?.thirdParty === true;
   return {
     message: caps?.privacy.message ?? null,
     network: modeUsesNetwork(mode) ? NETWORK_PRIVACY_NOTE : null,
-    local: caps?.privacy.level === 'local' ? LOCAL_PRIVACY_NOTE : null,
+    // Jamais « restent sur cet ordinateur » quand un prestataire tiers reçoit les textes.
+    local: caps?.privacy.level === 'local' && !thirdParty ? LOCAL_PRIVACY_NOTE : null,
+    ...(thirdParty ? { thirdParty: true } : {}),
+    ...(provider ? { providerUrl: providerPolicyUrl(provider) } : {}),
   };
 }

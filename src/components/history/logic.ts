@@ -4,6 +4,7 @@ import { getMatiereLabel, getToolLabel } from '@shared/catalog';
 import { toMagistraError } from '@shared/errors';
 import { getNiveauLabel, isNiveau, type NiveauScolaire } from '@shared/levels';
 import type { GenerationRecord, GenerationSummary } from '@shared/types';
+import { unwrapDocumentFence } from '@/lib/generation/result';
 import { excerptOf } from '@/lib/runtime/history';
 
 export const PAGE_SIZE = 30;
@@ -101,7 +102,7 @@ export function summaryFromRecord(record: GenerationRecord): GenerationSummary {
 export function exportDocFor(record: GenerationRecord) {
   return {
     title: record.sujet,
-    content: record.contenu,
+    content: unwrapDocumentFence(record.contenu),
     meta: {
       type: toolLabelFor(record),
       niveau: niveauLabelFor(record),

@@ -6,7 +6,19 @@ import type {
   Capabilities, GenerationEvent, GenerationRecord, GenerationRequest, HistoryPage, TeacherProfile, UsageStats,
 } from '@shared/types';
 
-export type RuntimeMode = 'web' | 'local' | 'demo';
+/**
+ * - 'web'      : site en ligne avec comptes (Clerk) ;
+ * - 'personal' : serveur Magistra démarré sur le poste de l'enseignant (npm run dev / npm start), sans compte,
+ *                protégé par un code d'accès ; mêmes données et même IA que le site web ;
+ * - 'local'    : application Windows (pont Electron) ;
+ * - 'demo'     : démonstration (exemples pré-rédigés, stockage du navigateur).
+ */
+export type RuntimeMode = 'web' | 'personal' | 'local' | 'demo';
+
+/** Modes où les données et l'IA passent par l'API du serveur Magistra. */
+export function usesServerApi(mode: RuntimeMode): mode is 'web' | 'personal' {
+  return mode === 'web' || mode === 'personal';
+}
 
 export interface DataStore {
   readonly kind: RuntimeMode;
