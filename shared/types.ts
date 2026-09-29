@@ -130,6 +130,13 @@ export interface GenerationRecord {
   model?: string;
 }
 
+/**
+ * Génération prête à enregistrer (sans identifiant ni date, attribués par le stockage). Produite par la pipeline ;
+ * transmise au site dans l'évènement « done » quand la génération a eu lieu dans l'application Windows à la demande
+ * du site (connecteur local) : le site l'enregistre alors dans l'historique du compte (POST /api/generation).
+ */
+export type GenerationRecordDraft = Omit<GenerationRecord, 'id' | 'createdAt' | 'isFavorite'>;
+
 export interface GenerationSummary {
   id: string;
   createdAt: string;
@@ -173,6 +180,11 @@ export type GenerationEvent =
       saved: boolean;
       id?: string;
       model: string;
+      /**
+       * Génération à enregistrer par le site (connecteur local uniquement : PipelineDeps.includeRecord). Retiré par le
+       * client du site avant l'affichage ; jamais présent quand `saved` est vrai.
+       */
+      record?: GenerationRecordDraft;
     }
   | {
       type: 'error';
@@ -236,4 +248,10 @@ export interface Capabilities {
   aiWarning?: AINotice;
   /** Prestataire qui reçoit les textes (web) : à annoncer clairement quand `thirdParty` est vrai. */
   providerInfo?: ProviderInfo;
+  /**
+   * Site web uniquement : moteur qui traitera la prochaine génération — « local-connector » = Magistra locale (IA de
+   * l'ordinateur de l'enseignant, via l'application Windows) ; « server » = serveur Magistra en ligne. Jamais de
+   * bascule silencieuse de l'un à l'autre : seul un choix explicite de l'enseignant change cette valeur.
+   */
+  route?: 'local-connector' | 'server';
 }

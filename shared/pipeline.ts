@@ -15,16 +15,21 @@ import { getLevelGroup, getNiveauLabel } from './levels.js';
 import { unwrapDocumentFence } from './markdownFence.js';
 import { buildMessages, estimateTokens, type PromptSource } from './prompts/index.js';
 import { planResearch, runResearch, type ResearchConfig, type ResearchDeps, type ResearchOutcome } from './research/index.js';
-import { modeUsesDocuments, type DocumentPassage, type GenerationEvent, type GenerationRecord, type GenerationRequest, type SourceRef } from './types.js';
+import { modeUsesDocuments, type DocumentPassage, type GenerationEvent, type GenerationRecordDraft, type GenerationRequest, type SourceRef } from './types.js';
 import { displaySujet } from './validation.js';
 
-export type NewGenerationRecord = Omit<GenerationRecord, 'id' | 'createdAt' | 'isFavorite'>;
+export type NewGenerationRecord = GenerationRecordDraft;
 
 export interface PipelineDeps {
   provider: AIProvider;
   research?: { config: ResearchConfig; deps: ResearchDeps };
   /** Enregistre la génération ; absent = pas de sauvegarde. */
   save?: (record: NewGenerationRecord) => Promise<{ id: string }>;
+  /**
+   * Sans `save` : joindre la génération prête à enregistrer à l'évènement « done » (champ `record`). Utilisé par le
+   * connecteur local de l'application Windows : c'est le site qui l'enregistre dans l'historique du compte.
+   */
+  includeRecord?: boolean;
   signal?: AbortSignal;
   /** Plafond de tokens produits. */
   maxOutputTokens?: number;
@@ -358,22 +363,22 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     // ─── Sauvegarde ──────────────────────────────────────────────────────
     let saved = false;
     let id: string | undefined;
+    const record: NewGenerationRecord = {
+      type: req.type,
+      niveau: req.niveau,
+      matiere: req.matiere,
+      discipline: req.discipline,
+      sujet: displaySujet(req, getToolLabel(req.type, req.niveau), getNiveauLabel(req.niveau), getMatiereLabel(req.matiere)),
+      contenu: final.content,
+      sources: final.used,
+      params: recordParams(req),
+      truncated,
+      internetUsed,
+      model: provider.model,
+    };
     if (deps.save) {
       try {
-        const niveauLabel = getNiveauLabel(req.niveau);
-        const result = await withTimeout(deps.save({
-          type: req.type,
-          niveau: req.niveau,
-          matiere: req.matiere,
-          discipline: req.discipline,
-          sujet: displaySujet(req, getToolLabel(req.type, req.niveau), niveauLabel, getMatiereLabel(req.matiere)),
-          contenu: final.content,
-          sources: final.used,
-          params: recordParams(req),
-          truncated,
-          internetUsed,
-          model: provider.model,
-        }), deps.saveTimeoutMs ?? 60_000);
+        const result = await withTimeout(deps.save(record), deps.saveTimeoutMs ?? 60_000);
         if (!result || typeof result.id !== 'string') throw new MagistraError('STORAGE_ERROR');
         saved = true;
         id = result.id;
@@ -382,7 +387,10 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
       }
     }
 
-    yield { type: 'done', content: final.content, sources: final.used, truncated, internetUsed, saved, id, model: provider.model };
+    yield {
+      type: 'done', content: final.content, sources: final.used, truncated, internetUsed, saved, id, model: provider.model,
+      ...(!deps.save && deps.includeRecord ? { record } : {}),
+    };
   } catch (err) {
     const e = signal?.aborted ? new MagistraError('GENERATION_ABORTED') : toMagistraError(err);
     // Le texte déjà produit n'est jamais rendu brut : ses citations sont vérifiées comme en fin normale.

@@ -3,6 +3,7 @@
 // les clés éventuelles restent dans le processus principal (chiffrées sur le disque).
 
 import type { HardwareInfo, Recommendation, TierId } from './ai/models.js';
+import type { ConnectorAppStatus } from './localConnector.js';
 import type {
   Capabilities, GenerationEvent, GenerationRecord, GenerationRequest, HistoryPage, ResearchMode, TeacherProfile, UsageStats,
 } from './types.js';
@@ -44,6 +45,14 @@ export const IPC = {
   appInfo: 'app:info',
   appReady: 'app:ready',
   appCheckUpdate: 'app:check-update',
+  /** Connecteur local (site web Magistra → IA de cet ordinateur) : état et navigateurs autorisés. */
+  connectorStatus: 'connector:status',
+  /** Retire l'autorisation d'un navigateur (argument : clientId). */
+  connectorRevoke: 'connector:revoke',
+  /** Active ou désactive le connecteur (argument : booléen). */
+  connectorSetEnabled: 'connector:set-enabled',
+  /** Évènement : l'état du connecteur a changé (nouvel appairage, retrait…) ; charge utile : ConnectorAppStatus. */
+  connectorChanged: 'connector:changed',
 } as const;
 
 // ─── État de l'IA locale ────────────────────────────────────────────────────
@@ -279,6 +288,13 @@ export interface MagistraBridge {
     load(id: string): Promise<StoredDocument | null>;
     save(doc: StoredDocument): Promise<void>;
     delete(id: string): Promise<void>;
+  };
+  /** Connecteur local : le site web Magistra utilise l'IA de cet ordinateur (navigateurs autorisés). */
+  connector: {
+    status(): Promise<ConnectorAppStatus>;
+    revoke(clientId: string): Promise<ConnectorAppStatus>;
+    setEnabled(enabled: boolean): Promise<ConnectorAppStatus>;
+    onChange(listener: (status: ConnectorAppStatus) => void): Unsubscribe;
   };
 }
 

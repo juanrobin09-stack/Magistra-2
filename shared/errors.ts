@@ -36,6 +36,12 @@ export type ErrorCode =
   | 'STORAGE_ERROR'
   | 'NETWORK_ERROR'
   | 'SERVER_MISCONFIGURED'
+  | 'CONNECTOR_UNREACHABLE'
+  | 'CONNECTOR_UNPAIRED'
+  | 'CONNECTOR_PAIRING_REFUSED'
+  | 'CONNECTOR_PAIRING_EXPIRED'
+  | 'LOCAL_NETWORK_PERMISSION_DENIED'
+  | 'LOCAL_ENGINE_REMOTE'
   | 'INTERNAL';
 
 const MESSAGES: Record<ErrorCode, string> = {
@@ -73,6 +79,14 @@ const MESSAGES: Record<ErrorCode, string> = {
   STORAGE_ERROR: "Impossible d'enregistrer dans l'historique.",
   NETWORK_ERROR: 'Connexion au serveur Magistra impossible. Vérifiez votre connexion.',
   SERVER_MISCONFIGURED: 'Le serveur Magistra est mal configuré. Contactez l’administrateur.',
+  CONNECTOR_UNREACHABLE: "Magistra n'est pas joignable sur cet ordinateur : ouvrez l'application Magistra, puis réessayez.",
+  CONNECTOR_UNPAIRED: "Ce navigateur n'est plus autorisé à utiliser Magistra sur cet ordinateur : reconnectez Magistra locale.",
+  CONNECTOR_PAIRING_REFUSED: "La connexion a été refusée dans l'application Magistra.",
+  CONNECTOR_PAIRING_EXPIRED: 'La demande de connexion a expiré : recommencez.',
+  LOCAL_NETWORK_PERMISSION_DENIED:
+    "Votre navigateur empêche ce site de joindre l'application Magistra de cet ordinateur. Autorisez-le dans les paramètres du site (icône à gauche de l'adresse), puis réessayez.",
+  LOCAL_ENGINE_REMOTE:
+    "L'application Magistra est réglée sur un serveur d'IA distant : l'intelligence locale n'est pas active sur cet ordinateur. Dans l'application Magistra, ouvrez Réglages → Options avancées → « Revenir à l'IA locale ».",
   INTERNAL: 'Erreur inattendue. Réessayez.',
 };
 
@@ -88,7 +102,7 @@ const MESSAGES: Record<ErrorCode, string> = {
 const RETRYABLE: ErrorCode[] = [
   'ENGINE_NOT_RUNNING', 'AI_SERVER_UNAVAILABLE', 'AI_BUSY', 'AI_TIMEOUT', 'AI_BAD_RESPONSE',
   'GENERATION_ABORTED', 'RATE_LIMITED', 'NETWORK_ERROR', 'INTERNAL', 'OUT_OF_MEMORY', 'GENERATION_BUSY',
-  'AI_QUOTA_EXCEEDED', 'AI_SERVER_UNREACHABLE',
+  'AI_QUOTA_EXCEEDED', 'AI_SERVER_UNREACHABLE', 'CONNECTOR_UNREACHABLE',
 ];
 
 const HTTP_STATUS: Partial<Record<ErrorCode, number>> = {
@@ -109,6 +123,10 @@ const HTTP_STATUS: Partial<Record<ErrorCode, number>> = {
   AI_STATUS_UNKNOWN: 503,
   ENGINE_OUTDATED: 503,
   SERVER_MISCONFIGURED: 500,
+  CONNECTOR_UNPAIRED: 401,
+  CONNECTOR_PAIRING_REFUSED: 403,
+  CONNECTOR_PAIRING_EXPIRED: 410,
+  LOCAL_ENGINE_REMOTE: 409,
   STORAGE_ERROR: 500,
   INTERNAL: 500,
 };
