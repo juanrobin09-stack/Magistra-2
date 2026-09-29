@@ -404,9 +404,13 @@ function stopActivation(error: MagistraError): void {
   setActivation({ state: 'error', error });
 }
 
+/**
+ * La demande est retirée AVANT l'affichage de « interrompue » : une fois l'annulation annoncée, fermer Magistra ne
+ * peut plus relancer le téléchargement au prochain lancement (l'écriture précède toujours l'annonce).
+ */
 async function markActivationCancelled(): Promise<void> {
-  setActivation({ state: 'cancelled', error: undefined });
   await rememberActivation(false);
+  setActivation({ state: 'cancelled', error: undefined });
 }
 
 /**
@@ -430,16 +434,16 @@ async function runActivation(resumed: boolean, options: ActivationOptions = {}):
       }
       if (status.ready) {
         // Reprise d'une activation déjà aboutie (téléchargement terminé avant la fermeture) : aucun message.
-        setActivation({ state: worked || !resumed ? 'done' : 'idle', step: null });
         await rememberActivation(false);
+        setActivation({ state: worked || !resumed ? 'done' : 'idle', step: null });
         return;
       }
       const plan = activationPlan(status, round === 0 ? options : {});
       if (!plan) {
         // Serveur IA distant, modèle personnalisé ou moteur sur un autre ordinateur (options avancées) : rien à
         // activer sur cet ordinateur — et rien à reprendre à chaque lancement.
-        setActivation({ state: 'idle', step: null });
         await rememberActivation(false);
+        setActivation({ state: 'idle', step: null });
         return;
       }
       // Le plan du premier tour (tailles annoncées) sert de base à la progression globale.

@@ -172,6 +172,29 @@ describe('Un clic : enchaînement automatique', () => {
     expect(text(container.querySelector('[data-testid="activate-ai-ready"]'))).toContain('L’IA de Magistra est prête.');
   });
 
+  it('« Annuler » : « Activation interrompue » annoncée seulement APRÈS le retrait de la demande (fermer Magistra ensuite ne relance rien)', async () => {
+    const fake = installFakeLocalAI({ engine: 'running', installed: [] });
+    fake.holdPull = hold();
+    const { container } = await mountCard();
+    await click(button(container, /Activer l’IA/));
+    await settle();
+    expect(fake.prefs.aiSetupRequested).toBe(true);
+
+    // Écriture de la préférence ralentie (disque lent, antivirus) pendant l'annulation.
+    fake.holdPrefs = hold();
+    await click(button(container, /^\s*Annuler$/));
+    await settle();
+    expect(fake.spies.cancelPull).toHaveBeenCalledOnce();
+    expect(fake.prefs.aiSetupRequested).toBe(true);
+    expect(text(container)).not.toContain('Activation interrompue.');
+
+    fake.holdPrefs.resolve();
+    fake.holdPrefs = null;
+    await settle();
+    expect(fake.prefs.aiSetupRequested).toBe(false);
+    expect(text(container)).toContain('Activation interrompue.');
+  });
+
   it('erreur précise (espace disque) : message du moteur, « Reprendre le téléchargement » ; la demande reste mémorisée', async () => {
     const fake = installFakeLocalAI({ engine: 'running', installed: [] });
     fake.pullFailure = ipcError('STORAGE_ERROR', 'Espace disque insuffisant pour installer Magistra Standard : environ 10 Go nécessaires, 4 Go disponibles. Libérez de l’espace puis réessayez.');
