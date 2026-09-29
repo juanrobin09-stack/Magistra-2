@@ -28,9 +28,15 @@ export default defineConfig([
     rules: { '@typescript-eslint/no-unused-vars': unusedVars },
   },
   {
-    files: ['tests/**/*.{ts,tsx}', 'e2e/**/*.ts'],
+    files: ['tests/**/*.{ts,tsx}', 'e2e/**/*.{ts,tsx}'],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: { ecmaVersion: 2022, globals: { ...globals.node, ...globals.browser } },
     rules: { '@typescript-eslint/no-unused-vars': unusedVars },
+  },
+  {
+    // Harnais E2E du connecteur local : page React (mêmes règles des hooks que le site).
+    files: ['e2e/connector-harness/**/*.tsx'],
+    extends: [reactHooks.configs.flat.recommended],
+    languageOptions: { globals: globals.browser },
   },
 ]);

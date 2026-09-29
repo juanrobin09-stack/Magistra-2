@@ -2,16 +2,19 @@
 // documentation avec le code (préréglages, commandes). Contrôles textuels : aucune dépendance YAML ajoutée ;
 // la syntaxe elle-même est vérifiée par GitHub (et par actionlint en local).
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import playwrightConfig from '../../playwright.config';
+import { LOCAL_NETWORK_ACCESS_ARGS, OTHER_SITE_PORT, SITE_PORT } from '../../e2e/connector-harness/sites';
 import { PROVIDER_PRESETS } from '../../shared/ai/presets';
 import { MIN_OLLAMA_VERSION } from '../../shared/ai/models';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => readFileSync(path.join(root, file), 'utf8');
 
+const ci = read('.github/workflows/ci.yml');
 const release = read('.github/workflows/release.yml');
 const realAI = read('.github/workflows/real-ai.yml');
 const readme = read('README.md');
@@ -163,5 +166,56 @@ describe('documentation', () => {
       'Quotas', 'État « non vérifié »', 'Mise à jour du moteur', 'Proxy', 'Validation avec une vraie IA']) {
       expect(architecture, title).toContain(title);
     }
+  });
+});
+
+describe('ci.yml et Playwright : E2E du connecteur local', () => {
+  it('job « electron » : trousseau de clés, construction du site et de l’application, puis projets « electron » et « connector »', () => {
+    const electron = job(ci, 'electron');
+    // Dans cet ordre : chaque étape a besoin des précédentes.
+    const steps = [
+      'run: npx playwright install --with-deps chromium',
+      'apt-get install -y --no-install-recommends gnome-keyring dbus',
+      'run: npx vite build',
+      'run: node scripts/build-electron.mjs',
+      'run: xvfb-run -a npm run test:e2e -- --project=electron',
+      'run: xvfb-run -a npm run test:e2e -- --project=connector',
+    ];
+    let previous = -1;
+    for (const step of steps) {
+      const at = electron.indexOf(step);
+      expect(at, step).toBeGreaterThan(previous);
+      previous = at;
+    }
+    expect(electron).toContain('path: test-results/connector-screens');
+    // Le projet « web » reste lancé seul dans son job.
+    expect(job(ci, 'e2e-web')).toContain('run: npm run test:e2e -- --project=web');
+  });
+
+  it('chaque fichier E2E appartient à exactement un projet ; « connector » active la protection Local Network Access', () => {
+    const projects = playwrightConfig.projects ?? [];
+    expect(projects.map(p => p.name)).toEqual(['web', 'electron', 'connector']);
+    const specs = readdirSync(path.join(root, 'e2e')).filter(f => f.endsWith('.spec.ts'));
+    expect(specs).toContain('connector-local.spec.ts');
+    for (const spec of specs) {
+      const owners = projects.filter(p => p.testMatch instanceof RegExp && p.testMatch.test(path.join(root, 'e2e', spec)));
+      expect(owners.map(p => p.name), spec).toHaveLength(1);
+    }
+    const connector = projects.find(p => p.name === 'connector')!;
+    expect(connector.use?.launchOptions?.args).toEqual([...LOCAL_NETWORK_ACCESS_ARGS]);
+    expect(LOCAL_NETWORK_ACCESS_ARGS).toContain('--enable-features=LocalNetworkAccessChecks');
+    expect(LOCAL_NETWORK_ACCESS_ARGS).toContain(`--ip-address-space-overrides=127.0.0.1:${SITE_PORT}=public,127.0.0.1:${OTHER_SITE_PORT}=public`);
+    // Aucun contournement : ni désactivation des contrôles, ni autorisation accordée d'office à tous les tests.
+    expect(JSON.stringify(playwrightConfig)).not.toMatch(/disable-features=[^"]*LocalNetworkAccess|local-network-access|disable-web-security/i);
+  });
+
+  it('le harnais E2E n’entre jamais dans le site publié', () => {
+    expect(read('vite.config.ts')).not.toMatch(/e2e|connector-harness/);
+    const app = JSON.parse(read('tsconfig.app.json')) as { include: string[] };
+    expect(app.include).not.toContain('e2e');
+    const harness = read('e2e/connector-harness/vite.config.ts');
+    expect(harness).toContain("path.join(root, 'test-results', 'connector-harness-dist')");
+    expect(read('.gitignore').split('\n')).toContain('test-results');
+    expect(read('index.html')).not.toContain('connector-harness');
   });
 });

@@ -325,7 +325,7 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
       module: 'undefined',
       magistra: 'object',
       isElectron: true,
-      groups: ['ai', 'app', 'data', 'documents', 'generation', 'isElectron', 'prefs', 'profile'],
+      groups: ['ai', 'app', 'connector', 'data', 'documents', 'generation', 'isElectron', 'prefs', 'profile'],
     });
 
     // Aucune fonction du pont ne renvoie de clé : ai.status ne contient aucun champ apiKey.

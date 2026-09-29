@@ -1,8 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
+import { LOCAL_NETWORK_ACCESS_ARGS } from './e2e/connector-harness/sites';
 
 // Tests de bout en bout :
 // - « web » : le site en mode démonstration (build de production servi par vite preview) ;
-// - « electron » : l'application Windows réelle (Electron) pilotée par Playwright, avec un Ollama simulé.
+// - « electron » : l'application Windows réelle (Electron) pilotée par Playwright, avec un Ollama simulé ;
+// - « connector » : le connecteur local de bout en bout — harnais du site (vrais composants, vrai client) dans Chromium
+//   avec la protection « Local Network Access » active, face à l'application Windows réelle (e2e/connector-local.spec.ts).
 export default defineConfig({
   testDir: 'e2e',
   timeout: 90_000,
@@ -20,6 +23,11 @@ export default defineConfig({
     {
       name: 'electron',
       testMatch: /electron-.*\.spec\.ts/,
+    },
+    {
+      name: 'connector',
+      testMatch: /connector-.*\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], actionTimeout: 30_000, launchOptions: { args: [...LOCAL_NETWORK_ACCESS_ARGS] } },
     },
   ],
   webServer: {

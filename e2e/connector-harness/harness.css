@@ -1,0 +1,5 @@
+/* Styles du harnais E2E : exactement ceux du site (src/index.css). La racine Vite du harnais n'est pas celle du
+   projet : les sources à analyser par Tailwind sont donc indiquées explicitement (composants réels du site). */
+@import "../../src/index.css";
+@source "../../src";
+@source "./";

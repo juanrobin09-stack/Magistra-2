@@ -10,6 +10,15 @@ Méthode : chaque point a été contrôlé **après** les corrections, par une r
 | **NOT APPLICABLE** | le code concerné n'existe plus : il a été supprimé ou remplacé par la nouvelle architecture (plus d'Anthropic, plus de serveur HTTP local dans Electron, plus de quota…), et le remplaçant n'a pas le défaut | 18 |
 | **DEFERRED** | corrigé en partie ; le reste est reporté pour une raison précise, indiquée | 2 |
 
+> **Note postérieure à l'audit (connecteur local).** Les points [#9](#9), [#46](#46) et [#75](#75) indiquent qu'aucun
+> serveur HTTP ne subsiste dans electron/ : c'était exact à la date de ce suivi. Depuis, `electron/connector/server.ts`
+> ajoute UN serveur dédié au connecteur local (site web officiel → IA de cet ordinateur) : écoute sur 127.0.0.1
+> uniquement, cinq routes Magistra, origine officielle et en-tête Host exacts, requêtes signées après un appairage
+> accepté dans l'application, aucun fichier servi, aucun relais vers Ollama. Les défauts de ces trois points ne s'y
+> retrouvent pas : l'interface reste servie par app:// (le serveur statique serveStatic n'est pas revenu), un JSON
+> invalide reçoit 400, et le corps est accumulé en octets puis décodé une seule fois en UTF-8 strict (voir
+> tests/electron/connectorServer.test.ts et tests/localConnector/interop.test.ts).
+
 ## Récapitulatif
 
 | # | Gravité | Problème | Statut |
