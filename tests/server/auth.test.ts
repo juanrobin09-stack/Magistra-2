@@ -123,6 +123,7 @@ describe('isolation des utilisateurs (jeton Clerk vérifié côté serveur)', ()
       ['POST', '/api/generate'],
       ['GET', '/api/history'],
       ['GET', '/api/generation?id=00000000-0000-4000-8000-000000000000'],
+      ['POST', '/api/generation'],
       ['PATCH', '/api/generation?id=00000000-0000-4000-8000-000000000000'],
       ['DELETE', '/api/generation?id=00000000-0000-4000-8000-000000000000'],
       ['GET', '/api/stats'],

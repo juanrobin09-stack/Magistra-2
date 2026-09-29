@@ -5,6 +5,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { CONNECTOR_HOST, CONNECTOR_PORTS } from '../../shared/localConnector.js';
 import { ROUTE_METHODS } from '../../server/handlers.js';
 import { securityHeaders } from '../../server/standalone.js';
 import { COMMERCIAL_VENDOR } from '../vendor';
@@ -37,9 +38,35 @@ describe('déploiement', () => {
     expect(JSON.stringify(vercel)).not.toContain('Access-Control-Allow-Origin');
   });
 
+  it('CSP : connect-src autorise EXACTEMENT les trois ports du connecteur local, et nulle autre directive', () => {
+    const global = vercel.headers.find(h => h.source === '/(.*)')!;
+    const csp = global.headers.find(h => h.key === 'Content-Security-Policy')!.value;
+    const directives = Object.fromEntries(csp.split(';').map(d => d.trim().split(/\s+/)).map(([name, ...values]) => [name, values]));
+    const loopback = (values: string[]) => values.filter(v => /127\.0\.0\.1|localhost|\[::1\]/i.test(v));
+    const expected = CONNECTOR_PORTS.map(port => `http://${CONNECTOR_HOST}:${port}`);
+    expect(expected).toEqual(['http://127.0.0.1:47831', 'http://127.0.0.1:47832', 'http://127.0.0.1:47833']);
+    expect(loopback(directives['connect-src'])).toEqual(expected);
+    for (const [name, values] of Object.entries(directives)) {
+      if (name !== 'connect-src') expect(loopback(values), name).toEqual([]);
+    }
+    // Ni joker de port, ni schéma générique, ni ws: : seulement les trois adresses exactes.
+    expect(csp).not.toMatch(/127\.0\.0\.1:\*|http:\s|http:;|ws:|localhost/);
+    // Ces directives transformeraient http://127.0.0.1 en https:// (ou le bloqueraient) : le connecteur deviendrait injoignable.
+    expect(csp).not.toMatch(/upgrade-insecure-requests|block-all-mixed-content/);
+  });
+
+  it('GET /api/windows-release : fonction Vercel courte, hors de la réécriture vers l’interface', () => {
+    expect(vercel.functions['api/windows-release.ts'].maxDuration).toBeGreaterThanOrEqual(10);
+    expect(vercel.functions['api/windows-release.ts'].maxDuration).toBeLessThanOrEqual(30);
+    expect(new RegExp(`^${vercel.rewrites[0].source}$`).test('/api/windows-release')).toBe(false);
+  });
+
   it('une fonction Vercel par route du contrat, et plus aucune ancienne route', () => {
     const files = readdirSync(path.join(root, 'api')).sort();
-    expect(files).toEqual(['account.ts', 'clerk-webhook.ts', 'generate.ts', 'generation.ts', 'history.ts', 'mode.ts', 'profile.ts', 'stats.ts', 'status.ts']);
+    expect(files).toEqual([
+      'account.ts', 'clerk-webhook.ts', 'generate.ts', 'generation.ts', 'history.ts', 'mode.ts', 'profile.ts', 'stats.ts', 'status.ts',
+      'windows-release.ts',
+    ]);
     // Chaque route du serveur a sa fonction Vercel, servie hors de la réécriture vers l'interface.
     for (const route of Object.keys(ROUTE_METHODS)) {
       expect(files, route).toContain(`${route}.ts`);
@@ -81,13 +108,13 @@ describe('déploiement', () => {
     const env = read('.env.example');
     const vars = [...env.matchAll(/^([A-Z0-9_]+)=(.*)$/gm)].map(m => ({ name: m[1], value: m[2] }));
     expect(vars.filter(v => v.name.startsWith('VITE_')).map(v => v.name)).toEqual(['VITE_CLERK_PUBLISHABLE_KEY']);
-    for (const secret of ['CLERK_SECRET_KEY', 'CLERK_JWT_KEY', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_SERVICE_ROLE_KEY', 'AI_API_KEY']) {
+    for (const secret of ['CLERK_SECRET_KEY', 'CLERK_JWT_KEY', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_SERVICE_ROLE_KEY', 'AI_API_KEY', 'GITHUB_TOKEN']) {
       expect(vars.find(v => v.name === secret)?.value, secret).toBe('');
     }
     for (const name of ['AI_PROVIDER', 'AI_BASE_URL', 'AI_MODEL', 'AI_SERVER_LABEL', 'AI_CONTEXT_TOKENS', 'AI_MAX_OUTPUT_TOKENS',
       'AI_TIMEOUT_SECONDS', 'SEARXNG_URL', 'CROSSREF_MAILTO', 'RESEARCH_ACADEMIC', 'RESEARCH_WIKIPEDIA', 'RATE_LIMIT_PER_MINUTE',
       'RATE_LIMIT_GLOBAL_PER_MINUTE', 'MAX_CONCURRENT_GENERATIONS_PER_USER', 'MAX_CONCURRENT_GENERATIONS',
-      'CLERK_AUTHORIZED_PARTIES', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_URL', 'PORT', 'CSP_EXTRA_ORIGINS']) {
+      'CLERK_AUTHORIZED_PARTIES', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_URL', 'PORT', 'CSP_EXTRA_ORIGINS', 'MAGISTRA_RELEASES_REPO', 'GITHUB_TOKEN']) {
       expect(vars.some(v => v.name === name), name).toBe(true);
     }
   });

@@ -24,6 +24,7 @@ import type { AINotice, ProviderInfo } from '../shared/types.js';
 import { parseWebhookSecret } from './clerkWebhook.js';
 import { REQUEST_LIMITS } from '../shared/validation.js';
 import { normalizeTimeZone } from './time.js';
+import { DEFAULT_RELEASES_REPO, parseReleasesRepo } from './windowsRelease.js';
 
 export type Env = Record<string, string | undefined>;
 
@@ -76,6 +77,17 @@ export interface AIServerConfig {
   providerInfo?: ProviderInfo;
 }
 
+/** Versions de l'application Windows proposées au téléchargement (GET /api/windows-release). */
+export interface ReleasesConfig {
+  /** Dépôt GitHub officiel « propriétaire/dépôt » (MAGISTRA_RELEASES_REPO, sinon DEFAULT_RELEASES_REPO). */
+  repo: string;
+  /**
+   * Jeton GitHub facultatif (GITHUB_TOKEN) : relève la limite de l'API GitHub (60 requêtes par heure et par adresse
+   * IP sans jeton). Serveur uniquement : jamais renvoyé au navigateur ni journalisé.
+   */
+  token?: string;
+}
+
 export interface ServerConfig {
   production: boolean;
   ai: AIServerConfig;
@@ -108,6 +120,7 @@ export interface ServerConfig {
   defaultTimeZone: string;
   /** Taille maximale des extraits de documents que le navigateur peut envoyer (caractères). */
   maxDocumentChars: number;
+  releases: ReleasesConfig;
   /** Problèmes de configuration, destinés aux journaux de l'administrateur uniquement. */
   problems: string[];
 }
@@ -479,6 +492,25 @@ function loadStore(env: Env, problems: string[]): { store: ServerConfig['store']
   return { store: 'supabase', storeExplicit: false };
 }
 
+// Jetons GitHub (ghp_…, github_pat_…, ghs_…) : lettres, chiffres et « _ » uniquement. Toute autre valeur (retour à la
+// ligne, espace…) est refusée sans jamais être recopiée dans un journal.
+const GITHUB_TOKEN_RE = /^[A-Za-z0-9_]{20,255}$/;
+
+function loadReleases(env: Env, problems: string[]): ReleasesConfig {
+  const rawRepo = clean(env.MAGISTRA_RELEASES_REPO);
+  let repo = DEFAULT_RELEASES_REPO;
+  if (rawRepo) {
+    const parsed = parseReleasesRepo(rawRepo);
+    if (parsed) repo = parsed;
+    else problems.push(`MAGISTRA_RELEASES_REPO doit être de la forme « propriétaire/dépôt » (dépôt GitHub) : dépôt officiel (${DEFAULT_RELEASES_REPO}) utilisé.`);
+  }
+  const rawToken = clean(env.GITHUB_TOKEN);
+  if (rawToken && !GITHUB_TOKEN_RE.test(rawToken)) {
+    problems.push('GITHUB_TOKEN invalide (lettres, chiffres et « _ » attendus) : ignoré, l’API GitHub est interrogée sans jeton.');
+  }
+  return { repo, ...(rawToken && GITHUB_TOKEN_RE.test(rawToken) ? { token: rawToken } : {}) };
+}
+
 /** Texte court et sans caractère de contrôle (contact affiché aux enseignants). */
 function shortText(raw: string | undefined, max: number): string | undefined {
   const text = raw ? [...raw].filter(ch => ch.charCodeAt(0) >= 32 && ch.charCodeAt(0) !== 127).join('').trim() : '';
@@ -533,6 +565,7 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): ServerCon
     supabase,
     defaultTimeZone,
     maxDocumentChars: maxDocumentCharsFor(ai.contextTokens),
+    releases: loadReleases(env, problems),
     problems,
   };
 }

@@ -2,15 +2,15 @@
 // Contrat : shared/apiContract.ts.
 //
 // Ordre des vérifications pour chaque requête :
-//   (mode personnel : connexion locale, Host et Origin) → méthode autorisée → route publique /api/mode
-//   → serveur configuré → jeton vérifié (Clerk : identité = claim « sub » ; mode personnel : jeton secret)
-//   → paramètres validés → opération filtrée par l'utilisateur du jeton.
+//   (mode personnel : connexion locale, Host et Origin) → méthode autorisée → routes publiques /api/mode et
+//   /api/windows-release → serveur configuré → jeton vérifié (Clerk : identité = claim « sub » ; mode personnel :
+//   jeton secret) → paramètres validés → opération filtrée par l'utilisateur du jeton.
 
 import type { ServerStatus } from '../shared/apiContract.js';
 import { isMagistraError, MagistraError, toMagistraError, type ErrorCode } from '../shared/errors.js';
 import { runGeneration } from '../shared/pipeline.js';
 import type { GenerationEvent, TeacherProfile } from '../shared/types.js';
-import { validateGenerationRequest } from '../shared/validation.js';
+import { validateGenerationRecordDraft, validateGenerationRequest } from '../shared/validation.js';
 import { authenticate } from './auth.js';
 import { verifyWebhook, WEBHOOK_BODY_LIMIT } from './clerkWebhook.js';
 import { generationSlotTtlSeconds, maxDocumentCharsFor } from './config.js';
@@ -20,15 +20,18 @@ import { personalUnauthenticated } from './personal.js';
 import { sanitizeProfile } from './profile.js';
 import { HISTORY_LIMITS, type GenerationAdmission, type GenerationStore } from './store.js';
 import { normalizeTimeZone } from './time.js';
+import { fetchLatestWindowsRelease, windowsReleaseCacheControl } from './windowsRelease.js';
 
-export type RouteName = 'mode' | 'status' | 'generate' | 'history' | 'generation' | 'stats' | 'profile' | 'account' | 'clerk-webhook';
+export type RouteName =
+  | 'mode' | 'status' | 'generate' | 'history' | 'generation' | 'windows-release' | 'stats' | 'profile' | 'account' | 'clerk-webhook';
 
 export const ROUTE_METHODS: Record<RouteName, readonly string[]> = {
   mode: ['GET'],
   status: ['GET'],
   generate: ['POST'],
   history: ['GET'],
-  generation: ['GET', 'PATCH', 'DELETE'],
+  generation: ['GET', 'POST', 'PATCH', 'DELETE'],
+  'windows-release': ['GET'],
   stats: ['GET'],
   profile: ['GET', 'PUT'],
   account: ['DELETE'],
@@ -364,8 +367,52 @@ async function history(userId: string, req: ApiRequest, deps: ServerDeps): Promi
   return json(page);
 }
 
+/**
+ * Limitation de débit d'un enregistrement (POST /api/generation) : même compteur partagé, même opération atomique et
+ * même limite par utilisateur (RATE_LIMIT_PER_MINUTE) que POST /api/generate — une génération faite par Magistra
+ * locale compte comme une demande de génération. Ni place de génération (rien ne s'exécute ici), ni limite globale
+ * (elle protège le serveur d'IA, que l'enregistrement n'utilise pas). Une panne du compteur ne bloque pas les
+ * enseignants, comme pour les générations.
+ */
+async function admitSave(userId: string, store: GenerationStore, deps: ServerDeps): Promise<void> {
+  const maxRequests = deps.config.rateLimitPerMinute;
+  if (maxRequests <= 0) return;
+  let admission: GenerationAdmission;
+  try {
+    admission = await store.beginGeneration(userId, {
+      windowSeconds: RATE_WINDOW_SECONDS,
+      maxRequests,
+      maxGlobalRequests: 0,
+      maxActive: 0,
+      activeTtlSeconds: RATE_WINDOW_SECONDS,
+    });
+  } catch (err) {
+    deps.log('Anti-abus indisponible (enregistrement accepté)', err);
+    return;
+  }
+  if (admission.status !== 'ok') throw new MagistraError(ADMISSION_ERRORS[admission.status]);
+}
+
+/**
+ * POST /api/generation : génération faite par Magistra locale (IA de l'ordinateur de l'enseignant, via le connecteur
+ * de l'application Windows), enregistrée dans l'historique du compte. Ordre : jeton vérifié (handleApi) → débit →
+ * validation complète du contenu (validateGenerationRecordDraft : entrée non fiable, le serveur ne l'a pas produite)
+ * → enregistrement sous l'utilisateur du jeton. Identifiant, date et favori sont attribués ici : ceux du corps, comme
+ * tout champ « userId », sont ignorés.
+ */
+async function saveGeneration(userId: string, req: ApiRequest, deps: ServerDeps, store: GenerationStore): Promise<ApiResult> {
+  if (req.query.has('id')) throw new MagistraError('INVALID_REQUEST', 'L’identifiant d’un nouveau contenu est attribué par le serveur.');
+  await admitSave(userId, store, deps);
+  const body = requireObject(await req.readJson());
+  if (!('record' in body)) throw new MagistraError('INVALID_REQUEST', 'Contenu à enregistrer manquant.');
+  const draft = validateGenerationRecordDraft(body.record);
+  const { id } = await store.saveGeneration(userId, draft);
+  return json({ id }, 201);
+}
+
 async function generation(userId: string, req: ApiRequest, deps: ServerDeps): Promise<ApiResult> {
   const store = requireStore(deps);
+  if (req.method === 'POST') return await saveGeneration(userId, req, deps, store);
   const id = requireUuid(req.query.get('id'));
   if (req.method === 'GET') return json(await store.getGeneration(userId, id));
   if (req.method === 'DELETE') {
@@ -398,6 +445,24 @@ async function profile(userId: string, req: ApiRequest, deps: ServerDeps): Promi
 async function account(userId: string, deps: ServerDeps): Promise<ApiResult> {
   await requireStore(deps).deleteAccount(userId);
   return json({ ok: true });
+}
+
+/**
+ * GET /api/windows-release : installateur de la dernière version STABLE publiée sur le dépôt officiel (voir
+ * windowsRelease.ts). Toujours 200 : « aucune version » et « GitHub indisponible » font partie de la réponse, avec la
+ * page des versions en repli. Réponse publique, mise en cache par le CDN (jamais le jeton GitHub).
+ */
+async function windowsRelease(deps: ServerDeps): Promise<ApiResult> {
+  const { repo, token } = deps.config.releases;
+  const body = await fetchLatestWindowsRelease({
+    fetch: deps.releasesFetch,
+    repo,
+    ...(token ? { token } : {}),
+    now: () => deps.now().getTime(),
+    cache: deps.releasesCache,
+    log: message => deps.log(message),
+  });
+  return json(body, 200, { 'Cache-Control': windowsReleaseCacheControl(body) });
 }
 
 /** Webhook Clerk : « user.deleted » → même suppression que DELETE /api/account ; autres évènements ignorés. */
@@ -450,6 +515,8 @@ export async function handleApi(route: RouteName, req: ApiRequest, deps: ServerD
     if (!allowed.includes(req.method)) return methodNotAllowed(allowed);
     // Mode d'authentification : public, sans aucun secret (clé PUBLIABLE Clerk seulement).
     if (route === 'mode') return json(deps.modeInfo);
+    // Dernière version stable de l'application Windows : publique (page d'accueil), sans aucun secret.
+    if (route === 'windows-release') return await windowsRelease(deps);
     // Webhook Clerk : authentifié par sa signature, jamais par un jeton de session.
     if (route === 'clerk-webhook') return await clerkWebhook(req, deps);
     const userId = await authenticateRequest(req, deps);

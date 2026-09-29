@@ -6,7 +6,10 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildContentSecurityPolicy, createStandaloneServer, parseExtraOrigins, resolveStaticPath } from '../../server/standalone.js';
+import { CONNECTOR_HOST, CONNECTOR_PORTS } from '../../shared/localConnector.js';
+import {
+  buildContentSecurityPolicy, createStandaloneServer, LOCAL_CONNECTOR_ORIGINS, parseExtraOrigins, resolveStaticPath,
+} from '../../server/standalone.js';
 import { testDeps } from './helpers.js';
 
 /** Requête HTTP brute : le chemin est envoyé tel quel (fetch normaliserait « .. »). */
@@ -38,7 +41,9 @@ describe('serveur autonome', () => {
     writeFileSync(path.join(publicDir, '.env'), 'SECRET=fichier-cache');
     writeFileSync(path.join(dir, 'secret.txt'), 'DONNEE-SECRETE');
     symlinkSync(path.join(dir, 'secret.txt'), path.join(publicDir, 'lien.txt'));
-    server = createStandaloneServer({ staticDir: publicDir, deps: testDeps(), cspExtraOrigins: ['https://clerk.univ-exemple.fr'] });
+    // GitHub simulé : aucune version publiée (aucun accès réseau pendant les tests).
+    const deps = testDeps({ overrides: { releasesFetch: async () => new Response('{"message":"Not Found"}', { status: 404 }) } });
+    server = createStandaloneServer({ staticDir: publicDir, deps, cspExtraOrigins: ['https://clerk.univ-exemple.fr'] });
     await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
     port = (server.address() as AddressInfo).port;
   });
@@ -113,6 +118,19 @@ describe('serveur autonome', () => {
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain('https://*.clerk.accounts.dev');
     expect(csp).toContain('https://clerk.univ-exemple.fr');
+    // Connecteur local de l'application Windows : les trois ports exacts de la boucle locale, en connect-src seulement.
+    const connect = csp.split(';').map(d => d.trim()).find(d => d.startsWith('connect-src '));
+    expect(connect).toBe("connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com http://127.0.0.1:47831 http://127.0.0.1:47832 http://127.0.0.1:47833 https://clerk.univ-exemple.fr");
+    expect(csp.split(';').filter(d => d.includes('127.0.0.1'))).toHaveLength(1);
+    expect(LOCAL_CONNECTOR_ORIGINS).toEqual(CONNECTOR_PORTS.map(port => `http://${CONNECTOR_HOST}:${port}`));
+  });
+
+  it('GET /api/windows-release : public, servi par l’API avec les en-têtes de sécurité', async () => {
+    const res = await rawGet(port, '/api/windows-release');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/json');
+    expect(String(res.headers['content-security-policy'])).toContain('http://127.0.0.1:47831');
+    expect(JSON.parse(res.body)).toEqual({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases' });
   });
 
   it('route /api/* vers l’API (authentification exigée, réponse JSON)', async () => {

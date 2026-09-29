@@ -14,6 +14,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { CONNECTOR_HOST, CONNECTOR_PORTS } from '../shared/localConnector.js';
 import { createServerDeps, describeStartup } from './deps.js';
 import { handleNodeRequest, type DepsSource } from './node.js';
 
@@ -45,13 +46,21 @@ const MIME_TYPES: Record<string, string> = {
 
 const CLERK_ORIGINS = ['https://*.clerk.accounts.dev', 'https://*.clerk.com'];
 
+/**
+ * Connecteur local de l'application Windows (Magistra locale) : les TROIS adresses exactes de la boucle locale, et
+ * elles seules (ni « localhost », ni joker de port, ni autre hôte). Seul connect-src les autorise (fetch du site vers
+ * l'application) : aucun script, aucune image, aucun cadre de la boucle locale. Le connecteur lui-même n'accepte que
+ * les origines officielles (voir shared/localConnector.ts).
+ */
+export const LOCAL_CONNECTOR_ORIGINS: readonly string[] = CONNECTOR_PORTS.map(port => `http://${CONNECTOR_HOST}:${port}`);
+
 /** Politique de sécurité du contenu (identique à vercel.json, plus les origines ajoutées). */
 export function buildContentSecurityPolicy(extraOrigins: string[] = []): string {
   const extra = extraOrigins.length ? ` ${extraOrigins.join(' ')}` : '';
   return [
     "default-src 'self'",
     `script-src 'self' 'unsafe-inline' ${CLERK_ORIGINS.join(' ')} https://challenges.cloudflare.com${extra}`,
-    `connect-src 'self' ${CLERK_ORIGINS.join(' ')}${extra}`,
+    `connect-src 'self' ${CLERK_ORIGINS.join(' ')} ${LOCAL_CONNECTOR_ORIGINS.join(' ')}${extra}`,
     `img-src 'self' data: blob: https://img.clerk.com${extra}`,
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",

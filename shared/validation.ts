@@ -7,7 +7,10 @@ import {
 } from './catalog.js';
 import { MagistraError } from './errors.js';
 import { isNiveau } from './levels.js';
-import { isResearchMode, type DocKind, type DocumentPassage, type GenerationRequest, type Locator, type TeacherProfile } from './types.js';
+import {
+  isResearchMode, RESEARCH_MODES, type DocKind, type DocumentPassage, type GenerationRecordDraft, type GenerationRequest, type Locator,
+  type ResearchMode, type SourceKind, type SourceRef, type TeacherProfile,
+} from './types.js';
 
 export const REQUEST_LIMITS = {
   sujet: 300,
@@ -33,6 +36,7 @@ const PROFILS: ProfilEleve[] = ['excellent', 'bon', 'moyen', 'fragile', 'decroch
 const DIFF_PROFILS: ProfilDifferenciation[] = ['renforce', 'standard', 'approfondissement'];
 const DOC_KINDS: DocKind[] = ['pdf', 'docx', 'pptx', 'txt', 'md'];
 const LOCATOR_TYPES: Locator['type'][] = ['pages', 'slides', 'section', 'paragraphs', 'lines'];
+const RESEARCH_MODE_VALUES: ResearchMode[] = RESEARCH_MODES.map(m => m.value);
 
 /** Retire les caractères de contrôle invisibles (sauf tabulation et retours à la ligne). */
 function stripControlChars(value: string): string {
@@ -195,6 +199,241 @@ export function validateGenerationRequest(input: unknown): GenerationRequest {
     throw new MagistraError('INVALID_REQUEST', 'Indiquez un sujet ou collez le contenu à adapter.');
   }
   return req;
+}
+
+// ─── Génération à enregistrer (POST /api/generation) ────────────────────────
+//
+// Une génération faite par Magistra locale (application Windows, à la demande du site via le connecteur) revient au
+// navigateur dans l'évènement « done » (champ `record`), puis le site l'enregistre dans l'historique du compte. Le
+// serveur ne l'a PAS produite : tout le contenu est une entrée non fiable, revalidée ici champ par champ (listes
+// blanches, tailles bornées, caractères de contrôle retirés). L'identifiant, la date, le favori et l'utilisateur ne
+// sont jamais lus dans le corps : le stockage les attribue, sous l'utilisateur du jeton vérifié.
+
+/** Bornes d'une génération à enregistrer (au-delà : INVALID_REQUEST, rien n'est tronqué en silence). */
+export const RECORD_LIMITS = {
+  /** Sujet affiché dans l'historique (sujet saisi ≤ 300, ou libellé construit par displaySujet). */
+  sujet: 400,
+  contenu: 200_000,
+  discipline: REQUEST_LIMITS.discipline,
+  model: 120,
+  maxSources: 100,
+  /** Numéro de citation [n] le plus grand accepté. */
+  maxSourceNumber: 999,
+  sourceTitle: 500,
+  maxAuthors: 20,
+  author: 200,
+  venue: 300,
+  doi: 200,
+  url: 2_000,
+  docName: REQUEST_LIMITS.docName,
+  /** Titre de section d'un emplacement de document (même borne que validateLocator). */
+  locatorTitle: 200,
+  /** Noms des documents utilisés, conservés dans les paramètres (DOCUMENT_LIMITS.maxDocuments = 12). */
+  maxDocumentNames: 20,
+} as const;
+
+/** Toutes les origines de source connues (Record : un nouveau SourceKind oublié ici ne compile pas). */
+const SOURCE_KINDS: Readonly<Record<SourceKind, true>> = {
+  document: true, hal: true, crossref: true, web: true, institutional: true, wikipedia: true,
+};
+
+function isSourceKind(value: unknown): value is SourceKind {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(SOURCE_KINDS, value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function invalidRecord(message: string): MagistraError {
+  return new MagistraError('INVALID_REQUEST', message);
+}
+
+/** Booléen facultatif : absent → undefined ; présent → true ou false exactement. */
+function optionalBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'boolean') throw invalidRecord(`Champ « ${field} » invalide.`);
+  return value;
+}
+
+/** Entier facultatif dans [min, max] (jamais converti depuis une chaîne). */
+function optionalInteger(value: unknown, min: number, max: number, field: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw invalidRecord(`Champ « ${field} » invalide.`);
+  }
+  return value;
+}
+
+/** Valeur facultative d'une liste blanche : toute autre valeur est refusée (jamais remplacée en silence). */
+function optionalOneOf<T extends string>(value: unknown, allowed: readonly T[], field: string): T | undefined {
+  if (value === undefined || value === null) return undefined;
+  const v = oneOf(value, allowed);
+  if (v === undefined) throw invalidRecord(`Champ « ${field} » invalide.`);
+  return v;
+}
+
+/** Liste facultative de textes courts, dédoublonnée ; vide → undefined. */
+function optionalTextList(value: unknown, maxItems: number, maxChars: number, field: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.length > maxItems) throw invalidRecord(`Champ « ${field} » invalide.`);
+  const out: string[] = [];
+  for (const item of value) {
+    const text = str(item, maxChars, field);
+    if (text !== undefined && !out.includes(text)) out.push(text);
+  }
+  return out.length ? out : undefined;
+}
+
+/** Liste facultative de valeurs d'une liste blanche, dédoublonnée ; vide → undefined. */
+function optionalOneOfList<T extends string>(value: unknown, allowed: readonly T[], field: string): T[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.length > allowed.length) throw invalidRecord(`Champ « ${field} » invalide.`);
+  const out: T[] = [];
+  for (const item of value) {
+    const v = oneOf(item, allowed);
+    if (v === undefined) throw invalidRecord(`Champ « ${field} » invalide.`);
+    if (!out.includes(v)) out.push(v);
+  }
+  return out.length ? out : undefined;
+}
+
+/** Adresse http(s) d'une source (lien affiché dans le contenu et l'historique) : jamais javascript:, data:… */
+function sourceUrl(value: unknown): string | undefined {
+  const url = str(value, RECORD_LIMITS.url, 'adresse de la source');
+  if (url === undefined) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw invalidRecord('Adresse de source invalide.');
+  }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password) {
+    throw invalidRecord('Adresse de source invalide.');
+  }
+  return url;
+}
+
+/**
+ * Emplacement d'un passage cité : mêmes règles que pour une demande (validateLocator), sans troncature du titre de
+ * section, plus l'indication « extrait » (`partial`), posée par la pipeline et affichée dans la liste des sources.
+ */
+function recordLocator(value: unknown): Locator {
+  if (!isPlainObject(value)) throw invalidRecord('Localisation de document invalide.');
+  const { type, start, end, labels } = validateLocator(value);
+  const title = str(value.title, RECORD_LIMITS.locatorTitle, 'titre de section');
+  return { type, start, end, ...(title ? { title } : {}), ...(labels ? { labels } : {}), ...(value.partial === true ? { partial: true } : {}) };
+}
+
+function recordSource(value: unknown): SourceRef {
+  if (!isPlainObject(value)) throw invalidRecord('Source invalide.');
+  const n = optionalInteger(value.n, 1, RECORD_LIMITS.maxSourceNumber, 'numéro de source');
+  if (n === undefined) throw invalidRecord('Numéro de source manquant.');
+  if (!isSourceKind(value.kind)) throw invalidRecord('Type de source inconnu.');
+  const title = str(value.title, RECORD_LIMITS.sourceTitle, 'titre de la source');
+  if (!title) throw invalidRecord('Titre de source manquant.');
+  const authors = optionalTextList(value.authors, RECORD_LIMITS.maxAuthors, RECORD_LIMITS.author, 'auteurs');
+  const year = optionalInteger(value.year, 0, 9_999, 'année');
+  const venue = str(value.venue, RECORD_LIMITS.venue, 'revue');
+  const doi = str(value.doi, RECORD_LIMITS.doi, 'DOI');
+  const url = sourceUrl(value.url);
+  const docName = str(value.docName, RECORD_LIMITS.docName, 'nom de document');
+  const locator = value.locator === undefined || value.locator === null ? undefined : recordLocator(value.locator);
+  return {
+    n,
+    kind: value.kind,
+    title,
+    ...(authors ? { authors } : {}),
+    ...(year !== undefined ? { year } : {}),
+    ...(venue ? { venue } : {}),
+    ...(doi ? { doi } : {}),
+    ...(url ? { url } : {}),
+    ...(docName ? { docName } : {}),
+    ...(locator ? { locator } : {}),
+  };
+}
+
+function recordSources(value: unknown): SourceRef[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw invalidRecord('Sources invalides.');
+  if (value.length > RECORD_LIMITS.maxSources) throw invalidRecord(`Trop de sources (${RECORD_LIMITS.maxSources} au plus).`);
+  return value.map(recordSource);
+}
+
+/**
+ * Paramètres conservés avec une génération : UNIQUEMENT les clés produites par recordParams (shared/pipeline.ts),
+ * avec les types et bornes de la demande d'origine. Une clé inconnue est ignorée (application Windows plus récente
+ * que le site : l'enregistrement reste possible) ; une clé connue de type ou de valeur inattendus est refusée.
+ * Jamais le texte des documents ni le travail d'un élève (seule sa longueur).
+ */
+function recordParams(value: unknown): Record<string, unknown> {
+  if (value === undefined || value === null) return {};
+  if (!isPlainObject(value)) throw invalidRecord('Paramètres de la génération invalides.');
+  const params: Record<string, unknown> = {
+    researchMode: optionalOneOf(value.researchMode, RESEARCH_MODE_VALUES, 'mode de recherche'),
+    duree: str(value.duree, REQUEST_LIMITS.duree, 'durée'),
+    objectifs: str(value.objectifs, REQUEST_LIMITS.objectifs, 'objectifs'),
+    consignes: str(value.consignes, REQUEST_LIMITS.consignes, 'consignes'),
+    difficulte: optionalOneOf(value.difficulte, DIFFICULTES, 'difficulté'),
+    format: optionalOneOf(value.format, FORMATS, 'format'),
+    trimestre: optionalOneOf(value.trimestre, ['1', '2', '3'] as const, 'trimestre'),
+    profilEleve: optionalOneOf(value.profilEleve, PROFILS, 'profil d’élève'),
+    nombreAppreciations: optionalInteger(value.nombreAppreciations, 1, REQUEST_LIMITS.maxAppreciations, 'nombre d’appréciations'),
+    profilsDifferenciation: optionalOneOfList(value.profilsDifferenciation, DIFF_PROFILS, 'profils de différenciation'),
+    typeLettre: optionalOneOf(value.typeLettre, LETTRES, 'type de lettre'),
+    contenuSource: str(value.contenuSource, REQUEST_LIMITS.contenuSource, 'contenu à adapter'),
+    texteEleveLength: optionalInteger(value.texteEleveLength, 1, REQUEST_LIMITS.texteEleve, 'longueur du travail corrigé'),
+    documents: optionalTextList(value.documents, RECORD_LIMITS.maxDocumentNames, RECORD_LIMITS.docName, 'documents'),
+  };
+  return Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined));
+}
+
+/**
+ * Contenu Markdown produit : caractères de contrôle retirés, mais ni rogné ni retouché (une indentation initiale ou
+ * le saut de ligne final font partie du document, identique à celui affiché à l'enseignant).
+ */
+function recordContent(value: unknown): string {
+  if (value === undefined || value === null) throw invalidRecord('Contenu vide : rien à enregistrer.');
+  if (typeof value !== 'string') throw invalidRecord('Champ « contenu » invalide.');
+  const content = stripControlChars(value);
+  if (!content.trim()) throw invalidRecord('Contenu vide : rien à enregistrer.');
+  if (content.length > RECORD_LIMITS.contenu) {
+    throw invalidRecord(`Le champ « contenu » est trop long (${RECORD_LIMITS.contenu} caractères maximum).`);
+  }
+  return content;
+}
+
+/**
+ * Valide une génération à enregistrer (corps `record` de POST /api/generation, JSON non fiable) et renvoie une copie
+ * propre : type, niveau et matière connus, sujet et contenu non vides et bornés, sources et paramètres en liste
+ * blanche, caractères de contrôle retirés. Les champs inconnus (id, createdAt, isFavorite, userId…) sont ignorés.
+ * Lève MagistraError('INVALID_REQUEST') avec un message explicite sinon.
+ */
+export function validateGenerationRecordDraft(input: unknown): GenerationRecordDraft {
+  if (!isPlainObject(input)) throw invalidRecord('Contenu à enregistrer invalide.');
+  if (!isTypeContenu(input.type)) throw invalidRecord('Type de contenu inconnu.');
+  if (!isNiveau(input.niveau)) throw invalidRecord('Niveau inconnu.');
+  if (!isMatiere(input.matiere)) throw invalidRecord('Matière inconnue.');
+  const sujet = str(input.sujet, RECORD_LIMITS.sujet, 'sujet');
+  if (!sujet) throw invalidRecord('Sujet manquant.');
+  const contenu = recordContent(input.contenu);
+  const discipline = str(input.discipline, RECORD_LIMITS.discipline, 'discipline');
+  const truncated = optionalBoolean(input.truncated, 'contenu tronqué');
+  const internetUsed = optionalBoolean(input.internetUsed, 'recherche Internet utilisée');
+  const model = str(input.model, RECORD_LIMITS.model, 'modèle');
+  return {
+    type: input.type,
+    niveau: input.niveau,
+    matiere: input.matiere,
+    ...(discipline ? { discipline } : {}),
+    sujet,
+    contenu,
+    sources: recordSources(input.sources),
+    params: recordParams(input.params),
+    ...(truncated !== undefined ? { truncated } : {}),
+    ...(internetUsed !== undefined ? { internetUsed } : {}),
+    ...(model ? { model } : {}),
+  };
 }
 
 /** Sujet affiché dans l'historique quand l'outil n'en exige pas. */

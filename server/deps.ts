@@ -6,7 +6,7 @@ import { createProvider } from '../shared/ai/factory.js';
 import { sameModel } from '../shared/ai/ollama.js';
 import { fetchOllamaRemoteHost, isOllamaCloudName, ollamaDestination } from '../shared/ai/ollamaRemote.js';
 import { addressKind, providerInfoFor } from '../shared/ai/presets.js';
-import type { AIProvider } from '../shared/ai/provider.js';
+import type { AIProvider, FetchLike } from '../shared/ai/provider.js';
 import type { AuthMode, ModeInfo } from '../shared/apiContract.js';
 import { MagistraError, type ErrorCode } from '../shared/errors.js';
 import type { ResearchConfig, ResearchDeps } from '../shared/research/types.js';
@@ -19,6 +19,7 @@ import { LocalAIDetector, LOCAL_AI_HINT, type LocalAIDetectorOptions, type Local
 import { loadOrCreateAccessToken, PersonalAccess, protectDataDir, resolveAuth, type ListenContext } from './personal.js';
 import { fetchPublicPage } from './safeFetch.js';
 import { MemoryStore, SupabaseStore, type GenerationStore } from './store.js';
+import { createWindowsReleaseCache, type WindowsReleaseCache } from './windowsRelease.js';
 
 export type Logger = (message: string, err?: unknown) => void;
 
@@ -69,6 +70,10 @@ export interface ServerDeps {
   healthCache: { at: number; ttl: number; value: unknown } | null;
   /** Générations en cours sur cette instance (plafonds MAX_CONCURRENT_GENERATIONS*). */
   activeGenerations: InstanceGenerations;
+  /** Accès à l'API GitHub pour GET /api/windows-release (tests : réponses simulées). */
+  releasesFetch: FetchLike;
+  /** Cache mémoire de la dernière version Windows (10 min), propre à cette instance. */
+  releasesCache: WindowsReleaseCache;
 }
 
 export interface DepsOverrides {
@@ -90,6 +95,8 @@ export interface DepsOverrides {
   projectRoot?: string;
   /** Détection de l'IA locale (tests : adresses et fetch simulés). */
   localAI?: LocalAIDetectorOptions;
+  /** Requêtes vers GitHub de GET /api/windows-release (tests : réponses simulées, aucun accès réseau). */
+  releasesFetch?: FetchLike;
 }
 
 /** Journal serveur : jamais de jeton, de clé ni de contenu d'enseignant ; seulement un résumé de la cause. */
@@ -325,6 +332,8 @@ export function createServerDeps(env: Env, overrides: DepsOverrides = {}): Serve
     exposeConfigProblems: dev,
     healthCache: null,
     activeGenerations: new InstanceGenerations(),
+    releasesFetch: overrides.releasesFetch ?? ((input, init) => fetch(input, init)),
+    releasesCache: createWindowsReleaseCache(),
   };
   return deps;
 }
