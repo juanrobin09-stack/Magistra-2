@@ -201,6 +201,7 @@ describe('canal IPC app:check-update et pont', () => {
     appInfo: () => ({ version: '2.0.0', platform: 'win32', userDataPath: 'C:/x', isPackaged: true }),
     openExternal: async () => undefined,
     onAppReady: () => undefined,
+    connector: {} as IpcContext['connector'],
     ...over,
   });
 

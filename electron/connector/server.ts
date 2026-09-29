@@ -1,0 +1,707 @@
+// Serveur HTTP du connecteur local : le site web Magistra (navigateur de l'enseignant) utilise l'IA de cet ordinateur.
+// Module PUR Node (aucun import d'Electron) : testé avec un vrai serveur sur un port éphémère.
+//
+//   site web ──HTTP boucle locale, requêtes signées──▶ ce serveur ──▶ GenerationManager ──▶ moteur IA ──▶ modèle
+//
+// Le navigateur n'obtient JAMAIS d'accès au moteur (Ollama) : cinq routes Magistra seulement (CONNECTOR_ROUTES), aucun
+// relais, aucun fichier, aucune commande, aucun réglage ; toute autre route → 404, toute autre méthode → 405.
+//
+// Contrôles, dans cet ordre, pour CHAQUE requête (voir shared/localConnector.ts) :
+//   1. pair distant = boucle locale (127.0.0.1 / ::ffff:127.0.0.1) ; écoute sur 127.0.0.1 UNIQUEMENT ;
+//   2. en-tête Host EXACTEMENT « 127.0.0.1:<port d'écoute> » (anti DNS rebinding) → sinon 403 sans CORS ;
+//   3. en-tête Origin présent, unique et EXACTEMENT dans la liste autorisée → sinon 403 sans CORS (« null », absent,
+//      autre site, localhost…). Jamais « Access-Control-Allow-Origin: * », jamais « Allow-Credentials » ;
+//   4. route exacte (chemin sans requête, sans normalisation : « /v1/../v1/hello » → 404), puis méthode (405) ;
+//   5. OPTIONS : pré-vérification CORS (méthode et en-têtes demandés autorisés, accès au réseau privé de Chrome) ;
+//      blocage temporaire après trop d'échecs d'authentification : 429 (toutes les routes sauf hello) ;
+//   6. POST : Content-Type application/json (charset utf-8 toléré) → sinon 415 ; taille annoncée bornée → 413 ;
+//   7. routes signées : format des en-têtes → navigateur connu ET appairé pour CETTE origine (401
+//      CONNECTOR_UNPAIRED) → horodatage (±clockSkewMs) → nonce jamais vu (401 UNAUTHENTICATED), puis lecture du corps
+//      (bornée, avec délai : 413 / 408) → signature HMAC sur les octets exacts du corps (401 UNAUTHENTICATED) ;
+//      les contrôles sans corps sont faits AVANT la lecture : une requête non authentifiable ne fait rien lire ;
+//   8. toutes les réponses : Cache-Control: no-store, X-Content-Type-Options: nosniff, Vary: Origin, et, pour une
+//      origine autorisée, Access-Control-Allow-Origin exact + Access-Control-Expose-Headers ; après une
+//      authentification réussie (erreurs comprises) : X-Magistra-Proof = HMAC(clé, canonicalProof(client, nonce)).
+// Corps d'erreur : ApiErrorBody, messages en français sans trace, adresse, port, chemin, réglage ni secret.
+// Journal : jamais de clé, de vérificateur, de signature ni de contenu de requête.
+
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo, Socket } from 'node:net';
+import { MagistraError, toMagistraError, type ErrorCode } from '../../shared/errors.js';
+import {
+  canonicalProof, canonicalRequest, CONNECTOR_ALLOWED_REQUEST_HEADERS, CONNECTOR_EXPOSED_RESPONSE_HEADERS, CONNECTOR_FORMATS,
+  CONNECTOR_HEADERS, CONNECTOR_HOST, CONNECTOR_LIMITS, CONNECTOR_PROTOCOL_VERSION, CONNECTOR_ROUTE_METHODS, CONNECTOR_ROUTES,
+  isSignedRoute, type ConnectorHello, type ConnectorRoute, type ConnectorStatus, type PairCompleteResponse,
+} from '../../shared/localConnector.js';
+import type { GenerationEvent } from '../../shared/types.js';
+import type { ExternalGenerationHandle, ExternalGenerationOptions } from '../generation.js';
+import type { ConnectorClientKey } from './clients.js';
+import { deriveClientKey, hmacBase64Url, parsePublicKey, sha256Base64Url, verifyHmac } from './crypto.js';
+import type { PairingCompletion } from './pairing.js';
+import { publicEvent, publicMessage } from './status.js';
+import { browserFromUserAgent } from './userAgent.js';
+
+// ─── Dépendances ────────────────────────────────────────────────────────────
+
+/** Navigateurs autorisés (ConnectorClientStore). */
+export interface ConnectorClientDirectory {
+  find(clientId: string): ConnectorClientKey | undefined;
+  touch(clientId: string): void;
+  add(input: { origin: string; browser: string; key: Uint8Array }): Promise<{ clientId: string }>;
+  revoke(clientId: string): Promise<boolean>;
+}
+
+/** Demandes d'appairage (PairingRegistry). */
+export interface ConnectorPairing {
+  complete(input: { pairingId: string; verifier: string; origin: string }): PairingCompletion;
+}
+
+/** Générations du site (GenerationManager). */
+export interface ConnectorGenerations {
+  startExternal(raw: unknown, options: ExternalGenerationOptions): ExternalGenerationHandle;
+  cancelExternal(jobId: string, owner: string): boolean;
+  cancelOwner(owner: string): void;
+}
+
+export interface ConnectorServerOptions {
+  /** Version de l'application (hello, status, appairage). */
+  version: string;
+  /** Origines autorisées : origines officielles (et, en développement seulement, origines de la boucle locale). */
+  allowedOrigins: readonly string[];
+  /** Ports essayés dans l'ordre (le premier libre). 0 : port éphémère (tests). */
+  ports: readonly number[];
+  clients: ConnectorClientDirectory;
+  pairing: ConnectorPairing;
+  generations: ConnectorGenerations;
+  /** GET /v1/status (déjà filtré : ni adresse, ni port, ni réglage). */
+  status: () => Promise<ConnectorStatus>;
+  /** Appelé après un appairage réussi ou un retrait par le navigateur (réglages de l'application). */
+  onClientsChanged?: () => void;
+  now?: () => number;
+  /** Journal (aucun secret, aucun contenu). */
+  log?: (message: string) => void;
+  /** Délais (tests). */
+  timeouts?: Partial<ConnectorTimeouts>;
+}
+
+export interface ConnectorTimeouts {
+  /** Réception des en-têtes. */
+  headersMs: number;
+  /** Réception de la requête complète (en-têtes et corps). */
+  requestMs: number;
+  /** Lecture du corps par le connecteur (réponse 408 lisible par le site, avant la coupure de requestMs). */
+  bodyMs: number;
+  /** Connexion inactive entre deux requêtes. */
+  keepAliveMs: number;
+  /** Intervalle de vérification des délais par Node. */
+  checkIntervalMs: number;
+}
+
+const DEFAULT_TIMEOUTS: ConnectorTimeouts = { headersMs: 10_000, requestMs: 30_000, bodyMs: 20_000, keepAliveMs: 5_000, checkIntervalMs: 1_000 };
+const MAX_HEADERS_COUNT = 40;
+const MAX_CONNECTIONS = 32;
+/** Blocage après trop d'échecs d'authentification. */
+const BLOCK_MS = 60_000;
+const FAILURE_WINDOW_MS = 60_000;
+/** Nonces mémorisés au plus (au-delà : refus temporaire, jamais d'oubli prématuré qui permettrait un rejeu). */
+const MAX_NONCES = 20_000;
+const NONCE_PURGE_THRESHOLD = 2_000;
+const PREFLIGHT_MAX_AGE = '600';
+
+const ROUTES = new Set<string>(Object.values(CONNECTOR_ROUTES));
+const ALLOWED_REQUEST_HEADERS = new Set(CONNECTOR_ALLOWED_REQUEST_HEADERS.map(h => h.toLowerCase()));
+const JSON_CONTENT_TYPE_RE = /^application\/json[ \t]*(?:;[ \t]*charset[ \t]*=[ \t]*(?:utf-8|"utf-8")[ \t]*)?$/i;
+
+/** Statut HTTP propre au connecteur (contrat : 409 pour une génération déjà en cours). */
+const STATUS_OVERRIDES: Partial<Record<ErrorCode, number>> = {
+  GENERATION_BUSY: 409,
+  LOCAL_ENGINE_REMOTE: 409,
+  DOCUMENT_TOO_LARGE: 413,
+};
+const RETRY_AFTER_SECONDS: Partial<Record<ErrorCode, number>> = { GENERATION_BUSY: 10 };
+
+// ─── Contexte d'une requête ─────────────────────────────────────────────────
+
+interface RequestContext {
+  /** Origine autorisée de la requête (en-têtes CORS) ; null avant le contrôle 3 ou si refusée. */
+  origin: string | null;
+  /** Preuve à joindre à toutes les réponses après authentification réussie. */
+  proof?: string;
+  /**
+   * Corps annoncé mais pas (entièrement) lu : la connexion est fermée après la réponse, plutôt que de lire et jeter
+   * le reste. Vrai dès qu'un corps est annoncé, faux une fois le corps lu en entier.
+   */
+  closeConnection?: boolean;
+}
+
+interface Authenticated {
+  client: ConnectorClientKey;
+  timestamp: string;
+  nonce: string;
+  signature: string;
+}
+
+class HttpError extends Error {
+  readonly status: number;
+  readonly error: MagistraError;
+  readonly headers: Record<string, string>;
+  constructor(status: number, error: MagistraError, headers: Record<string, string> = {}) {
+    super(error.code);
+    this.status = status;
+    this.error = error;
+    this.headers = headers;
+  }
+}
+
+/** Échec d'authentification : compté pour le blocage temporaire (429). */
+class AuthFailure extends HttpError {}
+
+function isLoopbackPeer(address: string | undefined): boolean {
+  return address === '127.0.0.1' || address === '::ffff:127.0.0.1';
+}
+
+/** Valeur UNIQUE d'un en-tête (absent ou répété → null). */
+function singleHeader(req: IncomingMessage, name: string): string | null {
+  const values = (req.headersDistinct as Record<string, string[] | undefined>)[name.toLowerCase()];
+  return values && values.length === 1 ? values[0] : null;
+}
+
+function declaredLength(headers: IncomingHttpHeaders): number | null {
+  const raw = headers['content-length'];
+  if (raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n >= 0 ? n : Number.POSITIVE_INFINITY;
+}
+
+function hasBody(req: IncomingMessage): boolean {
+  const length = declaredLength(req.headers);
+  return (length !== null && length > 0) || req.headers['transfer-encoding'] !== undefined;
+}
+
+function invalid(message = 'Demande invalide.'): HttpError {
+  return new HttpError(400, new MagistraError('INVALID_REQUEST', message));
+}
+
+function tooLarge(): HttpError {
+  return new HttpError(413, new MagistraError('DOCUMENT_TOO_LARGE', 'Demande trop volumineuse : retirez des documents ou raccourcissez les textes.'));
+}
+
+/** Corps JSON (objet) : analyse stricte, jamais de message d'analyse (qui citerait le contenu). */
+function parseJsonObject(body: Buffer): Record<string, unknown> {
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body));
+  } catch {
+    throw invalid('Corps de requête JSON invalide.');
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalid('Corps de requête JSON invalide.');
+  return value as Record<string, unknown>;
+}
+
+/** Objet ayant EXACTEMENT ces clés, toutes des chaînes. */
+function exactStrings<K extends string>(obj: Record<string, unknown>, keys: readonly K[]): Record<K, string> {
+  const present = Object.keys(obj);
+  if (present.length !== keys.length || !keys.every(k => typeof obj[k] === 'string')) throw invalid();
+  return obj as Record<K, string>;
+}
+
+// ─── Serveur ────────────────────────────────────────────────────────────────
+
+export class ConnectorServer {
+  private readonly options: ConnectorServerOptions;
+  private readonly timeouts: ConnectorTimeouts;
+  private readonly now: () => number;
+  private readonly log: (message: string) => void;
+  private server: Server | null = null;
+  private listeningPort: number | null = null;
+  private readonly sockets = new Set<Socket>();
+  private failures: number[] = [];
+  private blockedUntil = 0;
+  /** « clientId.nonce » → instant après lequel l'horodatage de la requête serait de toute façon refusé. */
+  private readonly nonces = new Map<string, number>();
+
+  constructor(options: ConnectorServerOptions) {
+    this.options = options;
+    this.timeouts = { ...DEFAULT_TIMEOUTS, ...options.timeouts };
+    this.now = options.now ?? Date.now;
+    this.log = options.log ?? (message => console.warn(`[magistra] ${message}`));
+  }
+
+  /** Port d'écoute ; null si le serveur n'écoute pas. */
+  get port(): number | null {
+    return this.listeningPort;
+  }
+
+  /**
+   * Écoute sur 127.0.0.1, sur le premier port libre de la liste (port occupé ou réservé par le système : suivant).
+   * Renvoie le port, ou null si aucun n'est disponible.
+   */
+  async start(): Promise<number | null> {
+    if (this.server) return this.listeningPort;
+    for (const port of this.options.ports) {
+      const server = this.createHttpServer();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const onError = (err: Error) => {
+            server.off('listening', onListening);
+            reject(err);
+          };
+          const onListening = () => {
+            server.off('error', onError);
+            resolve();
+          };
+          server.once('error', onError);
+          server.once('listening', onListening);
+          server.listen({ host: CONNECTOR_HOST, port, exclusive: true });
+        });
+      } catch (err) {
+        // Port occupé (EADDRINUSE) ou réservé par Windows (EACCES : plages exclues par Hyper-V…) : port suivant.
+        const code = (err as NodeJS.ErrnoException).code ?? 'inconnu';
+        this.log(`Connecteur local : port ${port} indisponible (${code}).`);
+        server.close(() => undefined);
+        continue;
+      }
+      server.on('error', err => this.log(`Connecteur local : erreur du serveur (${(err as NodeJS.ErrnoException).code ?? err.name}).`));
+      this.server = server;
+      this.listeningPort = (server.address() as AddressInfo).port;
+      return this.listeningPort;
+    }
+    return null;
+  }
+
+  /** Arrête d'écouter et coupe toutes les connexions (les générations du site en cours sont alors interrompues). */
+  async stop(): Promise<void> {
+    const server = this.server;
+    if (!server) return;
+    this.server = null;
+    this.listeningPort = null;
+    await new Promise<void>(resolve => {
+      server.close(() => resolve());
+      server.closeAllConnections();
+      for (const socket of this.sockets) socket.destroy();
+      this.sockets.clear();
+    });
+  }
+
+  private createHttpServer(): Server {
+    const server = createServer(
+      { connectionsCheckingInterval: this.timeouts.checkIntervalMs, requireHostHeader: true, joinDuplicateHeaders: false },
+      (req, res) => {
+        void this.handle(req, res);
+      },
+    );
+    server.headersTimeout = this.timeouts.headersMs;
+    server.requestTimeout = this.timeouts.requestMs;
+    server.keepAliveTimeout = this.timeouts.keepAliveMs;
+    server.maxHeadersCount = MAX_HEADERS_COUNT;
+    server.maxConnections = MAX_CONNECTIONS;
+    server.on('connection', (socket: Socket) => {
+      // 1. Boucle locale uniquement (l'écoute sur 127.0.0.1 le garantit déjà : double contrôle).
+      if (!isLoopbackPeer(socket.remoteAddress)) {
+        socket.destroy();
+        return;
+      }
+      this.sockets.add(socket);
+      socket.once('close', () => this.sockets.delete(socket));
+    });
+    server.on('clientError', (err: NodeJS.ErrnoException, socket: Socket) => {
+      if (!socket.writable) {
+        socket.destroy();
+        return;
+      }
+      const status = err.code === 'ERR_HTTP_REQUEST_TIMEOUT' ? '408 Request Timeout' : err.code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large' : '400 Bad Request';
+      socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Length: 0\r\n\r\n`);
+    });
+    return server;
+  }
+
+  // ─── Réponses ─────────────────────────────────────────────────────────────
+
+  private headersFor(ctx: RequestContext): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      Vary: 'Origin',
+    };
+    if (ctx.origin) {
+      headers['Access-Control-Allow-Origin'] = ctx.origin;
+      headers['Access-Control-Expose-Headers'] = CONNECTOR_EXPOSED_RESPONSE_HEADERS.join(', ');
+    }
+    if (ctx.proof) headers[CONNECTOR_HEADERS.proof] = ctx.proof;
+    if (ctx.closeConnection) headers.Connection = 'close';
+    return headers;
+  }
+
+  private sendJson(res: ServerResponse, ctx: RequestContext, status: number, body: unknown, extra: Record<string, string> = {}): void {
+    if (res.headersSent) {
+      if (!res.writableEnded) res.end();
+      return;
+    }
+    const payload = JSON.stringify(body);
+    res.writeHead(status, {
+      ...this.headersFor(ctx),
+      ...extra,
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Length': String(Buffer.byteLength(payload)),
+    });
+    res.end(payload);
+  }
+
+  private sendError(res: ServerResponse, ctx: RequestContext, err: unknown): void {
+    let status: number;
+    let error: MagistraError;
+    let extra: Record<string, string> = {};
+    if (err instanceof HttpError) {
+      status = err.status;
+      error = err.error;
+      extra = err.headers;
+    } else {
+      error = toMagistraError(err);
+      status = STATUS_OVERRIDES[error.code] ?? error.status;
+      if (error.code === 'INTERNAL') {
+        // Jamais le message d'origine (il pourrait citer le contenu de la requête) : type et code seulement.
+        const e = err as { name?: unknown; code?: unknown };
+        this.log(`Connecteur local : erreur interne (${String(e?.name ?? typeof err)}${e?.code ? ` ${String(e.code)}` : ''}).`);
+      }
+      const retry = RETRY_AFTER_SECONDS[error.code];
+      if (retry) extra = { 'Retry-After': String(retry) };
+    }
+    this.sendJson(res, ctx, status, { error: { code: error.code, message: publicMessage(error.code, error.message), retryable: error.retryable } }, extra);
+  }
+
+  /** Refus avant le contrôle de l'origine : aucun en-tête CORS, connexion fermée. */
+  private refuseWithoutCors(res: ServerResponse): void {
+    this.sendError(res, { origin: null, closeConnection: true }, new HttpError(403, new MagistraError('FORBIDDEN')));
+  }
+
+  // ─── Limitation des échecs d'authentification ─────────────────────────────
+
+  private blockedFor(): number {
+    return Math.max(0, this.blockedUntil - this.now());
+  }
+
+  private recordFailure(): void {
+    const now = this.now();
+    this.failures = this.failures.filter(t => now - t < FAILURE_WINDOW_MS);
+    this.failures.push(now);
+    if (this.failures.length > CONNECTOR_LIMITS.maxAuthFailuresPerMinute) {
+      this.blockedUntil = now + BLOCK_MS;
+      this.failures = [];
+      this.log('Connecteur local : trop d’échecs d’authentification, accès suspendu pendant une minute.');
+    }
+  }
+
+  private purgeNonces(): void {
+    const now = this.now();
+    for (const [key, expires] of this.nonces) if (expires <= now) this.nonces.delete(key);
+  }
+
+  // ─── Traitement d'une requête ─────────────────────────────────────────────
+
+  private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const ctx: RequestContext = { origin: null, closeConnection: hasBody(req) };
+    // Une écriture après la déconnexion du navigateur ne doit jamais faire tomber l'application.
+    res.on('error', () => undefined);
+    req.on('error', () => undefined);
+    try {
+      // 1. Pair distant.
+      if (!isLoopbackPeer(req.socket.remoteAddress)) {
+        req.socket.destroy();
+        return;
+      }
+      // 2. Hôte exact (anti DNS rebinding).
+      const port = this.listeningPort;
+      if (port === null || singleHeader(req, 'host') !== `${CONNECTOR_HOST}:${port}`) {
+        this.refuseWithoutCors(res);
+        return;
+      }
+      // 3. Origine exacte parmi les origines autorisées.
+      const origin = singleHeader(req, 'origin');
+      if (!origin || !this.options.allowedOrigins.includes(origin)) {
+        this.refuseWithoutCors(res);
+        return;
+      }
+      ctx.origin = origin;
+
+      // 4. Route exacte, puis méthode.
+      const path = req.url ?? '';
+      if (!ROUTES.has(path)) throw new HttpError(404, new MagistraError('NOT_FOUND', 'Service introuvable.'));
+      const route = path as ConnectorRoute;
+      const method = req.method ?? '';
+      const allowed = CONNECTOR_ROUTE_METHODS[route];
+      // 5. Pré-vérification CORS.
+      if (method === 'OPTIONS') {
+        this.preflight(req, res, ctx, allowed);
+        return;
+      }
+      if (!allowed.includes(method)) {
+        throw new HttpError(405, new MagistraError('INVALID_REQUEST', 'Méthode non autorisée pour cette adresse.'), { Allow: [...allowed, 'OPTIONS'].join(', ') });
+      }
+      if (route !== CONNECTOR_ROUTES.hello) {
+        const wait = this.blockedFor();
+        if (wait > 0) {
+          throw new HttpError(429, new MagistraError('RATE_LIMITED'), { 'Retry-After': String(Math.ceil(wait / 1000)) });
+        }
+      }
+
+      // 6. Format et taille annoncée du corps.
+      const limit = route === CONNECTOR_ROUTES.generate ? CONNECTOR_LIMITS.generateBodyBytes : CONNECTOR_LIMITS.smallBodyBytes;
+      if (method === 'POST') {
+        const contentType = singleHeader(req, 'content-type');
+        if (!contentType || !JSON_CONTENT_TYPE_RE.test(contentType.trim())) {
+          throw new HttpError(415, new MagistraError('INVALID_REQUEST', 'Format de requête invalide : JSON attendu.'));
+        }
+      } else if (hasBody(req)) {
+        throw invalid('Cette requête ne doit pas avoir de corps.');
+      }
+      const declared = declaredLength(req.headers);
+      if (declared !== null && declared > limit) throw tooLarge();
+
+      // 7a. Authentification sans le corps.
+      const signed = isSignedRoute(method, route);
+      const auth = signed ? this.preAuthenticate(req, origin) : null;
+
+      // 6b. Lecture du corps (bornée, avec délai).
+      const body = await this.readBody(req, limit, ctx);
+
+      // 7b. Signature sur les octets exacts du corps.
+      if (auth) this.verifySignature(auth, method, route, origin, body, ctx);
+
+      await this.dispatch(req, res, ctx, route, method, body, auth);
+    } catch (err) {
+      if (err instanceof AuthFailure) this.recordFailure();
+      this.sendError(res, ctx, err);
+    }
+  }
+
+  private preflight(req: IncomingMessage, res: ServerResponse, ctx: RequestContext, allowed: readonly string[]): void {
+    const requestedMethod = singleHeader(req, 'access-control-request-method');
+    // Plusieurs lignes d'en-tête valent une liste unique : TOUS les en-têtes demandés doivent être autorisés.
+    const requestedHeaders = ((req.headersDistinct as Record<string, string[] | undefined>)['access-control-request-headers'] ?? [])
+      .join(',')
+      .split(',')
+      .map(h => h.trim().toLowerCase())
+      .filter(Boolean);
+    if (!requestedMethod || !allowed.includes(requestedMethod) || !requestedHeaders.every(h => ALLOWED_REQUEST_HEADERS.has(h))) {
+      this.sendError(res, ctx, new HttpError(403, new MagistraError('FORBIDDEN')));
+      return;
+    }
+    const headers: Record<string, string> = {
+      ...this.headersFor(ctx),
+      'Access-Control-Allow-Methods': allowed.join(', '),
+      'Access-Control-Allow-Headers': CONNECTOR_ALLOWED_REQUEST_HEADERS.join(', '),
+      'Access-Control-Max-Age': PREFLIGHT_MAX_AGE,
+    };
+    // Ancien mécanisme « Private Network Access » de Chrome (site public → boucle locale) ; sans effet ailleurs.
+    if (singleHeader(req, 'access-control-request-private-network')?.toLowerCase() === 'true') {
+      headers['Access-Control-Allow-Private-Network'] = 'true';
+    }
+    res.writeHead(204, headers);
+    res.end();
+  }
+
+  /** En-têtes d'authentification, navigateur, horodatage, nonce : tout sauf la signature (qui exige le corps). */
+  private preAuthenticate(req: IncomingMessage, origin: string): Authenticated {
+    const unauthenticated = () => new AuthFailure(401, new MagistraError('UNAUTHENTICATED', 'Requête non authentifiée.'));
+    const clientId = singleHeader(req, CONNECTOR_HEADERS.client);
+    const timestamp = singleHeader(req, CONNECTOR_HEADERS.timestamp);
+    const nonce = singleHeader(req, CONNECTOR_HEADERS.nonce);
+    const signature = singleHeader(req, CONNECTOR_HEADERS.signature);
+    if (!clientId || !timestamp || !nonce || !signature
+      || !CONNECTOR_FORMATS.clientId.test(clientId) || !CONNECTOR_FORMATS.timestamp.test(timestamp)
+      || !CONNECTOR_FORMATS.nonce.test(nonce) || !CONNECTOR_FORMATS.mac.test(signature)) {
+      throw unauthenticated();
+    }
+    const client = this.options.clients.find(clientId);
+    // Navigateur inconnu, autorisation retirée, ou appairé pour un autre site : il doit se reconnecter.
+    if (!client || client.origin !== origin) throw new AuthFailure(401, new MagistraError('CONNECTOR_UNPAIRED'));
+    if (Math.abs(this.now() - Number(timestamp)) > CONNECTOR_LIMITS.clockSkewMs) throw unauthenticated();
+    if (this.nonces.has(`${clientId}.${nonce}`)) throw unauthenticated();
+    return { client, timestamp, nonce, signature };
+  }
+
+  private verifySignature(auth: Authenticated, method: string, route: ConnectorRoute, origin: string, body: Buffer, ctx: RequestContext): void {
+    const message = canonicalRequest({
+      method,
+      path: route,
+      origin,
+      clientId: auth.client.clientId,
+      timestamp: auth.timestamp,
+      nonce: auth.nonce,
+      bodySha256: sha256Base64Url(body),
+    });
+    if (!verifyHmac(auth.client.key, message, auth.signature)) {
+      throw new AuthFailure(401, new MagistraError('UNAUTHENTICATED', 'Requête non authentifiée.'));
+    }
+    // Nonce mémorisé SEULEMENT après une signature valide (une requête forgée ne remplit pas la mémoire), avec un
+    // nouveau contrôle : deux requêtes identiques simultanées ne passent jamais toutes les deux.
+    const key = `${auth.client.clientId}.${auth.nonce}`;
+    if (this.nonces.has(key)) throw new AuthFailure(401, new MagistraError('UNAUTHENTICATED', 'Requête déjà reçue.'));
+    if (this.nonces.size >= NONCE_PURGE_THRESHOLD) this.purgeNonces();
+    if (this.nonces.size >= MAX_NONCES) throw new HttpError(429, new MagistraError('RATE_LIMITED'), { 'Retry-After': '30' });
+    this.nonces.set(key, Number(auth.timestamp) + CONNECTOR_LIMITS.clockSkewMs + 1_000);
+    ctx.proof = hmacBase64Url(auth.client.key, canonicalProof(auth.client.clientId, auth.nonce));
+    this.options.clients.touch(auth.client.clientId);
+  }
+
+  /** Corps de la requête, borné, avec délai. Refus → la connexion sera fermée après la réponse. */
+  private readBody(req: IncomingMessage, limit: number, ctx: RequestContext): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        req.off('data', onData);
+        req.off('end', onEnd);
+        req.off('error', onError);
+        req.off('aborted', onError);
+      };
+      const fail = (err: HttpError) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        ctx.closeConnection = true;
+        req.pause();
+        reject(err);
+      };
+      const onData = (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > limit) fail(tooLarge());
+        else chunks.push(chunk);
+      };
+      const onEnd = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        ctx.closeConnection = false;
+        resolve(Buffer.concat(chunks, size));
+      };
+      const onError = () => fail(invalid('Lecture de la requête impossible.'));
+      const timer = setTimeout(() => fail(new HttpError(408, new MagistraError('INVALID_REQUEST', 'Requête reçue trop lentement.'))), this.timeouts.bodyMs);
+      timer.unref?.();
+      req.on('data', onData);
+      req.on('end', onEnd);
+      req.on('error', onError);
+      req.on('aborted', onError);
+    });
+  }
+
+  // ─── Routes ───────────────────────────────────────────────────────────────
+
+  private async dispatch(
+    req: IncomingMessage, res: ServerResponse, ctx: RequestContext, route: ConnectorRoute, method: string, body: Buffer, auth: Authenticated | null,
+  ): Promise<void> {
+    if (route === CONNECTOR_ROUTES.hello) {
+      const hello: ConnectorHello = { app: 'magistra', protocol: CONNECTOR_PROTOCOL_VERSION, version: this.options.version };
+      this.sendJson(res, ctx, 200, hello);
+      return;
+    }
+    if (route === CONNECTOR_ROUTES.pair && method === 'POST') {
+      await this.completePairing(req, res, ctx, body);
+      return;
+    }
+    if (!auth) throw new Error('route signée sans authentification');
+    const clientId = auth.client.clientId;
+    if (route === CONNECTOR_ROUTES.pair) {
+      // DELETE : ce navigateur retire sa propre autorisation (la preuve a été calculée avant le retrait).
+      await this.options.clients.revoke(clientId);
+      this.options.generations.cancelOwner(clientId);
+      this.options.onClientsChanged?.();
+      this.sendJson(res, ctx, 200, { ok: true });
+      return;
+    }
+    if (route === CONNECTOR_ROUTES.status) {
+      this.sendJson(res, ctx, 200, await this.options.status());
+      return;
+    }
+    if (route === CONNECTOR_ROUTES.cancel) {
+      const { jobId } = exactStrings(parseJsonObject(body), ['jobId'] as const);
+      if (!CONNECTOR_FORMATS.jobId.test(jobId)) throw invalid();
+      // Réponse identique que la génération existe ou non, qu'elle appartienne ou non à ce navigateur.
+      this.options.generations.cancelExternal(jobId, clientId);
+      this.sendJson(res, ctx, 200, { ok: true });
+      return;
+    }
+    if (route === CONNECTOR_ROUTES.generate) {
+      await this.generate(res, ctx, clientId, parseJsonObject(body));
+      return;
+    }
+    throw new HttpError(404, new MagistraError('NOT_FOUND', 'Service introuvable.'));
+  }
+
+  private async completePairing(req: IncomingMessage, res: ServerResponse, ctx: RequestContext, body: Buffer): Promise<void> {
+    const origin = ctx.origin!;
+    const input = exactStrings(parseJsonObject(body), ['pairingId', 'verifier', 'clientPublicKey'] as const);
+    if (!CONNECTOR_FORMATS.pairingId.test(input.pairingId) || !CONNECTOR_FORMATS.verifier.test(input.verifier)) throw invalid();
+    const clientPublicKey = parsePublicKey(input.clientPublicKey);
+    if (!clientPublicKey) throw invalid('Clé publique invalide.');
+    // Clé dérivée AVANT de consommer la demande : une clé publique hors de la courbe est refusée (400) sans
+    // faire perdre la demande (calcul synchrone : aucune autre requête ne peut s'intercaler).
+    let derived: { key: Buffer; connectorPublicKey: string };
+    try {
+      derived = deriveClientKey(clientPublicKey, input.pairingId);
+    } catch {
+      throw invalid('Clé publique invalide.');
+    }
+    let completion: PairingCompletion;
+    try {
+      completion = this.options.pairing.complete({ pairingId: input.pairingId, verifier: input.verifier, origin });
+    } catch (err) {
+      derived.key.fill(0);
+      const e = toMagistraError(err);
+      if (e.code === 'UNAUTHENTICATED') throw new AuthFailure(401, e);
+      throw err;
+    }
+    if (completion.status === 'pending') {
+      derived.key.fill(0);
+      const pending: PairCompleteResponse = { status: 'pending' };
+      this.sendJson(res, ctx, 202, pending);
+      return;
+    }
+    try {
+      const client = await this.options.clients.add({ origin, browser: browserFromUserAgent(req.headers['user-agent']), key: derived.key });
+      this.log('Connecteur local : nouveau navigateur autorisé.');
+      this.options.onClientsChanged?.();
+      const approved: PairCompleteResponse = {
+        status: 'approved',
+        clientId: client.clientId,
+        connectorPublicKey: derived.connectorPublicKey,
+        version: this.options.version,
+      };
+      this.sendJson(res, ctx, 200, approved);
+    } finally {
+      derived.key.fill(0);
+    }
+  }
+
+  private async generate(res: ServerResponse, ctx: RequestContext, clientId: string, raw: Record<string, unknown>): Promise<void> {
+    let head = false;
+    const queued: string[] = [];
+    const closed = () => res.destroyed || res.writableEnded;
+    const send = (event: GenerationEvent): boolean => {
+      if (closed()) return false;
+      const line = `${JSON.stringify(publicEvent(event))}\n`;
+      if (!head) queued.push(line);
+      else res.write(line);
+      return true;
+    };
+    // Erreurs levées ici (demande invalide, génération déjà en cours, moteur distant) : réponse JSON, pas de flux.
+    const handle = this.options.generations.startExternal(raw, { owner: clientId, send, requireLocal: true });
+    // Connexion fermée par le navigateur (onglet fermé, « Arrêter ») avant la fin : génération interrompue.
+    res.once('close', () => {
+      if (!res.writableFinished) this.options.generations.cancelExternal(handle.jobId, clientId);
+    });
+    res.writeHead(200, {
+      ...this.headersFor(ctx),
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      [CONNECTOR_HEADERS.job]: handle.jobId,
+    });
+    res.flushHeaders();
+    res.socket?.setNoDelay(true);
+    head = true;
+    for (const line of queued.splice(0)) res.write(line);
+    await handle.finished;
+    if (!closed()) res.end();
+  }
+}

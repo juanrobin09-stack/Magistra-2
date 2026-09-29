@@ -9,6 +9,7 @@ import {
   DEFAULT_PREFERENCES, type AIConfigUpdate, type EngineInstallOptions, type EngineStartOptions, type LocalPreferences, type StoredDocument,
 } from '../shared/ipc.js';
 import { isNiveau } from '../shared/levels.js';
+import { CONNECTOR_FORMATS } from '../shared/localConnector.js';
 import { isResearchMode, type TeacherProfile } from '../shared/types.js';
 import { validateLocatorLabels } from '../shared/validation.js';
 import { hasControlChars, stripNul } from './security.js';
@@ -27,6 +28,14 @@ export function requireId(value: unknown, what = 'identifiant'): string {
 
 export function requireBoolean(value: unknown, what: string): boolean {
   if (typeof value !== 'boolean') throw new MagistraError('INVALID_REQUEST', `Paramètre invalide : ${what}.`);
+  return value;
+}
+
+/** Identifiant d'un navigateur autorisé à utiliser le connecteur local (16 octets en base64url, attribué par l'application). */
+export function requireClientId(value: unknown): string {
+  if (typeof value !== 'string' || !CONNECTOR_FORMATS.clientId.test(value)) {
+    throw new MagistraError('INVALID_REQUEST', 'Paramètre invalide : navigateur autorisé.');
+  }
   return value;
 }
 

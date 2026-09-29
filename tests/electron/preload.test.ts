@@ -33,7 +33,8 @@ describe('pont window.magistra', () => {
   it('expose exactement les groupes du contrat MagistraBridge', () => {
     expect(Object.keys(exposed)).toEqual(['magistra']);
     expect(bridge.isElectron).toBe(true);
-    expect(Object.keys(bridge).sort()).toEqual(['ai', 'app', 'data', 'documents', 'generation', 'isElectron', 'prefs', 'profile']);
+    expect(Object.keys(bridge).sort()).toEqual(['ai', 'app', 'connector', 'data', 'documents', 'generation', 'isElectron', 'prefs', 'profile']);
+    expect(Object.keys(bridge.connector).sort()).toEqual(['onChange', 'revoke', 'setEnabled', 'status']);
     expect(Object.keys(bridge.ai).sort()).toEqual(['cancelEngineInstall', 'cancelPull', 'installEngine', 'onProgress', 'openEngineDownload', 'pullModel', 'refresh', 'setConfig', 'startEngine', 'status']);
     expect(Object.keys(bridge.data).sort()).toEqual(['clearAll', 'delete', 'get', 'list', 'setFavorite', 'stats']);
   });
@@ -69,6 +70,9 @@ describe('pont window.magistra', () => {
       [() => bridge.documents.list(), IPC.docsList, []],
       [() => bridge.documents.load('d'), IPC.docsLoad, ['d']],
       [() => bridge.documents.delete('d'), IPC.docsDelete, ['d']],
+      [() => bridge.connector.status(), IPC.connectorStatus, []],
+      [() => bridge.connector.revoke('AAAAAAAAAAAAAAAAAAAAAA'), IPC.connectorRevoke, ['AAAAAAAAAAAAAAAAAAAAAA']],
+      [() => bridge.connector.setEnabled(false), IPC.connectorSetEnabled, [false]],
     ];
     for (const [fn, channel, args] of calls) {
       invoke.mockClear();
@@ -97,5 +101,13 @@ describe('pont window.magistra', () => {
     expect(progress).toEqual([{ kind: 'model-ready', model: 'm' }]);
     offProgress();
     expect(listeners.get(IPC.aiProgress)!.size).toBe(0);
+
+    const statuses: unknown[] = [];
+    const offConnector = bridge.connector.onChange(status => statuses.push(status));
+    const status = { enabled: true, listening: true, persistent: true, clients: [] };
+    [...listeners.get(IPC.connectorChanged)!][0](fakeIpcEvent, status);
+    expect(statuses).toEqual([status]);
+    offConnector();
+    expect(listeners.get(IPC.connectorChanged)!.size).toBe(0);
   });
 });

@@ -94,6 +94,12 @@ describe('enregistrement des canaux IPC', () => {
   };
   const openExternal = vi.fn(async () => undefined);
   const onAppReady = vi.fn();
+  const connectorStatus = { enabled: true, listening: true, persistent: true, clients: [] };
+  const connector = {
+    status: vi.fn(() => connectorStatus),
+    revoke: vi.fn(async (_clientId: string) => connectorStatus),
+    setEnabled: vi.fn(async (_enabled: boolean) => connectorStatus),
+  };
 
   beforeEach(() => {
     handlers.clear();
@@ -108,11 +114,14 @@ describe('enregistrement des canaux IPC', () => {
       appInfo: () => ({ version: '2.0.0', platform: 'win32', userDataPath: 'C:/x', isPackaged: true }),
       openExternal,
       onAppReady,
+      connector,
     });
   });
 
   it('enregistre tous les canaux invoqués du contrat', () => {
-    const invoked = Object.values(IPC).filter(c => c !== IPC.aiProgress && c !== IPC.genEvent && c !== IPC.appReady);
+    // Évènements du processus principal vers la fenêtre (aucun gestionnaire) et signal app:ready (écouteur).
+    const events: string[] = [IPC.aiProgress, IPC.genEvent, IPC.connectorChanged, IPC.appReady];
+    const invoked = Object.values(IPC).filter(c => !events.includes(c));
     for (const channel of invoked) expect(handlers.has(channel), channel).toBe(true);
     expect(listeners.has(IPC.appReady)).toBe(true);
   });
@@ -158,6 +167,7 @@ describe('enregistrement des canaux IPC', () => {
       appInfo: () => ({ version: '2.0.0', platform: 'win32', userDataPath: 'C:/x', isPackaged: true }),
       openExternal,
       onAppReady,
+      connector,
     });
     const install = handlers.get(IPC.aiInstallEngine)!;
     await install(event('app://magistra/'));
@@ -174,6 +184,30 @@ describe('enregistrement des canaux IPC', () => {
     await expect(start(event('https://evil.example/'), { restart: true })).rejects.toThrow(/^FORBIDDEN\|/);
     expect(ai.startEngineOrExplain).toHaveBeenCalledTimes(1);
     expect(ai.restartEngine).toHaveBeenCalledTimes(1);
+  });
+
+  it('connecteur local : identifiant de navigateur et booléen validés, expéditeur étranger refusé', async () => {
+    const clientId = 'AAAAAAAAAAAAAAAAAAAAAA';
+    await expect(handlers.get(IPC.connectorStatus)!(event('app://magistra/'))).resolves.toEqual(connectorStatus);
+    const revoke = handlers.get(IPC.connectorRevoke)!;
+    await expect(revoke(event('app://magistra/'), clientId)).resolves.toEqual(connectorStatus);
+    expect(connector.revoke).toHaveBeenCalledWith(clientId);
+    for (const bad of ['../../ai-config', '', 'A'.repeat(23), 'A'.repeat(64), 42, null, { clientId }]) {
+      await expect(revoke(event('app://magistra/'), bad)).rejects.toThrow(/^INVALID_REQUEST\|/);
+    }
+    await expect(revoke(event('https://magistra-2.vercel.app/'), clientId)).rejects.toThrow(/^FORBIDDEN\|/);
+    expect(connector.revoke).toHaveBeenCalledTimes(1);
+
+    const setEnabled = handlers.get(IPC.connectorSetEnabled)!;
+    await setEnabled(event('app://magistra/'), false);
+    expect(connector.setEnabled).toHaveBeenCalledWith(false);
+    for (const bad of ['false', 0, 1, null, undefined, { enabled: true }]) {
+      await expect(setEnabled(event('app://magistra/'), bad)).rejects.toThrow(/^INVALID_REQUEST\|/);
+    }
+    await expect(setEnabled(event('https://evil.example/'), true)).rejects.toThrow(/^FORBIDDEN\|/);
+    expect(connector.setEnabled).toHaveBeenCalledTimes(1);
+    // Aucun évènement IPC n'est accepté dans ce sens : connector:changed n'est émis que par le processus principal.
+    expect(handlers.has(IPC.connectorChanged)).toBe(false);
   });
 
   it('shell:open-external refuse les schémas dangereux', async () => {

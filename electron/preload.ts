@@ -5,6 +5,7 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { IPC, type AIProgressEvent, type MagistraBridge } from '../shared/ipc.js';
+import type { ConnectorAppStatus } from '../shared/localConnector.js';
 import type { GenerationEvent } from '../shared/types.js';
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -71,6 +72,12 @@ const bridge: MagistraBridge = {
     load: id => ipcRenderer.invoke(IPC.docsLoad, id),
     save: doc => ipcRenderer.invoke(IPC.docsSave, doc),
     delete: id => ipcRenderer.invoke(IPC.docsDelete, id),
+  },
+  connector: {
+    status: () => ipcRenderer.invoke(IPC.connectorStatus),
+    revoke: clientId => ipcRenderer.invoke(IPC.connectorRevoke, clientId),
+    setEnabled: enabled => ipcRenderer.invoke(IPC.connectorSetEnabled, enabled),
+    onChange: listener => subscribe<ConnectorAppStatus>(IPC.connectorChanged, listener),
   },
 };
 

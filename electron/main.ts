@@ -1,12 +1,22 @@
 // Processus principal de Magistra (application Windows, également fonctionnelle sous macOS et Linux).
 //
 // Architecture : React (fenêtre) ⇄ IPC sécurisé (preload) ⇄ processus principal ⇄ { données locales, Ollama }.
-// Aucun serveur HTTP local : l'interface est servie par le protocole app:// directement depuis app.asar.
+// L'interface est servie par le protocole app:// directement depuis app.asar (aucun serveur HTTP pour elle).
 // La fenêtre a sa propre session (partition « magistra-ui ») où tout accès réseau est bloqué ; le processus
 // principal, lui, accède au réseau par la session par défaut (net.fetch).
+//
+// SEUL serveur HTTP : le connecteur local (electron/connector/), qui permet au SITE WEB officiel Magistra, ouvert
+// dans le navigateur de l'enseignant, d'utiliser l'IA de cet ordinateur :
+//   site web ──HTTP boucle locale (127.0.0.1, port dédié), requêtes signées──▶ connecteur ──▶ GenerationManager
+//   (même moteur, même créneau unique que la fenêtre) ──▶ moteur IA ──▶ modèle.
+// Il n'expose que cinq routes Magistra (présence, appairage, état, génération en flux, arrêt), jamais Ollama, ni
+// fichier, ni commande, ni réglage ; il n'accepte que l'origine officielle, après un appairage accepté par
+// l'enseignant dans une boîte de l'application (URL magistra://pair). Réglage « Site web Magistra » : activation,
+// navigateurs autorisés, retrait. Éteint pendant le test de démarrage.
 
 import {
-  app, BrowserWindow, dialog, Menu, net, protocol, safeStorage, session, shell, type MenuItemConstructorOptions, type Session,
+  app, BrowserWindow, dialog, Menu, net, protocol, safeStorage, session, shell, type MenuItemConstructorOptions, type MessageBoxOptions,
+  type Session,
 } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, promises as fsp, rmSync } from 'node:fs';
@@ -14,9 +24,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fetchPublicPage } from '../server/safeFetch.js';
+import { isLoopbackUrl } from '../shared/ai/ollama.js';
 import type { FetchLike } from '../shared/ai/provider.js';
 import { IPC, type AIProgressEvent, type UpdateCheckResult } from '../shared/ipc.js';
+import { CONNECTOR_PORTS, CONNECTOR_URL_SCHEME, OFFICIAL_WEB_ORIGINS } from '../shared/localConnector.js';
 import { AIConfigStore, safeStorageCipher } from './aiConfig.js';
+import { appUrlFromArgv, LocalConnector, type ConsentRequest } from './connector/service.js';
 import { GenerationManager } from './generation.js';
 import { detectHardware, freeDiskBytes, ollamaModelsDir, systemHardwareDeps } from './hardware.js';
 import { registerIpcHandlers } from './ipc.js';
@@ -274,6 +287,75 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
+/** Fenêtre au premier plan, créée si besoin (deuxième lancement, magistra://open, demande d'appairage). */
+function showMainWindow(): BrowserWindow | null {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+    return mainWindow;
+  }
+  if (app.isReady() && services) return createWindow();
+  return null;
+}
+
+/** Attend que la fenêtre soit affichée (au plus 10 s) : une boîte liée à une fenêtre cachée resterait invisible. */
+function whenShown(win: BrowserWindow): Promise<void> {
+  if (win.isDestroyed() || win.isVisible()) return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => {
+      clearTimeout(timer);
+      win.off('show', done);
+      win.off('closed', done);
+      resolve();
+    };
+    const timer = setTimeout(done, 10_000);
+    win.once('show', done);
+    win.once('closed', done);
+  });
+}
+
+// ─── Connecteur local : URL magistra:// et consentement ────────────────────
+
+let connector: LocalConnector | null = null;
+/** Vrai une fois le connecteur prêt à traiter les URL magistra:// (après le démarrage). */
+let connectorReady = false;
+/** URL reçue avant la fin du démarrage (ligne de commande, « open-url » de macOS) : seule la dernière est gardée. */
+let pendingAppUrl: string | null = null;
+
+/** URL magistra:// reçue (ligne de commande, deuxième instance, macOS). Jamais pendant le test de démarrage. */
+function receiveAppUrl(raw: string): void {
+  if (smokeOptions) return;
+  if (!connector || !connectorReady) {
+    pendingAppUrl = raw;
+    return;
+  }
+  connector.handleAppUrl(raw, () => {
+    showMainWindow();
+  }).catch(err => console.warn('[magistra] Adresse magistra:// non traitée :', err instanceof Error ? err.name : err));
+}
+
+/** Boîte de consentement native, liée à la fenêtre (créée et mise au premier plan d'abord). */
+async function askConsent(request: ConsentRequest, signal: AbortSignal): Promise<boolean> {
+  const win = showMainWindow();
+  if (win) await whenShown(win);
+  if (signal.aborted) return false;
+  const options: MessageBoxOptions = {
+    type: 'question',
+    buttons: ['Autoriser', 'Refuser'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    title: 'Magistra',
+    message: request.message,
+    detail: request.detail,
+    // Demande remplacée par une nouvelle ou expirée : la boîte se ferme (réponse « Refuser », sans effet).
+    signal,
+  };
+  const { response } = win && !win.isDestroyed() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+  return response === 0 && !signal.aborted;
+}
+
 // ─── Démarrage ──────────────────────────────────────────────────────────────
 
 async function start(): Promise<void> {
@@ -297,7 +379,8 @@ async function start(): Promise<void> {
   const store = new LocalStore(userData);
   await store.init();
 
-  const config = new AIConfigStore(path.join(userData, 'ai-config.json'), safeStorageCipher(safeStorage), { ollamaUrl: devOptions.ollamaUrl });
+  const cipher = safeStorageCipher(safeStorage);
+  const config = new AIConfigStore(path.join(userData, 'ai-config.json'), cipher, { ollamaUrl: devOptions.ollamaUrl });
   await config.load();
 
   const sendToWindow = (channel: string, payload: unknown): boolean => {
@@ -385,14 +468,37 @@ async function start(): Promise<void> {
     send: payload => sendToWindow(IPC.genEvent, payload),
     fetch: internetFetch,
     fetchPage: fetchPublicPage,
+    // Générations du site (connecteur local) : uniquement avec le moteur de CET ordinateur.
+    isLocalEngine: () => {
+      const cfg = config.get();
+      return cfg.mode === 'local' && isLoopbackUrl(cfg.ollamaUrl);
+    },
   });
+
+  const localConnector = new LocalConnector({
+    file: path.join(userData, 'local-connector.json'),
+    cipher,
+    version: app.getVersion(),
+    // Origines de développement (boucle locale) : jamais dans l'application installée (voir devOptions.ts).
+    allowedOrigins: [...OFFICIAL_WEB_ORIGINS, ...(devOptions.connectorDevOrigins ?? [])],
+    ports: devOptions.connectorPorts ?? CONNECTOR_PORTS,
+    generation,
+    askConsent,
+    onChange: status => {
+      sendToWindow(IPC.connectorChanged, status);
+    },
+    ...(devOptions.connectorDisabled ? { disabledForSession: true } : {}),
+  });
+  await localConnector.init();
+  connector = localConnector;
 
   services = {
     onAppReady: () => {
       if (smoke) void smoke.onAppReady();
     },
   };
-  onDocumentReplaced = () => generation.cancelAll();
+  // Seules les générations de la fenêtre sont concernées : celles du site continuent (leur page n'a pas changé).
+  onDocumentReplaced = () => generation.cancelWindow();
 
   // Une seule vérification de version à la fois (clics répétés : même réponse).
   let updateCheck: Promise<UpdateCheckResult> | null = null;
@@ -415,11 +521,17 @@ async function start(): Promise<void> {
         updateCheck = null;
       })),
     onAppReady: () => services?.onAppReady(),
+    connector: {
+      status: () => localConnector.status(),
+      revoke: clientId => localConnector.revoke(clientId),
+      setEnabled: enabled => localConnector.setEnabled(enabled),
+    },
   });
 
   app.on('before-quit', () => {
     quitting = true;
     generation.cancelAll();
+    void localConnector.stop();
     ai.dispose();
   });
 
@@ -431,6 +543,27 @@ async function start(): Promise<void> {
   if (!smoke) {
     ai.autoStart().catch(err => console.warn('[magistra] Démarrage automatique du moteur IA impossible :', err));
   }
+}
+
+/**
+ * Après le démarrage : schéma magistra:// (application installée), connecteur local (sauf test de démarrage), puis
+ * URL reçue pendant le démarrage (lancement par le site).
+ */
+async function startConnector(): Promise<void> {
+  const current = connector;
+  if (!current || smoke) return;
+  if (app.isPackaged) {
+    try {
+      if (!app.isDefaultProtocolClient(CONNECTOR_URL_SCHEME)) app.setAsDefaultProtocolClient(CONNECTOR_URL_SCHEME);
+    } catch (err) {
+      console.warn('[magistra] Enregistrement du schéma magistra:// impossible :', err instanceof Error ? err.message : err);
+    }
+  }
+  await current.start();
+  connectorReady = true;
+  const url = pendingAppUrl;
+  pendingAppUrl = null;
+  if (url) receiveAppUrl(url);
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -451,14 +584,21 @@ if (!gotLock) {
     });
   }
 
-  app.on('second-instance', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      if (!mainWindow.isVisible()) mainWindow.show();
-      mainWindow.focus();
-    } else if (app.isReady() && services) {
-      createWindow();
-    }
+  // Premier lancement par le site (Windows, Linux) : l'URL magistra:// est un argument de la ligne de commande.
+  pendingAppUrl = appUrlFromArgv(process.argv);
+
+  app.on('second-instance', (_event, argv) => {
+    const url = appUrlFromArgv(argv);
+    // Lancement avec une URL magistra:// : c'est elle qui décide (« open » ou appairage accepté : fenêtre au premier
+    // plan ; URL ignorée, site non autorisé : rien). Sinon (nouveau clic sur l'icône) : fenêtre au premier plan.
+    if (url && !smokeOptions) receiveAppUrl(url);
+    else showMainWindow();
+  });
+
+  // macOS : l'URL arrive par cet évènement, parfois avant « ready » (enregistré ici, avant le démarrage).
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    receiveAppUrl(url);
   });
 
   app.on('activate', () => {
@@ -469,5 +609,8 @@ if (!gotLock) {
     app.quit();
   });
 
-  app.whenReady().then(start).catch(err => fatal(err));
+  app.whenReady()
+    .then(start)
+    .then(() => startConnector().catch(err => console.warn('[magistra] Connecteur local non démarré :', err instanceof Error ? err.name : err)))
+    .catch(err => fatal(err));
 }

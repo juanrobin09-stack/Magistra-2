@@ -14,6 +14,14 @@
     "!node_modules/**"
   ],
   "asar": true,
+  "protocols": [
+    {
+      "name": "Magistra",
+      "schemes": [
+        "magistra"
+      ]
+    }
+  ],
   "electronFuses": {
     "runAsNode": false,
     "enableNodeOptionsEnvironmentVariable": false,

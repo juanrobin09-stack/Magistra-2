@@ -9,13 +9,14 @@
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import { MagistraError, toMagistraError } from '../shared/errors.js';
 import { IPC, type AppInfo, type UpdateCheckResult } from '../shared/ipc.js';
+import type { ConnectorAppStatus } from '../shared/localConnector.js';
 import type { GenerationManager } from './generation.js';
 import type { LocalStore } from './localStore.js';
 import type { AIManager } from './ollamaSetup.js';
 import { isSafeExternalUrl, isTrustedSender, type TrustedWindowLike } from './security.js';
 import { UPDATE_CHECK_UNAVAILABLE_MESSAGE } from './updateCheck.js';
 import {
-  requireBoolean, requireId, sanitizeAIConfigUpdate, sanitizeEngineInstallOptions, sanitizeEngineStartOptions, sanitizeListQuery,
+  requireBoolean, requireClientId, requireId, sanitizeAIConfigUpdate, sanitizeEngineInstallOptions, sanitizeEngineStartOptions, sanitizeListQuery,
   sanitizePreferencesUpdate, sanitizeProfile, sanitizePullTarget, sanitizeStoredDocument,
 } from './validate.js';
 
@@ -31,6 +32,12 @@ export interface IpcContext {
   /** Recherche d'une nouvelle version (au clic de l'enseignant uniquement) ; absente : « vérification impossible ». */
   checkForUpdate?: () => Promise<UpdateCheckResult>;
   onAppReady: () => void;
+  /** Connecteur local (site web Magistra → IA de cet ordinateur) : réglages « Site web Magistra ». */
+  connector: {
+    status(): ConnectorAppStatus | Promise<ConnectorAppStatus>;
+    revoke(clientId: string): Promise<ConnectorAppStatus>;
+    setEnabled(enabled: boolean): Promise<ConnectorAppStatus>;
+  };
 }
 
 /** Erreur transmise à la fenêtre : « CODE|message lisible », rien d'autre. */
@@ -135,6 +142,13 @@ export function registerIpcHandlers(ctx: IpcContext): () => void {
     await ctx.store.saveDocument(sanitizeStoredDocument(doc));
   });
   handle(IPC.docsDelete, (_e, id) => ctx.store.deleteDocument(requireId(id, 'document')));
+
+  // ─── Connecteur local (navigateurs autorisés, activation) ─────────────────
+  // Aucun secret ni aucune adresse dans l'état renvoyé (ConnectorAppStatus) ; l'évènement IPC.connectorChanged
+  // est émis par le processus principal.
+  handle(IPC.connectorStatus, () => ctx.connector.status());
+  handle(IPC.connectorRevoke, (_e, clientId) => ctx.connector.revoke(requireClientId(clientId)));
+  handle(IPC.connectorSetEnabled, (_e, enabled) => ctx.connector.setEnabled(requireBoolean(enabled, 'accès du site Magistra')));
 
   return () => {
     for (const channel of channels) ipcMain.removeHandler(channel);

@@ -9,7 +9,9 @@ import { MockProvider } from '../../shared/ai/mock.js';
 import type { AIProvider, PreloadOptions } from '../../shared/ai/provider.js';
 import { MagistraError } from '../../shared/errors.js';
 import type { GenerationEvent, PrivacyInfo } from '../../shared/types.js';
-import { GenerationManager, maxDocumentCharsFor, type GenerationDeps, type GenerationPayload } from '../../electron/generation.js';
+import {
+  BUSY_EXTERNAL_MESSAGE, BUSY_WINDOW_MESSAGE, GenerationManager, maxDocumentCharsFor, type GenerationDeps, type GenerationPayload,
+} from '../../electron/generation.js';
 import { LocalStore } from '../../electron/localStore.js';
 
 let dir: string;
@@ -33,9 +35,13 @@ const REQUEST = {
 
 type Active = Awaited<ReturnType<GenerationDeps['describeActive']>>;
 
-function manager(provider: AIProvider | (() => Promise<AIProvider>), opts: { privacy?: PrivacyInfo; windowOpen?: () => boolean; active?: Partial<Active> } = {}) {
+function manager(
+  provider: AIProvider | (() => Promise<AIProvider>),
+  opts: { privacy?: PrivacyInfo; windowOpen?: () => boolean; active?: Partial<Active>; isLocalEngine?: () => boolean } = {},
+) {
   const payloads: GenerationPayload[] = [];
   const gm = new GenerationManager({
+    ...(opts.isLocalEngine ? { isLocalEngine: opts.isLocalEngine } : {}),
     store,
     resolveProvider: async (_signal, onStatus) => {
       onStatus('Démarrage du moteur IA…');
@@ -201,5 +207,123 @@ describe('capacités', () => {
     expect(await gm.capabilities()).toMatchObject({ ready: false, notReady, providerInfo });
     const ok = manager(new MockProvider(), { active: { ready: true, notReady } });
     expect((await ok.gm.capabilities()).notReady).toBeUndefined();
+  });
+});
+
+describe('générations du site (connecteur local)', () => {
+  /** Destinataire d'une génération du site (flux NDJSON simulé). */
+  function sink(open: () => boolean = () => true) {
+    const events: GenerationEvent[] = [];
+    return { events, send: (event: GenerationEvent) => (open() ? (events.push(event), true) : false) };
+  }
+
+  it('évènements vers leur propre destinataire, jamais vers la fenêtre ; « done » porte la génération, rien n’est enregistré', async () => {
+    const { gm, payloads } = manager(new MockProvider({ reply: '# Espaces vectoriels\n\nDeux lois [S1].', model: 'ministral-3:14b' }));
+    const out = sink();
+    const handle = gm.startExternal(REQUEST, { owner: 'navigateur-A', send: out.send, requireLocal: true });
+    expect(gm.busy).toBe(true);
+    expect(gm.busyExternal).toBe(true);
+    await handle.finished;
+    // Créneau libéré dès la fin : une nouvelle génération est aussitôt possible.
+    expect(gm.busy).toBe(false);
+    expect(payloads).toEqual([]);
+    const done = out.events.at(-1) as Extract<GenerationEvent, { type: 'done' }>;
+    expect(done).toMatchObject({ type: 'done', saved: false, model: 'ministral-3:14b' });
+    expect(done.id).toBeUndefined();
+    expect(done.record).toMatchObject({ type: 'cours', sujet: 'Espaces vectoriels', contenu: done.content, model: 'ministral-3:14b' });
+    expect(done.record?.sources).toHaveLength(1);
+    expect(JSON.stringify(done.record)).not.toContain('muni de deux lois');
+    expect((await store.stats()).total).toBe(0);
+  });
+
+  it('même créneau unique que la fenêtre, avec la cause dans le message', async () => {
+    const provider = new MockProvider({ reply: 'x'.repeat(2_000), chunkSize: 10, delayMs: 5 });
+    const { gm, finished } = manager(provider);
+    const win = gm.start(REQUEST);
+    expect(() => gm.startExternal(REQUEST, { owner: 'A', send: sink().send })).toThrow(expect.objectContaining({ code: 'GENERATION_BUSY', message: BUSY_WINDOW_MESSAGE }));
+    gm.cancel(win.jobId);
+    await finished(win.jobId);
+    await new Promise(r => setTimeout(r, 0));
+    const handle = gm.startExternal(REQUEST, { owner: 'A', send: sink().send });
+    expect(() => gm.start(REQUEST)).toThrow(expect.objectContaining({ code: 'GENERATION_BUSY', message: BUSY_EXTERNAL_MESSAGE }));
+    expect(() => gm.startExternal(REQUEST, { owner: 'B', send: sink().send })).toThrow(expect.objectContaining({ code: 'GENERATION_BUSY' }));
+    gm.cancelExternal(handle.jobId, 'A');
+    await handle.finished;
+    expect(gm.busy).toBe(false);
+  });
+
+  it('moteur distant : LOCAL_ENGINE_REMOTE avant tout évènement (réglage), ou avant tout envoi au moteur (fournisseur)', async () => {
+    const remote = new MockProvider({ reply: 'jamais', local: false });
+    const bySetting = manager(remote, { isLocalEngine: () => false });
+    expect(() => bySetting.gm.startExternal(REQUEST, { owner: 'A', send: sink().send, requireLocal: true }))
+      .toThrow(expect.objectContaining({ code: 'LOCAL_ENGINE_REMOTE', status: 409 }));
+    expect(bySetting.gm.busy).toBe(false);
+    // La fenêtre, elle, peut utiliser le serveur distant choisi par l'enseignant.
+    expect(() => bySetting.gm.start(REQUEST)).not.toThrow();
+    bySetting.gm.cancelAll();
+
+    const byProvider = manager(remote);
+    const out = sink();
+    await byProvider.gm.startExternal(REQUEST, { owner: 'A', send: out.send, requireLocal: true }).finished;
+    expect(out.events.at(-1)).toMatchObject({ type: 'error', code: 'LOCAL_ENGINE_REMOTE' });
+    expect(remote.calls).toHaveLength(0);
+  });
+
+  it('demande invalide : refus immédiat, créneau libre', () => {
+    const { gm } = manager(new MockProvider());
+    expect(() => gm.startExternal({ ...REQUEST, sujet: '' }, { owner: 'A', send: sink().send })).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+    expect(() => gm.startExternal(REQUEST, { owner: '', send: sink().send })).toThrow(expect.objectContaining({ code: 'INTERNAL' }));
+    expect(gm.busy).toBe(false);
+  });
+
+  it('arrêt par le propriétaire seulement ; la fenêtre et le rechargement de sa page ne l’arrêtent pas', async () => {
+    const { gm } = manager(new MockProvider({ reply: 'y'.repeat(3_000), chunkSize: 10, delayMs: 5 }));
+    const out = sink();
+    const handle = gm.startExternal(REQUEST, { owner: 'A', send: out.send });
+    await new Promise(r => setTimeout(r, 30));
+    expect(gm.cancelExternal(handle.jobId, 'B')).toBe(false);
+    expect(gm.cancelExternal('autre-job', 'A')).toBe(false);
+    gm.cancel(handle.jobId);
+    gm.cancelWindow();
+    gm.cancelOwner('B');
+    expect(gm.busy).toBe(true);
+    expect(gm.cancelExternal(handle.jobId, 'A')).toBe(true);
+    await handle.finished;
+    expect(out.events.at(-1)).toMatchObject({ type: 'error', code: 'GENERATION_ABORTED' });
+    expect(out.events.filter(e => e.type === 'error')).toHaveLength(1);
+  });
+
+  it('retrait du navigateur, désactivation du connecteur, connexion fermée : génération interrompue', async () => {
+    const slow = () => new MockProvider({ reply: 'z'.repeat(3_000), chunkSize: 10, delayMs: 5 });
+    const a = manager(slow());
+    const byOwner = a.gm.startExternal(REQUEST, { owner: 'A', send: sink().send });
+    await new Promise(r => setTimeout(r, 20));
+    a.gm.cancelOwner('A');
+    await byOwner.finished;
+
+    const b = manager(slow());
+    const all = b.gm.startExternal(REQUEST, { owner: 'A', send: sink().send });
+    await new Promise(r => setTimeout(r, 20));
+    b.gm.cancelExternalAll();
+    await all.finished;
+
+    let open = true;
+    const c = manager(slow());
+    const out = sink(() => open);
+    const closed = c.gm.startExternal(REQUEST, { owner: 'A', send: out.send });
+    await new Promise(r => setTimeout(r, 20));
+    open = false;
+    await closed.finished;
+    expect(c.gm.busy).toBe(false);
+  });
+
+  it('page de la fenêtre remplacée : seule la génération de la fenêtre s’arrête', async () => {
+    const { gm, finished } = manager(new MockProvider({ reply: 'w'.repeat(2_000), chunkSize: 10, delayMs: 5 }));
+    const { jobId } = gm.start(REQUEST);
+    await new Promise(r => setTimeout(r, 20));
+    gm.cancelExternalAll();
+    expect(gm.busy).toBe(true);
+    gm.cancelWindow();
+    expect((await finished(jobId)).at(-1)).toMatchObject({ type: 'error', code: 'GENERATION_ABORTED' });
   });
 });

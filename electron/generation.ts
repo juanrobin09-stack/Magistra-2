@@ -2,15 +2,25 @@
 // → sauvegarde locale → évènements envoyés à la fenêtre (IPC.genEvent).
 //
 // GÉNÉRATION ILLIMITÉE : aucun quota, aucun compteur. Seules limites : la machine et le modèle.
-// Une seule génération à la fois (GENERATION_BUSY sinon) ; gen:cancel l'interrompt immédiatement.
+// Une seule génération à la fois AU TOTAL (GENERATION_BUSY sinon) ; gen:cancel l'interrompt immédiatement.
+//
+// Générations « externes » (connecteur local : le site web Magistra utilise l'IA de cet ordinateur) : même moteur,
+// même pipeline, MÊME créneau unique que la fenêtre, mais :
+//   - leurs évènements vont à leur propre destinataire (flux NDJSON du connecteur), jamais à la fenêtre ;
+//   - rien n'est enregistré dans l'historique de l'application : l'évènement « done » porte la génération à
+//     enregistrer (`record`, pipeline includeRecord) et c'est le site qui l'enregistre dans le compte ;
+//   - `requireLocal` : si le moteur actif n'est pas sur cet ordinateur (application réglée sur un serveur distant),
+//     refus LOCAL_ENGINE_REMOTE — jamais de relais silencieux des demandes du site vers un tiers ;
+//   - seul leur propriétaire (le navigateur appairé qui les a lancées) peut les arrêter ; le remplacement de la page
+//     de la fenêtre (rechargement) n'arrête que les générations de la fenêtre.
 
 import { randomUUID } from 'node:crypto';
 import type { AIProvider } from '../shared/ai/provider.js';
 import { MagistraError, toMagistraError } from '../shared/errors.js';
 import type { LocalPreferences } from '../shared/ipc.js';
-import { runGeneration } from '../shared/pipeline.js';
+import { runGeneration, type NewGenerationRecord } from '../shared/pipeline.js';
 import type { FetchedPage, ResearchConfig, ResearchDeps } from '../shared/research/index.js';
-import type { AINotice, Capabilities, GenerationEvent, PrivacyInfo, ProviderInfo } from '../shared/types.js';
+import type { AINotice, Capabilities, GenerationEvent, GenerationRequest, PrivacyInfo, ProviderInfo } from '../shared/types.js';
 import { validateGenerationRequest } from '../shared/validation.js';
 import type { LocalStore } from './localStore.js';
 
@@ -38,7 +48,37 @@ export interface GenerationDeps {
   fetch: ResearchDeps['fetch'];
   fetchPage?: (url: string, signal?: AbortSignal) => Promise<FetchedPage | null>;
   idFactory?: () => string;
+  /**
+   * Réglage du moteur actif, sans accès réseau : vrai si c'est le moteur de CET ordinateur (mode local, adresse de
+   * la boucle locale). Utilisé par `requireLocal` pour refuser AVANT toute préparation du moteur ; absent : seule
+   * la vérification du fournisseur préparé (`provider.local`) s'applique.
+   */
+  isLocalEngine?: () => boolean;
 }
+
+/** Génération demandée par le site web via le connecteur local. */
+export interface ExternalGenerationOptions {
+  /** Propriétaire : identifiant du navigateur appairé. Lui seul peut arrêter la génération. */
+  owner: string;
+  /**
+   * Destinataire des évènements (flux NDJSON) ; renvoie faux si la connexion est fermée : la génération est alors
+   * interrompue (inutile de faire travailler le modèle pour personne).
+   */
+  send: (event: GenerationEvent) => boolean;
+  /** Refuser un moteur qui n'est pas sur cet ordinateur (LOCAL_ENGINE_REMOTE). */
+  requireLocal?: boolean;
+}
+
+export interface ExternalGenerationHandle {
+  jobId: string;
+  /** Résolue quand la génération est terminée (dernier évènement envoyé) ET le créneau libéré. Ne rejette jamais. */
+  finished: Promise<void>;
+}
+
+/** Message de GENERATION_BUSY pour la fenêtre quand le site utilise l'IA de cet ordinateur. */
+export const BUSY_EXTERNAL_MESSAGE = 'Le site Magistra utilise en ce moment l’IA de cet ordinateur. Attendez la fin de cette génération.';
+/** Message de GENERATION_BUSY pour le site quand la fenêtre de l'application génère déjà. */
+export const BUSY_WINDOW_MESSAGE = 'Une génération est déjà en cours dans l’application Magistra de cet ordinateur. Attendez sa fin.';
 
 /** Place disponible pour les extraits de documents, selon le contexte du modèle (≈ 55 % du contexte). */
 export function maxDocumentCharsFor(contextTokens: number): number {
@@ -54,9 +94,24 @@ export function researchConfigFrom(prefs: LocalPreferences): ResearchConfig {
   };
 }
 
+interface ActiveJob {
+  jobId: string;
+  controller: AbortController;
+  /** null : fenêtre de l'application ; sinon navigateur appairé (connecteur local). */
+  owner: string | null;
+}
+
+interface RunMode {
+  /** Évènement vers son destinataire ; faux = destinataire disparu. */
+  sink: (event: GenerationEvent) => boolean;
+  /** Fenêtre : sauvegarde dans l'historique local. Connecteur : génération jointe à « done » (includeRecord). */
+  save: boolean;
+  requireLocal: boolean;
+}
+
 export class GenerationManager {
   private readonly deps: GenerationDeps;
-  private active: { jobId: string; controller: AbortController } | null = null;
+  private active: ActiveJob | null = null;
 
   constructor(deps: GenerationDeps) {
     this.deps = deps;
@@ -66,43 +121,106 @@ export class GenerationManager {
     return this.active !== null;
   }
 
-  /** Valide la demande et lance la génération ; les évènements arrivent ensuite par IPC. */
-  start(raw: unknown): { jobId: string } {
-    if (this.active) throw new MagistraError('GENERATION_BUSY');
-    const request = validateGenerationRequest(raw);
+  /** Vrai si la génération en cours a été demandée par le site web (connecteur local). */
+  get busyExternal(): boolean {
+    return this.active !== null && this.active.owner !== null;
+  }
+
+  private busyError(forExternal: boolean): MagistraError {
+    const a = this.active;
+    if (a && a.owner !== null && !forExternal) return new MagistraError('GENERATION_BUSY', BUSY_EXTERNAL_MESSAGE);
+    if (a && a.owner === null && forExternal) return new MagistraError('GENERATION_BUSY', BUSY_WINDOW_MESSAGE);
+    return new MagistraError('GENERATION_BUSY');
+  }
+
+  private launch(request: GenerationRequest, owner: string | null, modeFor: (jobId: string) => RunMode): ExternalGenerationHandle {
     const jobId = (this.deps.idFactory ?? randomUUID)();
     const controller = new AbortController();
-    const job = { jobId, controller };
+    const job: ActiveJob = { jobId, controller, owner };
     this.active = job;
-    void this.run(jobId, request, controller).finally(() => {
+    const finished = this.run(jobId, request, controller, modeFor(jobId)).finally(() => {
       if (this.active === job) this.active = null;
     });
+    return { jobId, finished };
+  }
+
+  /** Valide la demande et lance la génération ; les évènements arrivent ensuite par IPC. */
+  start(raw: unknown): { jobId: string } {
+    if (this.active) throw this.busyError(false);
+    const request = validateGenerationRequest(raw);
+    const { jobId } = this.launch(request, null, id => ({
+      sink: event => this.deps.send({ jobId: id, event }),
+      save: true,
+      requireLocal: false,
+    }));
     return { jobId };
   }
 
-  cancel(jobId: string): void {
-    if (this.active && this.active.jobId === jobId) this.active.controller.abort();
+  /**
+   * Génération demandée par le site web (connecteur local). Erreurs levées AVANT tout évènement (le connecteur les
+   * renvoie en JSON) : LOCAL_ENGINE_REMOTE, GENERATION_BUSY, INVALID_REQUEST / DOCUMENT_TOO_LARGE.
+   */
+  startExternal(raw: unknown, options: ExternalGenerationOptions): ExternalGenerationHandle {
+    if (!options.owner) throw new MagistraError('INTERNAL');
+    if (options.requireLocal && this.deps.isLocalEngine && !this.deps.isLocalEngine()) throw new MagistraError('LOCAL_ENGINE_REMOTE');
+    if (this.active) throw this.busyError(true);
+    const request = validateGenerationRequest(raw);
+    return this.launch(request, options.owner, () => ({ sink: options.send, save: false, requireLocal: options.requireLocal === true }));
   }
 
+  /** Arrêt demandé par la fenêtre : uniquement une génération de la fenêtre. */
+  cancel(jobId: string): void {
+    if (this.active && this.active.owner === null && this.active.jobId === jobId) this.active.controller.abort();
+  }
+
+  /** Arrêt demandé par un navigateur (POST /v1/cancel) : uniquement SA génération. Vrai si elle a été arrêtée. */
+  cancelExternal(jobId: string, owner: string): boolean {
+    const a = this.active;
+    if (!a || a.owner === null || a.owner !== owner || a.jobId !== jobId) return false;
+    a.controller.abort();
+    return true;
+  }
+
+  /** Arrête la génération d'un navigateur, quelle qu'elle soit (autorisation retirée). */
+  cancelOwner(owner: string): void {
+    if (this.active && this.active.owner !== null && this.active.owner === owner) this.active.controller.abort();
+  }
+
+  /** Arrête toute génération demandée par le site (connecteur désactivé ou arrêté). */
+  cancelExternalAll(): void {
+    if (this.active && this.active.owner !== null) this.active.controller.abort();
+  }
+
+  /** Arrête la génération de la fenêtre (page remplacée : plus personne ne peut l'afficher ni l'arrêter). */
+  cancelWindow(): void {
+    if (this.active && this.active.owner === null) this.active.controller.abort();
+  }
+
+  /** Arrête toute génération (fermeture de l'application). */
   cancelAll(): void {
     this.active?.controller.abort();
   }
 
-  private emit(jobId: string, event: GenerationEvent, controller: AbortController): void {
-    const delivered = this.deps.send({ jobId, event });
-    // Fenêtre fermée : inutile de continuer à faire travailler le modèle.
-    if (!delivered && !controller.signal.aborted) controller.abort();
-  }
-
-  private async run(jobId: string, request: ReturnType<typeof validateGenerationRequest>, controller: AbortController): Promise<void> {
+  private async run(jobId: string, request: GenerationRequest, controller: AbortController, mode: RunMode): Promise<void> {
     const signal = controller.signal;
-    const emit = (event: GenerationEvent) => this.emit(jobId, event, controller);
+    const emit = (event: GenerationEvent) => {
+      let delivered: boolean;
+      try {
+        delivered = mode.sink(event);
+      } catch {
+        delivered = false;
+      }
+      // Destinataire disparu (fenêtre fermée, connexion du navigateur coupée) : inutile de continuer.
+      if (!delivered && !signal.aborted) controller.abort();
+    };
     let finished = false;
     try {
       const prefs = await this.deps.store.getPreferences();
       emit({ type: 'status', stage: 'loading_model', message: 'Préparation du moteur IA…' });
       const provider = await this.deps.resolveProvider(signal, message => emit({ type: 'status', stage: 'loading_model', message }));
       if (signal.aborted) throw new MagistraError('GENERATION_ABORTED');
+      // Contrôle final sur le fournisseur réellement préparé : aucun texte du site ne part vers un autre ordinateur.
+      if (mode.requireLocal && !provider.local) throw new MagistraError('LOCAL_ENGINE_REMOTE');
       const events = runGeneration(request, {
         provider,
         signal,
@@ -110,7 +228,7 @@ export class GenerationManager {
           config: researchConfigFrom(prefs),
           deps: { fetch: this.deps.fetch, ...(this.deps.fetchPage ? { fetchPage: this.deps.fetchPage } : {}) },
         },
-        save: record => this.deps.store.saveGeneration(record),
+        ...(mode.save ? { save: (record: NewGenerationRecord) => this.deps.store.saveGeneration(record) } : { includeRecord: true }),
         // Moteur de cet ordinateur : le modèle est d'abord chargé en mémoire (« Chargement du modèle… », délai long),
         // pour que l'attente du premier mot ne compte plus ce chargement (PC sans carte graphique).
         preloadModel: provider.local,
@@ -123,7 +241,7 @@ export class GenerationManager {
     } catch (err) {
       if (finished) return;
       const e = signal.aborted ? new MagistraError('GENERATION_ABORTED') : toMagistraError(err);
-      if (e.code === 'INTERNAL') console.error('[magistra] Erreur de génération :', err);
+      if (e.code === 'INTERNAL') console.error(`[magistra] Erreur de génération (${jobId}) :`, err);
       emit({ type: 'error', code: e.code, message: e.message, retryable: e.retryable });
     }
   }
