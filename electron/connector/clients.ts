@@ -161,6 +161,11 @@ export class ConnectorClientStore {
   private dormant: StoredClient[] = [];
   /** Marques de retrait, par navigateur retiré (ordre d'insertion = du plus ancien au plus récent). */
   private readonly revoked = new Map<string, RevokedMark>();
+  /**
+   * Marques des navigateurs en cours d'éviction (add) : écrites avec la nouvelle autorisation, mais jamais servies
+   * (revokedMark) avant la fin de l'écriture, qui peut encore annuler l'éviction.
+   */
+  private readonly pendingRevoked = new Map<string, RevokedMark>();
   private enabledValue = true;
   private readonly listeners = new Set<() => void>();
 
@@ -268,14 +273,14 @@ export class ConnectorClientStore {
   }
 
   /** Marque de retrait calculée avec la clé de l'entrée, AVANT son effacement. */
-  private rememberRevoked(entry: ClientEntry): void {
-    this.revoked.delete(entry.clientId);
-    this.revoked.set(entry.clientId, {
-      clientId: entry.clientId,
-      origin: entry.origin,
-      mark: revokedMark(entry.key, entry.clientId),
-      revokedAt: this.now().toISOString(),
-    });
+  private markOf(entry: ClientEntry): RevokedMark {
+    return { clientId: entry.clientId, origin: entry.origin, mark: revokedMark(entry.key, entry.clientId), revokedAt: this.now().toISOString() };
+  }
+
+  /** Retient une marque de retrait (servie dès maintenant) ; les plus anciennes au-delà de MAX_REVOKED_MARKS sont oubliées. */
+  private rememberRevoked(mark: RevokedMark): void {
+    this.revoked.delete(mark.clientId);
+    this.revoked.set(mark.clientId, mark);
     while (this.revoked.size > MAX_REVOKED_MARKS) {
       const oldest = this.revoked.keys().next().value;
       if (oldest === undefined) break;
@@ -313,8 +318,11 @@ export class ConnectorClientStore {
         keyEnc: e.keyEnc,
       });
     }
-    // Les plus récentes d'abord (relues dans cet ordre, puis bornées à MAX_REVOKED_MARKS).
-    const revoked = [...this.revoked.values()].reverse();
+    // Les plus récentes d'abord (relues dans cet ordre, puis bornées à MAX_REVOKED_MARKS), éviction en cours comprise.
+    const revoked = [...this.revoked.values()].filter(r => !this.pendingRevoked.has(r.clientId))
+      .concat([...this.pendingRevoked.values()])
+      .reverse()
+      .slice(0, MAX_REVOKED_MARKS);
     return { version: 1, enabled: this.enabledValue, clients: [...clients, ...this.dormant], ...(revoked.length ? { revoked } : {}) };
   }
 
@@ -342,7 +350,9 @@ export class ConnectorClientStore {
    * Enregistre un navigateur nouvellement appairé. Au-delà de maxClients, le plus anciennement appairé est retiré
    * (évincé : marque de retrait conservée, comme pour un retrait) ; `evicted` (présent s'il y en a) liste ces
    * navigateurs, dont les générations en cours doivent être arrêtées. Échec d'écriture : rien n'est ajouté ni retiré
-   * (STORAGE_ERROR).
+   * (STORAGE_ERROR). Pendant l'écriture, les évincés sont déjà refusés, mais SANS marque de retrait : servie avant
+   * l'issue de l'écriture, elle resterait valable (et rejouable) pour un navigateur de nouveau autorisé si l'écriture
+   * échouait ; elle ne l'est qu'une fois l'éviction enregistrée.
    */
   async add(input: { origin: string; browser: string; key: Uint8Array }): Promise<ConnectorClientInfo & { evicted?: string[] }> {
     if (!isWellFormedOrigin(input.origin)) throw new MagistraError('INVALID_REQUEST');
@@ -365,21 +375,23 @@ export class ConnectorClientStore {
       this.entries.delete(oldest.clientId);
       evicted.push(oldest);
     }
-    // Marques calculées AVANT l'écriture (enregistrées avec elle) et avant l'effacement des clés.
-    for (const e of evicted) this.rememberRevoked(e);
+    // Marques calculées AVANT l'écriture (enregistrées avec elle) et avant l'effacement des clés ; servies seulement
+    // après l'écriture réussie.
+    const marks = evicted.map(e => this.markOf(e));
     if (keyEnc || evicted.some(e => e.keyEnc)) {
+      for (const m of marks) this.pendingRevoked.set(m.clientId, m);
       try {
         await this.persist();
       } catch (err) {
         this.entries.delete(clientId);
-        for (const e of evicted) {
-          this.revoked.delete(e.clientId);
-          this.entries.set(e.clientId, e);
-        }
+        for (const e of evicted) this.entries.set(e.clientId, e);
         key.fill(0);
         throw new MagistraError('STORAGE_ERROR', "Impossible d'enregistrer l'autorisation de ce navigateur sur cet ordinateur.", { cause: err });
+      } finally {
+        for (const m of marks) if (this.pendingRevoked.get(m.clientId) === m) this.pendingRevoked.delete(m.clientId);
       }
     }
+    for (const m of marks) this.rememberRevoked(m);
     for (const e of evicted) e.key.fill(0);
     this.changed();
     return {
@@ -400,7 +412,7 @@ export class ConnectorClientStore {
     const entry = this.entries.get(clientId);
     if (!entry) return false;
     this.entries.delete(clientId);
-    this.rememberRevoked(entry);
+    this.rememberRevoked(this.markOf(entry));
     entry.key.fill(0);
     this.changed();
     if (entry.keyEnc) {

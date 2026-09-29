@@ -10,23 +10,41 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-export type E2EProject = 'web' | 'electron' | 'connector';
+/** Projets du connecteur local : même fichier de tests, un navigateur chacun (Chromium de Playwright, Microsoft Edge). */
+export type ConnectorProject = 'connector' | 'connector-edge';
+export type E2EProject = 'web' | 'electron' | ConnectorProject;
+
+export const CONNECTOR_PROJECTS: readonly ConnectorProject[] = ['connector', 'connector-edge'];
 
 /** Chemins relatifs à la racine du dépôt (playwright.config.ts, workflows de CI). */
 export const E2E_OUTPUT_DIRS: Readonly<Record<E2EProject, string>> = {
   web: 'test-results/web',
   electron: 'test-results/electron',
   connector: 'test-results/connector',
+  'connector-edge': 'test-results/connector-edge',
 };
 
-/** Captures d'écran d'un projet (envoyées en artefact par la CI). */
-export const E2E_SCREENSHOT_DIRS: Readonly<Record<'electron' | 'connector', string>> = {
+/** Captures d'écran d'un projet (celles de « electron » et « connector » sont envoyées en artefact par la CI). */
+export const E2E_SCREENSHOT_DIRS: Readonly<Record<'electron' | ConnectorProject, string>> = {
   electron: `${E2E_OUTPUT_DIRS.electron}/captures`,
   connector: `${E2E_OUTPUT_DIRS.connector}/captures`,
+  'connector-edge': `${E2E_OUTPUT_DIRS['connector-edge']}/captures`,
 };
 
-/** Harnais du site construit par e2e/connector-local.spec.ts (jamais publié). */
-export const CONNECTOR_HARNESS_DIR = `${E2E_OUTPUT_DIRS.connector}/harness-dist`;
+/** Harnais du site construit par e2e/connector-local.spec.ts (jamais publié), dans le dossier du projet lancé. */
+export const CONNECTOR_HARNESS_DIRS: Readonly<Record<ConnectorProject, string>> = {
+  connector: `${E2E_OUTPUT_DIRS.connector}/harness-dist`,
+  'connector-edge': `${E2E_OUTPUT_DIRS['connector-edge']}/harness-dist`,
+};
+
+/** Dossier par défaut du harnais (construction à la main : `npx vite build --config e2e/connector-harness/vite.config.ts`). */
+export const CONNECTOR_HARNESS_DIR = CONNECTOR_HARNESS_DIRS.connector;
+
+/** Projet du connecteur local d'après son nom (erreur explicite pour tout autre projet). */
+export function connectorProject(name: string): ConnectorProject {
+  if ((CONNECTOR_PROJECTS as readonly string[]).includes(name)) return name as ConnectorProject;
+  throw new Error(`Projet Playwright inattendu pour le connecteur local : ${name}`);
+}
 
 /** Chemin absolu d'un de ces dossiers. */
 export function fromRoot(relative: string): string {

@@ -4,6 +4,7 @@
 // Règles d'écriture : jamais d'adresse (localhost, 127.0.0.1…), jamais de port, jamais le nom du moteur (« Ollama »),
 // jamais de clé à saisir ; l'enseignant n'a qu'à ouvrir Magistra et cliquer.
 
+import { defaultMessage } from '@shared/errors';
 import type { LocalEngineState } from '@/lib/localConnector/controller';
 import { isDisplayableText } from '@/lib/localConnector/texts';
 
@@ -35,7 +36,18 @@ export function pairingCodeText(code: string): string {
 export const CONNECTED_TEXT = '✓ Magistra locale connectée';
 export const JUST_CONNECTED_TEXT = '✓ Intelligence locale connectée';
 export const APP_CLOSED_TEXT = 'L’application Magistra est fermée.';
-export const APP_CLOSED_DETAIL = `Ouvrez Magistra sur cet ordinateur pour utiliser l’intelligence locale. ${SITE_ACCESS_HINT}`;
+/** Suivi de SITE_ACCESS_HINT (paragraphe distinct : le panneau de la page Générer, qui dit déjà d'ouvrir Magistra, le garde). */
+export const APP_CLOSED_DETAIL = 'Ouvrez Magistra sur cet ordinateur pour utiliser l’intelligence locale.';
+/**
+ * Appairé : une application Magistra répond, mais ne reconnaît pas ce navigateur (jamais « fermée » : elle vient de
+ * répondre).
+ */
+export const UNRECOGNIZED_TEXT = 'Magistra ne reconnaît pas ce navigateur.';
+/**
+ * L'application a répondu mais ne peut pas servir en l'état (reconnexion refusée ou expirée, réponse inattendue,
+ * autre version) : la cause suit, jamais « fermée ».
+ */
+export const UNUSABLE_TEXT = 'Magistra locale n’est pas utilisable pour le moment.';
 export const NEEDS_PERMISSION_TEXT = 'Autorisation du navigateur nécessaire';
 export const PERMISSION_EXPLANATION =
   'Votre navigateur va vous demander l’autorisation d’accéder aux applications de cet appareil : acceptez-la. Elle permet uniquement à ce site de dialoguer avec l’application Magistra installée sur cet ordinateur.';
@@ -58,6 +70,12 @@ export const DOWNLOAD_SHORT_LABEL = 'Télécharger Magistra';
 export const SEARCH_EXISTING_LABEL = "J'ai déjà Magistra : la rechercher";
 export const CONNECT_LABEL = 'Connecter Magistra locale';
 export const DISCONNECT_LABEL = 'Déconnecter Magistra locale';
+/** Confirmation de la déconnexion (réglages du site). */
+export const DISCONNECT_TEXT =
+  'Ce navigateur ne pourra plus utiliser l’intelligence artificielle de cet ordinateur. Si l’application Magistra est ouverte, l’autorisation y est aussi retirée ; sinon, retirez-la dans Magistra → Réglages → « Site web Magistra ». Vous pourrez reconnecter Magistra locale à tout moment.';
+/** Même confirmation quand le navigateur bloque l'accès à l'application : le retrait ne pourra pas lui être demandé. */
+export const DISCONNECT_BLOCKED_TEXT =
+  'Ce navigateur ne pourra plus utiliser l’intelligence artificielle de cet ordinateur. Votre navigateur bloque l’accès à l’application Magistra : l’autorisation ne pourra pas y être retirée d’ici. Retirez-la aussi dans Magistra → Réglages → « Site web Magistra ». Vous pourrez reconnecter Magistra locale à tout moment.';
 export const RETRY_LABEL = 'Réessayer';
 export const CANCEL_LABEL = 'Annuler';
 export const OPEN_APP_LABEL = 'Ouvrir Magistra';
@@ -122,6 +140,14 @@ export function localModelLabel(label: string | undefined): string | null {
 }
 
 /**
+ * Appairé, rien ne répond (aucune cause, ou le message par défaut de CONNECTOR_UNREACHABLE) : l'application est
+ * fermée (ou l'accès du site désactivé). Toute autre cause vient d'une application qui a répondu.
+ */
+export function appClosedPlain(state: LocalEngineState): boolean {
+  return !state.error || (state.error.code === 'CONNECTOR_UNREACHABLE' && state.error.message === defaultMessage('CONNECTOR_UNREACHABLE'));
+}
+
+/**
  * Résumé d'une ligne de l'état de Magistra locale (liste des priorités). `searched` : l'enseignant a lancé une
  * recherche pendant cette visite — sans elle, un navigateur jamais appairé n'est pas sondé (sauf autorisation déjà
  * accordée) : « non détectée » affirmerait un résultat qui n'existe pas.
@@ -142,7 +168,8 @@ export function localEngineSummary(state: LocalEngineState, searched = false): s
     case 'pairing':
       return 'connexion en cours…';
     case 'app-closed':
-      return state.error?.code === 'CONNECTOR_UNPAIRED' ? 'connectée, pas reconnue par l’application Magistra qui répond' : 'connectée, application fermée';
+      if (state.error?.code === 'CONNECTOR_UNPAIRED') return 'connectée, pas reconnue par l’application Magistra qui répond';
+      return appClosedPlain(state) ? 'connectée, application fermée' : 'connectée, pas utilisable pour le moment';
     case 'connected': {
       const engine = state.status?.engine;
       if (engine && !engine.local) return 'connectée, réglée sur un serveur distant dans l’application';

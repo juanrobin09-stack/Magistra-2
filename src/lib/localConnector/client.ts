@@ -110,6 +110,15 @@ const VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,39}$/;
 /** Réponse inattendue d'un programme qui se présente comme Magistra (version incompatible, programme inconnu). */
 export const UNEXPECTED_REPLY_MESSAGE =
   "L'application Magistra de cet ordinateur a répondu de façon inattendue : mettez-la à jour, puis réessayez.";
+/**
+ * Une application Magistra répond, mais dans une version PLUS ANCIENNE du protocole que ce site (les applications
+ * installées se mettent à jour à la main, le site tout de suite) : elle ne peut pas être utilisée avant sa mise à jour.
+ */
+export const APP_UPDATE_REQUIRED_MESSAGE =
+  "L'application Magistra de cet ordinateur doit être mise à jour pour être utilisée depuis ce site : installez la dernière version de Magistra pour Windows (bouton « Télécharger »), puis réessayez.";
+/** Une application Magistra répond dans une version PLUS RÉCENTE du protocole : cette page date d'avant la mise à jour. */
+export const PAGE_RELOAD_REQUIRED_MESSAGE =
+  "L'application Magistra de cet ordinateur est plus récente que cette page : rechargez la page, puis réessayez.";
 /** L'application répond, mais n'a jamais reconnu la demande de connexion (URL magistra:// non reçue). */
 export const PAIRING_NOT_RECEIVED_MESSAGE =
   "La demande de connexion n'est pas parvenue à l'application Magistra. Recommencez et, si votre navigateur le demande, acceptez l'ouverture de Magistra.";
@@ -278,6 +287,25 @@ export function parseHello(raw: unknown): ConnectorHello | null {
   return { app: 'magistra', protocol: CONNECTOR_PROTOCOL_VERSION, version: raw.version };
 }
 
+/**
+ * GET /v1/hello d'une application Magistra d'une AUTRE version du protocole (entier positif, version bien formée) :
+ * son numéro de protocole ; sinon null. Une telle application n'est jamais utilisée (ni appairage, ni contenu, ni
+ * requête signée vers un port où elle se présente ; seul le port mémorisé d'un navigateur appairé reçoit d'abord, comme
+ * tout programme qui l'occuperait, une requête signée sans contenu dont la réponse non prouvée n'est pas utilisée) :
+ * seul le message affiché change (« mettez Magistra à jour » ou « rechargez la page »).
+ */
+export function otherProtocolOf(raw: unknown): number | null {
+  if (!isRecord(raw) || raw.app !== 'magistra' || !isVersion(raw.version)) return null;
+  const { protocol } = raw;
+  if (typeof protocol !== 'number' || !Number.isSafeInteger(protocol) || protocol < 1 || protocol === CONNECTOR_PROTOCOL_VERSION) return null;
+  return protocol;
+}
+
+/** Erreur « application d'une autre version du protocole » (plus ancienne : mise à jour ; plus récente : recharger). */
+export function otherProtocolError(protocol: number): MagistraError {
+  return new MagistraError('CONNECTOR_UNREACHABLE', protocol < CONNECTOR_PROTOCOL_VERSION ? APP_UPDATE_REQUIRED_MESSAGE : PAGE_RELOAD_REQUIRED_MESSAGE);
+}
+
 function parseNotice(raw: unknown): AINotice | undefined {
   if (!isRecord(raw) || !isErrorCode(raw.code)) return undefined;
   const message = cleanMessage(raw.message);
@@ -394,6 +422,11 @@ export class LocalConnectorClient {
   private proven: ProvenPort | null = null;
   /** Dernier port où Magistra a répondu à hello (essayé tôt lors de la recherche suivante). */
   private lastFoundPort: number | null = null;
+  /**
+   * Dernière recherche : aucune application compatible, mais une application Magistra d'une autre version du
+   * protocole a répondu (son numéro) ; sinon null.
+   */
+  private otherProtocol: number | null = null;
   /** Dernière autorisation du navigateur lue (telle quelle). */
   private lastPermission: LoopbackPermission = 'unsupported';
   /**
@@ -435,8 +468,13 @@ export class LocalConnectorClient {
       const after = await this.readPermission();
       if (after === 'denied') throw permissionDenied();
       // Accordée pendant la recherche, après la coupure de la connexion retenue par le navigateur : nouvel essai.
-      if (after === 'granted') return (await this.findApps(signal, T.hello))[0] ?? null;
+      if (after === 'granted') {
+        const again = await this.findApps(signal, T.hello);
+        if (again.length) return again[0];
+      }
     }
+    // Seule une application Magistra d'une autre version répond : elle est là, mais inutilisable en l'état.
+    if (this.otherProtocol !== null) throw otherProtocolError(this.otherProtocol);
     return null;
   }
 
@@ -503,6 +541,7 @@ export class LocalConnectorClient {
       if (this.now() >= deadline) {
         if (everAcknowledged) throw new MagistraError('CONNECTOR_PAIRING_EXPIRED');
         if (appSeen) throw new MagistraError('CONNECTOR_PAIRING_EXPIRED', PAIRING_NOT_RECEIVED_MESSAGE);
+        if (this.otherProtocol !== null) throw otherProtocolError(this.otherProtocol);
         throw new MagistraError('CONNECTOR_UNREACHABLE');
       }
       // Recherche bornée par l'échéance (la demande du navigateur peut retenir la requête jusqu'à la réponse).
@@ -602,6 +641,7 @@ export class LocalConnectorClient {
     }
     if (unrecognized) throw new MagistraError('CONNECTOR_UNPAIRED', UNRECOGNIZED_BY_APP_MESSAGE);
     if (prompt && (await this.readPermission()) === 'denied') throw permissionDenied();
+    if (this.otherProtocol !== null) throw otherProtocolError(this.otherProtocol);
     throw new MagistraError('CONNECTOR_UNREACHABLE');
   }
 
@@ -646,16 +686,19 @@ export class LocalConnectorClient {
     try {
       const permission = await this.readPermission();
       if (permission !== 'denied') {
-        const attempt = async (): Promise<boolean> => {
-          if (this.ports.includes(pairing.port) && (await this.revoke(pairing, pairing.port))) return true;
-          for (const { port } of await this.findApps(undefined, T.hello)) {
-            if (port !== pairing.port && (await this.revoke(pairing, port))) return true;
+        const attempt = async (revokeMs: number, helloMs: number): Promise<boolean> => {
+          if (this.ports.includes(pairing.port) && (await this.revoke(pairing, pairing.port, revokeMs))) return true;
+          for (const { port } of await this.findApps(undefined, helloMs)) {
+            if (port !== pairing.port && (await this.revoke(pairing, port, revokeMs))) return true;
           }
           return false;
         };
-        revoked = await attempt();
+        // Autorisation à demander : comme status() et hello(), le navigateur retient la requête jusqu'à la réponse de
+        // l'enseignant (qui lit sa question juste après l'explication du site) ; jamais abandonnée au bout de 5 s.
+        const prompt = permission === 'prompt';
+        revoked = await attempt(prompt ? T.permissionPrompt : T.small, prompt ? T.permissionPrompt : T.hello);
         // Accordée pendant le premier essai, après la coupure de la connexion retenue par le navigateur : nouvel essai.
-        if (!revoked && permission === 'prompt' && (await this.readPermission()) === 'granted') revoked = await attempt();
+        if (!revoked && prompt && (await this.readPermission()) === 'granted') revoked = await attempt(T.small, T.hello);
       }
     } catch {
       // Au mieux : l'enseignant peut aussi retirer l'autorisation dans l'application.
@@ -826,22 +869,30 @@ export class LocalConnectorClient {
     return [...new Set([...preferred, ...this.ports])];
   }
 
-  /** Sonde tous les ports en parallèle ; ports où Magistra répond, dans l'ordre de préférence. */
+  /**
+   * Sonde tous les ports en parallèle ; ports où Magistra répond, dans l'ordre de préférence. Aucune application
+   * compatible mais une d'une autre version du protocole : son numéro est noté (otherProtocol).
+   */
   private async findApps(signal: AbortSignal | undefined, waitMs: number): Promise<{ port: number; hello: ConnectorHello }[]> {
     throwIfAborted(signal);
     const order = await this.portOrder();
-    const hellos = await Promise.all(order.map(port => this.probe(port, signal, waitMs)));
+    const replies = await Promise.all(order.map(port => this.probe(port, signal, waitMs)));
     throwIfAborted(signal);
     const found: { port: number; hello: ConnectorHello }[] = [];
+    let otherProtocol: number | null = null;
     order.forEach((port, i) => {
-      const hello = hellos[i];
-      if (hello) found.push({ port, hello });
+      const reply = replies[i];
+      if (reply?.kind === 'magistra') found.push({ port, hello: reply.hello });
+      else if (reply?.kind === 'other-protocol') otherProtocol ??= reply.protocol;
     });
     if (found.length) this.lastFoundPort = found[0].port;
+    this.otherProtocol = found.length ? null : otherProtocol;
     return found;
   }
 
-  private async probe(port: number, signal: AbortSignal | undefined, waitMs: number): Promise<ConnectorHello | null> {
+  private async probe(
+    port: number, signal: AbortSignal | undefined, waitMs: number,
+  ): Promise<{ kind: 'magistra'; hello: ConnectorHello } | { kind: 'other-protocol'; protocol: number } | null> {
     try {
       return await this.withTimeout(signal, waitMs, async s => {
         const res = await this.send(port, CONNECTOR_ROUTES.hello, { method: 'GET' }, s);
@@ -849,7 +900,11 @@ export class LocalConnectorClient {
           await discard(res);
           return null;
         }
-        return parseHello(await readJson(res, MAX_SMALL_RESPONSE_BYTES));
+        const raw = await readJson(res, MAX_SMALL_RESPONSE_BYTES);
+        const hello = parseHello(raw);
+        if (hello) return { kind: 'magistra', hello };
+        const protocol = otherProtocolOf(raw);
+        return protocol === null ? null : { kind: 'other-protocol', protocol };
       });
     } catch {
       if (signal?.aborted) throw abortError();
@@ -922,9 +977,9 @@ export class LocalConnectorClient {
    * DELETE /v1/pair signé. Vrai si l'application a confirmé le retrait (preuve), ou l'avait déjà fait (marque de
    * retrait valide) ; un 401 sans marque (autre application Magistra, autre session Windows) ne confirme rien.
    */
-  private async revoke(pairing: StoredPairing, port: number): Promise<boolean> {
+  private async revoke(pairing: StoredPairing, port: number, waitMs: number = T.small): Promise<boolean> {
     try {
-      return await this.withTimeout(undefined, T.small, async s => {
+      return await this.withTimeout(undefined, waitMs, async s => {
         const { res, proven } = await this.signed(pairing, port, 'DELETE', CONNECTOR_ROUTES.pair, null, s);
         const outcome = await this.classify(pairing, res, proven, () => true, MAX_SMALL_RESPONSE_BYTES);
         return outcome.kind === 'ok' || (outcome.kind === 'unpaired' && outcome.confirmed);

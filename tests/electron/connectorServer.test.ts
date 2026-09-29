@@ -1248,6 +1248,36 @@ describe('écoute', () => {
     }
   });
 
+  it('horloge du système reculée après le début de l’écoute (synchronisation de Windows) : les requêtes du site restent acceptées, recul journalisé une fois', async () => {
+    const browser = await paired();
+    await server.stop();
+    const logs: string[] = [];
+    let mono = 1_000;
+    const shifted = new ConnectorServer({ ...serverOptions, ports: [0], monotonic: () => mono, log: message => logs.push(message) });
+    port = (await shifted.start())!;
+    try {
+      expect((await browser.call('GET', '/v1/status')).reply.status).toBe(200);
+      // 10 s plus tard, l'heure du système est corrigée de 90 s vers l'arrière ; le navigateur (même horloge) signe
+      // avec la nouvelle heure.
+      mono += 10_000;
+      clock -= 80_000;
+      const after = await browser.call('GET', '/v1/status');
+      expect(after.reply.status).toBe(200);
+      expect(await browser.proofValid(after.reply.headers, after.nonce)).toBe(true);
+      for (let i = 0; i < 35; i++) {
+        mono += 100;
+        clock += 100;
+        expect((await browser.call('GET', '/v1/status')).reply.status).toBe(200);
+      }
+      expect(logs.filter(l => l.includes('horloge du système a reculé'))).toHaveLength(1);
+      // Une requête signée AVANT le début de l'écoute (heure antérieure au recul) reste refusée.
+      const before = await browser.call('GET', '/v1/status', '', { timestamp: String(clock - 100_000) });
+      expectError(before.reply, 401, 'UNAUTHENTICATED');
+    } finally {
+      await shifted.stop();
+    }
+  });
+
   it('requêtes malformées de clients qui ne ferment jamais leur côté : connexions détruites, le site joint toujours l’application', async () => {
     const sockets: Socket[] = [];
     try {

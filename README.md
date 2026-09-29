@@ -58,6 +58,7 @@ Les faits de ce tableau sont ceux que chaque prestataire **annonce** ; ils sont 
    - `VITE_CLERK_PUBLISHABLE_KEY` et `CLERK_SECRET_KEY` (même instance Clerk ; une clé `pk_live_…` exige votre propre domaine, une instance de développement `pk_test_…` fonctionne sur `*.vercel.app` — [Clerk](https://clerk.com/docs/guides/development/deployment/vercel)) ;
    - `SUPABASE_URL` et `SUPABASE_SERVICE_ROLE_KEY` ;
    - `AI_PRESET=ovhcloud` (et, si vous en avez une, `AI_API_KEY`) ;
+   - recommandé : `GITHUB_TOKEN`, jeton GitHub « fine-grained » en lecture seule, **sans aucune permission** (dépôts publics). Sur Vercel, les fonctions sortent par des adresses IP partagées avec d'autres clients : sans jeton, la limite de l'API GitHub (60 requêtes par heure et par adresse) peut être déjà atteinte, et « Télécharger Magistra pour Windows » renvoie alors vers la page des versions au lieu de télécharger l'installateur (ni version, ni taille, ni empreinte affichées) ;
    - facultatif : `MAGISTRA_ADMIN_CONTACT` (adresse affichée aux enseignants si l'IA ne répond pas).
 
    L'IA seule ne suffit pas : sans les clés Clerk, le site reste en **démonstration** (aucune IA n'est utilisée) ; sans Supabase, il affiche une erreur de configuration. Supprimez la clé d'API commerciale de l'ancienne version si elle figure encore dans les variables : elle n'est plus utilisée. Révoquez-la aussi chez son fournisseur.
@@ -114,7 +115,7 @@ Les versions sont produites par le workflow [`release.yml`](.github/workflows/re
 1. Installez `Magistra-Setup-x.y.z.exe`, téléchargé depuis la [page officielle des versions](https://github.com/juanrobin09-stack/magistra-2/releases).
    > **Avertissement Windows SmartScreen.** L'installateur n'est pas encore signé numériquement : Windows peut afficher « Windows a protégé votre ordinateur » (éditeur inconnu). Cliquez sur **Informations complémentaires**, puis sur **Exécuter quand même**. Cet avertissement ne signale pas un problème détecté dans le fichier : il vient de l'absence de certificat de signature de code, un certificat payant renouvelé chaque année, que ce projet non lucratif n'a pas encore acquis. N'exécutez l'installateur que s'il provient de la page officielle ci-dessus.
    >
-   > Vérification facultative : dans PowerShell, `Get-FileHash .\Magistra-Setup-x.y.z.exe -Algorithm SHA256` doit donner l'empreinte indiquée dans `SHA256SUMS.txt` sur la même page.
+   > Vérification facultative, pour le service informatique : l'empreinte SHA-256 de l'installateur est affichée sur le site (Réglages → « Magistra pour Windows ») et dans `SHA256SUMS.txt` sur la même page ; la commande est donnée dans « [Mainteneurs](#mainteneurs--versions-variables-domaine-ports) ».
 2. Au premier lancement, Magistra vérifie automatiquement si le moteur d'IA locale (Ollama) est installé et en marche, dans une version assez récente (Ollama 0.13.1 au moins), et si un modèle est disponible.
 3. **Si le moteur manque**, cliquez sur **Installer le moteur IA**. La taille du téléchargement et l'espace disque nécessaire sont affichés avant toute action. L'installateur officiel n'est lancé qu'après vérification de son empreinte SHA-256. En cas de problème, Magistra ouvre la page officielle et détecte seul la fin de l'installation. **Si le moteur est trop ancien**, Magistra propose **Mettre à jour le moteur IA** (vos modèles sont conservés) ; si Ollama a été installé pour tout l'ordinateur par le service informatique, Magistra vous invite à lui demander la mise à jour.
 4. Magistra analyse l'ordinateur (mémoire, processeur, carte graphique, disque) et **recommande un modèle**. Cliquez sur **Installer Magistra Standard** (ou un autre niveau). La progression s'affiche, et un téléchargement interrompu peut reprendre.
@@ -155,7 +156,8 @@ Le navigateur ne parle jamais au moteur d'IA lui-même : l'application n'accepte
 7. **Autoriser dans l'application** : Magistra demande « Autoriser magistra-2.vercel.app à utiliser l’intelligence locale de cet ordinateur ? », avec le même code. Si le code est identique, cliquez sur **Autoriser** ; sinon, ou si vous n'avez rien demandé, cliquez sur **Refuser** (bouton par défaut). Le site affiche « ✓ Intelligence locale connectée ». Il attend l'accord 2 minutes au plus ; la demande expire au bout de 5 minutes dans l'application.
 8. **Générer** : la page Générer indique « IA locale — Vos contenus sont générés sur cet ordinateur. ». Le texte apparaît au fur et à mesure, et **Arrêter** interrompt réellement le modèle de l'ordinateur. Le résultat est enregistré dans l'historique de votre compte.
 
-Aux visites suivantes, le site retrouve seul l'application ouverte (« ✓ Magistra locale connectée ») tant que l'autorisation du navigateur reste accordée : il n'y a rien à refaire. L'ordinateur traite **une génération à la fois**, application et site confondus. Si le moteur n'est pas prêt (modèle pas encore installé, application réglée sur un serveur distant…), le site en donne la cause et propose **Ouvrir Magistra**. Si l'application est fermée, il propose **Ouvrir Magistra** et **Réessayer**.
+Aux visites suivantes, le site retrouve seul l'application ouverte (« ✓ Magistra locale connectée ») tant que l'autorisation du navigateur reste accordée : il n'y a rien à refaire. L'ordinateur traite **une génération à la fois**, application et site confondus. Si le moteur n'est pas prêt (modèle pas encore installé, application réglée sur un serveur distant…), le site en donne la cause et propose **Ouvrir Magistra**. Si l'application est fermée, il propose **Ouvrir Magistra** et **Réessayer**. Si elle répond sans pouvoir servir ce navigateur (elle ne le reconnaît pas, reconnexion refusée, ancienne version à mettre à jour…), le site en donne la cause, jamais « fermée ».
+Après une mise à jour du site, une application Magistra d'une version plus ancienne du protocole n'est plus utilisée : le site affiche « L'application Magistra de cet ordinateur doit être mise à jour… », avec le téléchargement de la dernière version.
 
 ### Autorisation du navigateur (« Applications sur l'appareil » / « Réseau local »)
 
@@ -179,7 +181,14 @@ Aux visites suivantes, le site retrouve seul l'application ouverte (« ✓ Magis
 
 La stratégie supprime seulement la demande du navigateur : l'accord dans l'application Magistra (**Autoriser**) reste exigé pour chaque navigateur.
 
-**Autres navigateurs** : le parcours est vérifié par des tests automatiques dans Chromium, avec cette protection active. Firefox met en place une protection comparable ; s'il demande une autorisation, acceptez-la, mais ce cas n'est pas couvert par les tests. Safari n'existe pas sous Windows ; sur Mac, aucune application Magistra n'est publiée. Utilisez-y le serveur en ligne.
+**Navigateurs vérifiés** : le parcours est vérifié de bout en bout, avec cette protection active, dans Chromium (tests automatiques de la CI, autorisation « local-network-access ») et dans **Microsoft Edge 154** (projet `connector-edge`, lancé à la main là où Edge est installé ; autorisation « loopback-network » des versions récentes). Dans Edge 154 :
+- le site lit bien l'autorisation « loopback-network » (celle qu'il lit en premier) et joint l'application une fois qu'elle est accordée ;
+- un refus affiche « Votre navigateur bloque l’accès à l’application Magistra. » et la marche à suivre ;
+- tout le parcours passe : absente, trouvée, refus puis accord dans l'application, génération en flux, arrêt, fermeture, relance sans nouvel appairage, retrait, ainsi que « moteur non prêt », « autre site » et « programme sur le premier port ».
+
+Sans écran (tests), Edge enregistre sa réponse automatique à la demande comme un refus (l'état réel du navigateur, que le site affiche), là où Chromium la laisse « à demander ». Le libellé de la ligne des réglages du site (« Applications sur l'appareil ») n'est pas visible par les tests.
+
+**Autres navigateurs** : Google Chrome n'est pas testé automatiquement (même moteur que Chromium et Edge). Firefox met en place une protection comparable ; s'il demande une autorisation, acceptez-la, mais ce cas n'est pas couvert par les tests. Safari n'existe pas sous Windows ; sur Mac, aucune application Magistra n'est publiée. Utilisez-y le serveur en ligne.
 
 ### Ce qui reste sur l'ordinateur, ce qui est enregistré en ligne
 
@@ -217,7 +226,7 @@ Chaque ligne indique « non configuré » si elle ne s'applique pas.
 
 ### Retirer les autorisations
 
-- **Depuis le site** : Réglages → Intelligence artificielle → **Déconnecter Magistra locale**. Le navigateur demande à l'application de retirer son autorisation, puis l'oublie, même si l'application est fermée. Si l'application n'a pas pu confirmer, le site demande de la retirer aussi dans l'application.
+- **Depuis le site** : Réglages → Intelligence artificielle → **Déconnecter Magistra locale**. Le navigateur demande à l'application de retirer son autorisation, puis l'oublie, même si l'application est fermée. Si l'application n'a pas pu confirmer (fermée, injoignable, ou navigateur qui bloque l'accès à l'application : le retrait n'a alors pas même pu être demandé), le site demande de la retirer aussi dans l'application ; cet avertissement reste affiché jusqu'à la prochaine action.
 - **Depuis l'application** : Réglages → « **Site web Magistra** » liste les navigateurs autorisés (site, navigateur, dates). **Retirer** prend effet immédiatement et arrête la génération en cours de ce navigateur.
 - **Couper tout accès du site** : dans la même section, décochez « Permettre au site Magistra d’utiliser l’IA de cet ordinateur ». L'application n'écoute alors plus du tout. Recochez-la pour rétablir l'accès.
 - **Depuis le navigateur** : bloquer l'autorisation « Applications sur l'appareil » empêche tout contact. Effacer les données du site oublie l'appairage de ce navigateur : retirez-le aussi dans l'application.
@@ -232,6 +241,8 @@ Au-delà de 10 navigateurs autorisés, le plus ancien est retiré automatiquemen
 3. Relisez-la, puis **publiez-la**, en laissant cochée « Set as the latest release ». Le site la propose alors **automatiquement** : `GET /api/windows-release` interroge l'API GitHub (`/releases/latest`). Il affiche la version, la taille, la date, l'empreinte SHA-256 (champ `digest` de GitHub, sinon `SHA256SUMS.txt`) et « Windows 10 ou 11 (64 bits) ». Aucune version n'est écrite dans le code.
 4. **Délai d'affichage** : la réponse est gardée 10 minutes en mémoire par le serveur. Les en-têtes HTTP autorisent aussi 5 minutes de cache dans le navigateur et 10 minutes sur le CDN, qui peut ensuite resservir l'ancienne réponse le temps de la renouveler (`stale-while-revalidate`). Comptez donc quelques minutes, parfois un peu plus, avant l'affichage de la nouvelle version.
 
+**Vérifier l'empreinte d'un installateur** (service informatique, facultatif) : sous Windows, `Get-FileHash .\Magistra-Setup-x.y.z.exe -Algorithm SHA256` doit donner l'empreinte affichée sur le site (Réglages → « Magistra pour Windows ») et dans `SHA256SUMS.txt` de la release. Les textes destinés aux enseignants ne demandent jamais de ligne de commande.
+
 Ne sont **jamais** proposés : un brouillon, une préversion (tag `vX.Y.Z-rc.1`), une étiquette autre que `vX.Y.Z`, une release sans `Magistra-Setup-X.Y.Z.exe` du même numéro, ni un lien de téléchargement hors de `https://github.com/<dépôt>/releases/download/`. Si aucune version stable n'existe, ou si GitHub ne répond pas, le site renvoie vers la page des versions.
 
 **Variables du serveur (facultatives)**
@@ -239,7 +250,7 @@ Ne sont **jamais** proposés : un brouillon, une préversion (tag `vX.Y.Z-rc.1`)
 | Variable | Rôle |
 |---|---|
 | `MAGISTRA_RELEASES_REPO` | dépôt GitHub `propriétaire/dépôt` dont les versions sont proposées. Vide : dépôt officiel `juanrobin09-stack/magistra-2`. Valeur invalide : dépôt officiel, avec un avertissement dans le journal. À changer seulement pour une copie qui publie ses propres versions : l'application, elle, cherche ses mises à jour sur le dépôt officiel (`electron/updateCheck.ts`). |
-| `GITHUB_TOKEN` | jeton en lecture seule, en général inutile grâce au cache : sans jeton, l'API GitHub accepte 60 requêtes par heure et par adresse IP. Il est envoyé seulement à `api.github.com`, jamais au navigateur ni dans les journaux. |
+| `GITHUB_TOKEN` | **recommandé sur Vercel** et sur tout hébergement dont l'adresse de sortie est partagée : jeton « fine-grained » en lecture seule, sans aucune permission (dépôts publics). Sans jeton, l'API GitHub accepte 60 requêtes par heure et par adresse IP, **partagées avec les autres clients de l'hébergeur** ; le cache (10 minutes) est propre à chaque instance du serveur, et une instance qui démarre commence sans lui. Limite atteinte : `/api/windows-release` renvoie `unavailable` et le site propose la page des versions au lieu du téléchargement direct. Le jeton est envoyé seulement à `api.github.com`, jamais au navigateur ni dans les journaux. |
 
 `POST /api/generation` enregistre le résultat d'une génération locale. Cette route compte pour `RATE_LIMIT_PER_MINUTE`, pas pour `RATE_LIMIT_GLOBAL_PER_MINUTE`. Après la mise à jour, réexécutez `supabase-schema.sql` : il ajoute la colonne `kind` de `api_requests`.
 
@@ -335,7 +346,7 @@ npm run dev:electron     # application Windows en développement (Vite + Electro
 | `npm run lint` | ESLint (0 erreur exigée) |
 | `npm run typecheck` | TypeScript sur `src`, `shared`, `server`, `api`, `electron`, `tests` |
 | `npm test` | tests unitaires et d'intégration (Vitest) |
-| `npm run test:e2e` | tests de bout en bout Playwright : `--project=web` (site), `--project=electron` (application réelle avec Ollama simulé) ou `--project=connector` (site ⇄ connecteur local ⇄ application réelle, protection « Local Network Access » de Chromium active) |
+| `npm run test:e2e` | tests de bout en bout Playwright : `--project=web` (site), `--project=electron` (application réelle avec Ollama simulé), `--project=connector` (site ⇄ connecteur local ⇄ application réelle, protection « Local Network Access » de Chromium active) ou `--project=connector-edge` (les mêmes tests dans Microsoft Edge installé ; ignorés s'il est absent, jamais lancés par la CI) |
 | `npm run ai:check` | vérifie la configuration et l'IA branchée (`--dev`, `--start`, `--vercel`, `--env-file`, `--no-generate`) |
 | `npm run test:real-ai` | validation avec une **vraie** IA (Ollama) : voir ci-dessous |
 | `npm run build` | build web |

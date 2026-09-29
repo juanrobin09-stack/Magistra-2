@@ -8,8 +8,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { defaultMessage } from '@shared/errors';
 import LocalEngineCard from '@/components/localEngine/LocalEngineCard';
 import { resetWindowsReleaseCache } from '@/components/localEngine/windowsRelease';
-import { UNRECOGNIZED_BY_APP_MESSAGE } from '@/lib/localConnector/client';
-import { LocalEngineContext, NOT_ANSWERED_PERMISSION_MESSAGE, useLocalEngine } from '@/lib/localConnector/controller';
+import { APP_UPDATE_REQUIRED_MESSAGE, PAGE_RELOAD_REQUIRED_MESSAGE, UNEXPECTED_REPLY_MESSAGE, UNRECOGNIZED_BY_APP_MESSAGE } from '@/lib/localConnector/client';
+import { LocalEngineContext, NOT_ANSWERED_PERMISSION_MESSAGE, UNPAIR_BLOCKED_MESSAGE, useLocalEngine } from '@/lib/localConnector/controller';
 import { ENGINE_CHOICE_STORAGE_KEY, setEngineChoice } from '@/lib/localConnector/engineChoice';
 import { WINDOWS_DOWNLOAD_URL } from '@/lib/links';
 import { RuntimeContext } from '@/lib/runtime/context';
@@ -193,11 +193,38 @@ describe('Carte Magistra locale — appairée', () => {
     const engine = new FakeEngine(engineState('app-closed', { error: { code: 'CONNECTOR_UNPAIRED', message: UNRECOGNIZED_BY_APP_MESSAGE } }));
     const { status, card } = await mountCard(engine);
     expect(status().textContent).toContain(UNRECOGNIZED_BY_APP_MESSAGE);
+    expect(status().textContent).not.toContain('L’application Magistra est fermée.');
     expect(status().textContent).not.toContain('n’est plus autorisé');
     expect(button(card(), /Ouvrir Magistra/)).not.toBeNull();
     expect(button(card(), /Réessayer/)).not.toBeNull();
     await click(button(card(), /Connecter Magistra locale/));
     expect(engine.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('l’application vient de répondre (non reconnu, reconnexion refusée ou expirée, réponse inattendue) : jamais « fermée »', async () => {
+    const cases = [
+      { error: { code: 'CONNECTOR_UNPAIRED' as const, message: UNRECOGNIZED_BY_APP_MESSAGE }, headline: 'Magistra ne reconnaît pas ce navigateur.', connect: true },
+      { error: { code: 'CONNECTOR_PAIRING_REFUSED' as const, message: defaultMessage('CONNECTOR_PAIRING_REFUSED') }, headline: 'Magistra locale n’est pas utilisable pour le moment.', connect: true },
+      { error: { code: 'CONNECTOR_PAIRING_EXPIRED' as const, message: defaultMessage('CONNECTOR_PAIRING_EXPIRED') }, headline: 'Magistra locale n’est pas utilisable pour le moment.', connect: true },
+      { error: { code: 'CONNECTOR_UNREACHABLE' as const, message: UNEXPECTED_REPLY_MESSAGE }, headline: 'Magistra locale n’est pas utilisable pour le moment.', connect: false },
+      { error: { code: 'CONNECTOR_UNREACHABLE' as const, message: APP_UPDATE_REQUIRED_MESSAGE }, headline: 'Magistra locale n’est pas utilisable pour le moment.', connect: false },
+    ];
+    for (const { error, headline, connect } of cases) {
+      const engine = new FakeEngine(engineState('app-closed', { error }));
+      const { status, card } = await mountCard(engine);
+      const text = status().textContent ?? '';
+      expect(text, error.code).toContain(headline);
+      expect(text, error.code).toContain(error.message);
+      expect(text, error.code).not.toContain('fermée');
+      expect(button(card(), /Ouvrir Magistra/), error.code).not.toBeNull();
+      // Reconnexion refusée ou expirée depuis l'état « non reconnu » : « Connecter » reste proposé.
+      expect(Boolean(button(card(), /Connecter Magistra locale/)), error.code).toBe(connect);
+      if (connect) {
+        await click(button(card(), /Connecter Magistra locale/));
+        expect(engine.connect, error.code).toHaveBeenCalledTimes(1);
+      }
+      cleanup();
+    }
   });
 
   it('application occupée : simple information, aucune action exigée — jamais de file d’attente promise', async () => {
@@ -258,6 +285,48 @@ describe('Carte Magistra locale — autorisation du navigateur', () => {
     expect(text).toContain('« Autoriser »');
     await click(button(view.card(), /Réessayer/));
     expect(engine.detect).toHaveBeenCalledTimes(1);
+  });
+
+  it('déconnexion alors que le navigateur bloque l’accès : l’avertissement (retirer aussi dans l’application) est affiché avec l’aide', async () => {
+    const engine = new FakeEngine(engineState('permission-denied', {
+      paired: false, permission: 'denied', error: { code: 'CONNECTOR_UNREACHABLE', message: UNPAIR_BLOCKED_MESSAGE },
+    }));
+    const view = await mountCard(engine);
+    const text = view.card().textContent ?? '';
+    expect(text).toContain('Votre navigateur bloque l’accès à l’application Magistra.');
+    expect(text).toContain(UNPAIR_BLOCKED_MESSAGE);
+    expect(text).toContain('icône à gauche de l’adresse');
+  });
+});
+
+describe('Carte Magistra locale — application d’une autre version', () => {
+  it('jamais appairé, seule une Magistra d’une autre version répond : « mettez-la à jour » (téléchargement proposé), jamais « pas encore détectée »', async () => {
+    const engine = new FakeEngine(engineState('not-found', { error: { code: 'CONNECTOR_UNREACHABLE', message: APP_UPDATE_REQUIRED_MESSAGE } }));
+    const { status, card } = await mountCard(engine);
+    expect(status().textContent).toContain('Magistra locale n’est pas utilisable pour le moment.');
+    expect(status().textContent).toContain(APP_UPDATE_REQUIRED_MESSAGE);
+    expect(status().textContent).not.toContain('pas encore détectée');
+    expect(status().textContent).not.toContain('ouvrez-la puis réessayez');
+    const download = Array.from(card().querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra'));
+    expect(download?.getAttribute('href')).toBe(RELEASE.downloadUrl);
+  });
+
+  it('appairé (mise à jour du site), seule une Magistra plus ancienne répond : le téléchargement annoncé par le message est bien proposé', async () => {
+    const engine = new FakeEngine(engineState('app-closed', { error: { code: 'CONNECTOR_UNREACHABLE', message: APP_UPDATE_REQUIRED_MESSAGE } }));
+    const { status, card } = await mountCard(engine);
+    expect(status().textContent).toContain(APP_UPDATE_REQUIRED_MESSAGE);
+    expect(status().textContent).not.toContain('fermée');
+    const download = Array.from(card().querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra'));
+    expect(download?.getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(download?.getAttribute('rel')).toContain('noreferrer');
+    expect(button(card(), /Réessayer/)).not.toBeNull();
+    cleanup();
+
+    // Application plus récente que la page : la recharger suffit, aucun téléchargement.
+    const newer = new FakeEngine(engineState('app-closed', { error: { code: 'CONNECTOR_UNREACHABLE', message: PAGE_RELOAD_REQUIRED_MESSAGE } }));
+    const view = await mountCard(newer);
+    expect(view.status().textContent).toContain(PAGE_RELOAD_REQUIRED_MESSAGE);
+    expect(Array.from(view.card().querySelectorAll('a')).some(a => a.textContent?.includes('Télécharger'))).toBe(false);
   });
 });
 

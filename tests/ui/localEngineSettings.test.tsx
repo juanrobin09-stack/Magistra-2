@@ -11,7 +11,10 @@ import type { ConnectorAppStatus } from '@shared/localConnector';
 import type { Capabilities } from '@shared/types';
 import ConnectedBrowsersSettings from '@/components/localEngine/ConnectedBrowsersSettings';
 import { resetWindowsReleaseCache } from '@/components/localEngine/windowsRelease';
+import { CONNECTOR_PORTS } from '@shared/localConnector';
+import { createLocalEngineController, UNPAIR_NOT_CONFIRMED_MESSAGE } from '@/lib/localConnector/controller';
 import { ENGINE_CHOICE_STORAGE_KEY, setEngineChoice } from '@/lib/localConnector/engineChoice';
+import { MemoryPairingStore } from '@/lib/localConnector/pairingStore';
 import { RuntimeContext } from '@/lib/runtime/context';
 import { setRuntimeConfig } from '@/lib/runtime/mode';
 import SettingsPage from '@/pages/SettingsPage';
@@ -20,6 +23,7 @@ import {
   engineState, FakeEngine, fakeServer, FORBIDDEN_LOCAL_TEXT, mountWeb, OVH_INFO, RELEASE, resetEngineChoice, SERVER_CAPS,
   stubReleaseFetch,
 } from './localEngineHelpers';
+import { fakeClock, FakeConnector } from '../localConnector/fakeConnector';
 
 vi.mock('@clerk/react', () => ({
   useClerk: () => ({ openUserProfile: vi.fn() }),
@@ -133,6 +137,41 @@ describe('Réglages du site — Intelligence artificielle', () => {
     await click(button(dialog()!, 'Déconnecter'));
     await flush();
     expect(engine.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('déconnexion alors que le navigateur bloque l’accès : la confirmation dit que le retrait ne pourra pas être demandé à l’application', async () => {
+    const engine = new FakeEngine(engineState('permission-denied', {
+      paired: true, permission: 'denied', error: { code: 'LOCAL_NETWORK_PERMISSION_DENIED', message: 'Votre navigateur bloque l’accès à l’application Magistra.' },
+    }));
+    const view = await mountSettings(engine);
+    await click(button(view.ai(), /Déconnecter Magistra locale/));
+    const text = dialog()?.textContent ?? '';
+    expect(text).not.toContain('Si l’application Magistra est ouverte, l’autorisation y est aussi retirée');
+    expect(text).toContain('l’autorisation ne pourra pas y être retirée d’ici. Retirez-la aussi dans Magistra → Réglages → « Site web Magistra ».');
+    await click(button(dialog()!, 'Déconnecter'));
+    await flush();
+    expect(engine.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('déconnexion non confirmée par l’application (fermée) : l’avertissement reste affiché malgré la relecture des capacités (vrai contrôleur)', async () => {
+    const clock = fakeClock();
+    const connector = new FakeConnector(clock.now).setPort(CONNECTOR_PORTS[0], 'magistra');
+    const controller = createLocalEngineController({
+      origin: 'https://magistra-2.vercel.app', fetch: connector.fetch as typeof fetch, store: new MemoryPairingStore(),
+      openUrl: connector.openUrl, permission: async () => 'granted', now: clock.now, sleep: clock.sleep,
+    });
+    await controller.connect();
+    expect(controller.getSnapshot().kind).toBe('connected');
+    const view = await mountWeb(<SettingsPage />, controller, { server: fakeServer(SERVER_CAPS), path: '/app/settings' });
+    const ai = () => view.container.querySelector<HTMLElement>('section[aria-labelledby="settings-ai"]')!;
+    await flush(6);
+    connector.setPort(CONNECTOR_PORTS[0], 'closed');
+    await click(button(ai(), /Déconnecter Magistra locale/));
+    await click(button(dialog()!, 'Déconnecter'));
+    await flush(20);
+    expect(controller.getSnapshot().error?.message).toBe(UNPAIR_NOT_CONFIRMED_MESSAGE);
+    expect(ai().textContent).toContain(UNPAIR_NOT_CONFIRMED_MESSAGE);
+    expect(connector.clients.size).toBe(1);
   });
 
   it('ordre de priorité, navigateur jamais appairé et pas encore cherché : « pas encore connectée », jamais « non détectée » sans recherche', async () => {
@@ -305,6 +344,9 @@ describe('Application Windows — « Site web Magistra »', () => {
   it('suit les changements poussés par l’application (nouvel appairage) ; se désabonne au démontage', async () => {
     const view = await mountConnector(connectorStatus({ clients: [] }));
     expect(view.container.textContent).toContain('Aucun navigateur autorisé');
+    // Fenêtre de l'application (pas un navigateur) : jamais « dans ce navigateur ».
+    expect(view.container.textContent).toContain('ouvrez le site Magistra dans votre navigateur (de préférence Chrome ou Edge), connectez-vous à votre compte, puis cliquez sur « Connecter Magistra locale ».');
+    expect(view.container.textContent).not.toContain('dans ce navigateur');
     await view.push(connectorStatus());
     expect(view.container.querySelectorAll('li')).toHaveLength(2);
     view.unmount();

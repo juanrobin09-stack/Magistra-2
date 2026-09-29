@@ -144,8 +144,8 @@ export default function ConnectedBrowsersSettings({ connector }: { connector: Co
         </h3>
         {status.clients.length === 0 ? (
           <p className="text-sm text-mg-200">
-            Aucun navigateur autorisé. Pour en autoriser un, ouvrez le site Magistra dans ce navigateur, puis cliquez sur
-            « Connecter Magistra locale ».
+            Aucun navigateur autorisé. Pour en autoriser un, ouvrez le site Magistra dans votre navigateur (de
+            préférence Chrome ou Edge), connectez-vous à votre compte, puis cliquez sur « Connecter Magistra locale ».
           </p>
         ) : (
           <ul className="space-y-2">

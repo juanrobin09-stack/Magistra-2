@@ -24,7 +24,10 @@ interface LocalEngineNotReadyPanelProps {
 
 export default function LocalEngineNotReadyPanel({ engine, cause, providerName, onUseServer }: LocalEngineNotReadyPanelProps) {
   const [confirming, setConfirming] = useState(false);
-  const causeText = cause ? localEngineMessage(cause.code, cause.message) : undefined;
+  // Recherche lancée depuis ce panneau (« Ouvrir Magistra », « Réessayer »…) : le panneau reste affiché (focus et
+  // explications gardés) et la ligne « Recherche… » de l'état remplace la cause, qui date d'avant la recherche.
+  const searching = engine.state.kind === 'checking' || engine.state.kind === 'idle';
+  const causeText = cause && !searching ? localEngineMessage(cause.code, cause.message) : undefined;
 
   return (
     <section aria-labelledby="gen-local-title" data-testid="local-not-ready" className="p-4 sm:p-5 rounded-xl bg-warning/5 border border-warning/25">
@@ -35,6 +38,8 @@ export default function LocalEngineNotReadyPanel({ engine, cause, providerName, 
             <h2 id="gen-local-title" className="text-sm font-semibold text-warning">{LOCAL_NOT_READY_TITLE}</h2>
             {causeText && <p className="text-sm text-mg-100 mt-1 [overflow-wrap:anywhere]">{causeText}</p>}
           </div>
+          {/* « Ouvrez Magistra » est déjà dit par la cause ; l'indication sur l'accès du site (réglage de l'application)
+              reste affichée : le site ne distingue pas une application fermée d'un accès désactivé. */}
           <LocalEngineStatus engine={engine} headline={false} omit={causeText ? [causeText, APP_CLOSED_DETAIL] : []} idPrefix="gen" />
           <div className="border-t border-white/5 pt-3">
             <button type="button" onClick={() => setConfirming(true)} className={`btn-ghost text-sm py-2 px-3 ${FOCUS_RING}`}>

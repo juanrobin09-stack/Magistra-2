@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useEngineRoute, useRouteCapsHeal } from '@/components/localEngine/engineRoute';
-import { LOCAL_BANNER_TEXT } from '@/components/localEngine/texts';
+import { appClosedPlain, LOCAL_BANNER_TEXT } from '@/components/localEngine/texts';
 import { useAIStatus, useCapabilities } from '@/hooks/useAIStatus';
 import { progressPercent } from '@/lib/ai-ui/format';
 import { isEngineBusy, isModelPulling } from '@/lib/ai-ui/progress';
@@ -49,7 +49,9 @@ function localBadge(state: LocalEngineState): BadgeView {
       return { to, ok: false, text: 'Magistra locale : IA pas prête' };
     }
     case 'app-closed':
-      return { to, ok: false, text: 'Magistra locale fermée' };
+      // « Fermée » seulement quand rien n'a répondu : sinon l'application vient de répondre (voir LocalEngineStatus).
+      if (appClosedPlain(state)) return { to, ok: false, text: 'Magistra locale fermée' };
+      return { to, ok: false, text: state.error?.code === 'CONNECTOR_UNPAIRED' ? 'Magistra locale non reconnue' : 'Magistra locale indisponible' };
     case 'needs-permission':
       return { to, ok: false, text: 'Magistra locale : autorisation requise' };
     case 'permission-denied':

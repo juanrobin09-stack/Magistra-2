@@ -90,6 +90,8 @@ export interface ConnectorServerOptions {
   /** Appelé après un appairage réussi ou un retrait par le navigateur (réglages de l'application). */
   onClientsChanged?: () => void;
   now?: () => number;
+  /** Horloge monotone, en millisecondes (défaut : performance.now) : durée de l'écoute, insensible aux réglages de l'heure. */
+  monotonic?: () => number;
   /** Journal (aucun secret, aucun contenu). */
   log?: (message: string) => void;
   /** Délais (tests). */
@@ -115,6 +117,8 @@ const MAX_CONNECTIONS = 32;
 /** Blocage après trop d'échecs d'authentification. */
 const BLOCK_MS = 60_000;
 const FAILURE_WINDOW_MS = 60_000;
+/** Recul de l'horloge du système au-delà duquel il est journalisé (une fois par écoute). */
+const CLOCK_BACK_LOG_MS = 5_000;
 /** Nonces mémorisés au plus (au-delà : refus temporaire, jamais d'oubli prématuré qui permettrait un rejeu). */
 const MAX_NONCES = 20_000;
 const NONCE_PURGE_THRESHOLD = 2_000;
@@ -234,6 +238,11 @@ export class ConnectorServer {
    * session Windows), elle ne peut pas être rejouée ici (les nonces vus ne sont mémorisés que depuis cette écoute).
    */
   private listeningSince = Number.POSITIVE_INFINITY;
+  /** Même instant, sur l'horloge monotone. */
+  private listeningSinceMono = 0;
+  /** Recul de l'horloge du système déjà journalisé pour cette écoute. */
+  private clockBackLogged = false;
+  private readonly monotonic: () => number;
   private readonly sockets = new Set<Socket>();
   private failures: number[] = [];
   private blockedUntil = 0;
@@ -244,6 +253,7 @@ export class ConnectorServer {
     this.options = options;
     this.timeouts = { ...DEFAULT_TIMEOUTS, ...options.timeouts };
     this.now = options.now ?? Date.now;
+    this.monotonic = options.monotonic ?? (() => performance.now());
     this.log = options.log ?? (message => console.warn(`[magistra] ${message}`));
   }
 
@@ -285,6 +295,8 @@ export class ConnectorServer {
       this.server = server;
       this.listeningPort = (server.address() as AddressInfo).port;
       this.listeningSince = this.now();
+      this.listeningSinceMono = this.monotonic();
+      this.clockBackLogged = false;
       return this.listeningPort;
     }
     return null;
@@ -562,9 +574,28 @@ export class ConnectorServer {
     if (!client || client.origin !== origin) throw this.unpaired(clientId, origin);
     if (Math.abs(this.now() - Number(timestamp)) > CONNECTOR_LIMITS.clockSkewMs) throw unauthenticated();
     // Signée avant le début de cette écoute : rejeu d'une requête captée par le programme qui occupait ce port.
-    if (Number(timestamp) < this.listeningSince) throw unauthenticated();
+    if (Number(timestamp) < this.listeningStart()) throw unauthenticated();
     if (this.nonces.has(`${clientId}.${nonce}`)) throw unauthenticated();
     return { client, timestamp, nonce, signature };
+  }
+
+  /**
+   * Début de l'écoute exprimé dans l'horloge ACTUELLE du système. Si l'heure a reculé depuis (synchronisation de
+   * Windows, réglage manuel), le navigateur — même ordinateur, même horloge — signe avec des heures antérieures au
+   * début noté : comparées à lui, toutes ses requêtes seraient refusées (401, puis 429) jusqu'à ce que l'horloge le
+   * rattrape. La durée de l'écoute est donc mesurée par l'horloge monotone ; une heure avancée ne recule jamais ce début.
+   * Après un recul, une requête signée avant l'écoute avec une heure que l'horloge reparcourt redevient recevable
+   * (±CONNECTOR_LIMITS.clockSkewMs) : il faudrait qu'un programme l'ait captée sur ce port avant l'écoute ET que
+   * l'heure recule (droits d'administrateur) ; les nonces déjà vus restent refusés.
+   */
+  private listeningStart(): number {
+    if (!Number.isFinite(this.listeningSince)) return this.listeningSince;
+    const start = Math.min(this.listeningSince, this.now() - (this.monotonic() - this.listeningSinceMono));
+    if (!this.clockBackLogged && this.listeningSince - start > CLOCK_BACK_LOG_MS) {
+      this.clockBackLogged = true;
+      this.log('Connecteur local : l’horloge du système a reculé depuis le début de l’écoute ; les requêtes du site restent acceptées.');
+    }
+    return start;
   }
 
   /**

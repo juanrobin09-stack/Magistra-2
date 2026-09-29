@@ -8,7 +8,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultMessage } from '@shared/errors';
 import type { GenerationEvent } from '@shared/types';
 import AIStatusBadge from '@/components/ai/AIStatusBadge';
+import { APP_CLOSED_DETAIL, SEARCHING_TEXT, SITE_ACCESS_HINT } from '@/components/localEngine/texts';
 import { resetWindowsReleaseCache } from '@/components/localEngine/windowsRelease';
+import { CONNECTOR_PORTS } from '@shared/localConnector';
+import { UNRECOGNIZED_BY_APP_MESSAGE } from '@/lib/localConnector/client';
+import { createLocalEngineController } from '@/lib/localConnector/controller';
+import { MemoryPairingStore } from '@/lib/localConnector/pairingStore';
+import { fakeClock, FakeConnector } from '../localConnector/fakeConnector';
 import { ENGINE_CHOICE_STORAGE_KEY, setEngineChoice } from '@/lib/localConnector/engineChoice';
 import { LOCAL_CONNECTOR_NETWORK_NOTE, NETWORK_PRIVACY_NOTE } from '@/lib/generation/research';
 import { LOCAL_PRIVACY_MESSAGE } from '@/lib/runtime/hybrid';
@@ -129,6 +135,10 @@ describe('Page Générer — Magistra locale', () => {
     const panel = view.panel()!;
     expect(panel.querySelector('h2')?.textContent).toBe('Magistra locale n’est pas prête');
     expect(panel.textContent).toContain(defaultMessage('CONNECTOR_UNREACHABLE'));
+    // Le site ne distingue pas une application fermée d'un accès du site désactivé dans l'application : il le dit
+    // (sans répéter « ouvrez Magistra », déjà dans la cause).
+    expect(panel.textContent).toContain(SITE_ACCESS_HINT);
+    expect(panel.textContent).not.toContain(APP_CLOSED_DETAIL);
     await click(button(panel, /Ouvrir Magistra/));
     expect(engine.openApp).toHaveBeenCalledTimes(1);
     await click(button(panel, /Réessayer/));
@@ -141,6 +151,67 @@ describe('Page Générer — Magistra locale', () => {
     expect(view.server.capabilities).not.toHaveBeenCalled();
     expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(defaultMessage('CONNECTOR_UNREACHABLE'));
     expect(view.banner().textContent).toContain(LOCAL_BANNER);
+  });
+
+  it('recherche lancée depuis le panneau (« Ouvrir Magistra », jusqu’à une minute) : le panneau reste, avec « Recherche… », « Utiliser le serveur en ligne… » et le focus', async () => {
+    setEngineChoice('local');
+    const engine = new FakeEngine(engineState('app-closed'));
+    engine.openApp.mockImplementation(async () => {
+      await engine.set(engineState('checking', { paired: true }));
+    });
+    const view = await mountGenerate(engine);
+    const open = button(view.panel()!, /Ouvrir Magistra/)!;
+    open.focus();
+    await click(open);
+    await flush(6);
+    expect(engine.openApp).toHaveBeenCalledTimes(1);
+    const panel = view.panel();
+    expect(panel).not.toBeNull();
+    expect(panel!.textContent).toContain(SEARCHING_TEXT);
+    // Une seule fois : la cause d'avant la recherche ne s'affiche pas en même temps.
+    expect(panel!.textContent!.split(SEARCHING_TEXT)).toHaveLength(2);
+    expect(panel!.textContent).not.toContain(defaultMessage('CONNECTOR_UNREACHABLE'));
+    expect(button(panel!, 'Utiliser le serveur en ligne…')).not.toBeNull();
+    // Le bouton utilisé a disparu : le focus va à la ligne d'état du panneau, jamais au début de la page.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(panel!.contains(document.activeElement)).toBe(true);
+    await engine.set(engineState('app-closed'));
+    await flush(6);
+    expect(view.panel()?.textContent).toContain(defaultMessage('CONNECTOR_UNREACHABLE'));
+  });
+
+  it('vérification au chargement de la page : aucun panneau « pas prête » fugitif avant le résultat', async () => {
+    setEngineChoice('local');
+    const engine = new FakeEngine(engineState('checking', { paired: true }));
+    const view = await mountGenerate(engine);
+    expect(view.panel()).toBeNull();
+    await engine.set(engineState('connected'));
+    await flush(6);
+    expect(view.panel()).toBeNull();
+  });
+
+  it('navigateur sans autorisation « réseau local » (Firefox), jamais appairé, Magistra locale choisie : « Magistra trouvée » reste affichée et « Connecter » est proposé (vrai contrôleur)', async () => {
+    setEngineChoice('local');
+    const clock = fakeClock();
+    const connector = new FakeConnector(clock.now).setPort(CONNECTOR_PORTS[0], 'magistra');
+    const controller = createLocalEngineController({
+      origin: 'https://magistra-2.vercel.app', fetch: connector.fetch as typeof fetch, store: new MemoryPairingStore(),
+      openUrl: connector.openUrl, permission: async () => 'unsupported', now: clock.now, sleep: clock.sleep,
+    });
+    const kinds: string[] = [];
+    controller.subscribe(() => kinds.push(controller.getSnapshot().kind));
+    const view = await mountWeb(<GeneratePage />, controller, { path: PATH });
+    await flush(6);
+    const panel = () => view.container.querySelector<HTMLElement>('[data-testid="local-not-ready"]')!;
+    // Aucune requête vers cet ordinateur sans action de l'enseignant.
+    expect(connector.requests).toHaveLength(0);
+    await click(button(panel(), "J'ai déjà Magistra : la rechercher"));
+    await flush(12);
+    expect(controller.getSnapshot().kind).toBe('found');
+    expect(kinds.at(-1)).toBe('found');
+    expect(panel().textContent).toContain('Connectez-la à ce navigateur : l’application vous demandera votre accord.');
+    expect(button(panel(), 'Connecter Magistra locale')).not.toBeNull();
+    expect(panel().textContent).not.toContain('Si Magistra est installée, ouvrez-la puis réessayez');
   });
 
   it('« Utiliser le serveur en ligne… » : confirmation explicite qui nomme le prestataire ; « Rester » ne change rien', async () => {
@@ -341,6 +412,11 @@ describe('Pastille de la barre latérale (site web)', () => {
     expect(view.container.textContent).not.toMatch(/serveur/i);
     await engine.set(engineState('app-closed'));
     expect(view.container.querySelector('a')?.textContent).toContain('Magistra locale fermée');
+    // L'application vient de répondre : jamais « fermée ».
+    await engine.set(engineState('app-closed', { error: { code: 'CONNECTOR_UNPAIRED', message: UNRECOGNIZED_BY_APP_MESSAGE } }));
+    expect(view.container.querySelector('a')?.textContent).toContain('Magistra locale non reconnue');
+    await engine.set(engineState('app-closed', { error: { code: 'CONNECTOR_PAIRING_REFUSED', message: defaultMessage('CONNECTOR_PAIRING_REFUSED') } }));
+    expect(view.container.querySelector('a')?.textContent).toContain('Magistra locale indisponible');
 
     await act(async () => setEngineChoice('server'));
     await flush(6);

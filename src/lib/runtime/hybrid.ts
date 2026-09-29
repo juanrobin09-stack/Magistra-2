@@ -101,7 +101,11 @@ export function localCapabilities(state: LocalEngineState): Capabilities {
   }
   switch (state.kind) {
     case 'permission-denied':
-      return notReadyCapabilities(state.error ?? { code: 'LOCAL_NETWORK_PERMISSION_DENIED', message: defaultMessage('LOCAL_NETWORK_PERMISSION_DENIED') });
+      // Cause : le blocage par le navigateur (une cause de plus, comme une déconnexion non confirmée, est affichée
+      // par l'état lui-même).
+      return notReadyCapabilities(state.error?.code === 'LOCAL_NETWORK_PERMISSION_DENIED'
+        ? state.error
+        : { code: 'LOCAL_NETWORK_PERMISSION_DENIED', message: defaultMessage('LOCAL_NETWORK_PERMISSION_DENIED') });
     case 'needs-permission':
       return notReadyCapabilities({ code: 'LOCAL_NETWORK_PERMISSION_DENIED', message: LOCAL_NEEDS_PERMISSION_MESSAGE });
     case 'pairing':

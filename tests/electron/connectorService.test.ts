@@ -11,6 +11,7 @@ import { buildPairingUrl, PAIR_CODE_RE, parseAppUrl, type ConnectorAppStatus } f
 import type { Capabilities } from '../../shared/types.js';
 import type { SecretCipher } from '../../electron/aiConfig.js';
 import { pairCode, randomToken } from '../../electron/connector/crypto.js';
+import { withFileLock } from '../../electron/jsonFile.js';
 import {
   appUrlFromArgv, DEV_DISABLED_PROBLEM, LocalConnector, NO_PORT_PROBLEM, PROTOCOL_HANDLER_ARGS, type ConnectorGenerationHost, type ConsentRequest, type LocalConnectorDeps,
 } from '../../electron/connector/service.js';
@@ -151,6 +152,29 @@ describe('démarrage et réglage « activé »', () => {
     await next.start();
     expect(next.status()).toMatchObject({ enabled: false, listening: false });
     expect((await next.setEnabled(true)).listening).toBe(true);
+  });
+
+  it('désactivation : effet IMMÉDIAT — serveur fermé et générations du site arrêtées avant la fin de l’écriture du réglage (lente ou impossible)', async () => {
+    const c = connector();
+    await c.init();
+    await c.start();
+    expect(c.port).not.toBeNull();
+    // Écriture retenue (verrou d'antivirus, file d'écritures).
+    let release!: () => void;
+    let started!: () => void;
+    const running = new Promise<void>(resolve => (started = resolve));
+    const held = withFileLock(path.join(dir, 'local-connector.json'), () => new Promise<void>(resolve => {
+      release = resolve;
+      started();
+    }));
+    await running;
+    const disabling = c.setEnabled(false);
+    await vi.waitFor(() => expect(c.port).toBeNull(), { timeout: 2_000 });
+    expect(generation.cancelExternalAll).toHaveBeenCalled();
+    release();
+    await held;
+    expect(await disabling).toMatchObject({ enabled: false, listening: false });
+    expect(JSON.parse(readFileSync(path.join(dir, 'local-connector.json'), 'utf8'))).toMatchObject({ enabled: false });
   });
 
   it('aucun port dédié libre : cause affichée (sans port), nouvel essai automatique', async () => {

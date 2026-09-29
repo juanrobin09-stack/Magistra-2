@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CONNECTOR_PORTS, CONNECTOR_ROUTES, OPEN_APP_URL } from '@shared/localConnector';
 import { UNRECOGNIZED_BY_APP_MESSAGE } from '@/lib/localConnector/client';
 import {
-  createLocalEngineController, NOT_ANSWERED_PERMISSION_MESSAGE, OPEN_APP_ENGINE_START_MS, OPEN_APP_SEARCH_MS, UNPAIR_NOT_CONFIRMED_MESSAGE,
-  type LocalEngineState,
+  createLocalEngineController, NOT_ANSWERED_PERMISSION_MESSAGE, OPEN_APP_ENGINE_START_MS, OPEN_APP_SEARCH_MS, UNPAIR_BLOCKED_MESSAGE,
+  UNPAIR_NOT_CONFIRMED_MESSAGE, type LocalEngineState,
 } from '@/lib/localConnector/controller';
 import { localCapabilities } from '@/lib/runtime/hybrid';
 import { getEngineChoice, resetEngineChoiceMemory, setEngineChoice } from '@/lib/localConnector/engineChoice';
@@ -149,13 +149,69 @@ describe('état initial et vérification automatique', () => {
     expect(ctx.controller.getSnapshot()).toEqual({ kind: 'found', paired: false, permission: 'granted', appVersion: '2.1.0' });
   });
 
-  it('autre erreur précédente (appairage refusé) : jamais reportée par une vérification automatique', async () => {
+  it('issue d’une action de l’enseignant (appairage refusé, expiré) : gardée par les vérifications automatiques tant que l’état est le même, jamais au-delà', async () => {
     const ctx = setup();
+    await ctx.controller.autoCheck(); // « Magistra trouvée » : le bouton « Connecter » est proposé
     ctx.connector.approve = false;
     await ctx.controller.connect();
-    expect(ctx.controller.getSnapshot().error?.code).toBe('CONNECTOR_PAIRING_REFUSED');
+    const refused = ctx.controller.getSnapshot();
+    expect(refused.error?.code).toBe('CONNECTOR_PAIRING_REFUSED');
+    ctx.kinds.length = 0;
+    // Relecture des capacités qui suit aussitôt (pages Générer et Réglages) : rien ne change, rien n'est republié.
     await ctx.controller.refresh();
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot()).toBe(refused);
+    expect(ctx.kinds).toEqual([]);
+    // L'application est fermée ensuite : autre état, la cause disparaît.
+    ctx.connector.setPort(P1, 'closed');
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot()).toEqual({ kind: 'not-found', paired: false, permission: 'granted' });
+    // Une recherche de l'enseignant repart à neuf.
+    ctx.connector.setPort(P1, 'magistra');
+    ctx.connector.answerAfterPolls = null;
+    await ctx.controller.connect();
+    expect(ctx.controller.getSnapshot().error?.code).toBe('CONNECTOR_PAIRING_EXPIRED');
+    await ctx.controller.detect();
     expect(ctx.controller.getSnapshot()).toEqual({ kind: 'found', paired: false, permission: 'granted', appVersion: '2.1.0' });
+  });
+
+  it('cause issue d’une vérification (pas d’une action) : jamais reportée quand elle ne se vérifie plus', async () => {
+    const ctx = setup({ [P1]: 'magistra' });
+    await connected(ctx);
+    ctx.connector.forgetAll();
+    await ctx.controller.detect();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'app-closed', error: { code: 'CONNECTOR_UNPAIRED' } });
+    // Application réellement fermée ensuite : « fermée », sans la cause d'avant.
+    ctx.connector.setPort(P1, 'closed');
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot()).toEqual({ kind: 'app-closed', paired: true, permission: 'granted', appVersion: '2.1.0' });
+  });
+
+  it('navigateur sans autorisation « réseau local » (Firefox…), jamais appairé : « Magistra trouvée » par l’enseignant le reste aux vérifications automatiques (rien n’est sondé, rien de nouveau)', async () => {
+    for (const permission of ['unsupported', 'prompt'] as const) {
+      const ctx = setup({ [P1]: 'magistra' }, permission);
+      await ctx.controller.detect();
+      const found = ctx.controller.getSnapshot();
+      expect(found).toMatchObject({ kind: 'found', paired: false });
+      ctx.connector.requests.length = 0;
+      ctx.kinds.length = 0;
+      // Relecture des capacités (Générer, Réglages : Magistra locale choisie) : ni requête, ni « non détectée ».
+      await ctx.controller.refresh();
+      expect(ctx.controller.getSnapshot()).toEqual(found);
+      expect(ctx.kinds).toEqual([]);
+      expect(ctx.connector.requests).toHaveLength(0);
+    }
+  });
+
+  it('navigateur sans autorisation « réseau local », retrait prouvé par l’application : « trouvée » et sa cause restent affichées', async () => {
+    const ctx = setup({ [P1]: 'magistra' }, 'unsupported');
+    await connected(ctx);
+    ctx.connector.revokeAll();
+    await ctx.controller.detect();
+    const revoked = ctx.controller.getSnapshot();
+    expect(revoked).toMatchObject({ kind: 'found', paired: false, error: { code: 'CONNECTOR_UNPAIRED' } });
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot()).toEqual(revoked);
   });
 
   it('refresh silencieux : aucun « Recherche… » affiché, aucune publication si rien ne change', async () => {
@@ -549,6 +605,40 @@ describe('déconnexion', () => {
     expect(ctx.connector.calls(CONNECTOR_ROUTES.pair, 'DELETE')).toHaveLength(1);
     expect(ctx.connector.clients.has(clientId)).toBe(false);
     expect(ctx.controller.getSnapshot()).toEqual({ kind: 'found', paired: false, permission: 'granted', appVersion: '2.1.0' });
+  });
+
+  it('retrait non confirmé : l’avertissement reste affiché aux vérifications automatiques qui suivent (relecture des capacités)', async () => {
+    for (const permission of ['granted', 'unsupported'] as const) {
+      const ctx = setup({ [P1]: 'magistra' }, permission);
+      await connected(ctx);
+      ctx.connector.setPort(P1, 'closed');
+      await ctx.controller.disconnect();
+      const warned = ctx.controller.getSnapshot();
+      expect(warned.error?.message, permission).toBe(UNPAIR_NOT_CONFIRMED_MESSAGE);
+      await ctx.controller.refresh();
+      await ctx.controller.autoCheck();
+      expect(ctx.controller.getSnapshot(), permission).toEqual(warned);
+    }
+  });
+
+  it('navigateur qui bloque l’accès : aucun retrait demandé, l’enseignant est prévenu (jamais « retirée » à tort), et le reste', async () => {
+    const ctx = setup();
+    await connected(ctx);
+    ctx.setPermission('denied');
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'permission-denied', paired: true });
+    await ctx.controller.disconnect();
+    const warned = ctx.controller.getSnapshot();
+    expect(warned).toEqual({
+      kind: 'permission-denied', paired: false, permission: 'denied', error: { code: 'CONNECTOR_UNREACHABLE', message: UNPAIR_BLOCKED_MESSAGE },
+    });
+    expect(UNPAIR_BLOCKED_MESSAGE).toContain('Magistra → Réglages → « Site web Magistra »');
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.pair, 'DELETE')).toHaveLength(0);
+    expect(ctx.connector.clients.size).toBe(1);
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot()).toEqual(warned);
+    // La page Générer donne la cause du blocage (l'avertissement est affiché par l'état).
+    expect(localCapabilities(warned).notReady?.code).toBe('LOCAL_NETWORK_PERMISSION_DENIED');
   });
 
   it('application fermée : appairage oublié quand même, et l’enseignant est prévenu que l’application l’autorise encore', async () => {

@@ -19,7 +19,7 @@ import { runLocalAction, wasSearched } from './localActions';
 import LocalEngineStatus, { type LocalEngineHandle } from './LocalEngineStatus';
 import { PermissionExplainer } from './PermissionNotes';
 import {
-  DISCONNECT_LABEL, LOCAL_BANNER_TEXT, LOCAL_CHOICE_LABEL, localEngineSummary, NOT_CONFIGURED_TEXT, REMOTE_CONFIRM_LABEL,
+  DISCONNECT_BLOCKED_TEXT, DISCONNECT_LABEL, DISCONNECT_TEXT, LOCAL_BANNER_TEXT, LOCAL_CHOICE_LABEL, localEngineSummary, NOT_CONFIGURED_TEXT, REMOTE_CONFIRM_LABEL,
   REMOTE_CONFIRM_TITLE, remoteBannerText, remoteConfirmText, serverChoiceLabel,
 } from './texts';
 
@@ -186,7 +186,7 @@ export default function EngineSettings({ engine, serverCaps, serverDetails }: En
       <ConfirmDialog
         open={askDisconnect}
         title="Déconnecter Magistra locale ?"
-        message="Ce navigateur ne pourra plus utiliser l’intelligence artificielle de cet ordinateur. Si l’application Magistra est ouverte, l’autorisation y est aussi retirée ; sinon, retirez-la dans Magistra → Réglages → « Site web Magistra ». Vous pourrez reconnecter Magistra locale à tout moment."
+        message={state.permission === 'denied' ? DISCONNECT_BLOCKED_TEXT : DISCONNECT_TEXT}
         confirmLabel="Déconnecter"
         danger
         onConfirm={() => {

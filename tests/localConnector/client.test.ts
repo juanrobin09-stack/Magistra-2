@@ -4,11 +4,13 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { isAbortError } from '@shared/errors';
-import { CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS, CONNECTOR_PORTS, CONNECTOR_ROUTES, PAIR_CODE_RE, parseAppUrl } from '@shared/localConnector';
+import {
+  CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS, CONNECTOR_PORTS, CONNECTOR_PROTOCOL_VERSION, CONNECTOR_ROUTES, PAIR_CODE_RE, parseAppUrl,
+} from '@shared/localConnector';
 import type { GenerationEvent, GenerationRequest } from '@shared/types';
 import {
-  LocalConnectorClient, PAIRING_NOT_RECEIVED_MESSAGE, STREAM_INTERRUPTED_MESSAGE, UNEXPECTED_REPLY_MESSAGE, UNRECOGNIZED_BY_APP_MESSAGE,
-  type LocalConnectorClientOptions,
+  APP_UPDATE_REQUIRED_MESSAGE, LocalConnectorClient, PAGE_RELOAD_REQUIRED_MESSAGE, PAIRING_NOT_RECEIVED_MESSAGE, STREAM_INTERRUPTED_MESSAGE,
+  UNEXPECTED_REPLY_MESSAGE, UNRECOGNIZED_BY_APP_MESSAGE, type LocalConnectorClientOptions,
 } from '@/lib/localConnector/client';
 import { MemoryPairingStore } from '@/lib/localConnector/pairingStore';
 import type { LoopbackPermission } from '@/lib/localConnector/permission';
@@ -107,15 +109,36 @@ describe('hello : recherche sans adresse', () => {
     expect(await ctx.client.hello()).toBeNull();
   });
 
-  it('protocole incompatible ou réponse démesurée : ignorés', async () => {
+  it('réponse démesurée : ignorée', async () => {
     const ctx = setup({});
     ctx.connector.intercept = (port) => {
-      // Ancienne application (protocole 1 : accusé, signature et preuve non liés au port) : incompatible.
-      if (port === P1) return new Response(JSON.stringify({ app: 'magistra', protocol: 1, version: '9.0.0' }), { headers: { 'Content-Type': 'application/json' } });
       if (port === P2) return new Response(JSON.stringify({ app: 'magistra', protocol: 2, version: '2.0.0', pad: 'x'.repeat(40_000) }), { headers: { 'Content-Type': 'application/json' } });
       return undefined;
     };
     expect(await ctx.client.hello()).toBeNull();
+  });
+
+  it('application Magistra d’une autre version du protocole : jamais utilisée, mais jamais « pas encore détectée » — mettre Magistra à jour, ou recharger la page', async () => {
+    const helloOf = (protocol: unknown) => new Response(JSON.stringify({ app: 'magistra', protocol, version: '9.0.0' }), { headers: { 'Content-Type': 'application/json' } });
+    // Ancienne application (protocole 1 : accusé, signature et preuve non liés au port) : à mettre à jour.
+    const old = setup({});
+    old.connector.intercept = (port, path) => (port === P1 && path === CONNECTOR_ROUTES.hello ? helloOf(1) : undefined);
+    expect(await rejection(old.client.hello())).toMatchObject({ code: 'CONNECTOR_UNREACHABLE', message: APP_UPDATE_REQUIRED_MESSAGE });
+    // Application plus récente que cette page (site pas encore rechargé après sa mise à jour).
+    const newer = setup({});
+    newer.connector.intercept = (port, path) => (port === P3 && path === CONNECTOR_ROUTES.hello ? helloOf(CONNECTOR_PROTOCOL_VERSION + 1) : undefined);
+    expect(await rejection(newer.client.hello())).toMatchObject({ code: 'CONNECTOR_UNREACHABLE', message: PAGE_RELOAD_REQUIRED_MESSAGE });
+    // Rien ne lui est jamais envoyé d'autre que hello.
+    expect(newer.connector.requests.every(r => r.path === CONNECTOR_ROUTES.hello)).toBe(true);
+    // Une application compatible sur un autre port l'emporte ; protocole mal formé : simple programme inconnu.
+    const both = setup({ [P2]: 'magistra' });
+    both.connector.intercept = (port, path) => (port === P1 && path === CONNECTOR_ROUTES.hello ? helloOf(1) : undefined);
+    expect((await both.client.hello())?.port).toBe(P2);
+    for (const bad of [0, -1, 1.5, '1', null]) {
+      const odd = setup({});
+      odd.connector.intercept = (port, path) => (port === P1 && path === CONNECTOR_ROUTES.hello ? helloOf(bad) : undefined);
+      expect(await odd.client.hello(), String(bad)).toBeNull();
+    }
   });
 
   it('autorisation refusée par le navigateur : erreur précise, aucune requête', async () => {
@@ -542,6 +565,20 @@ describe('status : requêtes signées et preuve', () => {
     expect(await client.status()).toEqual(READY_STATUS);
   });
 
+  it('appairé, seule une application Magistra d’une autre version répond (mise à jour du site) : « mettez Magistra à jour », jamais « fermée »', async () => {
+    const ctx = setup();
+    await pairClient(ctx);
+    const client = ctx.reload();
+    ctx.connector.setPort(P1, 'closed');
+    ctx.connector.intercept = (port, path) => (port === P2 && path === CONNECTOR_ROUTES.hello
+      ? new Response(JSON.stringify({ app: 'magistra', protocol: 1, version: '1.9.0' }), { headers: { 'Content-Type': 'application/json' } })
+      : undefined);
+    expect(await rejection(client.status())).toMatchObject({ code: 'CONNECTOR_UNREACHABLE', message: APP_UPDATE_REQUIRED_MESSAGE });
+    expect(await client.hasPairing()).toBe(true);
+    // Aucune requête signée vers elle.
+    expect(ctx.connector.requests.filter(r => r.port === P2).every(r => r.path === CONNECTOR_ROUTES.hello)).toBe(true);
+  });
+
   it('autorisation du navigateur refusée : erreur précise, aucune requête', async () => {
     const ctx = setup();
     await pairClient(ctx);
@@ -732,6 +769,44 @@ describe('unpair', () => {
     await pairClient(ctx);
     ctx.connector.revokeAll();
     expect(await ctx.client.unpair()).toBe(true);
+    expect(await ctx.client.hasPairing()).toBe(false);
+  });
+
+  it('autorisation à demander : le navigateur retient DELETE jusqu’à la réponse de l’enseignant (accord après 7 s) → retrait confirmé', async () => {
+    const ctx = setup();
+    await pairClient(ctx);
+    const clientId = (await ctx.store.load())!.clientId;
+    ctx.setPermission('prompt');
+    // Navigateur qui applique la protection : chaque requête reste retenue tant que l'enseignant n'a pas répondu à
+    // sa question ; interrompue si le site l'abandonne.
+    let answered = false;
+    const release: (() => void)[] = [];
+    const client = new LocalConnectorClient({
+      ...ctx.options,
+      fetch: (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        if (!answered) {
+          await new Promise<void>((resolve, reject) => {
+            release.push(resolve);
+            init.signal?.addEventListener('abort', () => reject(new TypeError('Failed to fetch')), { once: true });
+          });
+        }
+        return ctx.connector.fetch(input, init);
+      }) as typeof fetch,
+    });
+    vi.useFakeTimers();
+    try {
+      const result = client.unpair();
+      await vi.advanceTimersByTimeAsync(7_000);
+      answered = true;
+      ctx.setPermission('granted');
+      for (const resolve of release.splice(0)) resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await result).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.pair, 'DELETE')).toHaveLength(1);
+    expect(ctx.connector.clients.has(clientId)).toBe(false);
     expect(await ctx.client.hasPairing()).toBe(false);
   });
 

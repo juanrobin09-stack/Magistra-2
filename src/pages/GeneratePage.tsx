@@ -147,6 +147,16 @@ export default function GeneratePage() {
           // l'envoi (preuve GET /v1/status) ferait apparaître la demande du navigateur sans explication.
           : localState.paired && localState.permission === 'prompt' ? LOCAL_PERMISSION_FIRST_NOTICE : null;
 
+  // Panneau « Magistra locale n'est pas prête » : jamais pendant la vérification du chargement de la page (aucun
+  // avertissement fugitif avant « connectée ») ; déjà affiché, il RESTE pendant la recherche que ses propres boutons
+  // lancent (« Ouvrir Magistra », « Réessayer », « Rechercher Magistra… ») : focus, explications et « Utiliser le
+  // serveur en ligne… » ne disparaissent pas pendant jusqu'à une minute.
+  const notReadyNow = Boolean(localRoute && caps && !caps.ready && localState && localState.kind !== 'idle' && localState.kind !== 'checking');
+  const localSearching = localState?.kind === 'checking';
+  const [panelBeforeSearch, setPanelBeforeSearch] = useState(notReadyNow);
+  if (!localSearching && panelBeforeSearch !== notReadyNow) setPanelBeforeSearch(notReadyNow);
+  const showNotReadyPanel = notReadyNow || (localSearching && panelBeforeSearch && Boolean(caps && !caps.ready));
+
   // Capacités relues quand le moteur choisi ou l'état de Magistra locale (utilisée) change. Moteur inconnu → connu :
   // les capacités lues au montage sont déjà celles de ce moteur (même règle de choix), rien à relire.
   const capsKey = engine ? `${route ?? ''}|${localRoute && localState ? engineStateKey(localState) : ''}` : '';
@@ -342,7 +352,7 @@ export default function GeneratePage() {
           )}
 
           {engine && localRoute ? (
-            caps && !caps.ready && localState && localState.kind !== 'idle' && localState.kind !== 'checking' ? (
+            showNotReadyPanel && caps ? (
               <LocalEngineNotReadyPanel
                 engine={engine}
                 cause={caps.notReady}

@@ -166,9 +166,9 @@ jobs:
           2. Magistra installe le moteur d'IA locale (Ollama, version 0.13.1 ou plus récente) et un modèle open weights :
              tout est guidé, sans compte ni clé. Vos documents et vos générations restent sur l'ordinateur.
 
-          ### Vérifier le fichier téléchargé (facultatif)
-          Dans PowerShell : \`Get-FileHash .\Magistra-Setup-$VERSION.exe -Algorithm SHA256\`, puis comparez le résultat
-          avec la ligne correspondante de \`SHA256SUMS.txt\`.
+          ### Vérifier le fichier téléchargé (facultatif, pour le service informatique)
+          L'empreinte SHA-256 de l'installateur est affichée sur le site Magistra (Réglages → « Magistra pour Windows ») :
+          elle doit correspondre à la ligne de \`Magistra-Setup-$VERSION.exe\` dans \`SHA256SUMS.txt\`.
 
           Guide complet : $SERVER/$REPO#brancher-une-vraie-ia
           EOF

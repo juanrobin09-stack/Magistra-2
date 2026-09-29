@@ -120,15 +120,20 @@ export function resetEngineChoice(): void {
   resetEngineChoiceMemory();
 }
 
-export interface WebMount {
-  engine: FakeEngine;
+export interface WebMount<E extends LocalEngineController = FakeEngine> {
+  engine: E;
   server: ReturnType<typeof fakeServer>;
   saveDraft: ReturnType<typeof vi.fn<(draft: GenerationRecordDraft) => Promise<{ id: string }>>>;
   client: HybridGenerationClient;
 }
 
-/** Monte `ui` comme sur le site web (enseignant connecté) : client hybride réel, contrôleur fourni par le contexte. */
-export async function mountWeb(ui: ReactNode, engine: FakeEngine, options: { server?: ReturnType<typeof fakeServer>; mode?: RuntimeMode; path?: string } = {}) {
+/**
+ * Monte `ui` comme sur le site web (enseignant connecté) : client hybride réel, contrôleur fourni par le contexte
+ * (faux contrôleur, ou le vrai face à un faux connecteur).
+ */
+export async function mountWeb<E extends LocalEngineController = FakeEngine>(
+  ui: ReactNode, engine: E, options: { server?: ReturnType<typeof fakeServer>; mode?: RuntimeMode; path?: string } = {},
+) {
   const server = options.server ?? fakeServer();
   const saveDraft = vi.fn(async (_draft: GenerationRecordDraft) => ({ id: 'local-1' }));
   const client = new HybridGenerationClient(server, engine, saveDraft);
@@ -142,7 +147,7 @@ export async function mountWeb(ui: ReactNode, engine: FakeEngine, options: { ser
     </RuntimeContext.Provider>,
   );
   await flush(6);
-  const mount: WebMount = { engine, server, saveDraft, client };
+  const mount: WebMount<E> = { engine, server, saveDraft, client };
   return { ...view, ...mount };
 }
 

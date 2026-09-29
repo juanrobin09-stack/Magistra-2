@@ -269,16 +269,21 @@ export class LocalConnector {
     return this.status();
   }
 
-  /** Réglages : « Permettre au site Magistra d'utiliser l'IA de cet ordinateur ». */
+  /**
+   * Réglages : « Permettre au site Magistra d'utiliser l'IA de cet ordinateur ». Désactivation : effet immédiat, comme
+   * un retrait — réglage changé en mémoire (partie synchrone de clients.setEnabled), serveur fermé et générations du
+   * site interrompues AVANT l'attente de l'écriture (lente sous un verrou d'antivirus, ou impossible), et même si elle
+   * échoue. Activation : écoute seulement une fois le réglage enregistré.
+   */
   async setEnabled(enabled: boolean): Promise<ConnectorAppStatus> {
     let failure: unknown = null;
-    try {
-      await this.clients.setEnabled(enabled);
-    } catch (err) {
+    const writing = this.clients.setEnabled(enabled).catch((err: unknown) => {
       failure = err;
-    }
-    // Désactivation : effective même si elle n'a pas pu être enregistrée.
-    if (!this.clients.enabled) await this.serialize(() => this.close());
+    });
+    const closing = this.clients.enabled ? null : this.serialize(() => this.close());
+    await writing;
+    if (closing) await closing;
+    else if (!this.clients.enabled) await this.serialize(() => this.close());
     else await this.serialize(() => this.listen());
     if (failure) throw failure;
     return this.status();

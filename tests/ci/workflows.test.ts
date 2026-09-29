@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import playwrightConfig from '../../playwright.config';
 import { LOCAL_NETWORK_ACCESS_ARGS, OTHER_SITE_PORT, SITE_PORT } from '../../e2e/connector-harness/sites';
-import { CONNECTOR_HARNESS_DIR, E2E_OUTPUT_DIRS, E2E_SCREENSHOT_DIRS, type E2EProject } from '../../e2e/outputDirs';
+import { CONNECTOR_HARNESS_DIR, CONNECTOR_HARNESS_DIRS, CONNECTOR_PROJECTS, E2E_OUTPUT_DIRS, E2E_SCREENSHOT_DIRS, type E2EProject } from '../../e2e/outputDirs';
 import { PROVIDER_PRESETS } from '../../shared/ai/presets';
 import { MIN_OLLAMA_VERSION } from '../../shared/ai/models';
 
@@ -99,6 +99,14 @@ describe('release.yml : application Windows publiée en brouillon', () => {
     expect(rel).not.toMatch(/npm |node /);
     expect(code(release)).not.toMatch(/git (tag|push)\b/);
     expect(code(release)).not.toMatch(/secrets\./);
+  });
+
+  it('textes destinés aux enseignants (notes de version liées depuis le site, installation) : jamais de ligne de commande', () => {
+    expect(release).not.toMatch(/PowerShell|Get-FileHash/);
+    const install = readme.slice(readme.indexOf("## Application Windows : installation pour l'enseignant"));
+    expect(install.slice(0, install.indexOf('\n---'))).not.toMatch(/PowerShell|Get-FileHash/);
+    // La commande reste documentée pour le service informatique (section des mainteneurs).
+    expect(readme.slice(readme.indexOf('### Mainteneurs'))).toContain('Get-FileHash');
   });
 
   it('le tag doit correspondre à la version de package.json (vérification de mise à jour)', () => {
@@ -201,7 +209,7 @@ describe('ci.yml et Playwright : E2E du connecteur local', () => {
     }
     // Captures envoyées même après un échec (c'est alors qu'elles servent), sous deux noms distincts.
     const names = new Set<string>();
-    for (const dir of Object.values(E2E_SCREENSHOT_DIRS)) {
+    for (const dir of [E2E_SCREENSHOT_DIRS.electron, E2E_SCREENSHOT_DIRS.connector]) {
       const upload = stepWith(electron, `path: ${dir}`);
       expect(upload, dir).toMatch(/^\s+if: always\(\)$/m);
       expect(upload, dir).toMatch(/uses: actions\/upload-artifact@/);
@@ -210,6 +218,16 @@ describe('ci.yml et Playwright : E2E du connecteur local', () => {
     expect([...names].filter(Boolean)).toHaveLength(2);
     // Le projet « web » reste lancé seul dans son job.
     expect(job(ci, 'e2e-web')).toContain('run: npm run test:e2e -- --project=web');
+    // Microsoft Edge n'est pas installé par la CI : « connector-edge » n'y est jamais lancé (vérification à la main).
+    expect(code(ci)).not.toContain('connector-edge');
+    expect(code(ci)).not.toMatch(/playwright test(?![^\n]*--project)/);
+  });
+
+  it('CI Linux : trousseau de clés exigé par l’E2E du connecteur (jamais de repli silencieux « autorisations en mémoire »)', () => {
+    const connectorSpec = read('e2e/connector-local.spec.ts');
+    expect(connectorSpec).toContain("if (process.env.CI && process.platform === 'linux' && keyring === null) {");
+    // Le démon arrêté avant de lire son mot de passe ne fait pas planter le test (EPIPE) : il est constaté (null).
+    expect(connectorSpec).toContain("keyring.stdin?.on('error', () => undefined);");
   });
 
   it('chaque projet a son propre dossier de sortie : lancer l’un ne vide jamais ce que l’autre a produit (captures, traces)', () => {
@@ -219,35 +237,48 @@ describe('ci.yml et Playwright : E2E du connecteur local', () => {
     const dirs = projects.map(p => p.outputDir ?? '');
     expect(dirs).toEqual(projects.map(p => E2E_OUTPUT_DIRS[p.name as E2EProject]));
     for (const [i, a] of dirs.entries()) {
-      expect(a).toMatch(/^test-results\/[a-z]+$/);
+      expect(a).toMatch(/^test-results\/[a-z]+(-[a-z]+)?$/);
       for (const [j, b] of dirs.entries()) if (i !== j) expect(`${b}/`.startsWith(`${a}/`), `${a} ⊃ ${b}`).toBe(false);
     }
     // Ce que produit un projet est rangé dans SON dossier.
     expect(E2E_SCREENSHOT_DIRS.electron.startsWith(`${E2E_OUTPUT_DIRS.electron}/`)).toBe(true);
-    expect(E2E_SCREENSHOT_DIRS.connector.startsWith(`${E2E_OUTPUT_DIRS.connector}/`)).toBe(true);
-    expect(CONNECTOR_HARNESS_DIR.startsWith(`${E2E_OUTPUT_DIRS.connector}/`)).toBe(true);
+    for (const project of CONNECTOR_PROJECTS) {
+      expect(E2E_SCREENSHOT_DIRS[project].startsWith(`${E2E_OUTPUT_DIRS[project]}/`), project).toBe(true);
+      expect(CONNECTOR_HARNESS_DIRS[project].startsWith(`${E2E_OUTPUT_DIRS[project]}/`), project).toBe(true);
+    }
+    expect(CONNECTOR_HARNESS_DIR).toBe(CONNECTOR_HARNESS_DIRS.connector);
     const electronSpec = read('e2e/electron-local.spec.ts');
     const connectorSpec = read('e2e/connector-local.spec.ts');
     expect(electronSpec).toContain('fromRoot(E2E_SCREENSHOT_DIRS.electron)');
-    expect(connectorSpec).toContain('fromRoot(E2E_SCREENSHOT_DIRS.connector)');
-    expect(connectorSpec).toContain('fromRoot(CONNECTOR_HARNESS_DIR)');
+    // Dossiers du projet LANCÉ (« connector » ou « connector-edge ») : jamais ceux de l'autre.
+    expect(connectorSpec).toContain('fromRoot(E2E_SCREENSHOT_DIRS[currentProject()])');
+    expect(connectorSpec).toContain('fromRoot(CONNECTOR_HARNESS_DIRS[currentProject()])');
     // Aucun autre chemin de test-results/ codé en dur (il échapperait à cette règle).
     for (const [file, text] of [['electron', electronSpec], ['connector', connectorSpec], ['harness', read('e2e/connector-harness/vite.config.ts')]]) {
       expect(code(text), file).not.toMatch(/['"`]test-results/);
     }
   });
 
-  it('chaque fichier E2E appartient à exactement un projet ; « connector » active la protection Local Network Access', () => {
+  it('chaque fichier E2E appartient à exactement un projet (le connecteur : un par navigateur) ; « connector » et « connector-edge » activent la protection Local Network Access', () => {
     const projects = playwrightConfig.projects ?? [];
-    expect(projects.map(p => p.name)).toEqual(['web', 'electron', 'connector']);
+    expect(projects.map(p => p.name)).toEqual(['web', 'electron', 'connector', 'connector-edge']);
     const specs = readdirSync(path.join(root, 'e2e')).filter(f => f.endsWith('.spec.ts'));
     expect(specs).toContain('connector-local.spec.ts');
     for (const spec of specs) {
-      const owners = projects.filter(p => p.testMatch instanceof RegExp && p.testMatch.test(path.join(root, 'e2e', spec)));
-      expect(owners.map(p => p.name), spec).toHaveLength(1);
+      const owners = projects.filter(p => p.testMatch instanceof RegExp && p.testMatch.test(path.join(root, 'e2e', spec))).map(p => p.name);
+      expect(owners, spec).toEqual(spec.startsWith('connector-') ? [...CONNECTOR_PROJECTS] : [expect.any(String)]);
     }
     const connector = projects.find(p => p.name === 'connector')!;
+    const edge = projects.find(p => p.name === 'connector-edge')!;
     expect(connector.use?.launchOptions?.args).toEqual([...LOCAL_NETWORK_ACCESS_ARGS]);
+    // Même tests, mêmes options ; seul le navigateur change (Microsoft Edge installé : canal « msedge »).
+    expect(String(edge.testMatch)).toBe(String(connector.testMatch));
+    expect(edge.use?.launchOptions?.args).toEqual([...LOCAL_NETWORK_ACCESS_ARGS]);
+    expect(edge.use?.channel).toBe('msedge');
+    expect(edge.use?.userAgent).toMatch(/ Edg\//);
+    expect(connector.use?.channel).toBeUndefined();
+    // Edge absent (CI Linux) : tests ignorés proprement, jamais en échec.
+    expect(read('e2e/connector-local.spec.ts')).toContain("test.skip(({ channel }) => channel === 'msedge' && msedgeExecutable() === null, MSEDGE_MISSING_REASON);");
     expect(LOCAL_NETWORK_ACCESS_ARGS).toContain('--enable-features=LocalNetworkAccessChecks');
     expect(LOCAL_NETWORK_ACCESS_ARGS).toContain(`--ip-address-space-overrides=127.0.0.1:${SITE_PORT}=public,127.0.0.1:${OTHER_SITE_PORT}=public`);
     // Aucun contournement : ni désactivation des contrôles, ni autorisation accordée d'office à tous les tests.

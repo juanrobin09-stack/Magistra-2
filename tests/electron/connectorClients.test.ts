@@ -10,6 +10,7 @@ import type { SecretCipher } from '../../electron/aiConfig.js';
 import { canonicalRevoked } from '../../shared/localConnector.js';
 import { ConnectorClientStore, MAX_REVOKED_MARKS } from '../../electron/connector/clients.js';
 import { hmacBase64Url, toBase64Url } from '../../electron/connector/crypto.js';
+import { withFileLock } from '../../electron/jsonFile.js';
 
 const ORIGIN = 'https://magistra-2.vercel.app';
 
@@ -34,6 +35,19 @@ function key(fill: number): Buffer {
 /** Toutes les écritures possibles d'une clé : aucune ne doit apparaître sur le disque. */
 function keyForms(k: Buffer): string[] {
   return [toBase64Url(k), k.toString('base64'), k.toString('hex'), JSON.stringify([...k])];
+}
+
+/** Écriture du fichier retenue (verrou d'antivirus, file d'écritures) jusqu'à `release`. */
+async function holdFile(target: string): Promise<{ held: Promise<void>; release: () => void }> {
+  let release!: () => void;
+  let started!: () => void;
+  const running = new Promise<void>(resolve => (started = resolve));
+  const held = withFileLock(target, () => new Promise<void>(resolve => {
+    release = resolve;
+    started();
+  }));
+  await running;
+  return { held, release };
 }
 
 let dir: string;
@@ -155,6 +169,47 @@ describe('autorisations enregistrées', () => {
     expect(s.find(a.clientId)).toBeUndefined();
     // Marque calculée avec la clé du navigateur évincé AVANT son effacement : il saura qu'il a été retiré.
     expect(s.revokedMark(a.clientId, ORIGIN)).toBe(hmacBase64Url(key(13), canonicalRevoked(a.clientId)));
+  });
+
+  it('éviction : marque servie seulement une fois l’éviction enregistrée ; écriture impossible → éviction annulée, AUCUNE marque servie (elle resterait valable pour un navigateur toujours autorisé)', async () => {
+    const s = store(fakeCipher(), 1);
+    await s.load();
+    const a = await s.add({ origin: ORIGIN, browser: 'Google Chrome', key: key(15) });
+    clock += 1_000;
+    // Écriture retenue (verrou d'antivirus, file d'écritures) puis impossible (disque plein, dossier disparu).
+    const { held, release } = await holdFile(file);
+    const adding = s.add({ origin: ORIGIN, browser: 'Microsoft Edge', key: key(16) });
+    // Pendant l'écriture : le navigateur évincé est déjà refusé, mais sans marque de retrait.
+    expect(s.find(a.clientId)).toBeUndefined();
+    expect(s.revokedMark(a.clientId, ORIGIN)).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+    writeFileSync(dir, 'fichier à la place du dossier');
+    release();
+    await held;
+    await expect(adding).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    // Éviction annulée : A reste autorisé (même clé), aucune marque n'a jamais été servie.
+    expect(s.find(a.clientId)?.key).toEqual(key(15));
+    expect(s.revokedMark(a.clientId, ORIGIN)).toBeUndefined();
+    expect(s.list().map(c => c.clientId)).toEqual([a.clientId]);
+    rmSync(dir, { force: true });
+  });
+
+  it('éviction enregistrée : marque servie ensuite, relue au démarrage', async () => {
+    const s = store(fakeCipher(), 1);
+    await s.load();
+    const a = await s.add({ origin: ORIGIN, browser: 'Google Chrome', key: key(17) });
+    clock += 1_000;
+    const { held, release } = await holdFile(file);
+    const adding = s.add({ origin: ORIGIN, browser: 'Microsoft Edge', key: key(18) });
+    expect(s.revokedMark(a.clientId, ORIGIN)).toBeUndefined();
+    release();
+    await held;
+    await adding;
+    const mark = hmacBase64Url(key(17), canonicalRevoked(a.clientId));
+    expect(s.revokedMark(a.clientId, ORIGIN)).toBe(mark);
+    const reloaded = store(fakeCipher(), 1);
+    await reloaded.load();
+    expect(reloaded.revokedMark(a.clientId, ORIGIN)).toBe(mark);
   });
 
   it('marque de retrait : calculée avec la clé avant son effacement, pour ce site seulement, enregistrée et bornée', async () => {

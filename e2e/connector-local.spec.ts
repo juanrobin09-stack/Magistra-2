@@ -1,4 +1,4 @@
-// Connecteur local DE BOUT EN BOUT : un vrai navigateur (Chromium, protection « Local Network Access » ACTIVE) ouvre
+// Connecteur local DE BOUT EN BOUT : un vrai navigateur (protection « Local Network Access » ACTIVE) ouvre
 // le harnais du site (VRAIS composants, VRAI contrôleur, VRAI client WebCrypto/IndexedDB, voir e2e/connector-harness)
 // et dialogue avec la VRAIE application Windows (Electron, dist-electron) qui génère avec un Ollama simulé
 // (scripts/mock-ollama.mjs) — ou avec un vrai Ollama (MAGISTRA_E2E_REAL_OLLAMA_URL).
@@ -15,14 +15,21 @@
 //    imposé par le chargeur Electron de Playwright est retiré par e2e/electron-keyring-preload.cjs) ;
 //  - l'autorisation « accès au réseau local » du navigateur est accordée ou refusée par le test, jamais par le site.
 //
+// Navigateurs : projet « connector », Chromium de Playwright (autorisation « local-network-access ») ; projet
+// « connector-edge », Microsoft Edge installé sur la machine (« loopback-network » des versions récentes ; tests
+// ignorés si Edge est absent, e2e/browsers.ts). Les autorisations passent par CDP (Browser.setPermission) pour chaque
+// nom connu du navigateur, et sont lues comme le site les lit (« loopback-network », sinon « local-network-access »).
+//
 // Prérequis : `npx vite build` (dist/) puis `node scripts/build-electron.mjs` (dist-electron/). Le harnais est construit
-// par ce fichier (test-results/connector/harness-dist, avec les captures dans test-results/connector/captures : dossier
-// du projet « connector », que Playwright vide au début de chacun de ses lancements, voir e2e/outputDirs.ts).
-// Lancement (Linux sans écran) : `xvfb-run -a npx playwright test --project=connector`.
+// par ce fichier (test-results/<projet>/harness-dist, avec les captures dans test-results/<projet>/captures : dossier
+// du projet lancé, que Playwright vide au début de chacun de ses lancements, voir e2e/outputDirs.ts).
+// Lancement (Linux sans écran) : `xvfb-run -a npx playwright test --project=connector --project=connector-edge`.
+// En CI (variable CI) sous Linux, le trousseau de clés est exigé : sans lui, la conservation chiffrée des autorisations
+// ne serait plus vérifiée.
 // Variables facultatives : MAGISTRA_E2E_REAL_OLLAMA_URL (vrai Ollama : ministral-3:8b installé ou en alias),
 // MAGISTRA_E2E_LOGS=1 (journaux du processus principal).
 
-import { _electron as electron, expect, test, type BrowserContext, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { _electron as electron, expect, test, type CDPSession, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createECDH, createHash, randomBytes } from 'node:crypto';
 import { accessSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -35,12 +42,26 @@ import { defaultMessage } from '../shared/errors';
 import type { MagistraBridge } from '../shared/ipc';
 import { buildPairingUrl, parseAppUrl, type ConnectorAppStatus, type ConnectorStatus } from '../shared/localConnector';
 import type { GenerationRecordDraft } from '../shared/types';
+import { msedgeExecutable, MSEDGE_MISSING_REASON } from './browsers';
 import { OTHER_SITE_ORIGIN, OTHER_SITE_PORT, SITE_ORIGIN, SITE_PORT } from './connector-harness/sites';
-import { CONNECTOR_HARNESS_DIR, E2E_SCREENSHOT_DIRS, fromRoot } from './outputDirs';
+import { CONNECTOR_HARNESS_DIRS, connectorProject, E2E_SCREENSHOT_DIRS, fromRoot } from './outputDirs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const HARNESS_DIR = fromRoot(CONNECTOR_HARNESS_DIR);
-const SHOTS = fromRoot(E2E_SCREENSHOT_DIRS.connector);
+
+/** Projet lancé (« connector » ou « connector-edge ») : chacun range tout ce qu'il produit dans SON dossier. */
+function currentProject() {
+  return connectorProject(test.info().project.name);
+}
+
+/** Captures du projet lancé. */
+function shotsDir(): string {
+  return fromRoot(E2E_SCREENSHOT_DIRS[currentProject()]);
+}
+
+/** Nom du navigateur tel que l'application le liste (d'après son User-Agent). */
+function browserLabel(): string {
+  return currentProject() === 'connector-edge' ? 'Microsoft Edge' : 'Google Chrome';
+}
 const REAL_OLLAMA_URL = process.env.MAGISTRA_E2E_REAL_OLLAMA_URL?.trim() || null;
 /** Les trois niveaux Magistra : le modèle recommandé est installé quelle que soit la machine de test. */
 const ALL_TIER_MODELS = ['ministral-3:8b', 'ministral-3:14b', 'mistral-small3.2:24b'];
@@ -132,18 +153,86 @@ function filesContaining(dir: string, needle: string): string[] {
 }
 
 async function shot(page: Page, name: string): Promise<void> {
-  mkdirSync(SHOTS, { recursive: true });
+  const dir = shotsDir();
+  mkdirSync(dir, { recursive: true });
   // Laisse les animations d'apparition se terminer.
   await page.waitForTimeout(500);
-  await page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true }).catch(() => undefined);
+  await page.screenshot({ path: path.join(dir, `${name}.png`), fullPage: true }).catch(() => undefined);
 }
 
 /** Capture d'une section (fenêtre de l'application) : amenée à l'écran, animation d'apparition terminée. */
 async function sectionShot(section: Locator, name: string): Promise<void> {
-  mkdirSync(SHOTS, { recursive: true });
+  const dir = shotsDir();
+  mkdirSync(dir, { recursive: true });
   await section.scrollIntoViewIfNeeded();
   await section.page().waitForTimeout(600);
-  await section.screenshot({ path: path.join(SHOTS, `${name}.png`) }).catch(() => undefined);
+  await section.screenshot({ path: path.join(dir, `${name}.png`) }).catch(() => undefined);
+}
+
+// ─── Autorisation « accès au réseau local » du navigateur ──────────────────
+
+/**
+ * Noms de l'autorisation selon les versions de Chromium : « loopback-network » (boucle locale ; Chrome et Edge
+ * récents, dont Edge 154) et « local-network-access » (versions antérieures, dont le Chromium de Playwright). Un
+ * navigateur refuse un nom qu'il ne connaît pas (« Invalid PermissionDescriptor name ») : ce nom est ignoré.
+ */
+const LOCAL_NETWORK_PERMISSIONS = ['loopback-network', 'local-network-access'] as const;
+
+/**
+ * Session CDP de la page, gardée ouverte jusqu'à sa fermeture : la détacher annulerait les autorisations accordées par
+ * elle (vérifié dans Edge 154). context.grantPermissions ne connaît pas « loopback-network ».
+ */
+const cdpSessions = new WeakMap<Page, Promise<{ cdp: CDPSession; browserContextId: string }>>();
+
+function cdpOf(page: Page): Promise<{ cdp: CDPSession; browserContextId: string }> {
+  let session = cdpSessions.get(page);
+  if (!session) {
+    session = (async () => {
+      const cdp = await page.context().newCDPSession(page);
+      const { targetInfo } = await cdp.send('Target.getTargetInfo');
+      if (!targetInfo.browserContextId) throw new Error('Contexte du navigateur introuvable (CDP).');
+      return { cdp, browserContextId: targetInfo.browserContextId };
+    })();
+    cdpSessions.set(page, session);
+  }
+  return session;
+}
+
+/**
+ * Accorde, refuse ou remet « à demander » l'autorisation du navigateur pour `origin`, comme l'enseignant (jamais le
+ * site), sous chaque nom que le navigateur connaît.
+ */
+async function setLocalNetworkPermission(page: Page, setting: 'granted' | 'denied' | 'prompt', origin = SITE_ORIGIN): Promise<void> {
+  const { cdp, browserContextId } = await cdpOf(page);
+  const known: string[] = [];
+  for (const name of LOCAL_NETWORK_PERMISSIONS) {
+    try {
+      await cdp.send('Browser.setPermission', { permission: { name }, setting, origin, browserContextId });
+      known.push(name);
+    } catch (err) {
+      if (!/Invalid PermissionDescriptor name|Unknown permission|not supported/i.test(String(err))) throw err;
+    }
+  }
+  expect(known, 'aucun nom de l’autorisation « réseau local » n’est connu de ce navigateur').not.toEqual([]);
+}
+
+/** Autorisation accordée par l'enseignant. */
+function grant(page: Page, origin = SITE_ORIGIN): Promise<void> {
+  return setLocalNetworkPermission(page, 'granted', origin);
+}
+
+/** État de l'autorisation, lu comme le site le lit : « loopback-network », sinon « local-network-access ». */
+function localNetworkPermissionState(page: Page): Promise<string> {
+  return page.evaluate(async names => {
+    for (const name of names) {
+      try {
+        return (await navigator.permissions.query({ name: name as PermissionName })).state;
+      } catch {
+        // nom suivant
+      }
+    }
+    return 'unsupported';
+  }, [...LOCAL_NETWORK_PERMISSIONS]);
 }
 
 /** URL magistra://pair valide (identifiant et défi aléatoires) pour l'origine donnée : ce que forgerait un autre site. */
@@ -274,9 +363,10 @@ async function waitForConnectorClosed(ports: readonly number[], timeoutMs = 15_0
 
 // ─── Harnais : construction et « sites » ────────────────────────────────────
 
-async function buildHarness(): Promise<void> {
+async function buildHarness(outDir: string): Promise<void> {
   const vite = path.join(root, 'node_modules', 'vite', 'bin', 'vite.js');
-  const child = spawn(process.execPath, [vite, 'build', '--config', path.join('e2e', 'connector-harness', 'vite.config.ts'), '--logLevel', 'warn'], {
+  const args = [vite, 'build', '--config', path.join('e2e', 'connector-harness', 'vite.config.ts'), '--outDir', outDir, '--emptyOutDir', '--logLevel', 'warn'];
+  const child = spawn(process.execPath, args, {
     cwd: root,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, NODE_ENV: 'production' },
@@ -285,7 +375,7 @@ async function buildHarness(): Promise<void> {
   child.stdout?.on('data', d => output.push(String(d)));
   child.stderr?.on('data', d => output.push(String(d)));
   const code = await new Promise<number | null>(resolve => child.on('close', resolve));
-  if (code !== 0 || !existsSync(path.join(HARNESS_DIR, 'index.html'))) {
+  if (code !== 0 || !existsSync(path.join(outDir, 'index.html'))) {
     throw new Error(`Construction du harnais impossible (code ${code}) :\n${output.join('')}`);
   }
 }
@@ -310,8 +400,8 @@ interface SiteServer {
   apiRequests: string[];
 }
 
-/** Sert le harnais construit (et un faux GET /api/windows-release) sur 127.0.0.1:<port>. */
-async function serveHarness(port: number): Promise<SiteServer> {
+/** Sert le harnais construit dans `dir` (et un faux GET /api/windows-release) sur 127.0.0.1:<port>. */
+async function serveHarness(port: number, dir: string): Promise<SiteServer> {
   const apiRequests: string[] = [];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
@@ -324,10 +414,10 @@ async function serveHarness(port: number): Promise<SiteServer> {
       return;
     }
     // Fichier du harnais (jamais hors du dossier construit), sinon la page (routes de l'application).
-    let file = path.resolve(HARNESS_DIR, `.${decodeURIComponent(url.pathname)}`);
-    const relative = path.relative(HARNESS_DIR, file);
+    let file = path.resolve(dir, `.${decodeURIComponent(url.pathname)}`);
+    const relative = path.relative(dir, file);
     if (relative.startsWith('..') || path.isAbsolute(relative) || !existsSync(file) || !statSync(file).isFile()) {
-      file = path.join(HARNESS_DIR, 'index.html');
+      file = path.join(dir, 'index.html');
     }
     res.writeHead(200, { 'Content-Type': CONTENT_TYPES[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-store' });
     res.end(readFileSync(file));
@@ -376,6 +466,8 @@ async function startKeyring(): Promise<Keyring | null> {
     stdio: ['pipe', 'ignore', 'ignore'],
   });
   processes.push(keyring);
+  // Démon arrêté avant d'avoir lu son mot de passe : EPIPE ignoré ici, l'arrêt est constaté juste après (null).
+  keyring.stdin?.on('error', () => undefined);
   keyring.stdin?.end('magistra-e2e');
   await new Promise(resolve => setTimeout(resolve, 800));
   if (keyring.exitCode !== null) {
@@ -682,6 +774,8 @@ async function generateAndWatch(
 
 test.describe('Connecteur local : site web ⇄ application Windows réelle', () => {
   test.describe.configure({ timeout: 300_000 });
+  // Projet « connector-edge » sans Microsoft Edge installé (CI Linux) : ignoré, sans lancer de navigateur.
+  test.skip(({ channel }) => channel === 'msedge' && msedgeExecutable() === null, MSEDGE_MISSING_REASON);
 
   let keyring: Keyring | null = null;
   const sites: SiteServer[] = [];
@@ -690,14 +784,20 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
 
   test.beforeAll(async () => {
     test.setTimeout(180_000);
-    await buildHarness();
+    const harnessDir = fromRoot(CONNECTOR_HARNESS_DIRS[currentProject()]);
+    await buildHarness(harnessDir);
     // Le harnais n'entre jamais dans le site publié : aucun de ses marqueurs dans dist/.
     expect(existsSync(path.join(root, 'dist', 'index.html')), 'dist/ construit (npx vite build)').toBe(true);
     expect(filesContaining(path.join(root, 'dist'), '__magistraE2E')).toEqual([]);
-    site = await serveHarness(SITE_PORT);
-    otherSite = await serveHarness(OTHER_SITE_PORT);
+    site = await serveHarness(SITE_PORT, harnessDir);
+    otherSite = await serveHarness(OTHER_SITE_PORT, harnessDir);
     sites.push(site, otherSite);
     keyring = await startKeyring();
+    // En CI (Linux), le trousseau est installé par le workflow : sans lui, le test passerait par la branche « limite »
+    // et ne vérifierait plus la conservation chiffrée des autorisations ni la reconnexion sans nouvel appairage.
+    if (process.env.CI && process.platform === 'linux' && keyring === null) {
+      throw new Error('Trousseau de clés (dbus + gnome-keyring) indisponible en CI : conservation chiffrée des autorisations non vérifiable.');
+    }
   });
 
   test.afterAll(async () => {
@@ -723,7 +823,7 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     const info = test.info();
     if (info.status !== info.expectedStatus) {
       await shot(page, `ECHEC-${info.title.replace(/[^a-z0-9]+/gi, '-').slice(0, 60)}`);
-      if (desktop?.session) await desktop.session.window.screenshot({ path: path.join(SHOTS, `ECHEC-application-${info.title.replace(/[^a-z0-9]+/gi, '-').slice(0, 40)}.png`) }).catch(() => undefined);
+      if (desktop?.session) await desktop.session.window.screenshot({ path: path.join(shotsDir(), `ECHEC-application-${info.title.replace(/[^a-z0-9]+/gi, '-').slice(0, 40)}.png`) }).catch(() => undefined);
     }
     expect.soft(pageErrors, 'erreurs JavaScript non interceptées dans la page du site').toEqual([]);
     if (desktop) {
@@ -744,15 +844,11 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     return desktop;
   }
 
-  async function grant(context: BrowserContext, origin = SITE_ORIGIN): Promise<void> {
-    await context.grantPermissions(['local-network-access'], { origin });
-  }
-
-  test('parcours complet : absente → trouvée → refus → accord → génération en flux → arrêt → fermeture → relance sans nouvel appairage → autorisation retirée', async ({ page, context }) => {
+  test('parcours complet : absente → trouvée → refus → accord → génération en flux → arrêt → fermeture → relance sans nouvel appairage → autorisation retirée', async ({ page }) => {
     mock = await startMock({ models: ALL_TIER_MODELS, chatDelayMs: 40 });
     const d = await newDesktop(mock.url);
     const ports = d.options.ports;
-    await grant(context);
+    await grant(page);
     await openHarness(page, d);
 
     await test.step('application absente : « Magistra n’est pas encore détectée. »', async () => {
@@ -817,7 +913,7 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
       // L'application connaît ce navigateur ; la clé n'est jamais écrite en clair sur le disque.
       const status = await d.connectorStatus();
       expect(status.clients).toHaveLength(1);
-      expect(status.clients[0]).toMatchObject({ site: `127.0.0.1:${SITE_PORT}`, browser: 'Google Chrome' });
+      expect(status.clients[0]).toMatchObject({ site: `127.0.0.1:${SITE_PORT}`, browser: browserLabel() });
       expect(status.persistent).toBe(process.platform !== 'linux' || keyring !== null);
       clientId = status.clients[0].clientId;
       const file = JSON.parse(readFileSync(path.join(userData!, 'local-connector.json'), 'utf8')) as { clients: Record<string, unknown>[] };
@@ -936,9 +1032,9 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
       await openAppSettings(window);
       const section = websiteSettings(window);
       await expect(section.getByText(`127.0.0.1:${SITE_PORT}`)).toBeVisible();
-      await expect(section.getByText(/Google Chrome/)).toBeVisible();
+      await expect(section.getByText(browserLabel(), { exact: false })).toBeVisible();
       await sectionShot(section, '14-application-navigateurs-autorises');
-      await section.getByRole('button', { name: /Retirer l’autorisation de Google Chrome/ }).click();
+      await section.getByRole('button', { name: `Retirer l’autorisation de ${browserLabel()}`, exact: false }).click();
       const confirm = window.getByRole('alertdialog', { name: 'Retirer cette autorisation ?' });
       await expect(confirm).toContainText('Une génération en cours depuis ce navigateur sera arrêtée.');
       await confirm.getByRole('button', { name: 'Retirer', exact: true }).click();
@@ -962,12 +1058,12 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     });
   });
 
-  test('moteur non prêt (modèle absent) : message précis ; modèle installé : prête — et section « Magistra pour Windows »', async ({ page, context }) => {
+  test('moteur non prêt (modèle absent) : message précis ; modèle installé : prête — et section « Magistra pour Windows »', async ({ page }) => {
     mock = await startMock({ models: [] });
     const d = await newDesktop(mock.url);
     d.consentAuto = true;
     await d.launch();
-    await grant(context);
+    await grant(page);
     // Le téléchargement direct de l'installateur ne quitte pas la page (fichier servi par le test, pas par GitHub).
     await page.route('https://github.com/**', route => route.fulfill({
       status: 200,
@@ -1029,12 +1125,12 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     await shot(page, '23-deconnectee-depuis-le-site');
   });
 
-  test('autre site : aucune réponse lisible du connecteur, aucun appairage possible (même avec l’accord de l’enseignant)', async ({ page, context }) => {
+  test('autre site : aucune réponse lisible du connecteur, aucun appairage possible (même avec l’accord de l’enseignant)', async ({ page }) => {
     mock = await startMock({ models: ALL_TIER_MODELS });
     const d = await newDesktop(mock.url);
     const port = (await d.launch()).port;
     // L'autre site a lui aussi l'autorisation du navigateur : seul le connecteur le refuse.
-    await grant(context, OTHER_SITE_ORIGIN);
+    await grant(page, OTHER_SITE_ORIGIN);
     await openHarness(page, d, { origin: OTHER_SITE_ORIGIN });
 
     await expect(card(page).getByText(T.intro)).toBeVisible();
@@ -1101,7 +1197,7 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     await expectNoTechnicalText(page, d.options.ports);
   });
 
-  test('programme qui occupe le premier port dédié et accepte tout : jamais de vérificateur pour lui, appairage avec l’application réelle sur le port suivant', async ({ page, context }) => {
+  test('programme qui occupe le premier port dédié et accepte tout : jamais de vérificateur pour lui, appairage avec l’application réelle sur le port suivant', async ({ page }) => {
     mock = await startMock({ models: ALL_TIER_MODELS });
     const d = await newDesktop(mock.url);
     const [first, second] = d.options.ports;
@@ -1115,7 +1211,7 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
         return reply?.status === 200 ? (JSON.parse(reply.body) as { version?: string }).version : null;
       }).not.toBe('9.9.9');
       expect((await connectorRequest(second))?.status).toBe(200);
-      await grant(context);
+      await grant(page);
       await openHarness(page, d);
       await expect(card(page).getByText(T.found)).toBeVisible();
       await card(page).getByRole('button', { name: T.connect }).click();
@@ -1146,7 +1242,7 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     }
   });
 
-  test('Local Network Access (protection réelle de Chromium) : explication avant la demande, refus expliqué, accord → connexion', async ({ page, context }) => {
+  test('Local Network Access (protection réelle de Chromium) : explication avant la demande, refus expliqué, accord → connexion', async ({ page }) => {
     mock = await startMock({ models: ALL_TIER_MODELS });
     const d = await newDesktop(mock.url);
     d.consentAuto = true;
@@ -1160,7 +1256,7 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     page.on('requestfailed', r => {
       if (connectorUrls.some(u => r.url().startsWith(u))) failures.push(r.failure()?.errorText ?? '');
     });
-    const permissionState = () => page.evaluate(async () => (await navigator.permissions.query({ name: 'local-network-access' as PermissionName })).state);
+    const permissionState = () => localNetworkPermissionState(page);
 
     await openHarness(page, d);
     expect(await permissionState()).toBe('prompt');
@@ -1175,21 +1271,27 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     await expect(explainer.getByText(T.permissionExplanation)).toBeVisible();
     expect(requests).toEqual([]);
     await shot(page, '40-explication-avant-demande');
-    // « Continuer » : le navigateur demande l'autorisation (refusée d'office sans écran) → requêtes bloquées.
+    // « Continuer » : le navigateur pose sa question, sans personne pour y répondre (sans écran) → requêtes bloquées.
     await explainer.getByRole('button', { name: 'Continuer' }).click();
-    await expect(card(page).getByText(T.notDetected)).toBeVisible();
-    // Demande restée sans réponse : la cause est dite (jamais « téléchargez-la » seul).
-    await expect(card(page).getByText(T.notAnswered)).toBeVisible();
+    await expect(card(page).getByText(T.notDetected).or(card(page).getByText(T.permissionDenied))).toBeVisible();
     expect(requests.length).toBeGreaterThan(0);
+    const unanswered = await permissionState();
+    if (unanswered === 'prompt') {
+      // Demande restée sans réponse (Chromium de Playwright) : la cause est dite (jamais « téléchargez-la » seul).
+      await expect(card(page).getByText(T.notDetected)).toBeVisible();
+      await expect(card(page).getByText(T.notAnswered)).toBeVisible();
+    } else {
+      // Edge 154 sans écran enregistre sa réponse automatique comme un REFUS : le site affiche l'état réel du navigateur.
+      expect(currentProject(), 'seul le Chromium de Playwright laisse la demande « à demander »').not.toBe('connector');
+      expect(unanswered).toBe('denied');
+      await expect(card(page).getByText(T.permissionDenied)).toBeVisible();
+      test.info().annotations.push({ type: 'navigateur', description: 'demande sans écran enregistrée comme un refus (Edge)' });
+    }
     expect(failures.length).toBe(requests.length);
     await shot(page, '41-demande-non-accordee');
 
     // L'enseignant a refusé l'autorisation dans le navigateur : comment l'accorder.
-    const cdp = await context.newCDPSession(page);
-    const { targetInfo } = await cdp.send('Target.getTargetInfo');
-    await cdp.send('Browser.setPermission', {
-      permission: { name: 'local-network-access' }, setting: 'denied', origin: SITE_ORIGIN, browserContextId: targetInfo.browserContextId,
-    });
+    await setLocalNetworkPermission(page, 'denied');
     expect(await permissionState()).toBe('denied');
     await card(page).getByRole('button', { name: T.retry }).click();
     const again = card(page).getByRole('group', { name: 'Autorisation du navigateur' });
@@ -1200,7 +1302,7 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     await shot(page, '42-autorisation-refusee');
 
     // Autorisation accordée : Magistra est trouvée, puis connectée.
-    await grant(context);
+    await grant(page);
     expect(await permissionState()).toBe('granted');
     await card(page).getByRole('button', { name: T.retry }).click();
     await expect(card(page).getByText(T.found)).toBeVisible();
@@ -1208,8 +1310,11 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     await card(page).getByRole('button', { name: T.connect }).click();
     await expect(card(page).getByText(T.justConnected)).toBeVisible();
 
-    // Autorisation à redemander (réglages du navigateur réinitialisés) : explication, aucune requête automatique.
-    await context.clearPermissions();
+    // Autorisation à redemander (réglages du site réinitialisés dans le navigateur) : explication, aucune requête
+    // automatique. Remise « à demander » par le test (la réponse automatique d'Edge sans écran, enregistrée comme un
+    // refus, réapparaîtrait sous une simple réinitialisation).
+    await setLocalNetworkPermission(page, 'prompt');
+    expect(await permissionState()).toBe('prompt');
     requests.length = 0;
     await page.reload();
     await expect(card(page).getByText(T.needsPermission)).toBeVisible();
@@ -1221,13 +1326,13 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     await expect(page.getByRole('button', { name: /^Générer : / })).toBeDisabled();
     await shot(page, '44-autorisation-a-redemander');
     await nav(page, 'Tableau de bord');
-    await grant(context);
+    await grant(page);
     await card(page).getByRole('button', { name: T.searchWithPermission }).click();
     await expect(card(page).getByText(T.connected)).toBeVisible();
     expect((await probe(page)).serverGenerations).toBe(0);
   });
 
-  test('vraie IA : appairage puis génération d’un cours en français, en flux, par site → connecteur → application → Ollama', async ({ page, context }) => {
+  test('vraie IA : appairage puis génération d’un cours en français, en flux, par site → connecteur → application → Ollama', async ({ page }) => {
     test.skip(!REAL_OLLAMA_URL, 'MAGISTRA_E2E_REAL_OLLAMA_URL non défini (vrai Ollama avec ministral-3:8b)');
     test.setTimeout(30 * 60_000);
     // Niveau « Léger » (ministral-3:8b) choisi dans l'application : c'est le modèle servi par ce vrai Ollama.
@@ -1235,7 +1340,7 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     const d = await newDesktop(REAL_OLLAMA_URL!);
     d.consentAuto = true;
     await d.launch();
-    await grant(context);
+    await grant(page);
     await openHarness(page, d);
     // Application déjà ouverte et autorisation du navigateur accordée : trouvée dès la vérification automatique.
     await expect(card(page).getByText(T.found)).toBeVisible();

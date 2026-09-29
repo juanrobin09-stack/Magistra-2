@@ -8,14 +8,16 @@ import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, ExternalLink, Info, Loader2, Monitor, Plug, RefreshCw, Search } from 'lucide-react';
 import { defaultMessage } from '@shared/errors';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
+import { APP_UPDATE_REQUIRED_MESSAGE, PAGE_RELOAD_REQUIRED_MESSAGE } from '@/lib/localConnector/client';
 import { NOT_ANSWERED_PERMISSION_MESSAGE, type LocalEngineController, type LocalEngineState } from '@/lib/localConnector/controller';
 import { useLocalActions, wasSearched, type LocalAction } from './localActions';
 import { PermissionDeniedHelp, PermissionExplainer } from './PermissionNotes';
 import {
-  APP_CLOSED_DETAIL, APP_CLOSED_TEXT, CANCEL_LABEL, CONNECT_LABEL, CONNECTED_TEXT, DOWNLOAD_SHORT_LABEL, DOWNLOAD_WINDOWS_LABEL,
+  APP_CLOSED_DETAIL, APP_CLOSED_TEXT, appClosedPlain, CANCEL_LABEL, CONNECT_LABEL, CONNECTED_TEXT, DOWNLOAD_SHORT_LABEL, DOWNLOAD_WINDOWS_LABEL,
   ENGINE_BUSY_TEXT, FOUND_DETAIL, FOUND_TEXT, JUST_CONNECTED_TEXT, LOCAL_INTRO_DETAIL, LOCAL_INTRO_TEXT, localEngineMessage,
   localModelLabel, NEEDS_PERMISSION_TEXT, NOT_DETECTED_DETAIL, NOT_DETECTED_TEXT, OPEN_APP_LABEL, PAIRING_DETAIL, PAIRING_TEXT,
   PAIRING_CODE_HINT, PAIRING_CODE_LABEL, PERMISSION_DENIED_TEXT, RETRY_LABEL, SEARCH_EXISTING_LABEL, SEARCH_WITH_PERMISSION_LABEL, SEARCHING_TEXT,
+  SITE_ACCESS_HINT, UNRECOGNIZED_TEXT, UNUSABLE_TEXT,
 } from './texts';
 import { useWindowsRelease } from './windowsRelease';
 
@@ -67,11 +69,27 @@ function permissionNotAnswered(state: LocalEngineState): boolean {
 }
 
 /**
- * Une application Magistra répond sans reconnaître ce navigateur (celle d'une autre session Windows, ou la sienne qui
- * a perdu ses autorisations) : appairage gardé, « Connecter » proposé en plus de « Ouvrir Magistra ».
+ * Appairé, une application Magistra a répondu sans pouvoir servir ce navigateur : elle ne le reconnaît pas (celle
+ * d'une autre session Windows, ou la sienne qui a perdu ses autorisations), ou la reconnexion demandée depuis cet état
+ * a été refusée ou a expiré. Appairage gardé, « Connecter » proposé en plus de « Ouvrir Magistra ».
  */
-function unrecognized(state: LocalEngineState): boolean {
-  return state.kind === 'app-closed' && state.paired && state.error?.code === 'CONNECTOR_UNPAIRED';
+function canReconnect(state: LocalEngineState): boolean {
+  const code = state.error?.code;
+  return state.kind === 'app-closed' && state.paired
+    && (code === 'CONNECTOR_UNPAIRED' || code === 'CONNECTOR_PAIRING_REFUSED' || code === 'CONNECTOR_PAIRING_EXPIRED');
+}
+
+/** Une application Magistra d'une autre version répond : à mettre à jour (ou page à recharger). */
+function otherVersion(state: LocalEngineState): boolean {
+  return appUpdateRequired(state) || state.error?.message === PAGE_RELOAD_REQUIRED_MESSAGE;
+}
+
+/**
+ * Seule une application Magistra plus ancienne (autre version du protocole) répond : sa mise à jour est la seule issue,
+ * le téléchargement est proposé, appairé ou non (le message renvoie au bouton « Télécharger »).
+ */
+function appUpdateRequired(state: LocalEngineState): boolean {
+  return state.error?.message === APP_UPDATE_REQUIRED_MESSAGE;
 }
 
 /** Texte, ton et détails de l'état (fonction pure, testée à travers les composants). */
@@ -83,21 +101,30 @@ function describe(state: LocalEngineState, searched: boolean, justConnected: boo
       return { tone: 'busy', headline: SEARCHING_TEXT, details: [] };
     case 'needs-permission':
       return { tone: 'info', headline: NEEDS_PERMISSION_TEXT, details: [], ...(error ? { alert: error } : {}) };
-    case 'permission-denied':
-      return { tone: 'warn', headline: PERMISSION_DENIED_TEXT, details: [] };
+    case 'permission-denied': {
+      // Cause de plus que le blocage lui-même (déconnexion dont le retrait n'a pas pu être demandé) : mise en avant.
+      const extra = state.error && state.error.code !== 'LOCAL_NETWORK_PERMISSION_DENIED' ? error : undefined;
+      return { tone: 'warn', headline: PERMISSION_DENIED_TEXT, details: [], ...(extra ? { alert: extra } : {}) };
+    }
     case 'not-found': {
       const plainUnreachable = state.error?.code === 'CONNECTOR_UNREACHABLE' && state.error.message === defaultMessage('CONNECTOR_UNREACHABLE');
       if (!searched && !error) return { tone: 'info', headline: LOCAL_INTRO_TEXT, details: [LOCAL_INTRO_DETAIL] };
       // Cause d'abord : l'autorisation du navigateur, pas l'absence de Magistra.
       if (permissionNotAnswered(state)) return { tone: 'warn', headline: NOT_DETECTED_TEXT, details: [], alert: error };
+      // Magistra répond, dans une autre version : jamais « pas encore détectée » ni « ouvrez-la ».
+      if (otherVersion(state)) return { tone: 'warn', headline: UNUSABLE_TEXT, details: [], alert: error };
       return { tone: 'warn', headline: NOT_DETECTED_TEXT, details: [NOT_DETECTED_DETAIL], ...(error && !plainUnreachable ? { alert: error } : {}) };
     }
     case 'found':
       return { tone: 'ok', headline: FOUND_TEXT, details: [FOUND_DETAIL], ...(error ? { alert: error } : {}) };
     case 'pairing':
       return { tone: 'busy', headline: PAIRING_TEXT, details: [PAIRING_DETAIL], ...(state.pairingCode ? { code: state.pairingCode } : {}) };
-    case 'app-closed':
-      return { tone: 'warn', headline: APP_CLOSED_TEXT, details: error ? [] : [APP_CLOSED_DETAIL], ...(error ? { alert: error } : {}) };
+    case 'app-closed': {
+      // « Fermée » seulement quand rien n'a répondu ; sinon l'application vient de répondre (non reconnu, refus,
+      // réponse inattendue…) : la cause suit.
+      const headline = appClosedPlain(state) ? APP_CLOSED_TEXT : state.error?.code === 'CONNECTOR_UNPAIRED' ? UNRECOGNIZED_TEXT : UNUSABLE_TEXT;
+      return { tone: 'warn', headline, details: error ? [] : [APP_CLOSED_DETAIL, SITE_ACCESS_HINT], ...(error ? { alert: error } : {}) };
+    }
     case 'connected': {
       const status = state.status;
       const headline = justConnected ? JUST_CONNECTED_TEXT : CONNECTED_TEXT;
@@ -138,8 +165,9 @@ export default function LocalEngineStatus({ engine, headline = true, omit = [], 
     setJustConnected(previousKind === 'pairing' && state.kind === 'connected');
   }
 
-  // Téléchargement proposé seulement quand Magistra n'est pas trouvée (installateur direct si la version est connue).
-  const needsDownload = state.kind === 'not-found' && !state.paired;
+  // Téléchargement proposé seulement quand Magistra n'est pas trouvée, ou quand seule une application à mettre à jour
+  // répond (installateur direct si la version est connue).
+  const needsDownload = (state.kind === 'not-found' && !state.paired) || appUpdateRequired(state);
   const release = useWindowsRelease(needsDownload);
   const download = release.status === 'ready'
     ? { href: release.release.downloadUrl, direct: true }
@@ -261,22 +289,26 @@ export default function LocalEngineStatus({ engine, headline = true, omit = [], 
             </button>
           </div>
         );
-      case 'app-closed':
+      case 'app-closed': {
+        // Application plus ancienne : la télécharger d'abord (l'ouvrir ne suffit pas).
+        const update = appUpdateRequired(state);
         return (
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={act('openApp')} className={BTN_PRIMARY}>
+            {update && downloadLink(DOWNLOAD_SHORT_LABEL, true)}
+            <button type="button" onClick={act('openApp')} className={update ? BTN_SECONDARY : BTN_PRIMARY}>
               <Monitor size={15} aria-hidden="true" /> {OPEN_APP_LABEL}
             </button>
             <button type="button" onClick={act('detect')} className={BTN_SECONDARY}>
               <RefreshCw size={15} aria-hidden="true" /> {RETRY_LABEL}
             </button>
-            {unrecognized(state) && (
+            {canReconnect(state) && (
               <button type="button" onClick={act('connect')} className={BTN_SECONDARY}>
                 <Plug size={15} aria-hidden="true" /> {CONNECT_LABEL}
               </button>
             )}
           </div>
         );
+      }
       case 'connected':
         if (!engineNeedsApp(state)) return null;
         return (

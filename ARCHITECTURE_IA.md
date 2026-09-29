@@ -432,11 +432,9 @@ Toute autre route donne 404 (chemin exact, sans normalisation : `/v1/../v1/hello
 | `/v1/generate` | POST | oui | demande validée par `validateGenerationRequest` ; réponse `application/x-ndjson` (un `GenerationEvent` par ligne), en-tête `X-Magistra-Job` ; avant le flux, en JSON : 409 `GENERATION_BUSY` (`Retry-After: 10`), 409 `LOCAL_ENGINE_REMOTE`, 400 `INVALID_REQUEST`, 413 |
 | `/v1/cancel` | POST | oui | `{ jobId }` : n'arrête qu'une génération de CE navigateur ; réponse `{ ok: true }` identique que la génération existe ou non |
 
-Le protocole est versionné (`CONNECTOR_PROTOCOL_VERSION` = 2). Un site et une application de versions de protocole différentes ne se reconnaissent pas :
-- le site ignore la réponse `hello` (Magistra « pas encore détectée ») ;
-- l'application ignore l'URL `magistra://pair`.
-
-L'application doit alors être mise à jour.
+Le protocole est versionné (`CONNECTOR_PROTOCOL_VERSION` = 2). Un site et une application de versions de protocole différentes ne dialoguent pas :
+- le site n'utilise jamais une application Magistra d'une autre version : aucune demande d'appairage, aucun contenu, aucune requête signée vers un port où elle se présente (`hello`). Seul le port mémorisé d'un navigateur appairé reçoit d'abord, comme tout programme qui l'occuperait, une requête signée sans contenu (état, retrait), dont la réponse sans preuve valide n'est pas utilisée. Si elle est seule à répondre, il le dit au lieu d'annoncer Magistra « pas encore détectée » ou « fermée » : application plus ancienne → « doit être mise à jour » (`APP_UPDATE_REQUIRED_MESSAGE`, avec **Télécharger Magistra**, appairé ou non) ; plus récente → « rechargez la page » (`PAGE_RELOAD_REQUIRED_MESSAGE`) ;
+- l'application ignore l'URL `magistra://pair` d'une autre version.
 
 ### Contrôles, dans l'ordre, pour chaque requête (`electron/connector/server.ts`)
 
@@ -449,7 +447,7 @@ L'application doit alors être mise à jour.
 7. routes signées, **avant** de lire le corps :
    - format des en-têtes ;
    - navigateur connu et appairé pour **cette** origine, sinon 401 `CONNECTOR_UNPAIRED`, avec la marque de retrait si cette application l'a retiré ;
-   - horodatage à ± 120 s et postérieur au début de l'écoute ;
+   - horodatage à ± 120 s et postérieur au début de l'écoute. Ce début est exprimé dans l'horloge **actuelle** : la durée de l'écoute est mesurée par une horloge monotone, si bien qu'une heure du système corrigée vers l'arrière (synchronisation de Windows, réglage manuel) ne fait pas refuser toutes les requêtes du site (401 puis 429) jusqu'à ce qu'elle rattrape l'ancien début ; le recul est journalisé une fois ;
    - nonce jamais vu.
 
    Ensuite : lecture du corps, bornée, 20 s au plus (sinon 408) ; autorisation toujours valable (elle a pu être retirée pendant la lecture) ; signature HMAC sur les octets exacts du corps et l'hôte joint, comparée à temps constant (401 `UNAUTHENTICATED`). Le nonce n'est mémorisé qu'après une signature valide : une requête forgée ne remplit pas la mémoire ;
@@ -518,6 +516,7 @@ Chrome (depuis la version 142) et Edge exigent l'accord de l'utilisateur avant q
 - Seules les actions de l'enseignant (`detect`, `connect`, `openApp`, `disconnect`) peuvent la faire apparaître.
 - Chromium ouvre la connexion **avant** de poser sa question, et l'application ferme une connexion muette au bout de 10 s. Une recherche commencée à `prompt` et terminée à `granted` est donc refaite aussitôt.
 - Un refus donne l'état `permission-denied`, avec la marche à suivre (« Applications sur l'appareil » ou « Réseau local » → Autoriser).
+- Navigateur sans cette autorisation (Firefox, Chromium qui ne l'applique pas) et jamais appairé : la vérification automatique ne sonde rien, donc n'apprend rien ; « ✓ Magistra trouvée » par une recherche de l'enseignant reste affiché (avec **Connecter Magistra locale**) quand les pages Générer et Réglages relisent l'état.
 - Rien n'est contourné. En parc géré, la stratégie `LocalNetworkAccessAllowedForUrls` (ou `LoopbackNetworkAllowedForUrls`, Chrome 146 et suivants) supprime la demande pour le site officiel ; l'accord dans l'application reste exigé.
 
 ### Générations du site dans l'application
@@ -533,10 +532,10 @@ Chrome (depuis la version 142) et Edge exigent l'accord de l'utilisateur avant q
 ### Révocation
 
 - **Retrait par l'application**, par Réglages → « Site web Magistra » → **Retirer**, `DELETE /v1/pair` ou éviction au-delà de 10 navigateurs : effet immédiat. Les requêtes suivantes de ce navigateur sont refusées, et sa génération en cours est arrêtée. Pour un retrait, l'état en mémoire change avant l'écriture sur le disque : une écriture lente ne laisse jamais tourner sa génération.
-- **Marque de retrait** : avant d'effacer la clé, l'application calcule `X-Magistra-Revoked` = HMAC(clé, `canonicalRevoked(clientId)`), et en conserve 50 au plus. Elle la joint ensuite à ses 401 `CONNECTOR_UNPAIRED` pour ce navigateur.
+- **Marque de retrait** : avant d'effacer la clé, l'application calcule `X-Magistra-Revoked` = HMAC(clé, `canonicalRevoked(clientId)`), et en conserve 50 au plus. Elle la joint ensuite à ses 401 `CONNECTOR_UNPAIRED` pour ce navigateur. Pour une **éviction**, la marque n'est servie qu'une fois l'éviction enregistrée : pendant l'écriture, le navigateur évincé est refusé sans marque ; si l'écriture échoue, l'éviction est annulée (il reste autorisé, avec la même clé), et aucune marque, qui resterait valable et rejouable pour un appairage toujours valide, n'a été servie.
 - **Oubli de l'appairage par le site** : un 401 ne peut pas porter de preuve, et l'application d'une autre session Windows, qui ne connaît pas ce navigateur, le renvoie légitimement. Le site n'oublie donc son appairage que sur une **marque valide**. Sans marque, il garde l'appairage et affiche « Une application Magistra répond sur cet ordinateur, mais elle ne reconnaît pas ce navigateur (…) ».
-- **« Déconnecter Magistra locale »** (site) : `DELETE /v1/pair` au mieux, puis oubli local même si l'application est fermée. Si elle n'a pas confirmé, le site demande de retirer l'autorisation dans l'application.
-- **Réglage désactivé** : le connecteur n'écoute plus, la demande d'appairage en cours est annulée et les générations du site sont interrompues. Une clé illisible au démarrage (profil Windows changé, fichier copié) est abandonnée, sans marque de retrait : le site propose alors de reconnecter.
+- **« Déconnecter Magistra locale »** (site) : `DELETE /v1/pair` au mieux, puis oubli local même si l'application est fermée. Autorisation du navigateur à demander : comme la recherche et l'état, la requête attend la réponse de l'enseignant à la question du navigateur (60 s), puis elle est refaite si l'autorisation est accordée après la coupure de la connexion retenue. Si l'application n'a pas confirmé, ou si le navigateur bloque l'accès (le retrait n'a alors pas pu être demandé), le site demande de retirer l'autorisation dans l'application ; la boîte de confirmation le dit d'avance quand le navigateur bloque l'accès.
+- **Réglage désactivé** : effet immédiat, comme un retrait : le réglage change en mémoire, puis le connecteur cesse d'écouter, la demande d'appairage en cours est annulée et les générations du site sont interrompues **avant** l'attente de l'écriture sur le disque (lente sous un verrou d'antivirus, ou impossible). Une clé illisible au démarrage (profil Windows changé, fichier copié) est abandonnée, sans marque de retrait : le site propose alors de reconnecter.
 
 ### Limites connues
 
@@ -564,7 +563,7 @@ Options ignorées dans l'application installée (`electron/devOptions.ts`) :
 - `MAGISTRA_CONNECTOR_DEV_ORIGINS` (origines http(s) de la **boucle locale** seulement, les autres sont ignorées) ;
 - `MAGISTRA_CONNECTOR_DISABLED=1`.
 
-`magistra://` n'est inscrit que par l'application installée. L'installateur l'inscrit (`electron-builder.json`), puis l'application vérifie l'inscription à chaque lancement avec la commande `"<exe>" -- "%1"` : après `--`, une URL piégée ne peut injecter aucune option de Chromium. Le connecteur reste éteint pendant le test de démarrage (`--smoke-test`).
+`magistra://` n'est inscrit que par l'application installée, **à son premier lancement** (sous Windows, electron-builder n'applique `protocols` d'`electron-builder.json` qu'à macOS, Linux et AppX, pas à l'installateur NSIS) : l'installateur lance l'application à la fin de l'installation (`runAfterFinish`), puis l'application vérifie l'inscription à chaque lancement avec la commande `"<exe>" -- "%1"` : après `--`, une URL piégée ne peut injecter aucune option de Chromium. Conséquences : après une installation silencieuse (`/S`), le schéma n'existe qu'une fois Magistra ouverte à la main ; la clé `HKCU\Software\Classes\magistra` n'est pas retirée à la désinstallation. Le connecteur reste éteint pendant le test de démarrage (`--smoke-test`).
 
 ### Tests
 
@@ -579,9 +578,11 @@ Options ignorées dans l'application installée (`electron/devOptions.ts`) :
   - programme qui occupe un port ou relaie depuis un autre port ;
   - retrait prouvé par la marque, application d'une autre session Windows ;
   - éviction, autre origine, moteur distant, application occupée.
-- **De bout en bout, avec Local Network Access active** : `e2e/connector-local.spec.ts`, projet Playwright `connector` (`xvfb-run -a npx playwright test --project=connector`, après `npx vite build` et `node scripts/build-electron.mjs` ; exécuté par la CI).
-  - Le harnais du site (`e2e/connector-harness/` : vrais composants, vrai contrôleur, vrai client WebCrypto et IndexedDB) tourne dans Chromium avec `--enable-features=LocalNetworkAccessChecks`. `--ip-address-space-overrides` le fait traiter comme un site **public**.
-  - L'autorisation est accordée ou refusée par le test, jamais par le site.
+- **De bout en bout, avec Local Network Access active** : `e2e/connector-local.spec.ts`, projets Playwright `connector` (Chromium de Playwright, exécuté par la CI) et `connector-edge` (les mêmes tests dans **Microsoft Edge** installé sur la machine, canal `msedge` ; ignorés proprement si Edge est absent, jamais lancés par la CI). Commande : `xvfb-run -a npx playwright test --project=connector --project=connector-edge`, après `npx vite build` et `node scripts/build-electron.mjs`.
+  - Le harnais du site (`e2e/connector-harness/` : vrais composants, vrai contrôleur, vrai client WebCrypto et IndexedDB) tourne avec `--enable-features=LocalNetworkAccessChecks`. `--ip-address-space-overrides` le fait traiter comme un site **public**.
+  - L'autorisation est accordée, refusée ou remise « à demander » par le test, jamais par le site : `Browser.setPermission` (CDP), pour chaque nom connu du navigateur (`loopback-network`, `local-network-access` ; un nom inconnu est ignoré), avec une session CDP gardée ouverte (la fermer annule l'autorisation dans Edge). L'état est lu comme le site le lit : `loopback-network`, sinon `local-network-access`.
+  - **Vérifié dans Edge 154** (Chromium 154) : autorisation `loopback-network` (`context.grantPermissions(['local-network-access'])` n'y suffit pas), `fetch` avec `targetAddressSpace: 'loopback'`, navigateur listé « Microsoft Edge » par l'application. Sans écran, Edge enregistre la réponse automatique à sa demande comme un **refus** (le site affiche alors « bloque l'accès », l'état réel), là où le Chromium de Playwright (141) la laisse « à demander » ; une simple réinitialisation des autorisations fait réapparaître ce refus, d'où la remise « à demander » explicite.
+  - En CI (Linux), le trousseau de clés est exigé : sans lui, le test échoue au lieu de passer par la branche « autorisations en mémoire ».
   - En face tourne la vraie application Electron, avec un Ollama simulé. Le test joue seulement le rôle du système : remise des URL `magistra://`, réponse à la boîte native, trousseau de clés sous Linux.
   - Parcours couverts : parcours complet (absente, trouvée, refus, accord, flux, arrêt, fermeture, relance sans nouvel appairage, retrait), moteur non prêt, autre site refusé, programme sur le premier port, explication puis refus puis accord de l'autorisation du navigateur.
 - **Vraie IA** : le test « vraie IA » du même fichier exécute appairage puis génération d'un cours en français, en flux, par site → connecteur → application → vrai Ollama. Il est ignoré sans `MAGISTRA_E2E_REAL_OLLAMA_URL` et n'est pas lancé par la CI. Exemple : `MAGISTRA_E2E_REAL_OLLAMA_URL=http://127.0.0.1:11434 xvfb-run -a npx playwright test --project=connector -g "vraie IA"`, avec `ministral-3:8b` installé.
