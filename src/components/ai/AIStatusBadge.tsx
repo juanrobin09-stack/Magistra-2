@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useEngineRoute, useRouteCapsHeal } from '@/components/localEngine/engineRoute';
 import { LOCAL_BANNER_TEXT } from '@/components/localEngine/texts';
 import { useAIStatus, useCapabilities } from '@/hooks/useAIStatus';
+import { activationProgress } from '@/lib/ai-ui/activation';
 import { progressPercent } from '@/lib/ai-ui/format';
 import { isEngineBusy, isModelPulling } from '@/lib/ai-ui/progress';
 import { serverAIView } from '@/lib/ai-ui/server';
@@ -110,8 +111,13 @@ export default function AIStatusBadge() {
   const phase = aiPhase(status);
   const info = phaseInfo(phase);
   const pull = ai.progress.model;
+  const activation = ai.activation;
   let text = info.badge;
-  if (!info.ok && isModelPulling(pull)) {
+  if (activation.state === 'running') {
+    // « Activer l'IA » : progression GLOBALE (moteur + modèle), la même que sur la carte d'activation.
+    const percent = activation.plan ? activationProgress(activation.plan, activation.step, ai.progress).percent : null;
+    text = percent !== null ? `Installation de l’IA : ${percent} %` : 'Installation de l’IA…';
+  } else if (!info.ok && isModelPulling(pull)) {
     const percent = pull?.stage === 'pull' ? progressPercent({ percent: pull.percent, completed: pull.completedMB, total: pull.totalMB }) : null;
     text = percent !== null ? `Installation de l’IA : ${percent} %` : 'Installation de l’IA…';
   } else if (!info.ok && (ai.pending.engine || isEngineBusy(ai.progress.engine))) {

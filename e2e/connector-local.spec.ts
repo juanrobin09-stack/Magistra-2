@@ -586,15 +586,19 @@ class Desktop {
   }
 }
 
-/** Fenêtre de l'application prête sur « Réglages » (assistant et profil déjà faits, comme chez un enseignant équipé). */
+/**
+ * Fenêtre de l'application prête sur « Réglages » (profil déjà créé, comme chez un enseignant équipé). Aucun assistant
+ * n'est plus imposé au premier lancement : le profil suffit pour ouvrir l'espace. L'animation d'ouverture, jouée au
+ * lancement, n'est pas rejouée par ce changement de page (même fenêtre) ; elle est attendue si elle est encore affichée.
+ */
 async function openAppSettings(window: Page): Promise<void> {
   await window.evaluate(async () => {
     const m = (window as unknown as Bridge).magistra;
-    await m.prefs.set({ setupCompleted: true });
     await m.profile.set({ displayName: 'Mme Durand', etablissement: 'Collège Jean Moulin', cycle: 'college', niveaux: ['6eme'], matierePrincipale: 'francais' });
   });
   await window.goto('app://magistra/app/settings');
   await expect(websiteSettings(window)).toBeVisible({ timeout: 20_000 });
+  await expect(window.getByTestId('app-intro')).toHaveCount(0, { timeout: 10_000 });
 }
 
 /** Réglages de l'application, section « Site web Magistra » (navigateurs autorisés). */
@@ -758,11 +762,15 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     await test.step('application absente : « Magistra n’est pas encore détectée. »', async () => {
       await expect(card(page).getByText(T.intro)).toBeVisible();
       await expect(card(page).getByRole('link', { name: 'Télécharger Magistra pour Windows' })).toHaveAttribute('href', RELEASE.downloadUrl);
+      // Comme partout où l'on télécharge : taille de l'installateur et trois étapes (avertissement SmartScreen).
+      await expect(card(page).getByTestId('windows-installer-facts')).toContainText(/^Installateur : 85,3\sMo · version 2\.1\.0/);
+      await expect(card(page).getByRole('list', { name: 'Installation en trois étapes' }).getByRole('listitem')).toHaveCount(3);
       await shot(page, '01-accueil-magistra-locale');
       await card(page).getByRole('button', { name: T.searchExisting }).click();
       await expect(card(page).getByText(T.notDetected)).toBeVisible();
       await expect(card(page).getByRole('button', { name: T.retry })).toBeVisible();
       await expect(card(page).getByRole('link', { name: 'Télécharger Magistra', exact: true })).toHaveAttribute('href', RELEASE.downloadUrl);
+      await expect(card(page).getByText(/elle s’installe en quelques secondes, sans droits d’administrateur/)).toBeVisible();
       await expectNoTechnicalText(page, ports);
       await shot(page, '02-non-detectee');
     });

@@ -5,8 +5,8 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import type { Page } from '@playwright/test';
 import {
-  chooseOption, expect, expectDemoResult, fakeExe, generateAndRecord, HISTORY_KEY, makeDocx, PROFILE_COLLEGE, PROFILE_KEY,
-  PROFILE_SUPERIEUR, readHistory, resultSection, seedProfile, snap, test,
+  chooseOption, E2E_RELEASE, expect, expectDemoResult, fakeExe, generateAndRecord, HISTORY_KEY, makeDocx, PROFILE_COLLEGE,
+  PROFILE_KEY, PROFILE_SUPERIEUR, readHistory, resultSection, seedProfile, snap, test,
 } from './web-helpers';
 import { COMMERCIAL_VENDOR } from '../tests/vendor';
 
@@ -64,6 +64,53 @@ test('accueil : rendu sans erreur, polices servies localement, CTA « Commencer 
   await page.getByRole('link', { name: 'Commencer' }).first().click();
   await expect(page).toHaveURL(/\/onboarding$/);
   await expect(page.getByRole('heading', { name: /Bienvenue sur Magistra/ })).toBeVisible();
+});
+
+test('vers la vraie IA : une seule voie (Magistra pour Windows), téléchargement direct, trois étapes, « Ouvrir Magistra »', async ({ page }) => {
+  await seedProfile(page, PROFILE_SUPERIEUR);
+  await page.goto('/app');
+  // Le bandeau reste : exemples pré-rédigés, aucune IA.
+  await expect(page.getByRole('note').filter({ hasText: 'Mode démonstration.' })).toContainText('aucune IA n’est utilisée');
+  const card = page.getByTestId('connect-real-ai');
+  await expect(card.getByText('Passez à la vraie IA : installez Magistra sur votre ordinateur Windows.')).toBeVisible();
+  await expect(card.getByText('L’IA y fonctionne gratuitement, en privé, même sans Internet.')).toBeVisible();
+  // Téléchargement direct de l'installateur de la dernière version stable (sans nouvel onglet).
+  const download = card.getByRole('link', { name: 'Télécharger Magistra pour Windows' });
+  await expect(download).toHaveAttribute('href', E2E_RELEASE.downloadUrl);
+  await expect(download).not.toHaveAttribute('target', /./);
+  // Un clic télécharge le fichier : sa taille (et la configuration requise) est annoncée à côté du bouton.
+  await expect(card.getByTestId('windows-installer-facts')).toHaveText(/^Installateur : 85,3\sMo · version 2\.0\.0 · Windows 10 ou 11 \(64 bits\)$/);
+  const steps = card.getByRole('list', { name: 'Installation en trois étapes' }).getByRole('listitem');
+  await expect(steps).toHaveCount(3);
+  await expect(steps.nth(0)).toContainText('Téléchargez Magistra.');
+  await expect(steps.nth(1)).toContainText('Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur « Informations complémentaires » puis « Exécuter quand même ».');
+  await expect(steps.nth(2)).toContainText('sans droits d’administrateur, et s’ouvre toute seule.');
+  await expect(card.getByText('Déjà installée ?')).toBeVisible();
+  await expect(card.getByRole('link', { name: 'Ouvrir Magistra' })).toHaveAttribute('href', 'magistra://open');
+  await expect(card.getByRole('link', { name: 'Mode d’emploi' })).toHaveAttribute('href', /#brancher-une-vraie-ia$/);
+  // Rien de technique pour l'enseignant, et plus rien à déplier.
+  expect(await card.innerText()).not.toMatch(/npm|ollama|clerk|supabase|AI_PRESET|OVHcloud|variable|localhost|trois solutions/i);
+  await expect(card.locator('details, form, input')).toHaveCount(0);
+  await card.scrollIntoViewIfNeeded();
+  await snap(page, '03b-carte-vraie-ia');
+
+  // Même carte sur la page Générer, sans masquer le formulaire de démonstration.
+  await page.goto('/app/generate');
+  await expect(page.getByTestId('connect-real-ai').getByRole('link', { name: 'Télécharger Magistra pour Windows' }))
+    .toHaveAttribute('href', E2E_RELEASE.downloadUrl);
+  await expect(page.getByRole('button', { name: 'Générer : Cours' })).toBeVisible();
+
+  // Accueil : « Télécharger pour Windows » mène à la section (téléchargement direct, étapes, « Ouvrir Magistra »).
+  await page.goto('/');
+  await page.getByRole('link', { name: 'Télécharger pour Windows' }).first().click();
+  await expect(page).toHaveURL(/\/#magistra-windows$/);
+  const section = page.locator('section#magistra-windows');
+  await expect(section.getByRole('heading', { name: 'Magistra pour Windows' })).toBeInViewport();
+  await expect(section.getByRole('link', { name: 'Télécharger Magistra pour Windows' })).toHaveAttribute('href', E2E_RELEASE.downloadUrl);
+  await expect(section.getByTestId('windows-version')).toHaveText(E2E_RELEASE.version);
+  await expect(section.getByRole('list', { name: 'Installation en trois étapes' }).getByRole('listitem')).toHaveCount(3);
+  await expect(section.getByRole('link', { name: 'Ouvrir Magistra' })).toHaveAttribute('href', 'magistra://open');
+  await snap(page, '01b-accueil-windows');
 });
 
 // ─── 2. Onboarding ──────────────────────────────────────────────────────────

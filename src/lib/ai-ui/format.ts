@@ -44,6 +44,25 @@ export function progressPercent(p: { percent?: number | null; completed?: number
   return null;
 }
 
+/** « 15 minutes », « 1 h 30 » (arrondi : 5 minutes au moins, puis à la demi-heure). */
+function durationText(minutes: number): string {
+  if (minutes <= 50) return `${Math.max(5, Math.round(minutes / 5) * 5)}${NBSP}minutes`;
+  const halfHours = Math.round(minutes / 30);
+  const hours = Math.floor(halfHours / 2);
+  return `${hours}${NBSP}h${halfHours % 2 ? `${NBSP}30` : ''}`;
+}
+
+/**
+ * Durée INDICATIVE d'un téléchargement (Mo de 1 048 576 octets), pour une connexion rapide (fibre, ≈ 100 Mbit/s) et une
+ * plus lente (≈ 20 Mbit/s) : « environ 15 minutes avec la fibre, 1 h 30 avec une connexion plus lente ». null si rien
+ * n'est à télécharger.
+ */
+export function downloadDurationText(totalMB: number): string | null {
+  if (!Number.isFinite(totalMB) || totalMB <= 0) return null;
+  const minutesAt = (mbitPerSecond: number) => (totalMB * 8.388608) / mbitPerSecond / 60;
+  return `environ ${durationText(minutesAt(100))} avec la fibre, ${durationText(minutesAt(20))} avec une connexion plus lente`;
+}
+
 /** Taille du téléchargement du moteur : exacte si connue, sinon « environ … ». */
 export function engineDownloadText(download: AIStatus['engineDownload']): string {
   if (typeof download.sizeMB === 'number' && download.sizeMB > 0) return formatMB(download.sizeMB);

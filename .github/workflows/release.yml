@@ -160,11 +160,13 @@ jobs:
           L'archive \`Magistra-$VERSION-win-x64.zip\` contient la même application sans installateur.
 
           ### Première utilisation
-          1. Lancez l'installateur. **Windows SmartScreen** peut afficher « Windows a protégé votre ordinateur » :
+          1. Ouvrez l'installateur. **Windows SmartScreen** peut afficher « Windows a protégé votre ordinateur » :
              l'installateur n'est pas encore signé numériquement (certificat payant). Cliquez sur
              **Informations complémentaires**, puis **Exécuter quand même**, uniquement si le fichier vient de cette page.
-          2. Magistra installe le moteur d'IA locale (Ollama, version 0.13.1 ou plus récente) et un modèle open weights :
-             tout est guidé, sans compte ni clé. Vos documents et vos générations restent sur l'ordinateur.
+          2. Magistra s'installe en quelques secondes, sans droits d'administrateur, et s'ouvre toute seule.
+          3. Dans Magistra, **Activer l'IA** installe le moteur d'IA locale (Ollama, version 0.13.1 ou plus récente) et
+             un modèle open weights adapté à l'ordinateur : un seul clic, taille du téléchargement annoncée avant, sans
+             compte ni clé. Vos documents et vos générations restent sur l'ordinateur.
 
           ### Vérifier le fichier téléchargé (facultatif)
           Dans PowerShell : \`Get-FileHash .\Magistra-Setup-$VERSION.exe -Algorithm SHA256\`, puis comparez le résultat

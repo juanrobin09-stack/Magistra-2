@@ -1,9 +1,12 @@
-import { lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ClerkFailed, ClerkLoaded, ClerkLoading, ClerkProvider, RedirectToSignIn, useAuth } from '@clerk/react';
+import AppIntro from '@/components/AppIntro';
 import ErrorBoundary from '@/components/ErrorBoundary';
-import { AuthUnavailable, FullPageSpinner, ProfileGuard, LocalSetupGuard } from '@/components/guards';
+import { AuthUnavailable, FullPageSpinner, ProfileGuard } from '@/components/guards';
 import { PersonalAccessGate } from '@/components/PersonalAccess';
+import { useAIStatus } from '@/hooks/useAIStatus';
+import { useRuntime } from '@/lib/runtime/context';
 import { getRuntimeConfig, type RuntimeConfig } from '@/lib/runtime/mode';
 import {
   DemoRuntimeProvider, LocalRuntimeProvider, PersonalRuntimeProvider, WebRuntimeProvider,
@@ -47,22 +50,52 @@ function Protected({ mode, children }: { mode: RuntimeMode; children: ReactNode 
   return <>{children}</>;
 }
 
+/**
+ * Application Windows, page d'ouverture : au premier lancement (aucun profil), la page d'accueil de Magistra — la même
+ * que celle du site, adaptée à l'application — puis « Commencer » → création du profil ; ensuite, le tableau de bord.
+ * Aucun assistant n'est imposé : l'IA s'active en un clic depuis le tableau de bord ou la page Générer.
+ */
+function LocalHome() {
+  const { profile, profileStatus } = useRuntime();
+  if (profileStatus === 'loading') return <FullPageSpinner />;
+  // Profil illisible : ProfileGuard (espace) affiche la vraie cause et « Réessayer ».
+  if (profile || profileStatus === 'error') return <Navigate to="/app" replace />;
+  return <LandingPage />;
+}
+
+/**
+ * Application Windows : reprise, au lancement, de l'activation de l'IA demandée lors d'une session précédente —
+ * seulement une fois le profil chargé. Sans profil (premier lancement, données effacées), l'enseignant est sur la page
+ * d'accueil ou la création du profil, sans barre latérale ni carte d'activation : plusieurs Go ne se téléchargent
+ * jamais sans progression visible ni « Annuler » ; la reprise attend le tableau de bord.
+ */
+function ResumeAIActivation() {
+  const ai = useAIStatus();
+  const { profile, profileStatus } = useRuntime();
+  const available = ai !== null && profileStatus === 'ready' && profile !== null;
+  const resume = ai?.resumeActivation;
+  useEffect(() => {
+    if (available && resume) void resume();
+  }, [available, resume]);
+  return null;
+}
+
 function AppRoutes({ mode }: { mode: RuntimeMode }) {
   return (
     <Suspense fallback={<FullPageSpinner />}>
       <Routes>
-        <Route path="/" element={mode === 'local' ? <Navigate to="/app" replace /> : <LandingPage />} />
+        <Route path="/" element={mode === 'local' ? <LocalHome /> : <LandingPage />} />
+        {/* Application Windows : la présentation de Magistra reste accessible (lien « Présentation » de la barre latérale). */}
+        {mode === 'local' && <Route path="/presentation" element={<LandingPage />} />}
         {mode === 'local' && <Route path="/setup" element={<SetupPage />} />}
         <Route path="/onboarding" element={<Protected mode={mode}><OnboardingPage /></Protected>} />
         <Route
           path="/app"
           element={
             <Protected mode={mode}>
-              <LocalSetupGuard enabled={mode === 'local'}>
-                <ProfileGuard>
-                  <AppLayout />
-                </ProfileGuard>
-              </LocalSetupGuard>
+              <ProfileGuard>
+                <AppLayout />
+              </ProfileGuard>
             </Protected>
           }
         >
@@ -93,7 +126,12 @@ export default function App({ config = getRuntimeConfig() }: { config?: RuntimeC
   if (mode === 'local') {
     return (
       <ErrorBoundary>
-        <LocalRuntimeProvider>{routes}</LocalRuntimeProvider>
+        <LocalRuntimeProvider>
+          {routes}
+          <ResumeAIActivation />
+          {/* Animation d'ouverture « Magistra », au-dessus de la première page (chargée en dessous pendant ce temps). */}
+          <AppIntro />
+        </LocalRuntimeProvider>
       </ErrorBoundary>
     );
   }

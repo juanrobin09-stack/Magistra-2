@@ -3,6 +3,9 @@
 //
 // Accessibilité : la ligne d'état est annoncée (aria-live) ; quand l'action de l'enseignant fait disparaître le bouton
 // qu'il vient d'utiliser (« Connecter » → « Annuler »…), le focus est placé sur la ligne d'état au lieu d'être perdu.
+// Téléchargement proposé (Magistra non trouvée) : avec `installSteps`, la taille de l'installateur et les trois étapes
+// (avertissement SmartScreen compris), comme partout où l'on télécharge — sauf là où la section « Magistra pour
+// Windows » les donne déjà sur la même page (réglages, « J'ai installé Magistra »).
 
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, ExternalLink, Info, Loader2, Monitor, Plug, RefreshCw, Search } from 'lucide-react';
@@ -18,6 +21,7 @@ import {
   PAIRING_CODE_HINT, PAIRING_CODE_LABEL, PERMISSION_DENIED_TEXT, RETRY_LABEL, SEARCH_EXISTING_LABEL, SEARCH_WITH_PERMISSION_LABEL, SEARCHING_TEXT,
 } from './texts';
 import { useWindowsRelease } from './windowsRelease';
+import { InstallerFacts, InstallSteps } from './WindowsInstall';
 
 export interface LocalEngineHandle {
   state: LocalEngineState;
@@ -32,6 +36,8 @@ interface LocalEngineStatusProps {
   omit?: readonly string[];
   /** Préfixe des identifiants (plusieurs vues sur la même page). */
   idPrefix: string;
+  /** Sous le lien de téléchargement : taille de l'installateur et trois étapes (tableau de bord, page Générer). */
+  installSteps?: boolean;
 }
 
 type Tone = 'ok' | 'warn' | 'info' | 'busy';
@@ -124,7 +130,7 @@ function engineNeedsApp(state: LocalEngineState): boolean {
   return state.kind === 'connected' && Boolean(state.status) && !(state.status!.engine.ready && state.status!.engine.local);
 }
 
-export default function LocalEngineStatus({ engine, headline = true, omit = [], idPrefix }: LocalEngineStatusProps) {
+export default function LocalEngineStatus({ engine, headline = true, omit = [], idPrefix, installSteps = false }: LocalEngineStatusProps) {
   const { state, controller } = engine;
   const actions = useLocalActions(engine);
   const statusRef = useRef<HTMLDivElement>(null);
@@ -172,6 +178,7 @@ export default function LocalEngineStatus({ engine, headline = true, omit = [], 
   const headlineId = `${idPrefix}-local-state`;
   const HeadIcon = view.tone === 'busy' ? Loader2 : view.tone === 'ok' ? CheckCircle2 : view.tone === 'warn' ? AlertTriangle : Info;
 
+  const factsId = `${idPrefix}-installer-facts`;
   function downloadLink(label: string, primary: boolean) {
     const className = primary ? BTN_PRIMARY : BTN_SECONDARY;
     if (!download.href) {
@@ -181,17 +188,26 @@ export default function LocalEngineStatus({ engine, headline = true, omit = [], 
         </span>
       );
     }
+    const describedBy = installSteps && release.status !== 'loading' ? factsId : undefined;
     return download.direct ? (
-      <a href={download.href} className={className} rel="noopener noreferrer">
+      <a href={download.href} className={className} rel="noopener noreferrer" aria-describedby={describedBy}>
         <Download size={15} aria-hidden="true" /> {label}
       </a>
     ) : (
-      <a href={download.href} target="_blank" rel="noopener noreferrer" className={className}>
+      <a href={download.href} target="_blank" rel="noopener noreferrer" className={className} aria-describedby={describedBy}>
         <Download size={15} aria-hidden="true" /> {label}
         <ExternalLink size={12} aria-hidden="true" />
       </a>
     );
   }
+
+  // Taille de l'installateur et trois étapes sous le lien de téléchargement (même contenu que la section Windows).
+  const installHelp = installSteps ? (
+    <div className="space-y-2">
+      <InstallerFacts release={release} id={factsId} />
+      <InstallSteps />
+    </div>
+  ) : null;
 
   function buttons() {
     if (actions.pending) {
@@ -229,20 +245,26 @@ export default function LocalEngineStatus({ engine, headline = true, omit = [], 
       case 'not-found':
         if (view.headline === LOCAL_INTRO_TEXT) {
           return (
-            <div className="flex flex-wrap items-center gap-2">
-              {downloadLink(DOWNLOAD_WINDOWS_LABEL, true)}
-              <button type="button" onClick={act('detect')} className={BTN_GHOST}>
-                <Search size={15} aria-hidden="true" /> {SEARCH_EXISTING_LABEL}
-              </button>
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {downloadLink(DOWNLOAD_WINDOWS_LABEL, true)}
+                <button type="button" onClick={act('detect')} className={BTN_GHOST}>
+                  <Search size={15} aria-hidden="true" /> {SEARCH_EXISTING_LABEL}
+                </button>
+              </div>
+              {installHelp}
             </div>
           );
         }
         return (
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={act('detect')} className={BTN_PRIMARY}>
-              <RefreshCw size={15} aria-hidden="true" /> {RETRY_LABEL}
-            </button>
-            {downloadLink(DOWNLOAD_SHORT_LABEL, false)}
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={act('detect')} className={BTN_PRIMARY}>
+                <RefreshCw size={15} aria-hidden="true" /> {RETRY_LABEL}
+              </button>
+              {downloadLink(DOWNLOAD_SHORT_LABEL, false)}
+            </div>
+            {installHelp}
           </div>
         );
       case 'found':

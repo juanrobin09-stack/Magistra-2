@@ -133,7 +133,27 @@ describe('real-ai.yml : validation avec une vraie IA', () => {
 });
 
 describe('documentation', () => {
-  it('README : « Brancher une vraie IA » en tête, avec les trois chemins', () => {
+  it('README : l’installation de l’enseignant en tête, en trois étapes, sans rien de technique', () => {
+    const teacher = readme.indexOf('## Installer Magistra (enseignants)');
+    const admin = readme.indexOf('## Brancher une vraie IA');
+    expect(teacher).toBeGreaterThan(0);
+    expect(teacher).toBeLessThan(admin);
+    expect(readme.slice(0, teacher)).not.toMatch(/^## /m); // première section du README
+    const section = readme.slice(teacher, admin);
+    const steps = section.split('\n').filter(l => /^\d\. /.test(l));
+    expect(steps).toHaveLength(3);
+    expect(steps[0]).toContain('[Télécharger Magistra pour Windows](https://github.com/juanrobin09-stack/magistra-2/releases/latest)');
+    expect(steps[1]).toContain('« Windows a protégé votre ordinateur »');
+    expect(steps[1]).toContain('**Informations complémentaires** puis **Exécuter quand même**');
+    expect(steps[2]).toContain('sans droits d\'administrateur, et s\'ouvre toute seule');
+    expect(section).toContain('**Déjà installée ?**');
+    expect(section).toContain('**Ouvrir Magistra**');
+    // Les détails techniques restent dans les sections administrateur et développeur, plus bas (un lien y mène).
+    expect(section).toContain('[Brancher une vraie IA](#brancher-une-vraie-ia)');
+    expect(section).not.toMatch(/npm|ollama|clerk|supabase|AI_PRESET|powershell|variable|localhost/i);
+  });
+
+  it('README : « Brancher une vraie IA » (administrateurs et développeurs) avant les fonctionnalités, avec les trois chemins', () => {
     const at = readme.indexOf('## Brancher une vraie IA');
     expect(at).toBeGreaterThan(0);
     expect(at).toBeLessThan(readme.indexOf('## Fonctionnalités'));

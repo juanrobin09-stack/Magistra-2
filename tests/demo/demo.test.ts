@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ALL_TYPES, type TypeContenu } from '@shared/catalog';
-import { DEMO_NOTICE, getDemoExample, runDemoGeneration } from '@shared/demo';
+import { DEMO_NOTICE, EXAMPLE_NOTICE, getDemoExample, runDemoGeneration } from '@shared/demo';
 import { DEMO_CONTENT, type DemoExample } from '@shared/demo/content';
 import type { NiveauScolaire } from '@shared/levels';
 import type { GenerationEvent, GenerationRequest } from '@shared/types';
@@ -158,6 +158,17 @@ describe('runDemoGeneration', () => {
     if (done?.type !== 'done') throw new Error('évènement done attendu');
     expect(done.content.startsWith(`> ${DEMO_NOTICE}`)).toBe(true);
     expect(done.content).toContain(DEMO_CONTENT[type].scolaire.markdown.trim());
+  });
+
+  it('application Windows (exemple à la demande) : même exemple, annoncé comme exemple pré-rédigé, sans « mode démonstration »', async () => {
+    const events = await collect(runDemoGeneration(request('cours', 'master_1'), { delayMs: 0, notice: EXAMPLE_NOTICE }));
+    const done = events.at(-1);
+    if (done?.type !== 'done') throw new Error('évènement done attendu');
+    expect(done.content.startsWith(`> ${EXAMPLE_NOTICE}`)).toBe(true);
+    expect(EXAMPLE_NOTICE).toMatch(/^Exemple pré-rédigé/);
+    expect(EXAMPLE_NOTICE).toContain("Il n'a pas été généré par une IA");
+    expect(done.content).not.toContain('Mode démonstration');
+    expect(done.content).toContain(DEMO_CONTENT.cours.superieur!.markdown.trim());
   });
 
   it("s'interrompt proprement si la génération est annulée", async () => {

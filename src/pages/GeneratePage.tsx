@@ -7,6 +7,11 @@
 // Magistra locale non prête → panneau dédié, jamais de bascule silencieuse vers le serveur (seul un choix confirmé
 // de l'enseignant y mène). Les capacités affichées sont toujours celles du moteur qui traitera la génération ; elles
 // sont relues quand le choix ou l'état de Magistra locale change, et le moteur est revérifié juste avant l'envoi.
+//
+// Application Windows, IA de l'ordinateur pas encore prête : carte « Activer l'IA » (un clic) et, à côté, « Voir un
+// exemple pré-rédigé » — le même exemple que la démonstration du site, affiché seulement à la demande, marqué
+// « Exemple pré-rédigé — ce n'est pas l'IA » et jamais enregistré. « Générer » tente toujours la vraie génération
+// (erreur précise si l'IA n'est pas prête) : jamais d'exemple silencieux.
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
@@ -17,6 +22,7 @@ import type { NiveauScolaire } from '@shared/levels';
 import {
   modeUsesDocuments, type DocumentPassage, type GenerationRequest, type ResearchMode,
 } from '@shared/types';
+import ActivateAICard from '@/components/ai/ActivateAICard';
 import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import AiNotReadyCard from '@/components/generate/AiNotReadyCard';
 import EngineBanner from '@/components/localEngine/EngineBanner';
@@ -31,7 +37,9 @@ import SourcesPanel from '@/components/generate/SourcesPanel';
 import ToolPicker from '@/components/generate/ToolPicker';
 import { useLocalPreferences, useSourceDocuments } from '@/components/generate/useSourceDocuments';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
+import { useAIStatus } from '@/hooks/useAIStatus';
 import { useCapabilities, useGeneration } from '@/hooks/useGeneration';
+import { activationBlocker } from '@/lib/ai-ui/activation';
 import { selectPassages } from '@/lib/documents';
 import {
   buildGenerationRequest, buildPassageQuery, createInitialForm, DEFAULT_DOCUMENT_BUDGET, validateForm, withNiveau,
@@ -44,6 +52,7 @@ import {
 import { formFromRecord, type ReusableRecord } from '@/lib/generation/reuse';
 import { useLocalEngine } from '@/lib/localConnector/controller';
 import { adminContact, configuredProvider, useRuntime } from '@/lib/runtime/context';
+import { ExampleGenerationClient } from '@/lib/runtime/demo';
 import { HybridGenerationClient, type EngineRoute } from '@/lib/runtime/hybrid';
 import { usesServerApi } from '@/lib/runtime/types';
 
@@ -92,6 +101,12 @@ export default function GeneratePage() {
   const sources = useSourceDocuments(mode, prefs);
   const generation = useGeneration(client);
   const resultRef = useRef<HTMLElement>(null);
+  // Application Windows : état de l'IA de cet ordinateur (null ailleurs) et exemple pré-rédigé à la demande.
+  const ai = useAIStatus();
+  const exampleClient = useMemo(() => new ExampleGenerationClient(), []);
+  const example = useGeneration(exampleClient);
+  /** Résultat affiché : la dernière génération réelle, ou le dernier exemple demandé. */
+  const [shown, setShown] = useState<'generation' | 'example'>('generation');
 
   const tool = getToolInfo(form.type, form.niveau);
   const problems = useMemo(() => validateForm(form), [form]);
@@ -161,6 +176,21 @@ export default function GeneratePage() {
 
   useRouteCapsHeal(localController, route, capabilities.caps, capabilities.loading, reloadCaps);
 
+  // Application Windows : IA activée (ou devenue indisponible) → capacités relues (bandeaux, confidentialité, recherche).
+  const aiReady = ai?.status ? ai.status.ready : null;
+  const aiReadyRef = useRef(aiReady);
+  useEffect(() => {
+    const previous = aiReadyRef.current;
+    aiReadyRef.current = aiReady;
+    if (previous !== null && aiReady !== null && previous !== aiReady) reloadCaps();
+  }, [aiReady, reloadCaps]);
+  // Carte « Activer l'IA » : IA de cet ordinateur (pas un serveur distant) pas prête, activation en cours ou terminée.
+  // Modèle personnalisé ou moteur sur un autre ordinateur (options avancées) : pas d'activation en un clic, la vraie
+  // cause (AiNotReadyCard), comme avant.
+  const localActivation = mode === 'local' && ai?.status?.config.mode === 'local'
+    && (ai.activation.state === 'running' || ai.activation.state === 'done'
+      || (!ai.status.ready && activationBlocker(ai.status) === null));
+
   // Passage au serveur en ligne confirmé depuis le panneau « Magistra locale n'est pas prête » : le panneau (et le
   // bouton qui avait le focus) disparaît ; le focus va au bandeau du moteur, qui annonce le nouveau moteur (jamais
   // perdu au début de la page).
@@ -172,11 +202,12 @@ export default function GeneratePage() {
     bannerRef.current?.focus({ preventScroll: true });
   }, [route]);
 
-  // Le résultat apparaît sous le formulaire : on l'amène à l'écran à chaque nouvelle génération.
+  // Le résultat apparaît sous le formulaire : on l'amène à l'écran à chaque nouvelle génération (ou exemple).
   const runId = generation.state.runId;
+  const exampleRunId = example.state.runId;
   useEffect(() => {
-    if (runId > 0) resultRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-  }, [runId]);
+    if (runId + exampleRunId > 0) resultRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [runId, exampleRunId]);
 
   const update = (patch: Partial<GenerateForm>) => {
     setForm(f => ({ ...f, ...patch }));
@@ -198,6 +229,9 @@ export default function GeneratePage() {
    */
   const routeCheck = useRef(false);
   const startGeneration = (request: GenerationRequest) => {
+    // Une vraie génération remplace l'exemple affiché.
+    if (example.isRunning) example.stop();
+    setShown('generation');
     if (!hybrid || !localController) {
       generation.start(request);
       return;
@@ -287,6 +321,14 @@ export default function GeneratePage() {
 
   const running = generation.isRunning;
 
+  /** « Voir un exemple pré-rédigé » : outil et niveau du formulaire (le sujet et les paramètres n'y changent rien). */
+  const showExample = () => {
+    if (running) return;
+    setSubmitNotice(null);
+    setShown('example');
+    example.start(buildGenerationRequest(form, form.type, profile, undefined, researchMode));
+  };
+
   return (
     <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 py-6 lg:py-8 lg:grid lg:grid-cols-[13.5rem_minmax(0,1fr)] lg:gap-8 xl:gap-10">
       <ToolPicker value={form.type} niveau={form.niveau} onChange={changeTool} />
@@ -358,6 +400,13 @@ export default function GeneratePage() {
                 <span>{localEngineMessage(caps.aiWarning.code, caps.aiWarning.message)}</span>
               </p>
             ) : null
+          ) : localActivation ? (
+            <ActivateAICard
+              variant="generate"
+              onShowExample={showExample}
+              exampleRunning={example.isRunning}
+              exampleDisabled={running}
+            />
           ) : (
             <AiNotReadyCard
               mode={mode}
@@ -419,14 +468,26 @@ export default function GeneratePage() {
           </form>
         </div>
 
-        <ResultPanel
-          state={generation.state}
-          mode={mode}
-          store={store}
-          onStop={generation.stop}
-          onRestart={restartGeneration}
-          containerRef={resultRef}
-        />
+        {shown === 'example' ? (
+          <ResultPanel
+            state={example.state}
+            mode={mode}
+            store={store}
+            onStop={example.stop}
+            onRestart={example.restart}
+            containerRef={resultRef}
+            example
+          />
+        ) : (
+          <ResultPanel
+            state={generation.state}
+            mode={mode}
+            store={store}
+            onStop={generation.stop}
+            onRestart={restartGeneration}
+            containerRef={resultRef}
+          />
+        )}
       </div>
     </div>
   );

@@ -10,6 +10,7 @@ import type { GenerationSummary, UsageStats } from '@shared/types';
 import { useLocalEngine } from '@/lib/localConnector/controller';
 import { useRuntime } from '@/lib/runtime/context';
 import ErrorBanner from '@/components/ui/ErrorBanner';
+import ActivateAICard from '@/components/ai/ActivateAICard';
 import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import LocalEngineCard from '@/components/localEngine/LocalEngineCard';
 import { errorMessage, niveauLabelFor, timeAgo, toolLabelFor } from '@/components/history/logic';
@@ -166,6 +167,9 @@ export default function DashboardPage() {
       )}
 
       {mode === 'web' && localEngine && <LocalEngineCard engine={localEngine} />}
+
+      {/* Application Windows : « Activer l'IA » en un clic tant que l'IA de cet ordinateur n'est pas prête. */}
+      {mode === 'local' && <ActivateAICard variant="dashboard" />}
 
       {/* ── Statistiques ── */}
       <section aria-labelledby="stats-title" className="space-y-3">

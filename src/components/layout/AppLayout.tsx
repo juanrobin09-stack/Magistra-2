@@ -176,6 +176,15 @@ export default function AppLayout() {
                 <a href="https://futurai.space" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
                   FutureAI
                 </a>
+                {/* Application Windows : la page d'accueil de Magistra reste accessible (le site entier est dans l'application). */}
+                {mode === 'local' && (
+                  <>
+                    {' · '}
+                    <Link to="/presentation" onClick={() => closeSidebar(false)} className="text-mg-200 hover:text-accent hover:underline">
+                      Présentation
+                    </Link>
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -203,7 +212,10 @@ export default function AppLayout() {
           {showUserButton ? <UserButton appearance={{ elements: { avatarBox: 'w-7 h-7' } }} /> : <span className="w-9" aria-hidden="true" />}
         </header>
 
-        <main ref={mainRef} id="main-content" tabIndex={-1} aria-label={appPageTitle(location.pathname)} className="flex-1 overflow-y-auto focus:outline-none">
+        {/* « relative » : les éléments positionnés en absolu des pages (champs de fichier « sr-only »…) restent dans
+            cette zone défilante ; sinon ils allongeaient le document, qui défilait tout entier (barre latérale
+            comprise) quand un résultat était amené à l'écran. */}
+        <main ref={mainRef} id="main-content" tabIndex={-1} aria-label={appPageTitle(location.pathname)} className="relative flex-1 overflow-y-auto focus:outline-none">
           <Outlet />
         </main>
       </div>

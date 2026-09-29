@@ -4,12 +4,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import EngineSetupPanel from '@/components/ai/EngineSetupPanel';
+import HardwareSummary from '@/components/ai/HardwareSummary';
 import ModelSetupPanel from '@/components/ai/ModelSetupPanel';
 import SetupChecklist from '@/components/ai/SetupChecklist';
 import TierPicker from '@/components/ai/TierPicker';
 import { MagistraError } from '@shared/errors';
 import { ENGINE_STARTING_MESSAGE } from '@shared/ipc';
-import { PROXY_RESTART_MESSAGE } from '../../electron/ollamaSetup';
+import { ENGINE_WATCH_TIMEOUT_MESSAGE, PROXY_RESTART_MESSAGE } from '../../electron/ollamaSetup';
 import type { AIController } from '@/hooks/useAIStatus';
 import { EMPTY_PROGRESS, type AIProgressState } from '@/lib/ai-ui/progress';
 import { setupChecks } from '@/lib/ai-ui/status';
@@ -136,6 +137,7 @@ function fakeController(
     ...(extra.engineUpdate !== undefined ? { engineUpdate: extra.engineUpdate } : {}),
     pending: extra.pending ?? { status: false, engine: false, start: false, model: false, config: false },
     manualInstall: false,
+    activation: { state: 'idle', step: null, plan: null, resumed: false },
     loadedAt: 1,
     refresh: async () => status,
     installEngine: noop,
@@ -147,6 +149,11 @@ function fakeController(
     cancelPull: noop,
     setConfig: async () => ({ status, error: null }),
     clearError: () => undefined,
+    activate: noop,
+    resumeActivation: noop,
+    cancelActivation: noop,
+    forgetActivation: noop,
+    dismissActivation: () => undefined,
   };
 }
 
@@ -222,6 +229,16 @@ describe('EngineSetupPanel (moteur IA absent ou arrêté)', () => {
     expect(html).toContain('Ouvrir la page officielle d&#x27;installation');
     expect(html).toContain('Rien n&#x27;est téléchargé tant que vous n&#x27;avez pas cliqué.');
     expect(html).not.toContain('role="progressbar"');
+  });
+
+  it('installation manuelle non détectée : les boutons que cite le message sont ceux affichés sous l’erreur', () => {
+    const errors = { engine: new MagistraError('ENGINE_NOT_INSTALLED', ENGINE_WATCH_TIMEOUT_MESSAGE) };
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(missing, EMPTY_PROGRESS, { errors }), status: missing }));
+    expect(html).toContain('Magistra a cessé d’attendre');
+    expect(html).toMatch(/<button[^>]*>.*Réessayer<\/button>/);
+    expect(html).toMatch(/<button[^>]*>.*Ouvrir la page officielle d(&#x27;|’)installation<\/button>/);
+    // « Installer le moteur IA » n'est le libellé qu'avant toute erreur (et n'existe pas dans la carte « Activer l'IA »).
+    expect(html).not.toMatch(/<button[^>]*>.*Installer le moteur IA<\/button>/);
   });
 
   it('taille réelle de l’installateur quand elle est connue', () => {
@@ -351,5 +368,18 @@ describe('ModelSetupPanel (erreur ENGINE_OUTDATED)', () => {
     expect(html).toMatch(/<button[^>]*>.*Reprendre le téléchargement<\/button>/);
     expect(html).not.toContain('demandez au service informatique');
     expect(html).not.toContain('Vérifiez votre connexion Internet');
+  });
+});
+
+describe('HardwareSummary (page de l’IA, section repliée)', () => {
+  it('recommandation affichée une seule fois : omise quand le choix de la version, qui la redit, suit juste après', () => {
+    const status = makeStatus({ engine: 'running', installed: ['standard'], hardware: { totalRamGB: 16, gpus: [] } });
+    const full = render(createElement(HardwareSummary, { hardware: status.hardware, recommendation: status.recommendation }));
+    expect(full).toContain('Ordinateur correct : Magistra Standard est recommandé.');
+    expect(full).toContain(status.recommendation.warning!);
+    const short = render(createElement(HardwareSummary, { hardware: status.hardware, recommendation: status.recommendation, withRecommendation: false }));
+    expect(short).toContain('Votre ordinateur');
+    expect(short).not.toContain('Ordinateur correct');
+    expect(short).not.toContain(status.recommendation.warning!);
   });
 });

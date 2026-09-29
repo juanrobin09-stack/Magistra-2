@@ -12,7 +12,8 @@ import { MIN_OLLAMA_VERSION } from '../../shared/ai/models.js';
 import type { AIProgressEvent } from '../../shared/ipc.js';
 import {
   ENGINE_STARTING_MESSAGE, ENGINE_VANISHED_MESSAGE, ENGINE_WATCH_TIMEOUT_MESSAGE, OLLAMA_PROCESS_NAMES, PROXY_PROBE_URL,
-  PROXY_RESTART_MESSAGE, RESTART_UNSUPPORTED_MESSAGE, envProxy, modelsDirFromServerLog, ollamaServerLogPath, prependOllamaDirs, proxyUrlFromRules, sanitizeLogText,
+  PROXY_RESTART_MESSAGE, RESTART_UNSUPPORTED_MESSAGE, envProxy, modelMissingMessage, modelsDirFromServerLog, ollamaServerLogPath, prependOllamaDirs,
+  proxyUrlFromRules, sanitizeLogText,
   serverLogExcerpt, type LocalOllamaProvider,
 } from '../../electron/ollamaSetup.js';
 import { sanitizeEngineInstallOptions, sanitizeEngineStartOptions } from '../../electron/validate.js';
@@ -189,6 +190,46 @@ describe('moteur trop ancien (WIN-OLLAMA-VERSION)', () => {
     expect(events).toEqual([{ kind: 'engine-error', message: expect.stringContaining('Program Files') }]);
   });
 
+  it('pendant l’installateur (ancien moteur arrêté) : état « installing », démarrage demandé par l’interface refusé (AI_BUSY), rien lancé en parallèle', async () => {
+    const installer = randomBytes(50_000);
+    const ollama: FakeOllama = { running: true, models: [], pullRequests: [], version: OLD_VERSION };
+    let finish!: () => void;
+    const finished = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    let inInstaller!: () => void;
+    const started = new Promise<void>(resolve => {
+      inInstaller = resolve;
+    });
+    const { manager, spawned } = await makeManager({
+      ollama,
+      existing: [APP_EXE, CLI_EXE],
+      netFetch: makeFetch(ollama, github(installer)),
+      runInstaller: async () => {
+        // L'installateur officiel arrête l'ancien moteur, puis remplace ses fichiers.
+        ollama.running = false;
+        inInstaller();
+        await finished;
+        ollama.running = true;
+        ollama.version = RECENT_VERSION;
+        return 0;
+      },
+    });
+    expect((await manager.status()).engine.installing).toBeUndefined();
+    const update = manager.installEngine({ update: true });
+    await started;
+    // Fenêtre rechargée à ce moment : le moteur semble « arrêté », mais l'installation est annoncée.
+    const status = await manager.status();
+    expect(status.engine.state).toBe('installed_stopped');
+    expect(status.engine.installing).toBe('update');
+    await expect(manager.startEngineOrExplain()).rejects.toMatchObject({ code: 'AI_BUSY', message: 'La mise à jour du moteur IA est déjà en cours.' });
+    expect(spawned).toEqual([]);
+    finish();
+    await update;
+    expect((await manager.status()).engine.installing).toBeUndefined();
+    expect(spawned).toEqual([]);
+  });
+
   it('hors Windows : mise à jour automatique indisponible, message clair', async () => {
     const { manager } = await makeManager({ ollama: { running: true, models: [], pullRequests: [], version: OLD_VERSION }, platform: 'linux', env: { PATH: '' } });
     await expect(manager.installEngine({ update: true })).rejects.toMatchObject({ code: 'ENGINE_OUTDATED', message: expect.stringContaining('ollama.com/download') });
@@ -334,7 +375,9 @@ describe('installation manuelle non détectée (WIN-OLLAMA-WATCH-SILENT-END)', (
     const { manager, events } = await makeManager({ ollama: { running: false, models: [], pullRequests: [] }, timings: { watchTimeoutMs: 40 } });
     await manager.openEngineDownload();
     await vi.waitFor(() => expect(events.at(-1)).toEqual({ kind: 'engine-error', message: ENGINE_WATCH_TIMEOUT_MESSAGE }), { timeout: 2_000 });
-    expect(ENGINE_WATCH_TIMEOUT_MESSAGE).toContain('utilisez « Installer le moteur IA »');
+    // Les boutons cités sont ceux affichés sous l'erreur (carte « Activer l'IA », panneau du moteur : tests/ai-ui/render.test.ts).
+    expect(ENGINE_WATCH_TIMEOUT_MESSAGE).toContain('utilisez « Réessayer » ou « Ouvrir la page officielle d’installation »');
+    expect(ENGINE_WATCH_TIMEOUT_MESSAGE).not.toContain('Installer le moteur IA');
   });
 
   it('installé mais qui ne démarre pas : la cause probable est donnée', async () => {
@@ -602,6 +645,23 @@ describe('génération sur PC sans carte graphique (WIN-OLLAMA-FIRST-TOKEN-TIMEO
     expect((await manager.describeActive()).notReady).toMatchObject({ code: 'ENGINE_NOT_RUNNING' });
     const none = await makeManager({ ollama: { running: false, models: [], pullRequests: [] } });
     expect((await none.manager.describeActive()).notReady).toMatchObject({ code: 'ENGINE_NOT_INSTALLED' });
+  });
+
+  it('modèle absent : « Activer l’IA » n’est cité que pour une version Magistra sur cet ordinateur (jamais un modèle personnalisé ni un autre ordinateur)', async () => {
+    const ollama: FakeOllama = { running: true, models: [], pullRequests: [] };
+    const { manager, config } = await makeManager({ ollama, existing: [APP_EXE] });
+    expect((await manager.describeActive()).notReady?.message).toContain('Cliquez sur « Activer l’IA » pour le télécharger.');
+    // Modèle personnalisé (options avancées) : « Activer l'IA » ne le téléchargerait pas (et le remplacerait).
+    await config.update({ customModel: 'llama3.1:8b' });
+    const custom = (await manager.describeActive()).notReady!;
+    expect(custom).toMatchObject({ code: 'MODEL_NOT_INSTALLED' });
+    expect(custom.message).not.toContain('Activer l’IA');
+    expect(custom.message).toContain('choisissez « Aucun » dans les options avancées de l’IA');
+    await expect(manager.resolveProvider()).rejects.toMatchObject({ code: 'MODEL_NOT_INSTALLED', message: custom.message });
+    // Moteur sur un autre ordinateur : rien ne s'installe ici.
+    const remote = modelMissingMessage({ label: 'Magistra Standard', custom: false }, 'http://10.0.0.5:11434');
+    expect(remote).not.toContain('Activer l’IA');
+    expect(remote).toContain('serveur Ollama (10.0.0.5:11434)');
   });
 
   it('serveur distant : prestataire annoncé (providerInfo), sans URL ni clé', async () => {

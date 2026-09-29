@@ -117,6 +117,9 @@ export function parseStoredProfile(raw: unknown): TeacherProfile | null {
 
 // ─── Préférences ────────────────────────────────────────────────────────────
 
+/** Préférences booléennes (aiSetupRequested : activation de l'IA lancée par l'enseignant, à reprendre au lancement). */
+const PREFERENCE_FLAGS = ['academicEnabled', 'wikipediaEnabled', 'keepDocuments', 'setupCompleted', 'aiSetupRequested'] as const;
+
 /** Mise à jour partielle des préférences (champ par champ, types stricts). */
 export function sanitizePreferencesUpdate(raw: unknown): Partial<LocalPreferences> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new MagistraError('INVALID_REQUEST', 'Préférences invalides.');
@@ -131,7 +134,7 @@ export function sanitizePreferencesUpdate(raw: unknown): Partial<LocalPreference
     if (v === undefined || v === null || v === '') out.searxngUrl = undefined;
     else out.searxngUrl = requireHttpUrl(v, 'serveur de recherche SearXNG');
   }
-  for (const key of ['academicEnabled', 'wikipediaEnabled', 'keepDocuments', 'setupCompleted'] as const) {
+  for (const key of PREFERENCE_FLAGS) {
     if (key in u) out[key] = requireBoolean(u[key], key);
   }
   return out;
@@ -144,7 +147,7 @@ export function parseStoredPreferences(raw: unknown): LocalPreferences | null {
   const prefs: LocalPreferences = { ...DEFAULT_PREFERENCES };
   if (isResearchMode(u.defaultResearchMode)) prefs.defaultResearchMode = u.defaultResearchMode;
   if (typeof u.searxngUrl === 'string' && isHttpUrl(u.searxngUrl)) prefs.searxngUrl = u.searxngUrl;
-  for (const key of ['academicEnabled', 'wikipediaEnabled', 'keepDocuments', 'setupCompleted'] as const) {
+  for (const key of PREFERENCE_FLAGS) {
     if (typeof u[key] === 'boolean') prefs[key] = u[key] as boolean;
   }
   return prefs;

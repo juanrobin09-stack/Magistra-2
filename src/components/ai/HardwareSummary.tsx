@@ -6,10 +6,12 @@ import { WarningNote } from './Notices';
 interface HardwareSummaryProps {
   hardware: HardwareInfo;
   recommendation: Recommendation;
+  /** Faux quand le choix de la version suit immédiatement et redit déjà la recommandation (jamais deux fois). */
+  withRecommendation?: boolean;
 }
 
 /** « Votre ordinateur » : mémoire, processeur, carte graphique, disque + recommandation. */
-export default function HardwareSummary({ hardware, recommendation }: HardwareSummaryProps) {
+export default function HardwareSummary({ hardware, recommendation, withRecommendation = true }: HardwareSummaryProps) {
   return (
     <section aria-labelledby="hw-title" className="rounded-xl border border-white/8 bg-mg-700/40 p-4">
       <h3 id="hw-title" className="flex items-center gap-2 text-sm font-semibold text-white mb-3">
@@ -23,8 +25,8 @@ export default function HardwareSummary({ hardware, recommendation }: HardwareSu
           </div>
         ))}
       </dl>
-      <p className="mt-3 text-sm text-mg-50">{recommendation.summary}</p>
-      {recommendation.warning && (
+      {withRecommendation && <p className="mt-3 text-sm text-mg-50">{recommendation.summary}</p>}
+      {withRecommendation && recommendation.warning && (
         <div className="mt-2">
           <WarningNote>{recommendation.warning}</WarningNote>
         </div>

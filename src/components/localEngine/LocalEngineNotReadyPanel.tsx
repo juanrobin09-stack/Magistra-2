@@ -35,7 +35,7 @@ export default function LocalEngineNotReadyPanel({ engine, cause, providerName, 
             <h2 id="gen-local-title" className="text-sm font-semibold text-warning">{LOCAL_NOT_READY_TITLE}</h2>
             {causeText && <p className="text-sm text-mg-100 mt-1 [overflow-wrap:anywhere]">{causeText}</p>}
           </div>
-          <LocalEngineStatus engine={engine} headline={false} omit={causeText ? [causeText, APP_CLOSED_DETAIL] : []} idPrefix="gen" />
+          <LocalEngineStatus engine={engine} headline={false} omit={causeText ? [causeText, APP_CLOSED_DETAIL] : []} idPrefix="gen" installSteps />
           <div className="border-t border-white/5 pt-3">
             <button type="button" onClick={() => setConfirming(true)} className={`btn-ghost text-sm py-2 px-3 ${FOCUS_RING}`}>
               <Send size={15} aria-hidden="true" /> {USE_SERVER_LABEL}

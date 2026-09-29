@@ -44,7 +44,7 @@ export default function LocalEngineCard({ engine }: { engine: LocalEngineHandle 
               <Settings size={12} aria-hidden="true" /> Réglages de l’IA
             </Link>
           </div>
-          <LocalEngineStatus engine={engine} idPrefix="card" />
+          <LocalEngineStatus engine={engine} idPrefix="card" installSteps />
           {ready && route === 'server' && (
             <div className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
               <p className="text-sm text-mg-200 flex-1 min-w-[12rem]">
