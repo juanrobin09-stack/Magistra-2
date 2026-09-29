@@ -238,11 +238,13 @@ Au-delà de 10 navigateurs autorisés, le plus ancien est retiré automatiquemen
 
 ### Mainteneurs : versions, variables, domaine, ports
 
-**Publier une version de l'application**
-1. Mettez `"version": "X.Y.Z"` dans `package.json`, commitez, puis poussez le tag : `git tag vX.Y.Z && git push origin vX.Y.Z`.
-2. Le workflow [`release.yml`](.github/workflows/release.yml) construit l'installateur, l'archive et `SHA256SUMS.txt`, puis crée une **release en brouillon**.
-3. Relisez-la, puis **publiez-la**, en laissant cochée « Set as the latest release ». Le site la propose alors **automatiquement** : `GET /api/windows-release` interroge l'API GitHub (`/releases/latest`). Il affiche la version, la taille, la date, l'empreinte SHA-256 (champ `digest` de GitHub, sinon `SHA256SUMS.txt`) et « Windows 10 ou 11 (64 bits) ». Aucune version n'est écrite dans le code.
-4. **Délai d'affichage** : la réponse est gardée 10 minutes en mémoire par le serveur. Les en-têtes HTTP autorisent aussi 5 minutes de cache dans le navigateur et 10 minutes sur le CDN, qui peut ensuite resservir l'ancienne réponse le temps de la renouveler (`stale-while-revalidate`). Comptez donc quelques minutes, parfois un peu plus, avant l'affichage de la nouvelle version.
+**Publier une version de l'application** — `"version": "X.Y.Z"` doit être dans `package.json` (commité). Deux façons :
+- **Sans ligne de commande (le plus simple).** Sur GitHub : **Releases → Draft a new release** → *Choose a tag* : tapez `vX.Y.Z` puis « Create new tag: vX.Y.Z on publish » → *Target* : la branche à publier → titre « Magistra X.Y.Z » → **Publish release** (laissez cochée « Set as the latest release »). Le workflow [`release.yml`](.github/workflows/release.yml) construit alors l'installateur, l'archive et `SHA256SUMS.txt` (≈ 10 à 15 minutes) et les **joint à cette release** (il n'y remplace jamais un fichier existant ; il ajoute les notes de version si vous n'en avez pas écrit). Pendant la construction, le site propose la page des versions ; ensuite, le téléchargement direct.
+- **Avec git.** `git tag vX.Y.Z && git push origin vX.Y.Z` : le workflow crée une **release en brouillon** avec les fichiers ; relisez-la puis **publiez-la** (même case cochée).
+
+Dans les deux cas, une fois la release publiée avec son installateur, le site la propose **automatiquement** : `GET /api/windows-release` interroge l'API GitHub (`/releases/latest`). Il affiche la version, la taille, la date, l'empreinte SHA-256 (champ `digest` de GitHub, sinon `SHA256SUMS.txt`) et « Windows 10 ou 11 (64 bits) ». Aucune version n'est écrite dans le code.
+
+**Délai d'affichage** : la réponse est gardée 10 minutes en mémoire par le serveur. Les en-têtes HTTP autorisent aussi 5 minutes de cache dans le navigateur et 10 minutes sur le CDN, qui peut ensuite resservir l'ancienne réponse le temps de la renouveler (`stale-while-revalidate`). Comptez donc quelques minutes, parfois un peu plus, avant l'affichage de la nouvelle version.
 
 **Vérifier l'empreinte d'un installateur** (service informatique, facultatif) : sous Windows, `Get-FileHash .\Magistra-Setup-x.y.z.exe -Algorithm SHA256` doit donner l'empreinte affichée sur le site (Réglages → « Magistra pour Windows ») et dans `SHA256SUMS.txt` de la release. Les textes destinés aux enseignants ne demandent jamais de ligne de commande.
 

@@ -3,12 +3,16 @@
 # « Rechercher une mise à jour » (electron/updateCheck.ts, /releases/latest) la propose aux enseignants.
 #
 # Déclenchement :
+#  - sans ligne de commande : sur GitHub, Releases → « Draft a new release » → tag v2.0.1 (« Create new tag on
+#    publish ») sur la branche voulue → « Publish release » : ce workflow construit alors l'installateur et le JOINT à
+#    cette release publiée (évènement « release: published » ; rien n'est jamais remplacé) ;
 #  - pousser un tag de version : git tag v2.0.1 && git push origin v2.0.1
 #    (le tag doit être égal à « v » + la version de package.json : v2.0.1 ↔ "version": "2.0.1" ;
 #     un tag avec suffixe, v2.1.0-rc.1, donne une préversion, jamais proposée comme mise à jour) ;
 #  - ou « Run workflow » (Actions) : avec un tag EXISTANT, même résultat ; sans tag, construction seule
 #    (fichiers téléchargeables dans l'exécution, aucune release).
-# Ce workflow ne crée jamais de tag (gh release create --verify-tag).
+# Ce workflow ne crée jamais de tag (gh release create --verify-tag) et ne remplace jamais un fichier d'une release
+# publiée : il n'y ajoute l'installateur que s'il en est absent.
 #
 # Chaîne d'approvisionnement : actions épinglées par SHA de commit (version en commentaire), aucun cache de
 # dépendances (npm ci depuis package-lock.json), aucun autre secret que GITHUB_TOKEN. La construction s'exécute avec
@@ -20,6 +24,8 @@ name: Publication Windows
 on:
   push:
     tags: ['v*']
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -31,12 +37,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref }}
+  # Même groupe pour le tag poussé et la release publiée qui le crée : les deux exécutions se suivent, la seconde
+  # trouve l'installateur déjà joint et ne modifie rien.
+  group: release-${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   build:
     name: Installateur Windows (NSIS + zip)
+    # Brouillon préparé par ce workflow puis publié à la main : l'installateur y est déjà, rien à reconstruire.
+    if: github.event_name != 'release' || !contains(join(github.event.release.assets.*.name, ','), 'Magistra-Setup-')
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
@@ -52,12 +62,14 @@ jobs:
         shell: bash
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           EVENT: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           tag=""
           if [ "$EVENT" = "push" ] && [ "$REF_TYPE" = "tag" ]; then tag="$REF_NAME"; fi
+          if [ "$EVENT" = "release" ]; then tag="$RELEASE_TAG"; fi
           if [ "$EVENT" = "workflow_dispatch" ]; then tag="$(printf '%s' "$INPUT_TAG" | tr -d '[:space:]')"; fi
           if [ -n "$tag" ] && ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
             echo "::error title=Tag invalide::« $tag » n'est pas un tag de version (attendu : v2.0.1 ou v2.1.0-rc.1)."
@@ -188,8 +200,25 @@ jobs:
             echo "Brouillon existant pour $TAG : fichiers remplacés."
             gh release upload "$TAG" "${files[@]}" --clobber
           elif [ "$state" = "false" ]; then
-            echo "::error title=Release déjà publiée::La release $TAG est publiée : elle n'est pas modifiée. Créez une nouvelle version."
-            exit 1
+            # Release publiée (par exemple depuis la page Releases de GitHub, sans ligne de commande) : l'installateur y
+            # est ajouté s'il est absent ; un fichier déjà présent n'est JAMAIS remplacé (intégrité de ce qui a été
+            # téléchargé).
+            assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            if printf '%s\n' "$assets" | grep -Fxq "Magistra-Setup-$VERSION.exe"; then
+              echo "::notice title=Release déjà complète::La release $TAG publiée contient déjà l'installateur : rien n'est modifié."
+              exit 0
+            fi
+            for f in "${files[@]}"; do
+              if printf '%s\n' "$assets" | grep -Fxq "$(basename "$f")"; then
+                echo "::error title=Fichier déjà présent::$(basename "$f") existe déjà dans la release publiée $TAG sans l'installateur : rien n'est remplacé. Vérifiez la release."
+                exit 1
+              fi
+            done
+            gh release upload "$TAG" "${files[@]}"
+            body="$(gh release view "$TAG" --json body --jq '.body')"
+            if [ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then gh release edit "$TAG" --notes-file notes.md; fi
+            echo "Installateur joint à la release publiée $TAG : le site le propose maintenant." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           else
             prerelease=()
             case "$TAG" in *-*) prerelease=(--prerelease) ;; esac

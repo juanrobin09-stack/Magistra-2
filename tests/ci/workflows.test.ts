@@ -43,7 +43,9 @@ function stepWith(jobText: string, marker: string): string {
 /** Texte d'un job : de « <nom>: » (2 espaces) au job suivant. */
 function job(text: string, name: string): string {
   const lines = text.split('\n');
-  const start = lines.findIndex(l => l === `  ${name}:`);
+  // Recherche dans la section « jobs: » seulement (« release: » est aussi un déclencheur de release.yml).
+  const jobs = lines.indexOf('jobs:');
+  const start = lines.findIndex((l, i) => i > jobs && l === `  ${name}:`);
   if (start < 0) throw new Error(`job ${name} introuvable`);
   const end = lines.findIndex((l, i) => i > start && /^ {2}[A-Za-z0-9_-]+:\s*$/.test(l));
   return lines.slice(start, end < 0 ? undefined : end).join('\n');
@@ -72,9 +74,23 @@ describe.each([
 });
 
 describe('release.yml : application Windows publiée en brouillon', () => {
-  it('déclenché par un tag v* ou à la main, jamais par une branche', () => {
-    expect(release).toMatch(/on:\n {2}push:\n {4}tags: \['v\*'\]\n {2}workflow_dispatch:/);
+  it('déclenché par un tag v*, une release publiée depuis GitHub ou à la main, jamais par une branche', () => {
+    expect(release).toMatch(/on:\n {2}push:\n {4}tags: \['v\*'\]\n {2}release:\n {4}types: \[published\]\n {2}workflow_dispatch:/);
     expect(release).not.toMatch(/branches:/);
+    // Tag poussé et release publiée qui le crée : même groupe, exécutions successives.
+    expect(release).toContain('group: release-${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}');
+    // Brouillon publié à la main avec son installateur : aucune reconstruction.
+    expect(job(release, 'build')).toContain("if: github.event_name != 'release' || !contains(join(github.event.release.assets.*.name, ','), 'Magistra-Setup-')");
+  });
+
+  it('release publiée sans installateur : fichiers AJOUTÉS, jamais remplacés', () => {
+    const rel = job(release, 'release');
+    const published = rel.slice(rel.indexOf('elif [ "$state" = "false" ]'), rel.indexOf('else\n', rel.indexOf('elif [ "$state" = "false" ]')));
+    expect(published).toContain('gh release upload "$TAG" "${files[@]}"\n');
+    expect(published).not.toContain('--clobber');
+    expect(published).toContain('grep -Fxq "Magistra-Setup-$VERSION.exe"');
+    // Un seul --clobber dans tout le fichier : celui du brouillon.
+    expect(release.match(/--clobber/g)).toHaveLength(1);
   });
 
   it('construction sous Windows : npm ci, build web + Electron, NSIS + zip sans publication, empreintes', () => {
@@ -103,7 +119,9 @@ describe('release.yml : application Windows publiée en brouillon', () => {
 
   it('textes destinés aux enseignants (notes de version liées depuis le site, installation) : jamais de ligne de commande', () => {
     expect(release).not.toMatch(/PowerShell|Get-FileHash/);
-    const install = readme.slice(readme.indexOf("## Application Windows : installation pour l'enseignant"));
+    const start = readme.indexOf('## Installer Magistra (enseignants)');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const install = readme.slice(start);
     expect(install.slice(0, install.indexOf('\n---'))).not.toMatch(/PowerShell|Get-FileHash/);
     // La commande reste documentée pour le service informatique (section des mainteneurs).
     expect(readme.slice(readme.indexOf('### Mainteneurs'))).toContain('Get-FileHash');
