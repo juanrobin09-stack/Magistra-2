@@ -5,6 +5,7 @@ Magistra est un projet **open source (licence MIT) et non lucratif**. Il ne dép
 - **Application Windows** : une IA **locale**, open weights, qui tourne sur l'ordinateur de l'enseignant via [Ollama](https://ollama.com). Aucune clé, aucun compte, aucune limite d'utilisation.
 - **Site web** : un **préréglage** (`AI_PRESET`, voir § 11 ; `ovhcloud` est gratuit, sans clé, hébergé en France) ou un serveur d'IA **compatible OpenAI** ou **Ollama** configuré par l'administrateur (serveur GPU d'une université sous vLLM, Ollama distant…). Un prestataire en ligne est **toujours annoncé** à l'enseignant.
 - **En local** (`npm run dev`, `npm start` sur la boucle locale) : **mode personnel** sans compte (§ 12), avec l'IA de l'ordinateur **détectée automatiquement** (§ 13).
+- **Site web + application Windows** (« Magistra locale ») : le site confie la génération à l'IA locale de l'application par son **connecteur local**, après appairage accepté par l'enseignant ; le navigateur n'accède jamais au moteur lui-même (§ 19).
 
 ---
 
@@ -33,6 +34,8 @@ Magistra est un projet **open source (licence MIT) et non lucratif**. Il ne dép
 ```
 
 Le **même pipeline** (`shared/pipeline.ts`) sert le web et Windows. Les **mêmes prompts** (`shared/prompts/`) sont utilisés partout : il n'existe plus trois copies divergentes.
+
+Troisième chemin, entre les deux colonnes du schéma : le navigateur du site peut joindre le processus principal de l'application par le **connecteur local** (HTTP sur `127.0.0.1`, requêtes signées) ; la génération passe alors par le même `GenerationManager` que la fenêtre de l'application (§ 19).
 
 ---
 
@@ -235,6 +238,7 @@ status(research) → warning* → sources → [status(loading_model)] → status
 |---|---|
 | Web | flux NDJSON sur `POST /api/generate`. La fermeture de la connexion interrompt le modèle. |
 | Windows | `webContents.send('gen:event', { jobId, event })`. `gen:cancel` interrompt le modèle. |
+| Web + Magistra locale | flux NDJSON sur `POST /v1/generate` du connecteur local (§ 19). La fermeture de la connexion ou `POST /v1/cancel` interrompt le modèle de l'ordinateur. |
 | Démo | exemples pré-rédigés restitués en flux, clairement signalés comme tels. |
 
 Dans l'interface, le texte apparaît progressivement, avec trois commandes : **Arrêter**, **Recommencer**, **Réessayer**.
@@ -270,6 +274,7 @@ Dans l'interface, le texte apparaît progressivement, avec trois commandes : **A
 | `MAX_CONCURRENT_GENERATIONS_PER_USER` | générations en cours par utilisateur, toutes instances confondues (2 ; 0 = sans limite) → `GENERATION_BUSY` (429) |
 | `MAX_CONCURRENT_GENERATIONS` | générations en cours par instance du serveur, vers le serveur d'IA (8 ; 0 = sans limite) → `AI_BUSY` (503, réessayable) |
 | `CLERK_WEBHOOK_SECRET` | webhook Clerk `POST /api/clerk-webhook` (signature Svix vérifiée) : `user.deleted` efface les données du compte, comme `DELETE /api/account` |
+| `MAGISTRA_RELEASES_REPO`, `GITHUB_TOKEN` | facultatives : dépôt GitHub dont la dernière version stable est proposée par `GET /api/windows-release` (défaut : dépôt officiel) et jeton en lecture seule, envoyé seulement à `api.github.com` (§ 19) |
 
 Les générations en cours sont comptées dans Supabase (table `active_generations`, fonctions `magistra_begin_generation` / `magistra_end_generation`) : la concurrence, le débit de l'utilisateur et le débit global sont vérifiés dans une même transaction, sous un verrou par utilisateur (plus un verrou commun pour le débit global), donc de façon atomique même avec plusieurs instances serverless. La place est libérée à la fin du flux (succès, erreur, arrêt, déconnexion du client) ; si cette libération échoue, elle expire après `AI_TIMEOUT_SECONDS` + 90 s. Si le compteur est indisponible, la demande est acceptée (journalisée) et seuls les plafonds de l'instance s'appliquent.
 
@@ -278,6 +283,8 @@ Les générations en cours sont comptées dans Supabase (table `active_generatio
 Réglages → Intelligence artificielle :
 - **mode local** (Ollama sur 127.0.0.1, par défaut) ;
 - ou **serveur distant**, compatible OpenAI ou Ollama. La clé éventuelle est chiffrée avec `safeStorage`, reste dans le processus principal et n'est jamais renvoyée à la fenêtre.
+
+Réglages → « Site web Magistra » : « Permettre au site Magistra d’utiliser l’IA de cet ordinateur » (activé par défaut), navigateurs autorisés et bouton **Retirer** (§ 19). Réglée sur un serveur distant, l'application refuse les générations du site (`LOCAL_ENGINE_REMOTE`) : jamais de relais vers un tiers.
 
 ---
 
@@ -292,6 +299,8 @@ Les messages dépendent du mode réel et ne promettent rien qui ne soit garanti.
 | Windows + serveur distant | « Les données utilisées pour la génération seront transmises au serveur IA configuré (libellé). » | page Générer, Réglages |
 | Web + prestataire en ligne (préréglage ou hôte reconnu) | « Les demandes et les extraits de vos documents sont envoyés à « OVHcloud AI Endpoints » (France, centre de données de Gravelines) pour la génération. » + conservation + entraînement + lien vers ses conditions ; vos fichiers originaux ne quittent pas votre navigateur | page Générer, Réglages |
 | Web + serveur de l'établissement | la demande et les extraits de vos documents sont transmis au serveur Magistra puis au serveur d'IA configuré par l'administrateur (libellé) ; vos fichiers originaux ne quittent pas votre navigateur | page Générer |
+| Web + Magistra locale (IA de l'ordinateur par l'application Windows) | « IA locale — Vos contenus sont générés sur cet ordinateur. » (bandeau) + « IA locale : vos contenus sont générés sur cet ordinateur par l'application Magistra ; les extraits de vos documents n'en sortent pas. Le résultat et les paramètres de la demande (sujet, objectifs, consignes, contenu à adapter, profils, noms des documents) sont enregistrés dans l'historique de votre compte en ligne. » | page Générer |
+| Web, passage de Magistra locale au serveur en ligne | confirmation obligatoire : « Cette génération sera traitée par [prestataire] (serveur distant). Vos demandes et les extraits de vos documents quitteront cet ordinateur. » | Réglages, page Générer |
 | Mode personnel + IA de l'ordinateur | « … transmis au serveur Magistra puis à « IA locale du serveur Magistra » (même machine que le serveur Magistra) pour la génération. Aucune transmission à un service d'IA en ligne. » | page Générer, Réglages |
 | Recherche en ligne choisie | seuls le sujet et les mots-clés sont transmis aux services de recherche, jamais les documents | page Générer |
 | Démonstration | exemples pré-rédigés, aucune IA ; données dans ce navigateur | partout |
@@ -379,4 +388,200 @@ Les tests Vitest et Playwright utilisent des serveurs simulés. `scripts/real-ai
 
 Variables : `REAL_AI_URL`, `REAL_AI_MODEL`, `REAL_AI_API_KEY` (jamais affichée), `REAL_AI_CONTEXT_TOKENS`, `REAL_AI_TIMEOUT_S`, `REAL_AI_REPORT`. Le workflow `.github/workflows/real-ai.yml` l'exécute chaque lundi et à la demande : image Docker officielle `ollama/ollama` épinglée par empreinte, port ouvert sur la boucle locale seulement, modèle `ministral-3:3b` (Apache 2.0) gardé en cache, processeur seul avec des délais généreux, rapport JSON et journal d'Ollama joints à l'exécution. Cette validation a mis en évidence le déballage du bloc « ```markdown » décrit au § 5.
 
-La publication de l'application Windows suit le même principe de chaîne vérifiable : `.github/workflows/release.yml` (tag `v*`) construit l'installateur NSIS et l'archive zip sous Windows, calcule `SHA256SUMS.txt` et crée une **release en brouillon** (actions épinglées par SHA, seul le job de publication peut écrire), qu'un mainteneur publie à la main.
+La publication de l'application Windows suit le même principe de chaîne vérifiable : `.github/workflows/release.yml` (tag `v*`) construit l'installateur NSIS et l'archive zip sous Windows, calcule `SHA256SUMS.txt` et crée une **release en brouillon** (actions épinglées par SHA, seul le job de publication peut écrire), qu'un mainteneur publie à la main. Une fois publiée, elle est proposée par le site (`GET /api/windows-release`, § 19).
+
+## 19. Connecteur local (site web → IA de l'ordinateur)
+
+Le site public (compte Clerk obligatoire) peut utiliser l'IA **locale** de l'ordinateur de l'enseignant, par l'application Windows, sans jamais donner au navigateur un accès au moteur (pas de « navigateur → `http://localhost:11434` »). Parcours de l'enseignant, autorisation du navigateur et publication des versions : README, « Utiliser l'IA de votre ordinateur depuis le site ».
+
+| Rôle | Fichiers |
+|---|---|
+| Contrat (constantes, routes, formats, chaînes canoniques, analyse stricte de `magistra://`) | `shared/localConnector.ts` |
+| Application : cryptographie, demandes d'appairage, navigateurs autorisés, serveur HTTP, service, état transmis au site | `electron/connector/crypto.ts`, `pairing.ts`, `clients.ts`, `server.ts`, `service.ts`, `status.ts`, `userAgent.ts` (modules Node purs, sans Electron) |
+| Application : générations « externes », `magistra://`, boîte de consentement, IPC des réglages | `electron/generation.ts`, `electron/main.ts` |
+| Site : WebCrypto, appairage mémorisé, autorisation du navigateur, client, état, choix du moteur | `src/lib/localConnector/` (`webCrypto.ts`, `pairingStore.ts`, `permission.ts`, `client.ts`, `controller.ts`, `engineChoice.ts`, `texts.ts`) |
+| Site : génération locale ou en ligne, sans repli silencieux | `src/lib/runtime/hybrid.ts` |
+| Interface | `src/components/localEngine/` (carte du tableau de bord, réglages, bandeau et panneau de la page Générer, « Magistra pour Windows », « Site web Magistra » de l'application) |
+| Serveur | `server/windowsRelease.ts` (`GET /api/windows-release`), `server/handlers.ts` (`POST /api/generation`) |
+
+```
+ navigateur : site officiel https://magistra-2.vercel.app (compte Clerk)
+   │  fetch http://127.0.0.1:{47831|47832|47833} : CORS, sans cookie ni Referer, requêtes signées (HMAC)
+   │  autorisation « Applications sur l'appareil » (Local Network Access) du navigateur
+   ▼
+ connecteur local : application Windows, electron/connector/server.ts, écoute sur 127.0.0.1 uniquement
+   │  cinq routes Magistra ; aucun relais, aucun fichier, aucune commande, aucun réglage
+   ▼
+ GenerationManager (electron/generation.ts) : même pipeline, MÊME créneau unique que la fenêtre
+   ▼
+ moteur d'IA local (Ollama, jamais exposé au navigateur)  ──▶  modèle (Magistra Léger, Standard, Qualité)
+
+ évènement « done » (record) ──▶ navigateur ──HTTPS + jeton Clerk──▶ POST /api/generation ──▶ historique (Supabase)
+```
+
+### Routes
+
+Toute autre route donne 404 (chemin exact, sans normalisation : `/v1/../v1/hello` → 404), toute autre méthode 405 (avec `Allow`).
+
+| Route | Méthode | Signée | Rôle |
+|---|---|---|---|
+| `/v1/hello` | GET | non | présence : `{ app: 'magistra', protocol: 2, version }` ; aucune configuration, aucun chemin, aucune adresse |
+| `/v1/pair` | POST | non | appairage en deux temps (ci-dessous) : 202 `pending`, 200 `consented`, 200 `approved` ; erreurs 403 `CONNECTOR_PAIRING_REFUSED`, 410 `CONNECTOR_PAIRING_EXPIRED`, 404 (demande inconnue ou épuisée), 401 (vérificateur faux), 403 `FORBIDDEN` (origine différente de celle de la demande) |
+| `/v1/pair` | DELETE | oui | ce navigateur retire sa propre autorisation : `{ ok: true }` |
+| `/v1/status` | GET | oui | `ConnectorStatus` : moteur prêt, local ou non, libellé du modèle, cause s'il n'est pas prêt, capacités (`maxDocumentChars`, recherche), `busy` |
+| `/v1/generate` | POST | oui | demande validée par `validateGenerationRequest` ; réponse `application/x-ndjson` (un `GenerationEvent` par ligne), en-tête `X-Magistra-Job` ; avant le flux, en JSON : 409 `GENERATION_BUSY` (`Retry-After: 10`), 409 `LOCAL_ENGINE_REMOTE`, 400 `INVALID_REQUEST`, 413 |
+| `/v1/cancel` | POST | oui | `{ jobId }` : n'arrête qu'une génération de CE navigateur ; réponse `{ ok: true }` identique que la génération existe ou non |
+
+Le protocole est versionné (`CONNECTOR_PROTOCOL_VERSION` = 2). Un site et une application de versions de protocole différentes ne se reconnaissent pas :
+- le site ignore la réponse `hello` (Magistra « pas encore détectée ») ;
+- l'application ignore l'URL `magistra://pair`.
+
+L'application doit alors être mise à jour.
+
+### Contrôles, dans l'ordre, pour chaque requête (`electron/connector/server.ts`)
+
+1. pair distant de la boucle locale (`127.0.0.1`, `::ffff:127.0.0.1`), en plus de l'écoute sur `127.0.0.1` seulement ; une requête d'au moins 40 en-têtes est refusée (431), car Node ignorerait les suivants en silence ;
+2. en-tête `Host` unique et **exactement** `127.0.0.1:<port d'écoute>` (anti DNS rebinding), sinon 403 **sans** en-tête CORS et connexion fermée ;
+3. en-tête `Origin` présent, unique et **exactement** dans la liste autorisée (`OFFICIAL_WEB_ORIGINS`), sinon 403 sans CORS (`null`, absent, autre site, `localhost`…). Jamais `Access-Control-Allow-Origin: *`, jamais `Access-Control-Allow-Credentials` ;
+4. route exacte (404), puis méthode (405) ;
+5. `OPTIONS` (pré-vérification CORS) : si la méthode demandée est autorisée pour la route et si tous les en-têtes demandés figurent dans `CONNECTOR_ALLOWED_REQUEST_HEADERS` (casse ignorée), réponse 204 avec l'origine exacte, `Access-Control-Max-Age: 600` et, quand le navigateur le demande, `Access-Control-Allow-Private-Network: true` (ancien mécanisme « Private Network Access » de Chrome) ; sinon 403. Ensuite, après plus de 30 échecs d'authentification en une minute, 429 pendant 60 s (toutes les routes sauf `hello`) ;
+6. `POST` : `Content-Type: application/json` (`charset=utf-8` toléré), sinon 415 ; taille annoncée au plus 1 100 000 octets pour `/v1/generate` et 4 096 pour les autres routes, sinon 413 ;
+7. routes signées, **avant** de lire le corps :
+   - format des en-têtes ;
+   - navigateur connu et appairé pour **cette** origine, sinon 401 `CONNECTOR_UNPAIRED`, avec la marque de retrait si cette application l'a retiré ;
+   - horodatage à ± 120 s et postérieur au début de l'écoute ;
+   - nonce jamais vu.
+
+   Ensuite : lecture du corps, bornée, 20 s au plus (sinon 408) ; autorisation toujours valable (elle a pu être retirée pendant la lecture) ; signature HMAC sur les octets exacts du corps et l'hôte joint, comparée à temps constant (401 `UNAUTHENTICATED`). Le nonce n'est mémorisé qu'après une signature valide : une requête forgée ne remplit pas la mémoire ;
+8. toutes les réponses : `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Vary: Origin` ; pour l'origine officielle, `Access-Control-Allow-Origin` exacte et `Access-Control-Expose-Headers` ; après une authentification réussie (erreurs comprises), `X-Magistra-Proof`. Corps d'erreur : `ApiErrorBody` en français, sans trace, adresse, port, chemin, secret, nom ni réglage du moteur.
+
+Serveur Node : `headersTimeout` 10 s, `requestTimeout` 30 s, `keepAliveTimeout` 5 s, 32 connexions au plus, écoute exclusive. Les ports sont essayés dans l'ordre (port occupé ou réservé par Windows : suivant). Si aucun n'est libre, l'application réessaie toutes les minutes et affiche la cause, sans port, dans ses réglages. Le journal ne contient jamais de clé, de vérificateur, de signature ni de contenu.
+
+Les messages qui partent vers le site sont filtrés deux fois :
+- par l'application (`electron/connector/status.ts`) : aucune URL, adresse IP, port, chemin, ni le mot « Ollama » ; textes neutres de `LOCAL_ENGINE_SITE_MESSAGES` pour les codes du moteur ; un moteur distant est décrit « Serveur d’IA distant », jamais par son nom d'hôte ;
+- puis par le site (`src/lib/localConnector/texts.ts`).
+
+### Appairage en deux temps
+
+Aucun secret de longue durée ne circule dans une adresse.
+
+1. **Le site prépare la demande** :
+   - `pairingId` (16 octets) et `verifier` (32 octets), tirés au hasard ;
+   - `challenge` = SHA-256 des octets du vérificateur ;
+   - une paire ECDH P-256 dont la clé privée est **non extractible** ;
+   - un **code de vérification** (`K7F-2QX`) dérivé du défi.
+
+   Il ouvre ensuite `magistra://pair?v=2&id=<pairingId>&challenge=<challenge>&origin=<origine>`. Le vérificateur n'y figure jamais.
+2. **L'application reçoit l'URL** : premier lancement (argument), deuxième instance (`second-instance`) ou macOS (`open-url`). `parseAppUrl` l'analyse strictement : paramètres exacts, formats, version. Une origine hors de la liste est ignorée (journal seulement, aucune boîte). Une seule demande existe à la fois (une nouvelle remplace l'ancienne), avec au plus 3 boîtes de consentement par minute. La boîte native (« Autoriser [site] à utiliser l’intelligence locale de cet ordinateur ? ») affiche le même code et **Refuser** par défaut. Elle dit que le site n'aura accès ni aux fichiers, ni aux autres applications, ni aux réglages, et que l'autorisation se retire dans Réglages → « Site web Magistra ».
+3. **Premier temps : accusé de réception, sans secret.** Le site envoie `POST /v1/pair { pairingId }` à chaque port où Magistra répond. L'application renvoie `ack` = SHA-256(`canonicalPairAck(pairingId, challenge, hôte)`), avec 202 `pending`, puis 200 `consented` après l'accord.
+
+   Le défi n'est présent que dans l'URL `magistra://`, jamais dans une requête HTTP : seule l'application qui a reçu l'URL peut calculer l'accusé. Un port dont l'accusé est absent ou faux est ignoré. C'est le cas d'un autre programme, de l'application d'une autre session Windows, ou d'un relais installé sur un autre port. Ce premier temps ne modifie jamais la demande.
+4. **Second temps**, seulement après `consented` et seulement vers le port dont l'accusé est valide : `POST /v1/pair { pairingId, verifier, clientPublicKey }`. L'application vérifie :
+   - SHA-256(vérificateur) = défi, à temps constant ; au 5ᵉ essai faux, la demande est supprimée ;
+   - l'en-tête `Origin` identique à celui de la demande ;
+   - l'accord de l'enseignant ;
+   - le délai : 5 minutes depuis l'ouverture de l'URL.
+
+   La demande est à usage unique. L'application tire alors une paire ECDH éphémère, calcule le secret, puis dérive la clé HMAC-SHA-256 : `HKDF-SHA-256(secret, sel = pairingId, info = « magistra-connector-v1 hmac-sha256 »)`. Elle répond `{ status: 'approved', clientId, connectorPublicKey, version, ack }`.
+5. **Le site dérive la même clé**, `CryptoKey` HMAC **non extractible**, et la conserve dans IndexedDB « magistra-local-connector » (en mémoire seulement si IndexedDB est indisponible). L'application enregistre `{ clientId, origine, navigateur, dates, clé }` dans `<userData>/local-connector.json`, par écriture atomique :
+   - la clé est chiffrée par `safeStorage` (**DPAPI** sous Windows), jamais écrite en clair ;
+   - sans chiffrement du système, l'autorisation reste en mémoire (`persistent: false`).
+
+   Au plus 10 navigateurs sont autorisés ; au-delà, le plus ancien est retiré. Le site termine par un `GET /v1/status` prouvé : la clé est la même des deux côtés.
+
+Le site attend 2 minutes au plus : recherche de l'application toutes les secondes, essais d'appairage toutes les 1,5 s. La clé n'a jamais circulé. Côté navigateur, ni le site, ni une extension, ni un script injecté ne peuvent en lire les octets.
+
+### Requêtes signées et preuve de l'application
+
+Chaque requête signée porte :
+- `X-Magistra-Client` (identifiant attribué par l'application) ;
+- `X-Magistra-Timestamp` (millisecondes, 13 chiffres) ;
+- `X-Magistra-Nonce` (16 octets) ;
+- `X-Magistra-Signature` = HMAC(clé, `canonicalRequest`). La chaîne signée contient la méthode, l'**hôte joint** (`127.0.0.1:<port>`), le chemin, l'origine, le client, l'horodatage, le nonce et le SHA-256 du corps exact.
+
+Chaque réponse porte `X-Magistra-Proof` = HMAC(clé, `canonicalProof(client, nonce, hôte)`).
+
+Le navigateur **refuse toute réponse sans preuve valide** : un autre programme sur le port, l'application d'une autre session ou un relais donnent `CONNECTOR_UNREACHABLE`, et le texte de leur réponse n'est jamais affiché. Aucun contenu de génération (demande, extraits) n'est envoyé à un port qui n'a pas prouvé détenir la clé depuis moins de 30 s : sinon, le site refait d'abord `GET /v1/status`.
+
+Accusé, signature et preuve sont liés au **port**. Un programme qui occuperait un autre port dédié et relaierait tout à la vraie application n'obtient rien d'utilisable :
+- s'il garde l'en-tête `Host`, l'application refuse la requête ;
+- s'il le réécrit, la signature ne vaut plus ;
+- il ne peut pas calculer lui-même l'accusé ni la preuve pour son port.
+
+Côté navigateur, `fetch` est appelé en mode `cors`, avec `credentials: 'omit'`, `cache: 'no-store'`, `referrerPolicy: 'no-referrer'`, `redirect: 'error'` et `targetAddressSpace: 'loopback'` (option Local Network Access de Chrome, ignorée ailleurs). La présence est recherchée avec un délai de 1,5 s par port. Les réponses lues sont bornées (16 Ko, 64 Ko pour l'état). La CSP du site ajoute à `connect-src`, et à cette seule directive, les trois origines exactes `http://127.0.0.1:47831`, `http://127.0.0.1:47832` et `http://127.0.0.1:47833` : ni `localhost`, ni joker de port.
+
+### Autorisation du navigateur (Local Network Access)
+
+Chrome (depuis la version 142) et Edge exigent l'accord de l'utilisateur avant qu'un site public ne joigne la boucle locale. `src/lib/localConnector/permission.ts` lit l'état **sans le demander** : `navigator.permissions.query` avec `loopback-network`, puis `local-network-access` ; tout échec donne `unsupported`.
+
+- La vérification automatique (`autoCheck`, `refresh`) ne déclenche **jamais** la demande. Si l'autorisation est encore à demander et que le navigateur est appairé, l'état `needs-permission` explique la demande avant qu'elle n'apparaisse. Sans appairage, rien n'est sondé, sauf si l'autorisation est déjà accordée.
+- Seules les actions de l'enseignant (`detect`, `connect`, `openApp`, `disconnect`) peuvent la faire apparaître.
+- Chromium ouvre la connexion **avant** de poser sa question, et l'application ferme une connexion muette au bout de 10 s. Une recherche commencée à `prompt` et terminée à `granted` est donc refaite aussitôt.
+- Un refus donne l'état `permission-denied`, avec la marche à suivre (« Applications sur l'appareil » ou « Réseau local » → Autoriser).
+- Rien n'est contourné. En parc géré, la stratégie `LocalNetworkAccessAllowedForUrls` (ou `LoopbackNetworkAllowedForUrls`, Chrome 146 et suivants) supprime la demande pour le site officiel ; l'accord dans l'application reste exigé.
+
+### Générations du site dans l'application
+
+`GenerationManager.startExternal` (`electron/generation.ts`) utilise le même moteur, le même pipeline et le **même créneau unique** que la fenêtre : une génération à la fois au total, et `GENERATION_BUSY` avec un message propre à chaque côté.
+
+- **`requireLocal`** : si l'application est réglée sur un serveur distant, la génération est refusée (`LOCAL_ENGINE_REMOTE`) avant toute préparation du moteur, puis vérifiée à nouveau sur le fournisseur préparé.
+- **Évènements** : ils vont au flux NDJSON, jamais à la fenêtre. Seul le navigateur propriétaire peut arrêter sa génération, et le rechargement de la fenêtre n'arrête que les générations de la fenêtre.
+- **Aucun enregistrement dans l'historique de l'application** : le pipeline tourne avec `includeRecord`, et l'évènement `done` porte `record`. Ce `record` contient le résultat, les sources citées et les paramètres de la demande (`recordParams` : sujet, objectifs, consignes, contenu à adapter, profils, noms des documents), jamais le texte des extraits ni le travail d'élève.
+- **Enregistrement par le site** : `HybridGenerationClient` retire `record` de l'évènement et l'envoie à `POST /api/generation`. Le serveur vérifie le jeton, applique le débit (`RATE_LIMIT_PER_MINUTE` ; jamais le plafond global, réservé au serveur d'IA : colonne `kind` de `api_requests`), valide entièrement le contenu (`validateGenerationRecordDraft`) puis l'enregistre. En cas d'échec, l'avertissement `STORAGE_ERROR` s'affiche et le contenu reste affiché.
+- **Choix du moteur** (`engineChoice.ts`, `localStorage` « magistra_engine_choice ») : choix explicite de l'enseignant, sinon Magistra locale si le navigateur est appairé. Un appairage réussi mémorise Magistra locale, sauf choix déjà fait. `HybridGenerationClient` ne se replie **jamais** vers le serveur : Magistra locale injoignable ou pas prête donne des capacités « non prête » (route `local-connector`) et une erreur. Seul un choix explicite, confirmé en nommant le prestataire, passe au serveur en ligne.
+
+### Révocation
+
+- **Retrait par l'application**, par Réglages → « Site web Magistra » → **Retirer**, `DELETE /v1/pair` ou éviction au-delà de 10 navigateurs : effet immédiat. Les requêtes suivantes de ce navigateur sont refusées, et sa génération en cours est arrêtée. Pour un retrait, l'état en mémoire change avant l'écriture sur le disque : une écriture lente ne laisse jamais tourner sa génération.
+- **Marque de retrait** : avant d'effacer la clé, l'application calcule `X-Magistra-Revoked` = HMAC(clé, `canonicalRevoked(clientId)`), et en conserve 50 au plus. Elle la joint ensuite à ses 401 `CONNECTOR_UNPAIRED` pour ce navigateur.
+- **Oubli de l'appairage par le site** : un 401 ne peut pas porter de preuve, et l'application d'une autre session Windows, qui ne connaît pas ce navigateur, le renvoie légitimement. Le site n'oublie donc son appairage que sur une **marque valide**. Sans marque, il garde l'appairage et affiche « Une application Magistra répond sur cet ordinateur, mais elle ne reconnaît pas ce navigateur (…) ».
+- **« Déconnecter Magistra locale »** (site) : `DELETE /v1/pair` au mieux, puis oubli local même si l'application est fermée. Si elle n'a pas confirmé, le site demande de retirer l'autorisation dans l'application.
+- **Réglage désactivé** : le connecteur n'écoute plus, la demande d'appairage en cours est annulée et les générations du site sont interrompues. Une clé illisible au démarrage (profil Windows changé, fichier copié) est abandonnée, sans marque de retrait : le site propose alors de reconnecter.
+
+### Limites connues
+
+- **Safari** : sans objet sous Windows. Sur Mac, aucune application Magistra n'est publiée, et Safari peut bloquer une requête `http://127.0.0.1` depuis une page `https` (contenu mixte). Ce cas n'est pas testé ; sur Mac, le serveur en ligne reste le chemin prévu.
+- **Firefox** : il met en place sa propre protection (autorisations `local-network` et `loopback-network`). Le site lit `loopback-network` s'il est exposé. Les explications à l'écran sont écrites pour Chrome et Edge, et aucun test automatique ne couvre Firefox.
+- **Chrome ou Edge sans Local Network Access** (versions antérieures, ou protection désactivée par stratégie) : aucune demande n'apparaît, et la sécurité repose alors entièrement sur le connecteur (origine exacte, appairage, signatures). Par ces ports, un autre site ne peut rien lire ni rien déclencher : 403 sans CORS, `Content-Type` JSON exigé, requêtes signées. Il peut au plus constater qu'un programme y écoute (connexion acceptée ou refusée).
+- **Sessions Windows multiples** (PC partagé, bureaux à distance) : les ports de la boucle locale sont communs à toutes les sessions.
+  - Trois applications au plus écoutent en même temps, une par port ; la quatrième affiche la cause dans ses réglages.
+  - L'application d'une autre session peut répondre à `hello`, et le site affiche alors « ✓ Magistra trouvée ». Elle ne reçoit pourtant jamais le vérificateur (accusé), ne peut pas se faire passer pour l'application de l'enseignant (preuve) et ne peut pas faire oublier l'appairage (marque de retrait).
+- **`magistra://pair` depuis un autre site** : n'importe quelle page peut ouvrir cette URL, après la question du navigateur « ouvrir Magistra ? », et faire apparaître la boîte de consentement.
+  - Seule une origine officielle est acceptée, avec 3 boîtes par minute au plus. La boîte affiche un code qu'aucun onglet du site officiel n'affiche : « Refuser ».
+  - Même accepté, un tel appairage ne peut être terminé que par une requête portant l'en-tête `Origin` officiel, ce qu'une page web ne peut pas forger.
+- **Programme local malveillant sous le compte de l'enseignant** : hors du modèle de menace. Il lit déjà les fichiers de l'utilisateur. DPAPI protège les clés contre la copie du fichier vers un autre compte ou un autre ordinateur, pas contre un programme de la même session.
+- **Autres contraintes** :
+  - l'application doit rester ouverte (fermer sa fenêtre la quitte) ;
+  - une seule génération à la fois ;
+  - en navigation privée stricte, l'appairage ne dure que jusqu'au rechargement de la page ;
+  - un nouveau domaine du site exige une nouvelle version de l'application (`OFFICIAL_WEB_ORIGINS` est compilé dans l'application) ;
+  - le site nécessite Internet, même quand la génération est locale.
+
+### Développement
+
+Options ignorées dans l'application installée (`electron/devOptions.ts`) :
+- `MAGISTRA_CONNECTOR_PORTS` (« p1,p2 ») ;
+- `MAGISTRA_CONNECTOR_DEV_ORIGINS` (origines http(s) de la **boucle locale** seulement, les autres sont ignorées) ;
+- `MAGISTRA_CONNECTOR_DISABLED=1`.
+
+`magistra://` n'est inscrit que par l'application installée. L'installateur l'inscrit (`electron-builder.json`), puis l'application vérifie l'inscription à chaque lancement avec la commande `"<exe>" -- "%1"` : après `--`, une URL piégée ne peut injecter aucune option de Chromium. Le connecteur reste éteint pendant le test de démarrage (`--smoke-test`).
+
+### Tests
+
+- **Unitaires** :
+  - application : `tests/electron/connectorCrypto`, `connectorPairing`, `connectorClients`, `connectorServer`, `connectorService`, `connectorStatus` (`.test.ts`), `tests/electron/generation.test.ts` (générations externes), `tests/electron/devOptions.test.ts` ;
+  - site : `tests/localConnector/webCrypto`, `pairingStore`, `permission`, `client`, `controller`, `hybrid` (`.test.ts`), `engineChoice.test.tsx`, `provider.test.tsx` ;
+  - interface : `tests/ui/localEngineCard`, `localEngineGenerate`, `localEngineSettings`, `localEngineWindows` (`.test.tsx`) ;
+  - serveur : `tests/server/windowsRelease.test.ts`, `saveGeneration.test.ts`, `deploy.test.ts` (CSP : exactement les trois ports, dans `connect-src` seulement).
+- **Interopérabilité** : `tests/localConnector/interop.test.ts`. Le vrai client du site (WebCrypto, clés non extractibles, preuve exigée) dialogue avec le vrai connecteur (serveur HTTP sur `127.0.0.1`, magasin sur le disque) et le vrai `GenerationManager`, avec une IA simulée. Scénarios :
+  - appairage accepté ou refusé, génération en flux, annulation ;
+  - redémarrage de l'application sur un autre port ;
+  - programme qui occupe un port ou relaie depuis un autre port ;
+  - retrait prouvé par la marque, application d'une autre session Windows ;
+  - éviction, autre origine, moteur distant, application occupée.
+- **De bout en bout, avec Local Network Access active** : `e2e/connector-local.spec.ts`, projet Playwright `connector` (`xvfb-run -a npx playwright test --project=connector`, après `npx vite build` et `node scripts/build-electron.mjs` ; exécuté par la CI).
+  - Le harnais du site (`e2e/connector-harness/` : vrais composants, vrai contrôleur, vrai client WebCrypto et IndexedDB) tourne dans Chromium avec `--enable-features=LocalNetworkAccessChecks`. `--ip-address-space-overrides` le fait traiter comme un site **public**.
+  - L'autorisation est accordée ou refusée par le test, jamais par le site.
+  - En face tourne la vraie application Electron, avec un Ollama simulé. Le test joue seulement le rôle du système : remise des URL `magistra://`, réponse à la boîte native, trousseau de clés sous Linux.
+  - Parcours couverts : parcours complet (absente, trouvée, refus, accord, flux, arrêt, fermeture, relance sans nouvel appairage, retrait), moteur non prêt, autre site refusé, programme sur le premier port, explication puis refus puis accord de l'autorisation du navigateur.
+- **Vraie IA** : le test « vraie IA » du même fichier exécute appairage puis génération d'un cours en français, en flux, par site → connecteur → application → vrai Ollama. Il est ignoré sans `MAGISTRA_E2E_REAL_OLLAMA_URL` et n'est pas lancé par la CI. Exemple : `MAGISTRA_E2E_REAL_OLLAMA_URL=http://127.0.0.1:11434 xvfb-run -a npx playwright test --project=connector -g "vraie IA"`, avec `ministral-3:8b` installé.

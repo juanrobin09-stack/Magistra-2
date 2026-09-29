@@ -22,6 +22,7 @@ Magistra **ne dépend d'aucune API payante** :
 |---|---|---|---|
 | **Application Windows** | IA **locale** open weights via [Ollama](https://ollama.com) : Magistra Léger, Standard ou Qualité | aucun | restent sur l'ordinateur |
 | **Site web** | un **préréglage** (par exemple OVHcloud AI Endpoints, gratuit, hébergé en France) ou le serveur d'IA de l'établissement (vLLM, Ollama…) | Clerk | serveur Magistra (Supabase), puis le prestataire d'IA **annoncé dans l'interface** |
+| **Site web + application Windows** (« Magistra locale ») | l'IA **locale** de l'application Windows, utilisée depuis le site ([détails](#utiliser-lia-de-votre-ordinateur-depuis-le-site-magistra-pour-windows)) | Clerk | extraits de documents et génération sur l'ordinateur ; résultat et paramètres de la demande dans l'historique en ligne |
 | **En local** (`npm run dev`) | l'IA installée sur l'ordinateur (Ollama, LM Studio), **détectée automatiquement** | aucun (mode personnel) | restent sur l'ordinateur |
 | **Démonstration** | aucune : exemples pré-rédigés, clairement signalés | aucun | navigateur |
 
@@ -85,6 +86,7 @@ Votre historique et votre clé d'accès sont enregistrés dans `.magistra-data` 
 
 1. Téléchargez **`Magistra-Setup-x.y.z.exe`** sur la [page des versions](https://github.com/juanrobin09-stack/magistra-2/releases) (chaque version y publie aussi `SHA256SUMS.txt`).
 2. Installez-le, puis laissez-vous guider : Magistra installe le moteur d'IA locale (Ollama) et un modèle adapté à votre ordinateur, sans ligne de commande, sans compte ni clé. Détails ci-dessous : « [Application Windows : installation pour l'enseignant](#application-windows--installation-pour-lenseignant) ».
+3. Facultatif : connectez-la au site pour y générer avec l'IA de l'ordinateur (« [Utiliser l'IA de votre ordinateur depuis le site](#utiliser-lia-de-votre-ordinateur-depuis-le-site-magistra-pour-windows) »).
 
 Les versions sont produites par le workflow [`release.yml`](.github/workflows/release.yml) : un tag `vX.Y.Z` (égal à la version de `package.json`) construit l'installateur et l'archive sous Windows, calcule les empreintes et crée une **release en brouillon**, qu'un mainteneur relit puis publie.
 
@@ -129,6 +131,133 @@ Aucune clé, aucun compte, **aucune ligne de commande**. Hors connexion, Magistr
 **Mises à jour** : Magistra ne vérifie rien automatiquement. Dans Réglages → À propos, **Rechercher une mise à jour** interroge la page des versions et, si une nouvelle version existe, propose d'ouvrir sa page pour la télécharger (rien n'est téléchargé ni installé automatiquement).
 
 En mode avancé (Réglages), un établissement peut aussi connecter l'application à son propre serveur d'IA. Magistra indique alors clairement que les données de génération sont transmises à ce serveur.
+
+---
+
+## Utiliser l'IA de votre ordinateur depuis le site (Magistra pour Windows)
+
+Le site web peut confier vos générations à l'IA **locale** de l'application Windows (« Magistra locale ») :
+
+```
+site web (navigateur) ──▶ connecteur local de l'application Magistra ──▶ moteur d'IA (Ollama) ──▶ modèle
+```
+
+Le navigateur ne parle jamais au moteur d'IA lui-même : l'application n'accepte que cinq opérations Magistra (présence, appairage, état, génération en direct, arrêt), et seulement de la part du site officiel, après votre accord. Aucune clé API, aucune adresse à saisir, aucune ligne de commande. Le fonctionnement détaillé et la sécurité sont décrits dans [ARCHITECTURE_IA.md](ARCHITECTURE_IA.md#19-connecteur-local-site-web--ia-de-lordinateur) (§ 19).
+
+### Parcours de l'enseignant
+
+1. **Compte** : sur l'ordinateur Windows 10 ou 11 où Magistra sera installée, connectez-vous au site (`https://magistra-2.vercel.app`), de préférence avec Chrome ou Edge.
+2. **Tableau de bord** : la carte « Magistra locale » affiche « Activez l’intelligence Magistra sur votre ordinateur. ».
+3. **Télécharger** : **Télécharger Magistra pour Windows** télécharge directement l'installateur de la dernière version **stable** publiée. Sa version, sa taille, sa date et son empreinte SHA-256 sont affichées dans Réglages → « Magistra pour Windows » et sur la page d'accueil.
+4. **Installer** : lancez `Magistra-Setup-x.y.z.exe` (avertissement SmartScreen : voir « [Application Windows : installation pour l'enseignant](#application-windows--installation-pour-lenseignant) »). Au premier lancement, Magistra prépare seule le moteur et le modèle. **Laissez l'application ouverte** : fermer sa fenêtre la quitte, et le site ne la trouve plus.
+5. **Détection** : sur le tableau de bord, cliquez sur **J'ai déjà Magistra : la rechercher** (ou, dans la section « Magistra pour Windows », sur **Détecter maintenant**, sous « J’ai installé Magistra »). Si le navigateur doit demander son autorisation, le site l'explique **avant** (voir ci-dessous), puis affiche « Recherche de Magistra sur cet ordinateur… » et « ✓ Magistra trouvée ». Si l'application n'est pas trouvée, il affiche « Magistra n’est pas encore détectée. », avec **Réessayer** et **Télécharger Magistra**.
+6. **Connecter Magistra locale** : si le navigateur demande d'ouvrir Magistra, acceptez. Le site affiche « Confirmez dans l’application Magistra… » et un **code de vérification** (par exemple `K7F-2QX`).
+7. **Autoriser dans l'application** : Magistra demande « Autoriser magistra-2.vercel.app à utiliser l’intelligence locale de cet ordinateur ? », avec le même code. Si le code est identique, cliquez sur **Autoriser** ; sinon, ou si vous n'avez rien demandé, cliquez sur **Refuser** (bouton par défaut). Le site affiche « ✓ Intelligence locale connectée ». Il attend l'accord 2 minutes au plus ; la demande expire au bout de 5 minutes dans l'application.
+8. **Générer** : la page Générer indique « IA locale — Vos contenus sont générés sur cet ordinateur. ». Le texte apparaît au fur et à mesure, et **Arrêter** interrompt réellement le modèle de l'ordinateur. Le résultat est enregistré dans l'historique de votre compte.
+
+Aux visites suivantes, le site retrouve seul l'application ouverte (« ✓ Magistra locale connectée ») tant que l'autorisation du navigateur reste accordée : il n'y a rien à refaire. L'ordinateur traite **une génération à la fois**, application et site confondus. Si le moteur n'est pas prêt (modèle pas encore installé, application réglée sur un serveur distant…), le site en donne la cause et propose **Ouvrir Magistra**. Si l'application est fermée, il propose **Ouvrir Magistra** et **Réessayer**.
+
+### Autorisation du navigateur (« Applications sur l'appareil » / « Réseau local »)
+
+**Pourquoi** : le site est public, et l'application écoute sur l'ordinateur lui-même (adresse de boucle locale). Chrome (depuis la version 142) et Edge exigent votre accord avant qu'un site public ne contacte l'ordinateur ou le réseau local (protection « Local Network Access » contre les sites qui attaqueraient une imprimante, une box ou un programme local). Magistra ne contourne jamais cette protection :
+- la vérification automatique à l'ouverture d'une page ne déclenche jamais la demande ;
+- seul un clic de votre part peut la faire apparaître (rechercher, connecter, ouvrir ou déconnecter Magistra) ;
+- le site l'explique avant : « Votre navigateur va vous demander l’autorisation d’accéder aux applications de cet appareil : acceptez-la. Elle permet uniquement à ce site de dialoguer avec l’application Magistra installée sur cet ordinateur. »
+
+**L'accorder** : acceptez la demande du navigateur. Si vous l'avez refusée, le site affiche « Votre navigateur bloque l’accès à l’application Magistra. ». Dans ce cas :
+1. cliquez sur l'icône à gauche de l'adresse du site ;
+2. ouvrez les autorisations du site ;
+3. à la ligne « Applications sur l'appareil » (« Réseau local » dans les versions plus anciennes), choisissez **Autoriser** ;
+4. puis cliquez sur **Réessayer**.
+
+**La retirer** : au même endroit, choisissez **Bloquer**. Le site ne peut alors plus joindre l'application. Son appairage reste enregistré : pour le supprimer, voir « Retirer les autorisations ».
+
+**Parcs gérés** : l'administrateur peut accorder l'autorisation au site officiel par stratégie, sans demande à l'enseignant.
+- La stratégie [`LocalNetworkAccessAllowedForUrls`](https://chromeenterprise.google/policies/local-network-access-allowed-for-urls/) existe pour Chrome à partir de la version 140, et sous le même nom pour [Edge](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/localnetworkaccessallowedforurls). Sa valeur est la liste des origines autorisées : `https://magistra-2.vercel.app`.
+- Sous Windows (Chrome), elle s'écrit dans `HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome\LocalNetworkAccessAllowedForUrls`, avec une valeur `REG_SZ` nommée `1` et contenant `https://magistra-2.vercel.app`. Pour Edge, la clé est `…\Policies\Microsoft\Edge\LocalNetworkAccessAllowedForUrls`.
+- Les versions qui séparent « Réseau local » et « Applications sur l'appareil » (Chrome 146 et suivants) proposent aussi [`LoopbackNetworkAllowedForUrls`](https://chromeenterprise.google/policies/loopback-network-allowed-for-urls/). Elle est limitée à l'ordinateur lui-même, donc plus restreinte. Une stratégie `…BlockedForUrls` qui vise le même site l'emporte sur ces deux stratégies.
+
+La stratégie supprime seulement la demande du navigateur : l'accord dans l'application Magistra (**Autoriser**) reste exigé pour chaque navigateur.
+
+**Autres navigateurs** : le parcours est vérifié par des tests automatiques dans Chromium, avec cette protection active. Firefox met en place une protection comparable ; s'il demande une autorisation, acceptez-la, mais ce cas n'est pas couvert par les tests. Safari n'existe pas sous Windows ; sur Mac, aucune application Magistra n'est publiée. Utilisez-y le serveur en ligne.
+
+### Ce qui reste sur l'ordinateur, ce qui est enregistré en ligne
+
+| Donnée | Où elle va |
+|---|---|
+| Fichiers originaux (PDF, DOCX…) | nulle part : le texte est extrait dans le navigateur, comme toujours |
+| Demande complète et **extraits** sélectionnés de vos documents | uniquement à l'application Magistra de cet ordinateur, jamais au serveur Magistra en ligne ni à un prestataire d'IA |
+| Rédaction par le modèle | sur cet ordinateur |
+| Recherche Internet ou académique (si vous la choisissez) | faite par l'application, depuis cet ordinateur, avec ses propres réglages : seuls le sujet et les mots-clés partent vers HAL, Crossref, Wikipédia ou SearXNG |
+| **Résultat**, sources citées (nom du document, pages…), paramètres de la demande (sujet, objectifs, consignes, contenu à adapter, profils, noms des documents), nom du modèle | enregistrés dans l'**historique de votre compte** en ligne (serveur Magistra, Supabase) ; l'application ne les garde pas dans son propre historique |
+| Travail d'élève collé pour un corrigé | jamais enregistré (seule sa longueur est notée) |
+| Appairage de ce navigateur | navigateur : clé **non extractible** (IndexedDB « magistra-local-connector ») ; application : fichier `local-connector.json` de son dossier de données (site, navigateur, dates, clé chiffrée par Windows avec DPAPI) |
+
+La page Générer le rappelle : « IA locale : vos contenus sont générés sur cet ordinateur par l'application Magistra ; les extraits de vos documents n'en sortent pas. Le résultat et les paramètres de la demande (…) sont enregistrés dans l'historique de votre compte en ligne. »
+
+### Choix du moteur et priorité
+
+Réglages → **Intelligence artificielle** affiche l'ordre de priorité :
+1. **Magistra locale** (son état) ;
+2. **Serveur IA de l’établissement** (le serveur d'IA du site, s'il n'est pas un prestataire tiers) ;
+3. **Fournisseur web configuré** (nom du prestataire, par exemple OVHcloud AI Endpoints).
+
+Chaque ligne indique « non configuré » si elle ne s'applique pas.
+
+- **Par défaut** : Magistra locale dès que ce navigateur est connecté (le choix est alors mémorisé), sinon le serveur en ligne. Le choix est propre à chaque navigateur (`localStorage`, clé `magistra_engine_choice`).
+- **Passer au serveur en ligne** : choisissez « Serveur en ligne : [prestataire] » dans les réglages, ou **Utiliser le serveur en ligne…** sur la page Générer. Une confirmation s'affiche toujours : « Cette génération sera traitée par [prestataire] (serveur distant). Vos demandes et les extraits de vos documents quitteront cet ordinateur. ».
+- **Jamais de bascule silencieuse** : si Magistra locale est choisie mais fermée ou pas prête, la page Générer affiche « Magistra locale n’est pas prête » et sa cause, et n'envoie rien au serveur.
+- **Revenir à l'IA locale** est immédiat (**Utiliser l’IA locale**).
+- Sans installation possible (Mac, Linux, poste partagé de l'établissement), le serveur en ligne reste disponible.
+
+### Hors connexion
+
+- **L'application Windows** fonctionne sans Internet, avec le modèle local et vos documents.
+- **Le site**, lui, nécessite Internet, même quand la génération est faite par l'ordinateur : chargement des pages, connexion au compte, enregistrement dans l'historique. Sans Internet, utilisez directement l'application.
+
+### Retirer les autorisations
+
+- **Depuis le site** : Réglages → Intelligence artificielle → **Déconnecter Magistra locale**. Le navigateur demande à l'application de retirer son autorisation, puis l'oublie, même si l'application est fermée. Si l'application n'a pas pu confirmer, le site demande de la retirer aussi dans l'application.
+- **Depuis l'application** : Réglages → « **Site web Magistra** » liste les navigateurs autorisés (site, navigateur, dates). **Retirer** prend effet immédiatement et arrête la génération en cours de ce navigateur.
+- **Couper tout accès du site** : dans la même section, décochez « Permettre au site Magistra d’utiliser l’IA de cet ordinateur ». L'application n'écoute alors plus du tout. Recochez-la pour rétablir l'accès.
+- **Depuis le navigateur** : bloquer l'autorisation « Applications sur l'appareil » empêche tout contact. Effacer les données du site oublie l'appairage de ce navigateur : retirez-le aussi dans l'application.
+
+Au-delà de 10 navigateurs autorisés, le plus ancien est retiré automatiquement. Si le système ne permet pas de chiffrer les clés (Linux sans trousseau de clés, par exemple ; sous Windows, DPAPI est normalement disponible), les autorisations ne durent que jusqu'à la fermeture de l'application, et les réglages le signalent.
+
+### Mainteneurs : versions, variables, domaine, ports
+
+**Publier une version de l'application**
+1. Mettez `"version": "X.Y.Z"` dans `package.json`, commitez, puis poussez le tag : `git tag vX.Y.Z && git push origin vX.Y.Z`.
+2. Le workflow [`release.yml`](.github/workflows/release.yml) construit l'installateur, l'archive et `SHA256SUMS.txt`, puis crée une **release en brouillon**.
+3. Relisez-la, puis **publiez-la**, en laissant cochée « Set as the latest release ». Le site la propose alors **automatiquement** : `GET /api/windows-release` interroge l'API GitHub (`/releases/latest`). Il affiche la version, la taille, la date, l'empreinte SHA-256 (champ `digest` de GitHub, sinon `SHA256SUMS.txt`) et « Windows 10 ou 11 (64 bits) ». Aucune version n'est écrite dans le code.
+4. **Délai d'affichage** : la réponse est gardée 10 minutes en mémoire par le serveur. Les en-têtes HTTP autorisent aussi 5 minutes de cache dans le navigateur et 10 minutes sur le CDN, qui peut ensuite resservir l'ancienne réponse le temps de la renouveler (`stale-while-revalidate`). Comptez donc quelques minutes, parfois un peu plus, avant l'affichage de la nouvelle version.
+
+Ne sont **jamais** proposés : un brouillon, une préversion (tag `vX.Y.Z-rc.1`), une étiquette autre que `vX.Y.Z`, une release sans `Magistra-Setup-X.Y.Z.exe` du même numéro, ni un lien de téléchargement hors de `https://github.com/<dépôt>/releases/download/`. Si aucune version stable n'existe, ou si GitHub ne répond pas, le site renvoie vers la page des versions.
+
+**Variables du serveur (facultatives)**
+
+| Variable | Rôle |
+|---|---|
+| `MAGISTRA_RELEASES_REPO` | dépôt GitHub `propriétaire/dépôt` dont les versions sont proposées. Vide : dépôt officiel `juanrobin09-stack/magistra-2`. Valeur invalide : dépôt officiel, avec un avertissement dans le journal. À changer seulement pour une copie qui publie ses propres versions : l'application, elle, cherche ses mises à jour sur le dépôt officiel (`electron/updateCheck.ts`). |
+| `GITHUB_TOKEN` | jeton en lecture seule, en général inutile grâce au cache : sans jeton, l'API GitHub accepte 60 requêtes par heure et par adresse IP. Il est envoyé seulement à `api.github.com`, jamais au navigateur ni dans les journaux. |
+
+`POST /api/generation` enregistre le résultat d'une génération locale. Cette route compte pour `RATE_LIMIT_PER_MINUTE`, pas pour `RATE_LIMIT_GLOBAL_PER_MINUTE`. Après la mise à jour, réexécutez `supabase-schema.sql` : il ajoute la colonne `kind` de `api_requests`.
+
+**Domaine personnalisé** : l'application n'accepte que les origines de `OFFICIAL_WEB_ORIGINS` (`shared/localConnector.ts`, aujourd'hui `https://magistra-2.vercel.app`). Cette liste est **compilée dans l'application**. Pour servir le site sur un autre domaine (ou sur un serveur autonome d'établissement) :
+1. ajoutez l'origine exacte (`https://mon-domaine.fr`, sans chemin ni barre finale) ; gardez l'ancienne tant qu'elle sert ;
+2. **publiez une nouvelle version de l'application** et faites-la installer. Les versions déjà installées ignorent les demandes de connexion du nouveau domaine et refusent ses requêtes (403) : le site y affiche « Magistra n’est pas encore détectée. » ;
+3. la **CSP reste inchangée** : `connect-src` vise les ports du connecteur (`http://127.0.0.1:47831 http://127.0.0.1:47832 http://127.0.0.1:47833`), pas le domaine du site.
+
+Une autorisation est liée à l'origine du site : sur le nouveau domaine, chaque navigateur doit se reconnecter.
+
+**Ports 47831–47833** : l'application écoute sur `127.0.0.1` uniquement, jamais sur le réseau.
+- Elle prend le premier port libre des trois ; le site les essaie tous. Aucune règle de pare-feu ni aucun droit d'administrateur n'est nécessaire.
+- Si les trois ports sont occupés, par un autre programme ou par des plages que Windows réserve (Hyper-V : `netsh interface ipv4 show excludedportrange protocol=tcp`), Réglages → « Site web Magistra » l'indique, et l'application réessaie toutes les minutes.
+- Chaque session Windows où Magistra est ouverte en même temps sur le même PC occupe un port : trois sessions au plus peuvent utiliser Magistra locale simultanément.
+- Pour changer les ports, modifiez :
+  - `CONNECTOR_PORTS` dans `shared/localConnector.ts` ;
+  - la CSP de `vercel.json` (le serveur autonome la déduit de `CONNECTOR_PORTS`, et `tests/server/deploy.test.ts` vérifie les deux) ;
+  - puis publiez une nouvelle version de l'application.
 
 ---
 
@@ -206,7 +335,7 @@ npm run dev:electron     # application Windows en développement (Vite + Electro
 | `npm run lint` | ESLint (0 erreur exigée) |
 | `npm run typecheck` | TypeScript sur `src`, `shared`, `server`, `api`, `electron`, `tests` |
 | `npm test` | tests unitaires et d'intégration (Vitest) |
-| `npm run test:e2e` | tests de bout en bout Playwright : `--project=web` (site) ou `--project=electron` (application réelle avec Ollama simulé) |
+| `npm run test:e2e` | tests de bout en bout Playwright : `--project=web` (site), `--project=electron` (application réelle avec Ollama simulé) ou `--project=connector` (site ⇄ connecteur local ⇄ application réelle, protection « Local Network Access » de Chromium active) |
 | `npm run ai:check` | vérifie la configuration et l'IA branchée (`--dev`, `--start`, `--vercel`, `--env-file`, `--no-generate`) |
 | `npm run test:real-ai` | validation avec une **vraie** IA (Ollama) : voir ci-dessous |
 | `npm run build` | build web |
@@ -218,6 +347,7 @@ La CI (GitHub Actions) exécute sur chaque push et chaque PR ([`ci.yml`](.github
 - `npm ci`, lint, typecheck, tests, build web et build serveur ;
 - les tests de bout en bout du site ;
 - le démarrage réel d'Electron et les tests de bout en bout de l'application avec Ollama simulé ;
+- les tests de bout en bout du connecteur local (site ⇄ application, dans Chromium avec la protection « Local Network Access » active) ;
 - l'empaquetage Windows (sans installeur) sur `windows-latest`.
 
 Deux autres workflows :
@@ -260,7 +390,7 @@ shared/     cœur commun (IA, prompts, documents, recherche, citations, pipeline
 src/        interface React (pages, composants, runtime web/local/démo)
 server/     serveur web (auth Clerk, Supabase, flux de génération, protection SSRF, serveur autonome)
 api/        fonctions Vercel (adaptateurs minces vers server/)
-electron/   application Windows (protocole app://, IPC sécurisé, données locales, Ollama)
+electron/   application Windows (protocole app://, IPC sécurisé, données locales, Ollama, connecteur local du site)
 scripts/    builds, test de démarrage, Ollama simulé, validation avec une vraie IA, icône
 tests/      tests Vitest · e2e/ tests Playwright
 design/     maquettes (magistra.pen, à ouvrir avec l'éditeur Pencil) : illustrations, pas la référence fonctionnelle
@@ -277,6 +407,7 @@ L'architecture IA est détaillée dans [ARCHITECTURE_IA.md](ARCHITECTURE_IA.md).
 | **Windows + IA locale** | Vos documents et générations restent sur l'ordinateur. |
 | **En local** (`npm run dev`, IA détectée sur l'ordinateur) | Rien ne sort de l'ordinateur. |
 | **Recherche en ligne** (si vous la choisissez) | Seuls le sujet et les mots-clés partent vers HAL, Crossref, Wikipédia ou SearXNG ; jamais vos documents. |
+| **Site web + Magistra locale** | La demande et les **extraits** de vos documents vont uniquement à l'application Magistra de cet ordinateur. Seuls le résultat, les sources citées et les paramètres de la demande (sujet, objectifs, consignes, contenu à adapter, profils, noms des documents) sont enregistrés dans l'historique de votre compte en ligne. |
 | **Site web** | La demande et les **extraits** sélectionnés de vos documents sont transmis au serveur Magistra puis au service d'IA configuré par l'administrateur. Quand c'est un prestataire en ligne (OVHcloud, Mistral AI, Albert, Scaleway…), l'interface le **nomme**, avec son pays, sa conservation des données, son usage pour l'entraînement et un lien vers ses conditions. Les fichiers originaux restent dans votre navigateur. |
 | **Suppression** | Réglages → « Supprimer toutes mes données » (web) ou « Effacer toutes les données locales » (Windows). |
 
