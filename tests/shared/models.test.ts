@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { formatGB, getTier, MODEL_TIERS, nominalRamGB, recommendTier, tierForModel, type HardwareInfo } from '../../shared/ai/models';
+import {
+  compareVersions, formatGB, getTier, installedModelForTier, installedTiers, MIN_OLLAMA_VERSION, MODEL_TIERS, modelMatchesTier,
+  nominalRamGB, normalizeModelName, ollamaVersionStatus, parseVersion, recommendTier, tierForModel, type HardwareInfo,
+} from '../../shared/ai/models';
 
 function hw(partial: Partial<HardwareInfo>): HardwareInfo {
   return { totalRamGB: 16, cpuCores: 8, gpus: [], platform: 'win32', freeDiskGB: 200, ...partial };
@@ -155,5 +158,82 @@ describe('catalogue des modèles', () => {
     expect(tierForModel('ministral-3:14b')?.id).toBe('standard');
     expect(getTier('inconnu').id).toBe('standard');
     expect(formatGB(7.84)).toBe('7,8 Go');
+  });
+});
+
+describe('alias des niveaux (modèle déjà installé sous un autre nom, G4)', () => {
+  it('chaque niveau exige Ollama 0.13.1 (ministral-3)', () => {
+    expect(MIN_OLLAMA_VERSION).toBe('0.13.1');
+    for (const tier of MODEL_TIERS) expect(tier.minOllama).toBe('0.13.1');
+  });
+
+  it('les alias officiels sont reconnus comme le même niveau', () => {
+    for (const name of ['ministral-3', 'ministral-3:latest', 'ministral-3:8b-instruct-2512-q4_K_M', 'Ministral-3:8B', 'registry.ollama.ai/library/ministral-3:8b']) {
+      expect(tierForModel(name)?.id, name).toBe('leger');
+    }
+    expect(tierForModel('ministral-3:14b-instruct-2512-q4_K_M')?.id).toBe('standard');
+    for (const name of ['mistral-small3.2', 'mistral-small3.2:latest', 'mistral-small3.2:24b-instruct-2506-q4_K_M']) {
+      expect(tierForModel(name)?.id, name).toBe('qualite');
+    }
+    expect(tierForModel('ministral-3:3b')).toBeUndefined();
+    expect(tierForModel('')).toBeUndefined();
+  });
+
+  it('les variantes q8 / fp16 ne sont PAS équivalentes (mémoire bien plus grande)', () => {
+    for (const name of ['ministral-3:8b-instruct-2512-q8_0', 'ministral-3:8b-instruct-2512-fp16', 'ministral-3:14b-instruct-2512-q8_0', 'mistral-small3.2:24b-instruct-2506-fp16']) {
+      expect(tierForModel(name), name).toBeUndefined();
+      expect(MODEL_TIERS.some(t => modelMatchesTier(name, t)), name).toBe(false);
+    }
+  });
+
+  it('installedModelForTier renvoie le nom RÉELLEMENT installé (à passer à /api/chat), le nom du catalogue en priorité', () => {
+    const tags = [{ name: 'ministral-3:latest' }, { name: 'nomic-embed-text:latest' }, { name: 'mistral-small3.2:24b-instruct-2506-q4_K_M' }];
+    expect(installedModelForTier('leger', tags)).toBe('ministral-3:latest');
+    expect(installedModelForTier('standard', tags)).toBeUndefined();
+    expect(installedModelForTier(getTier('qualite'), tags)).toBe('mistral-small3.2:24b-instruct-2506-q4_K_M');
+    expect(installedModelForTier('leger', ['ministral-3:latest', 'ministral-3:8b'])).toBe('ministral-3:8b');
+    expect(installedModelForTier('leger', ['ministral-3:8b-instruct-2512-q8_0'])).toBeUndefined();
+    expect(installedTiers(tags).map(t => [t.tier.id, t.model])).toEqual([['leger', 'ministral-3:latest'], ['qualite', 'mistral-small3.2:24b-instruct-2506-q4_K_M']]);
+    expect(installedTiers([])).toEqual([]);
+  });
+
+  it('normalizeModelName', () => {
+    expect(normalizeModelName(' Mistral ')).toBe('mistral:latest');
+    expect(normalizeModelName('library/ministral-3:8B')).toBe('ministral-3:8b');
+    expect(normalizeModelName('hf.co/org/modele-gguf')).toBe('hf.co/org/modele-gguf:latest');
+  });
+});
+
+describe('versions (Ollama)', () => {
+  it('compareVersions : semver tolérant (préfixe v, parties manquantes, pré-versions, métadonnées)', () => {
+    expect(compareVersions('0.13.1', '0.13.1')).toBe(0);
+    expect(compareVersions('v0.13.1', '0.13.1')).toBe(0);
+    expect(compareVersions('0.13', '0.13.0')).toBe(0);
+    expect(compareVersions('0.12.3', '0.13.1')).toBe(-1);
+    expect(compareVersions('0.34.4', '0.13.1')).toBe(1);
+    expect(compareVersions('0.9.10', '0.9.9')).toBe(1);
+    expect(compareVersions('0.13.1-rc1', '0.13.1')).toBe(-1);
+    expect(compareVersions('0.13.1-rc2', '0.13.1-rc10')).toBe(-1);
+    expect(compareVersions('1.0.0-alpha', '1.0.0-alpha.1')).toBe(-1);
+    expect(compareVersions('1.0.0-1', '1.0.0-alpha')).toBe(-1);
+    expect(compareVersions('0.13.1+build.5', '0.13.1')).toBe(0);
+    expect(compareVersions('inconnue', '0.13.1')).toBeNaN();
+    expect(parseVersion(' V0.34.4 ')).toEqual({ core: [0, 34, 4], pre: [] });
+    expect(parseVersion('0.12.3-mock')).toEqual({ core: [0, 12, 3], pre: ['mock'] });
+    expect(parseVersion('pas une version')).toBeNull();
+  });
+
+  it('ollamaVersionStatus : à jour, trop ancien, ou inconnu (jamais bloquant)', () => {
+    expect(ollamaVersionStatus('0.34.4')).toBe('ok');
+    expect(ollamaVersionStatus('0.13.1')).toBe('ok');
+    expect(ollamaVersionStatus('v0.13.1-rc1')).toBe('ok');
+    expect(ollamaVersionStatus('0.40.0-rc0')).toBe('ok');
+    expect(ollamaVersionStatus('0.13.0')).toBe('outdated');
+    expect(ollamaVersionStatus('0.12.3-mock')).toBe('outdated');
+    expect(ollamaVersionStatus('0.6.2')).toBe('outdated');
+    expect(ollamaVersionStatus('0.0.0')).toBe('unknown');
+    expect(ollamaVersionStatus('inconnue')).toBe('unknown');
+    expect(ollamaVersionStatus(null)).toBe('unknown');
+    expect(ollamaVersionStatus('0.14.0', '0.15')).toBe('outdated');
   });
 });

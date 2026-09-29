@@ -55,6 +55,9 @@ describe('prompts — honnêteté et identité', () => {
     const user = buildUserPrompt(req({ type: 'cours', niveau: 'licence_2' }), SOURCES);
     expect(user).toMatch(/\[S1\] Document de l'enseignant « cours\.pdf » — pages 14 à 18/);
     expect(user).toMatch(/\[S2\] Publication \(HAL\) : « Un article réel » — A\. Martin · 2021 · Revue X · DOI 10\.1234\/abcd/);
+    // Consigne de citation rappelée EN DERNIER (non-régression : un vrai petit modèle local ne citait rien).
+    expect(user.trimEnd().split('\n').at(-1)).toBe('Produis maintenant le contenu complet en Markdown, en citant les sources fournies ([S1], [S2]…) à chaque idée qui en provient.');
+    expect(buildUserPrompt(req({ type: 'cours', niveau: 'licence_2' }), []).trimEnd().split('\n').at(-1)).toBe('Produis maintenant le contenu complet en Markdown.');
   });
 
   it('sans source : aucune référence bibliographique, seulement des pistes de recherche', () => {

@@ -17,6 +17,8 @@ export interface MockProviderOptions {
   model?: string;
   local?: boolean;
   contextTokens?: number;
+  /** État renvoyé par health() (ex. { ok: true, warning: { code: 'AI_STATUS_UNKNOWN', … } }), prioritaire sur failWith. */
+  healthStatus?: HealthStatus;
 }
 
 export class MockProvider implements AIProvider {
@@ -60,6 +62,7 @@ export class MockProvider implements AIProvider {
   }
 
   async health(): Promise<HealthStatus> {
+    if (this.opts.healthStatus) return this.opts.healthStatus;
     return this.opts.failWith
       ? { ok: false, error: { code: this.opts.failWith.code, message: this.opts.failWith.message } }
       : { ok: true, version: 'mock' };

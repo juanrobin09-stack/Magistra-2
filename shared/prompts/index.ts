@@ -147,7 +147,11 @@ export function buildUserPrompt(req: GenerationRequest, sources: PromptSource[])
   if (ctx) lines.push(`- ${ctx}`);
   if (req.contenuSource && allowed('contenuSource')) lines.push(`\nContenu à adapter :\n${fenced(req.contenuSource)}`);
   if (req.texteEleve && allowed('texteEleve')) lines.push(`\nTravail à corriger (reproduit tel quel) :\n${fenced(req.texteEleve)}`);
-  lines.push('\nProduis maintenant le contenu complet en Markdown.');
+  // Avec des sources, la consigne de citation est rappelée en dernier : un petit modèle local suit mieux la
+  // dernière consigne lue (constaté avec un vrai Ministral 3 3B, qui rédigeait sans aucune citation).
+  lines.push(sources.length
+    ? '\nProduis maintenant le contenu complet en Markdown, en citant les sources fournies ([S1], [S2]…) à chaque idée qui en provient.'
+    : '\nProduis maintenant le contenu complet en Markdown.');
   return lines.join('\n');
 }
 

@@ -13,6 +13,10 @@ export type ErrorCode =
   | 'AI_BUSY'
   | 'AI_TIMEOUT'
   | 'AI_BAD_RESPONSE'
+  | 'AI_QUOTA_EXCEEDED'
+  | 'AI_SERVER_UNREACHABLE'
+  | 'AI_STATUS_UNKNOWN'
+  | 'ENGINE_OUTDATED'
   | 'GENERATION_ABORTED'
   | 'GENERATION_TRUNCATED'
   | 'GENERATION_BUSY'
@@ -46,6 +50,10 @@ const MESSAGES: Record<ErrorCode, string> = {
   AI_BUSY: "Le serveur d'IA est surchargé. Réessayez dans quelques instants.",
   AI_TIMEOUT: "Le serveur d'IA n'a pas répondu à temps.",
   AI_BAD_RESPONSE: "Réponse inattendue du serveur d'IA.",
+  AI_QUOTA_EXCEEDED: "Le quota du service d'IA (offre gratuite ou crédits) est atteint. Réessayez plus tard.",
+  AI_SERVER_UNREACHABLE: "Le serveur d'IA est injoignable à l'adresse configurée.",
+  AI_STATUS_UNKNOWN: "L'état du serveur d'IA n'a pas pu être vérifié : la génération reste possible.",
+  ENGINE_OUTDATED: 'Le moteur IA (Ollama) est trop ancien pour ce modèle : mettez-le à jour.',
   GENERATION_ABORTED: 'Génération interrompue.',
   GENERATION_TRUNCATED: 'Le contenu a atteint la longueur maximale et peut être incomplet.',
   GENERATION_BUSY: 'Une génération est déjà en cours. Attendez sa fin ou arrêtez-la.',
@@ -68,9 +76,19 @@ const MESSAGES: Record<ErrorCode, string> = {
   INTERNAL: 'Erreur inattendue. Réessayez.',
 };
 
+/**
+ * Codes pour lesquels l'interface propose « Réessayer » (nouvel essai À LA DEMANDE de l'enseignant).
+ * Les nouveaux essais AUTOMATIQUES sont une autre notion : voir TRANSIENT_AI_ERRORS (shared/pipeline.ts),
+ * qui ne contient ni AI_QUOTA_EXCEEDED, ni AI_SERVER_UNREACHABLE, ni ENGINE_OUTDATED.
+ *  - AI_QUOTA_EXCEEDED : réessayable plus tard (le message indique quand, si le fournisseur le dit) ;
+ *  - AI_SERVER_UNREACHABLE : réessayable à la main (serveur rallumé, adresse corrigée), jamais automatiquement ;
+ *  - ENGINE_OUTDATED : non réessayable (il faut d'abord mettre le moteur à jour) ;
+ *  - AI_STATUS_UNKNOWN : n'est pas une erreur (état non vérifié, non bloquant) : jamais levé.
+ */
 const RETRYABLE: ErrorCode[] = [
   'ENGINE_NOT_RUNNING', 'AI_SERVER_UNAVAILABLE', 'AI_BUSY', 'AI_TIMEOUT', 'AI_BAD_RESPONSE',
   'GENERATION_ABORTED', 'RATE_LIMITED', 'NETWORK_ERROR', 'INTERNAL', 'OUT_OF_MEMORY', 'GENERATION_BUSY',
+  'AI_QUOTA_EXCEEDED', 'AI_SERVER_UNREACHABLE',
 ];
 
 const HTTP_STATUS: Partial<Record<ErrorCode, number>> = {
@@ -86,6 +104,10 @@ const HTTP_STATUS: Partial<Record<ErrorCode, number>> = {
   AI_TIMEOUT: 504,
   AI_BAD_RESPONSE: 502,
   AI_AUTH_FAILED: 502,
+  AI_QUOTA_EXCEEDED: 429,
+  AI_SERVER_UNREACHABLE: 502,
+  AI_STATUS_UNKNOWN: 503,
+  ENGINE_OUTDATED: 503,
   SERVER_MISCONFIGURED: 500,
   STORAGE_ERROR: 500,
   INTERNAL: 500,
@@ -95,18 +117,34 @@ export function defaultMessage(code: ErrorCode): string {
   return MESSAGES[code];
 }
 
+export interface MagistraErrorOptions {
+  /** Erreur d'origine (diagnostic seulement : jamais montrée ni sérialisée). */
+  cause?: unknown;
+  /**
+   * Attente conseillée par le fournisseur d'IA avant un nouvel essai, en millisecondes
+   * (en-tête Retry-After, x-ratelimit-reset…). Lue par la pipeline pour un AI_BUSY court (≤ 15 s) ;
+   * informative pour AI_QUOTA_EXCEEDED. Jamais sérialisée (toJSON) : le message dit déjà quand réessayer.
+   */
+  retryAfterMs?: number;
+}
+
 export class MagistraError extends Error {
   readonly code: ErrorCode;
   readonly retryable: boolean;
   readonly status: number;
+  /** Voir MagistraErrorOptions.retryAfterMs. */
+  readonly retryAfterMs?: number;
 
-  constructor(code: ErrorCode, message?: string, options?: { cause?: unknown }) {
+  constructor(code: ErrorCode, message?: string, options?: MagistraErrorOptions) {
     super(message ?? MESSAGES[code]);
     this.name = 'MagistraError';
     this.code = code;
     this.retryable = RETRYABLE.includes(code);
     this.status = HTTP_STATUS[code] ?? 500;
     if (options?.cause !== undefined) (this as { cause?: unknown }).cause = options.cause;
+    if (options?.retryAfterMs !== undefined && Number.isFinite(options.retryAfterMs) && options.retryAfterMs >= 0) {
+      this.retryAfterMs = Math.round(options.retryAfterMs);
+    }
   }
 
   toJSON(): { code: ErrorCode; message: string; retryable: boolean } {

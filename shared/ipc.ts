@@ -10,6 +10,10 @@ import type {
 export const IPC = {
   aiStatus: 'ai:status',
   aiRefresh: 'ai:refresh',
+  /**
+   * Installation OU mise à jour du moteur (Ollama). Argument facultatif : EngineInstallOptions.
+   * `{ update: true }` = « Mettre à jour le moteur IA » (moteur trop ancien : AIStatus.engine.outdated).
+   */
   aiInstallEngine: 'ai:install-engine',
   aiCancelEngineInstall: 'ai:cancel-engine-install',
   aiOpenEngineDownload: 'ai:open-engine-download',
@@ -83,6 +87,28 @@ export interface AIStatus {
     url: string;
     /** Chemin de l'exécutable détecté (affiché en mode avancé uniquement). */
     executable?: string;
+    /**
+     * Vrai si le moteur répond mais que sa version est inférieure à `minVersion` (ollamaVersionStatus()
+     * de shared/ai/models.ts vaut 'outdated') : les modèles Magistra ne pourront pas s'installer (erreur 412
+     * du registre → ENGINE_OUTDATED). L'interface propose alors « Mettre à jour le moteur IA »
+     * (installEngine({ update: true })), ou « demandez au service informatique » si `managedByAdmin`.
+     * Absent ou faux si la version est suffisante ou inconnue (version de développement, « inconnue »).
+     */
+    outdated?: boolean;
+    /** Version minimale exigée par les modèles Magistra (MIN_OLLAMA_VERSION, ex. « 0.13.1 »). */
+    minVersion?: string;
+    /**
+     * Vrai si Ollama est installé pour toute la machine (dossier Program Files, droits administrateur) :
+     * l'enseignant ne peut ni le mettre à jour ni le réinstaller lui-même (message « demandez au service informatique »).
+     */
+    managedByAdmin?: boolean;
+    /**
+     * Vrai après l'échec réseau d'un téléchargement de modèle alors que Windows utilise un proxy (réseau
+     * d'établissement) et qu'Ollama a été démarré sans lui (Ollama ignore le proxy du système : seule la variable
+     * HTTPS_PROXY compte). L'interface peut proposer « Relancer le moteur IA » : startEngine({ restart: true }),
+     * après accord de l'enseignant. Reprendre le téléchargement relance aussi le moteur (message d'erreur explicite).
+     */
+    proxyRestart?: boolean;
   };
   installedModels: { name: string; sizeGB: number }[];
   tiers: TierStatus[];
@@ -99,6 +125,34 @@ export interface AIStatus {
   /** Informations sur l'installateur Ollama (taille réelle si connue). */
   engineDownload: { sizeMB?: number; approxSizeMB: number; requiredDiskGB: number; platformSupported: boolean };
 }
+
+/**
+ * Options de ai.installEngine() (canal IPC.aiInstallEngine).
+ *  - update : mettre à jour un moteur déjà installé mais trop ancien. L'installateur officiel (même vérification
+ *    SHA-256 que pour une première installation) arrête lui-même « ollama app.exe » et ollama.exe avant la copie.
+ *    Refusé (ENGINE_OUTDATED, message « demandez au service informatique ») si le moteur est géré par
+ *    l'administrateur (AIStatus.engine.managedByAdmin). Progression : mêmes évènements engine-* qu'une installation.
+ */
+export interface EngineInstallOptions {
+  update?: boolean;
+}
+
+/**
+ * Options de ai.startEngine() (canal IPC.aiStartEngine, argument facultatif).
+ *  - restart : arrêter puis relancer le moteur de CET ordinateur (« ollama app.exe » et ollama.exe), avec le proxy
+ *    du système transmis en HTTPS_PROXY (voir AIStatus.engine.proxyRestart). Toujours après un clic de l'enseignant.
+ * Sans option : démarre le moteur s'il est arrêté. En cas d'échec, l'erreur donne la cause probable (journal du moteur,
+ * antivirus, port occupé…) plutôt que de renvoyer simplement faux.
+ */
+export interface EngineStartOptions {
+  restart?: boolean;
+}
+
+/**
+ * Message affiché pendant le démarrage du moteur local (jusqu'à 2 minutes au premier lancement) : émis par
+ * l'application Windows (génération, installation) et affiché par l'interface sous le bouton « Démarrage… ».
+ */
+export const ENGINE_STARTING_MESSAGE = 'Le moteur IA démarre, cela peut prendre une minute au premier lancement…';
 
 export type AIProgressEvent =
   | { kind: 'engine-download'; receivedMB: number; totalMB?: number }
@@ -183,10 +237,16 @@ export interface MagistraBridge {
   ai: {
     status(): Promise<AIStatus>;
     refresh(): Promise<AIStatus>;
-    installEngine(): Promise<void>;
+    /**
+     * Installe le moteur (Ollama), ou le met à jour avec `{ update: true }` (voir EngineInstallOptions).
+     * Toujours après un clic de l'enseignant ; progression via onProgress (engine-download → engine-install
+     * → engine-waiting → engine-ready | engine-error).
+     */
+    installEngine(options?: EngineInstallOptions): Promise<void>;
     cancelEngineInstall(): Promise<void>;
     openEngineDownload(): Promise<void>;
-    startEngine(): Promise<boolean>;
+    /** Démarre (ou, avec `{ restart: true }`, relance) le moteur local : voir EngineStartOptions. */
+    startEngine(options?: EngineStartOptions): Promise<boolean>;
     pullModel(target: { tier?: TierId; model?: string }): Promise<void>;
     cancelPull(): Promise<void>;
     setConfig(update: AIConfigUpdate): Promise<AIStatus>;

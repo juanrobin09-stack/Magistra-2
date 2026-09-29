@@ -129,6 +129,20 @@ export function mapProse(text: string, fn: (prose: string) => string): string {
   return out.join('\n');
 }
 
+/** Marqueur du bloc de code encore ouvert à la fin du texte (même lecture des blocs que mapProse), sinon null. */
+export function unclosedFence(text: string): string | null {
+  let fence: string | null = null;
+  for (const line of text.split('\n')) {
+    const marker = /^\s*(```+|~~~+)/.exec(line)?.[1];
+    if (fence) {
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+    } else if (marker) {
+      fence = marker;
+    }
+  }
+  return fence;
+}
+
 /**
  * Pseudo-citations numériques non vérifiées, hors code : « [12] », « [4, p. 45] », « [1 ; p. 3] ».
  * Jamais : les intervalles « [0, 1] » / « [1, 2] », les indices « t[3] », les notes « [^1] »,
@@ -302,6 +316,18 @@ export interface FinalizeOptions {
    * ou dans la demande de l'enseignant.
    */
   allowedUrls?: readonly string[];
+  /**
+   * Texte COMPLET (et non partiel) : si des sources ont été fournies mais qu'aucune n'est citée, une mention
+   * le signale à l'enseignant (sinon rien n'indiquerait que le contenu ne s'appuie pas sur ses documents).
+   */
+  flagUncited?: boolean;
+}
+
+/** Mention ajoutée quand aucune des sources fournies n'est citée (texte complet). */
+export function uncitedSourcesNote(provided: readonly SourceRef[]): string {
+  const what = provided.some(s => s.kind === 'document') ? 'sur vos documents' : 'sur les sources trouvées';
+  return `> Aucune des sources fournies n'est citée dans ce contenu : il ne s'appuie peut-être pas ${what}. `
+    + 'Vérifiez-le avant diffusion, ou relancez la génération.';
 }
 
 /**
@@ -398,6 +424,10 @@ export function finalizeCitations(text: string, provided: SourceRef[], options: 
 
   const cited = citedNumbersInProse(content);
   const used = provided.filter(s => cited.has(s.n));
+  // Bloc de code laissé ouvert par le modèle (clôture oubliée ou isolée) : refermé ici, sinon « Sources utilisées »
+  // et les mentions ajoutées ci-dessous s'afficheraient en texte brut, à l'intérieur de ce bloc.
+  const openFence = unclosedFence(content);
+  if (openFence) content += `\n${openFence}`;
   // Les citations vérifiées gardent leur forme « [S1] » : elles restent distinguables de tout « [1] »
   // (intervalle mathématique, numérotation) et renvoient à la liste « Sources utilisées » ci-dessous.
   if (used.length > 0) {
@@ -409,6 +439,9 @@ export function finalizeCitations(text: string, provided: SourceRef[], options: 
   if (unverifiedLinks > 0) notes.push('des liens absents des sources fournies');
   if (notes.length) {
     content += `\n> Magistra a retiré automatiquement ${notes.join(' et ')}. Vérifiez toute référence avant diffusion.\n`;
+  }
+  if (options.flagUncited && provided.length > 0 && used.length === 0 && content.trim()) {
+    content += `\n\n${uncitedSourcesNote(provided)}\n`;
   }
   return { content, used, removedCitations, unverifiedDois, unverifiedLinks };
 }

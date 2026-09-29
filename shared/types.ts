@@ -189,6 +189,32 @@ export interface PrivacyInfo {
   message: string;
 }
 
+/** Code et message précis (en français, sans secret ni trace technique) sur l'état de l'IA. */
+export interface AINotice {
+  code: ErrorCode;
+  message: string;
+}
+
+/**
+ * Prestataire d'IA qui reçoit les textes, affiché honnêtement à l'enseignant (transparence).
+ * Construit côté serveur par providerInfoFor() (shared/ai/presets.ts).
+ * Ne contient JAMAIS l'URL de base (AI_BASE_URL) ni aucune clé : seulement un nom lisible et des faits publics.
+ */
+export interface ProviderInfo {
+  /** Nom du prestataire ou du service (« OVHcloud AI Endpoints », « IA locale du serveur Magistra »…). */
+  label: string;
+  /** Vrai si les textes partent chez un tiers (service en ligne) ; faux pour une IA locale ou du réseau local. */
+  thirdParty: boolean;
+  /** Pays ou lieu d'hébergement, s'il est connu (« France (Gravelines) »). */
+  country?: string;
+  /** Conservation des données par le prestataire, telle qu'il l'annonce. */
+  retention?: string;
+  /** Utilisation des textes pour entraîner des modèles, telle que le prestataire l'annonce. */
+  training?: string;
+  /** Page publique du prestataire (conditions, confidentialité) : jamais l'adresse de l'API. */
+  privacyUrl?: string;
+}
+
 export interface Capabilities {
   /** Taille maximale (caractères) des extraits de documents envoyés au modèle. */
   maxDocumentChars: number;
@@ -197,4 +223,17 @@ export interface Capabilities {
   privacy: PrivacyInfo;
   engineLabel: string;
   ready: boolean;
+  /**
+   * Cause précise quand `ready` est faux (AI_NOT_CONFIGURED, MODEL_NOT_INSTALLED, AI_AUTH_FAILED,
+   * AI_SERVER_UNREACHABLE, AI_QUOTA_EXCEEDED…) : à afficher tel quel à la place d'un texte générique.
+   * Absent quand `ready` est vrai.
+   */
+  notReady?: AINotice;
+  /**
+   * Avertissement NON bloquant quand `ready` est vrai : AI_STATUS_UNKNOWN (état non vérifié, la génération
+   * reste possible), MODEL_NOT_INSTALLED (modèle absent de la liste du serveur, mais peut-être un alias), AI_BUSY.
+   */
+  aiWarning?: AINotice;
+  /** Prestataire qui reçoit les textes (web) : à annoncer clairement quand `thirdParty` est vrai. */
+  providerInfo?: ProviderInfo;
 }

@@ -12,6 +12,7 @@ import { documentSourceRef, extractUrls, finalizeCitations } from './citations.j
 import { rankChunks } from './documents/retrieve.js';
 import { MagistraError, toMagistraError, type ErrorCode } from './errors.js';
 import { getLevelGroup, getNiveauLabel } from './levels.js';
+import { unwrapDocumentFence } from './markdownFence.js';
 import { buildMessages, estimateTokens, type PromptSource } from './prompts/index.js';
 import { planResearch, runResearch, type ResearchConfig, type ResearchDeps, type ResearchOutcome } from './research/index.js';
 import { modeUsesDocuments, type DocumentPassage, type GenerationEvent, type GenerationRecord, type GenerationRequest, type SourceRef } from './types.js';
@@ -29,17 +30,31 @@ export interface PipelineDeps {
   maxOutputTokens?: number;
   /** Délai maximal accordé à la sauvegarde (60 s par défaut) : au-delà, le contenu est rendu sans être enregistré. */
   saveTimeoutMs?: number;
-  /** Attentes avant chaque nouvel essai automatique (serveur d'IA surchargé ou indisponible). */
+  /**
+   * Attentes avant chaque nouvel essai automatique (serveur d'IA surchargé ou indisponible). Le nombre
+   * d'éléments fixe le nombre de nouveaux essais ; un délai conseillé par le serveur (Retry-After ≤ 15 s,
+   * MagistraError.retryAfterMs) remplace l'attente prévue. [] = aucun nouvel essai.
+   */
   retryDelaysMs?: readonly number[];
+  /**
+   * Précharger le modèle avant la rédaction (fournisseurs qui l'implémentent : Ollama), avec le statut
+   * « Chargement du modèle… » (étape loading_model). Utile pour le moteur local : l'attente du premier mot
+   * ne compte plus le chargement. Désactivé par défaut.
+   */
+  preloadModel?: boolean;
 }
 
 /**
- * Surcharge ou indisponibilité passagère du serveur d'IA AVANT tout texte produit : Magistra réessaie
- * automatiquement, avec une attente croissante, avant d'afficher l'erreur. Jamais après le premier
- * mot (le texte serait dupliqué) ni après « Arrêter ».
+ * Surcharge ou indisponibilité PASSAGÈRE du serveur d'IA AVANT tout texte produit : Magistra réessaie
+ * automatiquement, avec une attente croissante (ou celle conseillée par le serveur), avant d'afficher l'erreur.
+ * Jamais après le premier mot (le texte serait dupliqué) ni après « Arrêter ».
+ * Volontairement absents : AI_SERVER_UNREACHABLE (adresse injoignable : réessayer ne sert à rien),
+ * AI_QUOTA_EXCEEDED (quota : attendre la reprise annoncée), ENGINE_OUTDATED.
  */
 export const TRANSIENT_AI_ERRORS: readonly ErrorCode[] = ['AI_BUSY', 'AI_SERVER_UNAVAILABLE'];
 export const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [2_000, 5_000];
+/** Au-delà de cette attente conseillée par le serveur, pas de nouvel essai automatique (l'erreur est affichée). */
+export const MAX_AUTO_RETRY_WAIT_MS = 15_000;
 
 function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -271,13 +286,29 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     ];
     yield { type: 'sources', sources: provided, internetUsed };
 
+    // ─── Chargement du modèle (facultatif) ───────────────────────────────
+    let preloaded = false;
+    if (deps.preloadModel && typeof provider.preload === 'function') {
+      yield { type: 'status', stage: 'loading_model', message: 'Chargement du modèle…' };
+      try {
+        await provider.preload({ signal });
+        preloaded = true;
+      } catch (err) {
+        // Une panne passagère est laissée aux nouveaux essais de la rédaction ; le reste est affiché tout de suite.
+        if (!(err instanceof MagistraError && TRANSIENT_AI_ERRORS.includes(err.code))) throw err;
+      }
+      if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
+    }
+
     // ─── Génération en flux ──────────────────────────────────────────────
     yield {
       type: 'status',
       stage: 'generating',
-      message: provider.local
-        ? 'Le modèle rédige… (le premier lancement peut prendre une minute, le temps de charger le modèle)'
-        : 'Rédaction en cours…',
+      message: !provider.local
+        ? 'Rédaction en cours…'
+        : preloaded
+          ? 'Le modèle rédige…'
+          : 'Le modèle rédige… (le premier lancement peut prendre une minute, le temps de charger le modèle)',
     };
     providedForPartial = provided;
     let finishReason: 'stop' | 'length' | 'unknown' = 'unknown';
@@ -298,11 +329,14 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
       } catch (err) {
         const transient = err instanceof MagistraError && TRANSIENT_AI_ERRORS.includes(err.code);
         if (!transient || text || signal?.aborted || attempt >= retryDelays.length) throw err;
-        const wait = retryDelays[attempt];
+        // Délai conseillé par le serveur (Retry-After) s'il est court ; au-delà, inutile d'attendre ici.
+        const advised = (err as MagistraError).retryAfterMs;
+        if (advised !== undefined && advised > MAX_AUTO_RETRY_WAIT_MS) throw err;
+        const wait = advised ?? retryDelays[attempt];
         yield {
           type: 'status',
           stage: 'generating',
-          message: `Serveur d'IA momentanément occupé : nouvel essai automatique dans ${Math.max(1, Math.round(wait / 1000))} s…`,
+          message: `${provider.local ? 'Le moteur IA est' : "Le serveur d'IA est"} momentanément occupé : nouvel essai automatique dans ${Math.max(1, Math.round(wait / 1000))} s…`,
         };
         await abortableSleep(wait, signal);
       }
@@ -312,7 +346,8 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
 
     // ─── Finalisation : citations vérifiées ──────────────────────────────
     yield { type: 'status', stage: 'finalizing', message: 'Vérification des citations…' };
-    const final = finalizeCitations(text, provided, { allowedUrls });
+    // Un document entier entouré de « ```markdown » serait vu comme du code : aucune citation vérifiée.
+    const final = finalizeCitations(unwrapDocumentFence(text, { complete: finishReason === 'stop' }), provided, { allowedUrls, flagUncited: true });
     const truncated = finishReason !== 'stop';
     if (finishReason === 'length') {
       yield { type: 'warning', code: 'GENERATION_TRUNCATED', message: 'Le contenu a atteint la longueur maximale et peut être incomplet.' };
@@ -351,7 +386,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
   } catch (err) {
     const e = signal?.aborted ? new MagistraError('GENERATION_ABORTED') : toMagistraError(err);
     // Le texte déjà produit n'est jamais rendu brut : ses citations sont vérifiées comme en fin normale.
-    const partial = text.trim() ? finalizeCitations(text, providedForPartial, { allowedUrls }).content : undefined;
+    const partial = text.trim() ? finalizeCitations(unwrapDocumentFence(text), providedForPartial, { allowedUrls }).content : undefined;
     yield { type: 'error', code: e.code, message: e.message, retryable: e.retryable, ...(partial ? { partial } : {}) };
   }
 }

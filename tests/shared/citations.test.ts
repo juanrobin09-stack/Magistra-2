@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  citedNumbers, documentSourceRef, finalizeCitations, formatLocator, formatSourceLine, stripModelSourcesSection,
+  citedNumbers, documentSourceRef, finalizeCitations, formatLocator, formatSourceLine, stripModelSourcesSection, unclosedFence, uncitedSourcesNote,
 } from '../../shared/citations';
 import type { SourceRef } from '../../shared/types';
 
@@ -63,6 +63,35 @@ describe('finalizeCitations', () => {
     expect(used).toEqual([DOC_SLIDES]);
     expect(content).not.toContain('Cours gouvernance.pdf');
     expect(content).not.toContain('Wikipédia');
+  });
+
+  it('texte complet sans aucune citation alors que des sources étaient fournies : mention honnête (non-régression)', () => {
+    // Constaté avec un vrai Ministral 3 3B : un cours complet rédigé sans citer le document de l'enseignant,
+    // sans « Sources utilisées » ni le moindre signal à l'écran.
+    const text = 'Le cycle de l’eau comprend l’évaporation, la condensation et les précipitations.';
+    const full = finalizeCitations(text, [DOC_PAGES], { flagUncited: true });
+    expect(full.used).toEqual([]);
+    expect(full.content.startsWith(text)).toBe(true);
+    expect(full.content).toContain(uncitedSourcesNote([DOC_PAGES]));
+    expect(full.content).toContain('ne s’appuie peut-être pas sur vos documents'.replace('’', "'"));
+    expect(full.content).not.toContain('Sources utilisées');
+    // Recherche sans document : formulation adaptée.
+    expect(finalizeCitations(text, [HAL], { flagUncited: true }).content).toContain('sur les sources trouvées');
+    // Texte partiel (génération interrompue), aucune source fournie, ou source citée : aucune mention.
+    expect(finalizeCitations(text, [DOC_PAGES]).content).toBe(text);
+    expect(finalizeCitations(text, [], { flagUncited: true }).content).toBe(text);
+    expect(finalizeCitations(`${text} [S1]`, [DOC_PAGES], { flagUncited: true }).content).not.toContain('Aucune des sources fournies');
+  });
+
+  it('bloc de code laissé ouvert par le modèle : refermé avant « Sources utilisées » (non-régression)', () => {
+    const text = 'Évaporation [S1].\n\n```\nÉvaporation → Condensation\n\nNote finale.';
+    const { content, used } = finalizeCitations(text, [DOC_PAGES], { flagUncited: true });
+    expect(used).toEqual([DOC_PAGES]);
+    expect(unclosedFence(content)).toBeNull();
+    expect(content).toContain('Note finale.\n```\n\n---\n\n## Sources utilisées');
+    // Blocs correctement fermés : rien n'est ajouté.
+    expect(finalizeCitations('A [S1].\n\n```\nx\n```', [DOC_PAGES]).content).toMatch(/^A \[S1\]\.\n\n```\nx\n```\n\n---\n\n## Sources utilisées/);
+    expect(unclosedFence('```py\nx\n```\n~~~\ny')).toBe('~~~');
   });
 
   it('retire une citation inconnue sans abîmer le texte autour', () => {

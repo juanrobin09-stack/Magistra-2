@@ -143,7 +143,8 @@ describe('runGeneration — avertissements et cas dégradés', () => {
   it('réponse tronquée (finish length) → avertissement + truncated', async () => {
     const events = await collect(runGeneration(request(), { provider: new MockProvider({ reply: 'Début', finishReason: 'length' }) }));
     expect(ofType(events, 'warning').map(w => w.code)).toContain('GENERATION_TRUNCATED');
-    expect(last(events)).toMatchObject({ type: 'done', truncated: true, content: 'Début' });
+    // Documents fournis mais non cités : mention honnête ajoutée après le texte (voir finalizeCitations).
+    expect(last(events)).toMatchObject({ type: 'done', truncated: true, content: expect.stringMatching(/^Début\n\n> Aucune des sources fournies n'est citée/) });
   });
 
   it('flux coupé sans fin explicite (« unknown ») → avertissement + truncated', async () => {
@@ -173,7 +174,7 @@ describe('runGeneration — avertissements et cas dégradés', () => {
       saveTimeoutMs: 30,
     }));
     expect(ofType(events, 'warning').map(w => w.code)).toContain('STORAGE_ERROR');
-    expect(last(events)).toMatchObject({ type: 'done', saved: false, content: 'Contenu.' });
+    expect(last(events)).toMatchObject({ type: 'done', saved: false, content: expect.stringMatching(/^Contenu\.\n/) });
   });
 
   it('recherche non disponible dans cet environnement → avertissement, génération poursuivie', async () => {
@@ -262,7 +263,7 @@ describe('runGeneration — erreurs et annulation (jamais d’exception)', () =>
     const events = await collect(runGeneration(request(), { provider, retryDelaysMs: [5, 5] }));
     expect(attempts).toBe(3);
     expect(ofType(events, 'status').filter(s => /nouvel essai automatique/.test(s.message))).toHaveLength(2);
-    expect(last(events)).toMatchObject({ type: 'done', content: 'Contenu final.' });
+    expect(last(events)).toMatchObject({ type: 'done', content: expect.stringMatching(/^Contenu final\.\n/) });
   });
 
   it('surcharge persistante : erreur après les nouveaux essais ; jamais de nouvel essai après le premier mot', async () => {
@@ -287,6 +288,57 @@ describe('runGeneration — erreurs et annulation (jamais d’exception)', () =>
     const midEvents = await collect(runGeneration(request(), { provider: midStream, retryDelaysMs: [1, 1] }));
     expect(midAttempts).toBe(1);
     expect(last(midEvents)).toMatchObject({ type: 'error', code: 'AI_BUSY', partial: 'abcd' });
+  });
+
+  it('429 court : l’attente conseillée par le serveur (Retry-After) remplace 2 s puis 5 s (WEB-AI-03)', async () => {
+    const provider = new MockProvider({ reply: 'Contenu final.' });
+    const original = provider.stream.bind(provider);
+    let attempts = 0;
+    provider.stream = async function* (options) {
+      attempts++;
+      if (attempts === 1) throw new MagistraError('AI_BUSY', undefined, { retryAfterMs: 30 });
+      yield* original(options);
+    };
+    const started = Date.now();
+    const events = await collect(runGeneration(request(), { provider, retryDelaysMs: [10_000, 10_000] }));
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(attempts).toBe(2);
+    expect(ofType(events, 'status').some(s => s.message === "Le moteur IA est momentanément occupé : nouvel essai automatique dans 1 s…")).toBe(true);
+    expect(last(events)).toMatchObject({ type: 'done', content: expect.stringMatching(/^Contenu final\.\n/) });
+  });
+
+  it('attente conseillée trop longue (> 15 s), serveur injoignable, quota, moteur trop ancien : AUCUN nouvel essai automatique (F5)', async () => {
+    const cases = [
+      new MagistraError('AI_BUSY', undefined, { retryAfterMs: 60_000 }),
+      new MagistraError('AI_SERVER_UNREACHABLE', "Le serveur d'IA est injoignable à l'adresse configurée (connexion refusée)."),
+      new MagistraError('AI_QUOTA_EXCEEDED', 'Quota atteint : réessayez dans environ 12 minutes.'),
+      new MagistraError('ENGINE_OUTDATED'),
+    ];
+    for (const failure of cases) {
+      let attempts = 0;
+      const provider = new MockProvider({ local: false });
+      provider.stream = async function* () {
+        attempts++;
+        yield* [];
+        throw failure;
+      };
+      const events = await collect(runGeneration(request(), { provider, retryDelaysMs: [1, 1] }));
+      expect(attempts, failure.code).toBe(1);
+      expect(ofType(events, 'status').filter(st => /nouvel essai/.test(st.message)), failure.code).toHaveLength(0);
+      expect(last(events), failure.code).toMatchObject({ type: 'error', code: failure.code, message: failure.message, retryable: failure.retryable });
+    }
+  });
+
+  it('message de nouvel essai grammatical pour un serveur distant', async () => {
+    const provider = new MockProvider({ local: false, reply: 'ok' });
+    const original = provider.stream.bind(provider);
+    let attempts = 0;
+    provider.stream = async function* (options) {
+      if (++attempts === 1) throw new MagistraError('AI_SERVER_UNAVAILABLE');
+      yield* original(options);
+    };
+    const events = await collect(runGeneration(request(), { provider, retryDelaysMs: [5] }));
+    expect(ofType(events, 'status').some(st => st.message === "Le serveur d'IA est momentanément occupé : nouvel essai automatique dans 1 s…")).toBe(true);
   });
 
   it('« Arrêter » pendant l’attente d’un nouvel essai : arrêt immédiat', async () => {
@@ -439,5 +491,63 @@ describe('runGeneration — budget de contexte', () => {
     expect(b.fits).toBe(true);
     expect(b.promptTokens + b.outputTokens + b.sourcesChars / 3.2).toBeLessThanOrEqual(12_288);
     expect(computeBudgets(new MockProvider({ contextTokens: 12_288 }), request(), 800).outputTokens).toBe(800);
+  });
+});
+
+describe('runGeneration — chargement du modèle (preloadModel)', () => {
+  function withPreload(impl: (options?: { signal?: AbortSignal }) => Promise<void>) {
+    const provider = new MockProvider({ reply: 'Contenu.' }) as MockProvider & { preload?: (options?: { signal?: AbortSignal }) => Promise<void> };
+    let calls = 0;
+    provider.preload = async options => {
+      calls++;
+      await impl(options);
+    };
+    return { provider, calls: () => calls };
+  }
+
+  it('statut « Chargement du modèle… » (étape loading_model) avant la rédaction', async () => {
+    const { provider, calls } = withPreload(async () => {});
+    const events = await collect(runGeneration(request(), { provider, preloadModel: true }));
+    expect(calls()).toBe(1);
+    const stages = ofType(events, 'status').map(e => e.stage);
+    expect(stages.indexOf('loading_model')).toBeGreaterThanOrEqual(0);
+    expect(stages.indexOf('loading_model')).toBeLessThan(stages.indexOf('generating'));
+    expect(ofType(events, 'status').find(e => e.stage === 'loading_model')?.message).toBe('Chargement du modèle…');
+    expect(last(events)).toMatchObject({ type: 'done' });
+  });
+
+  it('désactivé par défaut ; sans méthode preload, rien ne change', async () => {
+    const { provider, calls } = withPreload(async () => {});
+    await collect(runGeneration(request(), { provider }));
+    expect(calls()).toBe(0);
+    const plain = await collect(runGeneration(request(), { provider: new MockProvider(), preloadModel: true }));
+    expect(ofType(plain, 'status').some(e => e.stage === 'loading_model')).toBe(false);
+  });
+
+  it('échec du chargement (modèle absent, mémoire) → erreur claire, sans rédaction ; panne passagère → la rédaction tente quand même', async () => {
+    const missing = withPreload(async () => {
+      throw new MagistraError('MODEL_NOT_INSTALLED', "Le modèle Magistra Standard n'est pas encore installé.");
+    });
+    const events = await collect(runGeneration(request(), { provider: missing.provider, preloadModel: true }));
+    expect(last(events)).toMatchObject({ type: 'error', code: 'MODEL_NOT_INSTALLED' });
+    expect(ofType(events, 'delta')).toHaveLength(0);
+
+    const transient = withPreload(async () => {
+      throw new MagistraError('AI_SERVER_UNAVAILABLE');
+    });
+    expect(last(await collect(runGeneration(request(), { provider: transient.provider, preloadModel: true })))).toMatchObject({ type: 'done' });
+  });
+
+  it('« Arrêter » pendant le chargement : arrêt immédiat', async () => {
+    const controller = new AbortController();
+    const { provider } = withPreload(options => new Promise((_, reject) => {
+      options?.signal?.addEventListener('abort', () => reject(new MagistraError('GENERATION_ABORTED')));
+    }));
+    const events: GenerationEvent[] = [];
+    for await (const event of runGeneration(request(), { provider, preloadModel: true, signal: controller.signal })) {
+      events.push(event);
+      if (event.type === 'status' && event.stage === 'loading_model') setTimeout(() => controller.abort(), 10);
+    }
+    expect(last(events)).toMatchObject({ type: 'error', code: 'GENERATION_ABORTED' });
   });
 });

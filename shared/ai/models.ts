@@ -7,6 +7,13 @@
 
 export type TierId = 'leger' | 'standard' | 'qualite';
 
+/**
+ * Version minimale d'Ollama pour les modèles Magistra : ministral-3 exige Ollama 0.13.1
+ * (page du modèle dans la bibliothèque Ollama ; support ajouté par v0.13.1-rc1). En dessous, le registre
+ * refuse le téléchargement (« 412: … requires a newer version of Ollama ») → ENGINE_OUTDATED.
+ */
+export const MIN_OLLAMA_VERSION = '0.13.1';
+
 export interface ModelTier {
   id: TierId;
   label: string;
@@ -26,7 +33,21 @@ export interface ModelTier {
   fastVramGB: number;
   /** Taille de contexte demandée à Ollama (tokens). */
   contextTokens: number;
+  /**
+   * Autres noms Ollama du MÊME fichier de modèle (même quantification Q4_K_M), reconnus comme « installé »
+   * pour ce niveau (voir installedModelForTier). Les variantes q8_0 / fp16 n'y figurent PAS : elles demandent
+   * beaucoup plus de mémoire et ne sont pas équivalentes.
+   */
+  aliases: string[];
+  /** Version minimale d'Ollama pour ce modèle. */
+  minOllama: string;
 }
+
+/**
+ * Contexte demandé à Ollama (num_ctx) pour un modèle hors catalogue Magistra : celui du niveau Léger, supportable
+ * sans carte graphique. Commun au serveur (déclaré par AI_MODEL ou détecté) et à l'application Windows.
+ */
+export const CUSTOM_OLLAMA_MODEL_CONTEXT = 12_288;
 
 export const MODEL_TIERS: ModelTier[] = [
   {
@@ -41,6 +62,9 @@ export const MODEL_TIERS: ModelTier[] = [
     comfortableRamGB: 12,
     fastVramGB: 8,
     contextTokens: 12_288,
+    // ministral-3:latest désigne le 8B (même empreinte que ministral-3:8b dans la bibliothèque Ollama).
+    aliases: ['ministral-3', 'ministral-3:latest', 'ministral-3:8b-instruct-2512-q4_K_M'],
+    minOllama: MIN_OLLAMA_VERSION,
   },
   {
     id: 'standard',
@@ -54,6 +78,8 @@ export const MODEL_TIERS: ModelTier[] = [
     comfortableRamGB: 24,
     fastVramGB: 12,
     contextTokens: 12_288,
+    aliases: ['ministral-3:14b-instruct-2512-q4_K_M'],
+    minOllama: MIN_OLLAMA_VERSION,
   },
   {
     id: 'qualite',
@@ -67,6 +93,9 @@ export const MODEL_TIERS: ModelTier[] = [
     comfortableRamGB: 48,
     fastVramGB: 16,
     contextTokens: 16_384,
+    // mistral-small3.2:latest désigne le 24B Q4_K_M.
+    aliases: ['mistral-small3.2', 'mistral-small3.2:latest', 'mistral-small3.2:24b-instruct-2506-q4_K_M'],
+    minOllama: MIN_OLLAMA_VERSION,
   },
 ];
 
@@ -76,8 +105,136 @@ export function getTier(id: string | undefined): ModelTier {
   return MODEL_TIERS.find(t => t.id === id) ?? MODEL_TIERS.find(t => t.id === DEFAULT_TIER)!;
 }
 
+/**
+ * Forme canonique d'un nom de modèle Ollama : casse ignorée, préfixe « registry.ollama.ai/library/ » retiré,
+ * étiquette « :latest » ajoutée quand aucune n'est précisée (« mistral » = « mistral:latest »).
+ * « ministral-3:8b » et « ministral-3:14b » restent distincts.
+ */
+export function normalizeModelName(name: string): string {
+  const n = name.trim().toLowerCase().replace(/^registry\.ollama\.ai\/library\//, '').replace(/^library\//, '');
+  const lastSegment = n.slice(n.lastIndexOf('/') + 1);
+  return lastSegment.includes(':') ? n : `${n}:latest`;
+}
+
+/** Vrai si `name` désigne le modèle d'un niveau : nom du catalogue ou l'un de ses alias (même quantification). */
+export function modelMatchesTier(name: string, tier: ModelTier): boolean {
+  const n = normalizeModelName(name);
+  return normalizeModelName(tier.model) === n || tier.aliases.some(a => normalizeModelName(a) === n);
+}
+
+/** Niveau Magistra correspondant à un nom de modèle (nom du catalogue ou alias), sinon undefined. */
 export function tierForModel(model: string): ModelTier | undefined {
-  return MODEL_TIERS.find(t => t.model === model);
+  if (!model) return undefined;
+  return MODEL_TIERS.find(t => modelMatchesTier(model, t));
+}
+
+type InstalledEntry = string | { name: string };
+
+/**
+ * Nom RÉELLEMENT installé pour un niveau, d'après la liste d'Ollama (/api/tags : `models[].name`), ou undefined.
+ * Priorité au nom du catalogue, puis aux alias dans l'ordre déclaré. Le nom renvoyé est celui de la liste,
+ * tel quel : c'est lui qu'il faut passer à /api/chat (« ministral-3:latest » quand seul cet alias est présent).
+ * Sert à l'application Windows (éviter un nouveau téléchargement) et à l'auto-détection du serveur.
+ */
+export function installedModelForTier(tier: TierId | ModelTier, installed: readonly InstalledEntry[]): string | undefined {
+  const t = typeof tier === 'string' ? MODEL_TIERS.find(x => x.id === tier) : tier;
+  if (!t) return undefined;
+  const names = installed.map(e => (typeof e === 'string' ? e : e?.name)).filter((n): n is string => typeof n === 'string' && n.length > 0);
+  for (const candidate of [t.model, ...t.aliases]) {
+    const wanted = normalizeModelName(candidate);
+    const found = names.find(n => normalizeModelName(n) === wanted);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** Niveaux Magistra présents dans la liste d'Ollama, dans l'ordre du catalogue (Léger, Standard, Qualité). */
+export function installedTiers(installed: readonly InstalledEntry[]): { tier: ModelTier; model: string }[] {
+  return MODEL_TIERS.flatMap(tier => {
+    const model = installedModelForTier(tier, installed);
+    return model ? [{ tier, model }] : [];
+  });
+}
+
+// ─── Versions (Ollama) ──────────────────────────────────────────────────────
+
+export interface ParsedVersion {
+  /** [majeur, mineur, correctif] (les parties absentes valent 0). */
+  core: [number, number, number];
+  /** Identifiants de pré-version (« rc1 », « mock »…), vide pour une version publiée. */
+  pre: string[];
+}
+
+/**
+ * Lit une version de façon tolérante : préfixe « v », espaces, parties manquantes (« 0.13 » = 0.13.0),
+ * pré-version (« 0.13.1-rc1 »), métadonnées de construction (« +abc », ignorées). null si illisible.
+ */
+export function parseVersion(raw: string | null | undefined): ParsedVersion | null {
+  if (typeof raw !== 'string') return null;
+  const m = /^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?\s*$/i.exec(raw);
+  if (!m) return null;
+  return {
+    core: [Number(m[1]), Number(m[2] ?? 0), Number(m[3] ?? 0)],
+    pre: m[4] ? m[4].split('.').filter(Boolean) : [],
+  };
+}
+
+function comparePre(a: string[], b: string[]): number {
+  // Une version publiée est plus récente que ses pré-versions (1.0.0-rc1 < 1.0.0).
+  if (a.length === 0 || b.length === 0) return a.length === b.length ? 0 : a.length === 0 ? 1 : -1;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] === undefined) return -1;
+    if (b[i] === undefined) return 1;
+    const na = /^\d+$/.test(a[i]) ? Number(a[i]) : NaN;
+    const nb = /^\d+$/.test(b[i]) ? Number(b[i]) : NaN;
+    if (!Number.isNaN(na) && !Number.isNaN(nb)) {
+      if (na !== nb) return na < nb ? -1 : 1;
+    } else if (!Number.isNaN(na)) {
+      return -1; // identifiant numérique < identifiant alphanumérique (règle semver)
+    } else if (!Number.isNaN(nb)) {
+      return 1;
+    } else if (a[i] !== b[i]) {
+      // Tolérance : « rc2 » < « rc10 » (étiquettes d'Ollama), là où semver comparerait lettre à lettre.
+      const ma = /^([a-z]+)(\d+)$/i.exec(a[i]);
+      const mb = /^([a-z]+)(\d+)$/i.exec(b[i]);
+      if (ma && mb && ma[1].toLowerCase() === mb[1].toLowerCase() && ma[2] !== mb[2]) return Number(ma[2]) < Number(mb[2]) ? -1 : 1;
+      return a[i] < b[i] ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Compare deux versions (règles semver, lecture tolérante de parseVersion) : -1 si a < b, 0 si égales,
+ * 1 si a > b. NaN si l'une des deux est illisible (« inconnue »…) : à traiter comme « version inconnue ».
+ */
+export function compareVersions(a: string, b: string): number {
+  const va = parseVersion(a);
+  const vb = parseVersion(b);
+  if (!va || !vb) return NaN;
+  for (let i = 0; i < 3; i++) {
+    if (va.core[i] !== vb.core[i]) return va.core[i] < vb.core[i] ? -1 : 1;
+  }
+  return comparePre(va.pre, vb.pre);
+}
+
+/**
+ * Version d'Ollama suffisante pour les modèles Magistra ?
+ *  - 'ok'       : version ≥ minimum. Une PRÉ-VERSION de la version minimale ou d'une version plus récente
+ *                 (« 0.13.1-rc1 », « 0.35.0-rc1 ») est acceptée : seule la partie x.y.z est comparée, par prudence
+ *                 envers les testeurs (si le registre refuse quand même, le téléchargement renvoie ENGINE_OUTDATED) ;
+ *  - 'outdated' : version inférieure au minimum (proposer la mise à jour) ;
+ *  - 'unknown'  : version illisible ou « inconnue », ou 0.0.0 (Ollama compilé depuis les sources) : ne rien bloquer.
+ */
+export function ollamaVersionStatus(version: string | null | undefined, min: string = MIN_OLLAMA_VERSION): 'ok' | 'outdated' | 'unknown' {
+  const v = parseVersion(version);
+  const m = parseVersion(min);
+  if (!v || !m) return 'unknown';
+  if (v.core.every(n => n === 0)) return 'unknown';
+  for (let i = 0; i < 3; i++) {
+    if (v.core[i] !== m.core[i]) return v.core[i] > m.core[i] ? 'ok' : 'outdated';
+  }
+  return 'ok';
 }
 
 export interface GpuInfo {
