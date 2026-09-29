@@ -2,12 +2,12 @@
 // l'administrateur (ou par l'enseignant lui-même en mode personnel). Chaque appel porte le jeton :
 // session Clerk (web) ou code d'accès du mode personnel.
 
-import { API_ROUTES, type ServerStatus } from '@shared/apiContract';
+import { API_ROUTES, type SaveGenerationBody, type ServerStatus } from '@shared/apiContract';
 import { defaultMessage, isErrorCode, MagistraError } from '@shared/errors';
 import { safeStoredProfile } from '@shared/validation';
 import type {
-  AINotice, Capabilities, GenerationEvent, GenerationRecord, GenerationRequest, HistoryPage, TeacherProfile,
-  UsageStats,
+  AINotice, Capabilities, GenerationEvent, GenerationRecord, GenerationRecordDraft, GenerationRequest, HistoryPage,
+  TeacherProfile, UsageStats,
 } from '@shared/types';
 import { parseProviderInfo, serverPrivacyMessage } from '@/lib/ai-ui/server';
 import { authedFetch, authedJson, readEventStream, type TokenGetter } from './http';
@@ -63,6 +63,17 @@ export class ApiDataStore implements DataStore {
 
   getGeneration(id: string): Promise<GenerationRecord> {
     return this.json<GenerationRecord>(`${API_ROUTES.generation}?id=${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Enregistre dans l'historique du compte une génération faite par Magistra locale (connecteur local) : seul le
+   * résultat est envoyé au serveur, jamais la demande ni les extraits de documents (POST /api/generation).
+   */
+  async saveGenerationDraft(draft: GenerationRecordDraft): Promise<{ id: string }> {
+    const body: SaveGenerationBody = { record: draft };
+    const result = await this.json<{ id?: unknown }>(API_ROUTES.generation, { method: 'POST', body: JSON.stringify(body) });
+    if (!result || typeof result.id !== 'string' || !result.id) throw new MagistraError('STORAGE_ERROR');
+    return { id: result.id };
   }
 
   async setFavorite(id: string, value: boolean): Promise<void> {

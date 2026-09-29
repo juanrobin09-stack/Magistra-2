@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { useAuth, useUser } from '@clerk/react';
 import { toMagistraError, type MagistraError } from '@shared/errors';
 import type { TeacherProfile } from '@shared/types';
+import { createLocalEngineController, LocalEngineContext } from '@/lib/localConnector/controller';
 import { RuntimeContext } from './context';
 import { DemoDataStore, DemoGenerationClient } from './demo';
+import { HybridGenerationClient } from './hybrid';
 import { getBridge, LocalDataStore, LocalGenerationClient } from './local';
 import {
   clearAccessCode, initialAccessCode, normalizeAccessCode, PERSONAL_USER_ID, PersonalAccessContext, storeAccessCode,
@@ -97,24 +99,46 @@ export function DemoRuntimeProvider({ children }: { children: ReactNode }) {
   return <RuntimeContext.Provider value={value}>{children}</RuntimeContext.Provider>;
 }
 
-/** Web : doit être rendu à l'intérieur de <ClerkProvider>. */
+/**
+ * Web : doit être rendu à l'intérieur de <ClerkProvider>.
+ * Utilisateur connecté : générations par le serveur en ligne OU par Magistra locale (IA de cet ordinateur, via
+ * l'application Windows), selon le choix de l'enseignant ; UN seul contrôleur de Magistra locale par page, fourni
+ * par LocalEngineContext (carte du tableau de bord, réglages, page Générer).
+ */
 export function WebRuntimeProvider({ children }: { children: ReactNode }) {
   // getToken est mémoïsé par Clerk (stable tant que l'instance Clerk ne change pas).
   const { getToken, isSignedIn } = useAuth();
   const { user } = useUser();
   const tokenGetter = useCallback(async () => (await getToken()) ?? null, [getToken]);
   const userId = isSignedIn && user ? user.id : null;
+  // L'appairage appartient à ce navigateur (et non au compte) : le contrôleur vit aussi longtemps que la page.
+  const localEngine = useMemo(() => createLocalEngineController(), []);
 
   const store = useMemo(() => (userId ? new ApiDataStore(tokenGetter, userId) : null), [userId, tokenGetter]);
-  const client = useMemo(() => (userId ? new ApiGenerationClient(tokenGetter) : null), [userId, tokenGetter]);
+  const client = useMemo(
+    () => (store ? new HybridGenerationClient(new ApiGenerationClient(tokenGetter), localEngine, draft => store.saveGenerationDraft(draft)) : null),
+    [store, tokenGetter, localEngine],
+  );
   const runtimeUser = useMemo<RuntimeUser | null>(
     () => (user ? { id: user.id, firstName: user.firstName, email: user.primaryEmailAddress?.emailAddress ?? null } : null),
     [user],
   );
   const value = useRuntimeValue('web', store, client, runtimeUser);
+
+  // Vérification automatique (jamais de demande d'autorisation du navigateur) dès que l'enseignant est connecté.
+  useEffect(() => {
+    if (userId) void localEngine.autoCheck();
+  }, [userId, localEngine]);
+  // Page quittée pendant un appairage : l'attente est interrompue.
+  useEffect(() => () => localEngine.cancelPairing(), [localEngine]);
+
   // Non connecté : les pages publiques s'affichent, les pages de l'application sont protégées par le routeur.
   if (!value) return <>{children}</>;
-  return <RuntimeContext.Provider value={value}>{children}</RuntimeContext.Provider>;
+  return (
+    <RuntimeContext.Provider value={value}>
+      <LocalEngineContext.Provider value={localEngine}>{children}</LocalEngineContext.Provider>
+    </RuntimeContext.Provider>
+  );
 }
 
 /**

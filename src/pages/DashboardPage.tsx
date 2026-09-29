@@ -7,9 +7,11 @@ import {
 import { ALL_TYPES, getMatiereEmoji, getMatiereLabel, getSujetSuggestions, getToolInfo, type TypeContenu } from '@shared/catalog';
 import { getNiveauLabel, isSuperieur } from '@shared/levels';
 import type { GenerationSummary, UsageStats } from '@shared/types';
+import { useLocalEngine } from '@/lib/localConnector/controller';
 import { useRuntime } from '@/lib/runtime/context';
 import ErrorBanner from '@/components/ui/ErrorBanner';
 import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
+import LocalEngineCard from '@/components/localEngine/LocalEngineCard';
 import { errorMessage, niveauLabelFor, timeAgo, toolLabelFor } from '@/components/history/logic';
 
 type Loadable<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'error'; error: string };
@@ -75,6 +77,8 @@ function StatValue({ state, pick }: { state: Loadable<UsageStats>; pick: (s: Usa
 
 export default function DashboardPage() {
   const { store, profile, user, mode } = useRuntime();
+  // Site web uniquement : Magistra locale (IA de cet ordinateur, via l'application Windows).
+  const localEngine = useLocalEngine();
   // L'heure est lue une seule fois, à l'ouverture de la page (jamais pendant le rendu).
   const [now] = useState(() => new Date());
 
@@ -160,6 +164,8 @@ export default function DashboardPage() {
           <ConnectRealAICard />
         </div>
       )}
+
+      {mode === 'web' && localEngine && <LocalEngineCard engine={localEngine} />}
 
       {/* ── Statistiques ── */}
       <section aria-labelledby="stats-title" className="space-y-3">

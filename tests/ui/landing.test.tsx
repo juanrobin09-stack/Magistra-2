@@ -80,7 +80,11 @@ describe('Landing — affirmations', () => {
     expect(text).toMatch(/HAL, Crossref/);
     expect(text).toMatch(/relire et adapter/);
     expect(text).not.toMatch(COMMERCIAL_VENDOR);
-    expect(text).not.toMatch(/clé API/i);
+    // Seule mention permise : la négation « Aucune clé API » de la section « Magistra pour Windows » (demandée
+    // explicitement) ; aucune clé n'est jamais demandée ni évoquée ailleurs.
+    const windows = container.querySelector('[data-testid="windows-download"]');
+    expect(windows?.textContent).toContain('Aucune clé API');
+    expect(text.replace(/Aucune clé API/g, '')).not.toMatch(/clé API/i);
   });
 
   it('les liens externes s’ouvrent sans exposer la page (rel="noopener")', async () => {

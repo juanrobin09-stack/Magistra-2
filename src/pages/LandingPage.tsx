@@ -3,6 +3,7 @@ import { ClerkFailed, ClerkLoading, Show, SignInButton } from '@clerk/react';
 import { ArrowRight, Download, GraduationCap, Sparkles } from 'lucide-react';
 import { ALL_MATIERES, ALL_TYPES } from '@shared/catalog';
 import { ALL_NIVEAUX } from '@shared/levels';
+import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSection';
 import { useCapabilities } from '@/hooks/useAIStatus';
 import { WINDOWS_DOWNLOAD_URL } from '@/lib/links';
 import { detectMode, useOptionalRuntime } from '@/lib/runtime/context';
@@ -307,6 +308,11 @@ export default function LandingPage() {
             </div>
           </div>
         </section>
+
+        <div className="glow-line max-w-xl mx-auto" aria-hidden="true" />
+
+        {/* Magistra pour Windows : dernière version publiée, étapes, IA locale (section publique) */}
+        <WindowsDownloadSection variant="landing" mode={mode} />
 
         <div className="glow-line max-w-xl mx-auto" aria-hidden="true" />
 

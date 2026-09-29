@@ -1,12 +1,17 @@
 // Réglages — mêmes sections dans les trois modes (Windows, site web, démonstration),
 // avec un contenu honnête adapté à chacun. Aucun secret n'est affiché ni demandé ici,
 // sauf la clé facultative d'un serveur IA distant (options avancées, en écriture seule).
+//
+// Site web : moteur des générations (Magistra locale ou serveur en ligne, passage au distant confirmé) et
+// « Magistra pour Windows ». Application Windows : « Site web Magistra » (navigateurs autorisés à utiliser l'IA de
+// cet ordinateur). Jamais d'adresse, de port ni de nom de moteur local pour Magistra locale.
 
 import { useCallback, useEffect, useId, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useClerk } from '@clerk/react';
 import {
-  BookOpen, Cpu, FileText, Info, Loader2, RefreshCw, Search, Settings, Shield, Trash2, User, UserCog, Wand2, type LucideIcon,
+  BookOpen, Cpu, FileText, Globe, Info, Loader2, Monitor, RefreshCw, Search, Settings, Shield, Trash2, User, UserCog, Wand2,
+  type LucideIcon,
 } from 'lucide-react';
 import { getMatiereLabel } from '@shared/catalog';
 import { isMagistraError } from '@shared/errors';
@@ -19,11 +24,17 @@ import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import EngineSetupPanel from '@/components/ai/EngineSetupPanel';
 import ModelSetupPanel from '@/components/ai/ModelSetupPanel';
 import { ErrorBox, SuccessNote, WarningNote } from '@/components/ai/Notices';
+import ConnectedBrowsersSettings from '@/components/localEngine/ConnectedBrowsersSettings';
+import { engineStateKey, useEngineRoute, useRouteCapsHeal } from '@/components/localEngine/engineRoute';
+import EngineSettings from '@/components/localEngine/EngineSettings';
+import { WEBSITE_SECTION_TITLE } from '@/components/localEngine/texts';
+import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSection';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import UpdateCheck from '@/components/UpdateCheck';
 import { useAIStatus, useCapabilities, type AIController, type CapabilitiesState } from '@/hooks/useAIStatus';
 import { providerPolicyUrl, serverAIView, type ServerMode } from '@/lib/ai-ui/server';
 import { aiPhase, engineHostIfRemote, phaseInfo, phaseLine } from '@/lib/ai-ui/status';
+import { useLocalEngine } from '@/lib/localConnector/controller';
 import { adminContact, useRuntime } from '@/lib/runtime/context';
 import { fromIpcError, getBridge } from '@/lib/runtime/local';
 import { usePersonalAccess } from '@/lib/runtime/personal';
@@ -125,7 +136,18 @@ export default function SettingsPage() {
   const mode = runtime.mode;
   const ai = useAIStatus();
   const aiKey = ai?.status ? `${ai.status.config.mode}|${ai.status.ready}|${ai.status.activeModel}` : '';
-  const caps = useCapabilities({ refreshKey: aiKey });
+  // Site web : Magistra locale ou serveur en ligne ; les capacités (recherche, confidentialité) sont celles du moteur
+  // choisi et sont relues quand il change.
+  const localEngine = useLocalEngine();
+  const engine = mode === 'web' ? localEngine : null;
+  const { route } = useEngineRoute(engine?.state ?? null);
+  const engineKey = engine ? `${route ?? ''}|${route === 'local-connector' ? engineStateKey(engine.state) : ''}` : '';
+  const allCaps = useCapabilities({ refreshKey: `${aiKey}|${engineKey}` });
+  useRouteCapsHeal(engine?.controller ?? null, route, allCaps.capabilities, allCaps.loading, allCaps.reload);
+  const routeCaps = allCaps.capabilities && (!engine || allCaps.capabilities.route === route) ? allCaps.capabilities : null;
+  const caps: CapabilitiesState = engine ? { ...allCaps, capabilities: routeCaps } : allCaps;
+  const serverCaps = engine && route === 'server' ? routeCaps : null;
+  const bridge = mode === 'local' ? getBridge() : null;
   const prefsState = useLocalPrefs(mode === 'local');
 
   return (
@@ -141,8 +163,28 @@ export default function SettingsPage() {
       <Section id="settings-ai" icon={Cpu} title="Intelligence artificielle">
         {mode === 'local' && ai
           ? <LocalAISettings ai={ai} />
-          : mode === 'web' || mode === 'personal' ? <ServerAISettings caps={caps} mode={mode} /> : <DemoAISettings />}
+          : engine
+            ? (
+              <EngineSettings
+                engine={engine}
+                serverCaps={serverCaps}
+                serverDetails={<ServerAISettings caps={{ ...caps, capabilities: serverCaps }} mode="web" />}
+              />
+            )
+            : mode === 'web' || mode === 'personal' ? <ServerAISettings caps={caps} mode={mode} /> : <DemoAISettings />}
       </Section>
+
+      {mode === 'local' && bridge?.connector && (
+        <Section id="settings-website" icon={Globe} title={WEBSITE_SECTION_TITLE}>
+          <ConnectedBrowsersSettings connector={bridge.connector} />
+        </Section>
+      )}
+
+      {engine && (
+        <Section id="settings-windows" icon={Monitor} title="Magistra pour Windows">
+          <WindowsDownloadSection variant="settings" mode={mode} />
+        </Section>
+      )}
 
       <Section id="settings-research" icon={Search} title="Recherche">
         {mode === 'local' ? <LocalResearchSettings state={prefsState} /> : usesServerApi(mode) ? <WebResearchSettings caps={caps} /> : (
@@ -461,7 +503,9 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
 }
 
 function WebResearchSettings({ caps }: { caps: CapabilitiesState }) {
-  const r = caps.capabilities?.research;
+  const c = caps.capabilities;
+  // Magistra locale pas encore prête : ses sources ne sont pas connues (jamais « non disponible » à tort).
+  const r = c && !(c.route === 'local-connector' && !c.ready) ? c.research : undefined;
   const rows: { label: string; ok: boolean | undefined }[] = [
     { label: 'Sources académiques (HAL, Crossref)', ok: r?.academic },
     { label: 'Recherche web', ok: r?.web },

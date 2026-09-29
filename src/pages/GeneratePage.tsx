@@ -1,16 +1,28 @@
 // Page « Générer » : 11 outils, formulaire propre à chaque outil, sources (documents + recherche),
 // confidentialité honnête, génération en flux avec arrêt / reprise.
 // Mise en page : sélecteur d'outils en haut (onglets défilants) sous `lg`, barre latérale au-dessus.
+//
+// Site web : la génération est faite par Magistra locale (IA de l'ordinateur de l'enseignant, via l'application
+// Windows) OU par le serveur en ligne, selon le choix de l'enseignant. Le bandeau dit TOUJOURS lequel avant l'envoi ;
+// Magistra locale non prête → panneau dédié, jamais de bascule silencieuse vers le serveur (seul un choix confirmé
+// de l'enseignant y mène). Les capacités affichées sont toujours celles du moteur qui traitera la génération ; elles
+// sont relues quand le choix ou l'état de Magistra locale change, et le moteur est revérifié juste avant l'envoi.
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
-import { Loader2, Settings2, Sparkles } from 'lucide-react';
+import { Info, Loader2, Settings2, Sparkles } from 'lucide-react';
 import { getToolInfo, type TypeContenu } from '@shared/catalog';
 import { toMagistraError } from '@shared/errors';
 import type { NiveauScolaire } from '@shared/levels';
-import { modeUsesDocuments, type DocumentPassage, type ResearchMode } from '@shared/types';
+import {
+  modeUsesDocuments, type Capabilities, type DocumentPassage, type GenerationRequest, type ResearchMode,
+} from '@shared/types';
 import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import AiNotReadyCard from '@/components/generate/AiNotReadyCard';
+import EngineBanner from '@/components/localEngine/EngineBanner';
+import { engineStateKey, serverProviderName, useEngineRoute, useRouteCapsHeal } from '@/components/localEngine/engineRoute';
+import LocalEngineNotReadyPanel from '@/components/localEngine/LocalEngineNotReadyPanel';
+import { localEngineMessage, SEARCHING_TEXT } from '@/components/localEngine/texts';
 import GenerateFormFields from '@/components/generate/GenerateFormFields';
 import PrivacyNotice from '@/components/generate/PrivacyNotice';
 import ResearchModePicker from '@/components/generate/ResearchModePicker';
@@ -26,11 +38,33 @@ import {
   type GenerateForm,
 } from '@/lib/generation/request';
 import {
-  describeResearchOptions, effectiveResearchMode, privacyNotes, providerAnnounced, researchHints,
+  describeResearchOptions, effectiveResearchMode, modeUsesNetwork, NETWORK_PRIVACY_NOTE, privacyNotes, providerAnnounced,
+  researchHints, type PrivacyNotes,
 } from '@/lib/generation/research';
 import { formFromRecord, type ReusableRecord } from '@/lib/generation/reuse';
+import { useLocalEngine } from '@/lib/localConnector/controller';
 import { adminContact, configuredProvider, useRuntime } from '@/lib/runtime/context';
+import { HybridGenerationClient, LOCAL_PRIVACY_MESSAGE } from '@/lib/runtime/hybrid';
 import { usesServerApi } from '@/lib/runtime/types';
+
+/** Magistra locale attend l'accord du navigateur : la génération ne doit pas faire apparaître sa demande sans explication. */
+export const LOCAL_PERMISSION_NOTICE =
+  'Autorisez d’abord votre navigateur à joindre Magistra : bouton « Rechercher Magistra… » ci-dessus.';
+export const LOCAL_PAIRING_NOTICE = 'Terminez d’abord la connexion de Magistra locale (confirmation dans l’application Magistra).';
+export const ENGINE_CHANGED_NOTICE =
+  'Le moteur de génération vient de changer : vérifiez le bandeau en haut de la page, puis relancez la génération.';
+
+/**
+ * Confidentialité quand Magistra locale génère : son message, sans « restent sur cet ordinateur » (le résultat est
+ * enregistré dans l'historique en ligne du compte).
+ */
+function localRoutePrivacy(caps: Capabilities | null, researchMode: ResearchMode): PrivacyNotes {
+  return {
+    message: caps?.privacy.message ?? LOCAL_PRIVACY_MESSAGE,
+    network: modeUsesNetwork(researchMode) ? NETWORK_PRIVACY_NOTE : null,
+    local: null,
+  };
+}
 
 const FIELD_IDS: Record<string, string> = {
   sujet: 'gen-sujet',
@@ -59,7 +93,7 @@ export default function GeneratePage() {
   const [chosenMode, setChosenMode] = useState<ResearchMode | null>(reused?.researchMode ?? null);
 
   const capabilities = useCapabilities(client);
-  const caps = capabilities.caps;
+  const reloadCaps = capabilities.refresh;
   const prefs = useLocalPreferences(mode);
   const sources = useSourceDocuments(mode, prefs);
   const generation = useGeneration(client);
@@ -68,19 +102,69 @@ export default function GeneratePage() {
   const tool = getToolInfo(form.type, form.niveau);
   const problems = useMemo(() => validateForm(form), [form]);
 
-  // Recherche : préférence locale par défaut, sinon « Mes documents uniquement » (fonctionne hors ligne).
-  const researchOptions = useMemo(() => describeResearchOptions(caps, mode, form.niveau), [caps, mode, form.niveau]);
+  // Site web : Magistra locale ou serveur en ligne (client hybride + contrôleur de Magistra locale) ; sinon null.
+  const localEngine = useLocalEngine();
+  const hybrid = localEngine && client instanceof HybridGenerationClient ? client : null;
+  const engine = hybrid ? localEngine : null;
+  const engineRoute = useEngineRoute(engine?.state ?? null);
+  const setEngineChoice = engineRoute.setChoice;
+  const route = engine ? engineRoute.route : null;
+  const localRoute = route === 'local-connector';
+  const localState = engine?.state ?? null;
+  const localController = engine?.controller ?? null;
+  // Capacités du moteur qui traitera RÉELLEMENT la prochaine génération (jamais celles de l'autre moteur).
+  const caps = engine ? (capabilities.caps?.route === route ? capabilities.caps : null) : capabilities.caps;
+
+  // Recherche : préférence locale par défaut, sinon « Mes documents uniquement » (fonctionne hors ligne). Magistra
+  // locale : sources de l'application (réglages de l'application) ; pas encore prête : rien n'est promis ni retiré.
+  const researchCaps = localRoute && caps && !caps.ready ? null : caps;
+  const researchRuntime = localRoute ? 'local' : mode;
+  const researchOptions = useMemo(
+    () => describeResearchOptions(researchCaps, researchRuntime, form.niveau),
+    [researchCaps, researchRuntime, form.niveau],
+  );
   const researchMode = effectiveResearchMode(chosenMode ?? prefs?.defaultResearchMode ?? 'documents', researchOptions);
   const hints = researchHints(researchMode, sources.docs.filter(d => d.status !== 'error').length, form.niveau, researchOptions, mode);
   // Destinataire des textes : fiche de /api/status, sinon celle annoncée au démarrage par /api/mode, sinon annonce
   // prudente. Pendant la première vérification, sans prestataire annoncé, la génération attend (quelques secondes).
   const fallbackProvider = configuredProvider();
   const privacyContext = { runtimeMode: mode, fallbackProvider };
-  const privacy = privacyNotes(caps, researchMode, privacyContext);
-  const verifying = !providerAnnounced(caps, privacyContext) && capabilities.loading;
-  const aiRecipient = caps?.providerInfo?.thirdParty
-    ? caps.providerInfo.label
-    : !caps && fallbackProvider?.thirdParty ? fallbackProvider.label : undefined;
+  // Moteur pas encore connu : aucune annonce (ni locale ni distante) tant qu'il n'est pas vérifié ; l'envoi attend.
+  const privacy = localRoute
+    ? localRoutePrivacy(caps, researchMode)
+    : engine && route === null
+      ? { message: null, network: modeUsesNetwork(researchMode) ? NETWORK_PRIVACY_NOTE : null, local: null }
+      : privacyNotes(caps, researchMode, privacyContext);
+  const serverVerifying = !providerAnnounced(caps, privacyContext) && capabilities.loading;
+  // Moteur encore inconnu, ou capacités de Magistra locale pas encore lues : la génération attend (quelques instants).
+  const verifying = engine ? route === null || (localRoute ? caps === null : serverVerifying) : serverVerifying;
+  const aiRecipient = localRoute || (engine && route === null)
+    ? undefined
+    : caps?.providerInfo?.thirdParty
+      ? caps.providerInfo.label
+      : !caps && fallbackProvider?.thirdParty ? fallbackProvider.label : undefined;
+  const providerName = serverProviderName(route === 'server' ? caps : null, fallbackProvider);
+  const localReady = localState?.kind === 'connected' && Boolean(localState.status?.engine.ready && localState.status.engine.local);
+  // Magistra locale choisie mais en attente d'une action (autorisation du navigateur, appairage, recherche) : l'envoi
+  // ferait apparaître une demande du navigateur sans explication, ou échouerait à coup sûr.
+  const localBlocked = !localRoute || !localState ? null
+    : localState.kind === 'needs-permission' ? LOCAL_PERMISSION_NOTICE
+      : localState.kind === 'pairing' ? LOCAL_PAIRING_NOTICE
+        : localState.kind === 'checking' || localState.kind === 'idle' ? SEARCHING_TEXT : null;
+
+  // Capacités relues quand le moteur choisi ou l'état de Magistra locale (utilisée) change. Moteur inconnu → connu :
+  // les capacités lues au montage sont déjà celles de ce moteur (même règle de choix), rien à relire.
+  const capsKey = engine ? `${route ?? ''}|${localRoute && localState ? engineStateKey(localState) : ''}` : '';
+  const capsKeyRef = useRef(capsKey);
+  useEffect(() => {
+    const previous = capsKeyRef.current;
+    if (previous === capsKey) return;
+    capsKeyRef.current = capsKey;
+    if (previous.startsWith('|')) return;
+    reloadCaps();
+  }, [capsKey, reloadCaps]);
+
+  useRouteCapsHeal(localController, route, capabilities.caps, capabilities.loading, reloadCaps);
 
   // Le résultat apparaît sous le formulaire : on l'amène à l'écran à chaque nouvelle génération.
   const runId = generation.state.runId;
@@ -102,13 +186,52 @@ export default function GeneratePage() {
     setSubmitNotice(null);
   };
 
+  /**
+   * Site web : le moteur réel (même lecture que la génération) est revérifié juste avant l'envoi ; s'il diffère du
+   * bandeau, rien n'est envoyé et l'enseignant est prévenu (jamais d'envoi vers un moteur qui n'a pas été annoncé).
+   */
+  const routeCheck = useRef(false);
+  const startGeneration = (request: GenerationRequest) => {
+    if (!hybrid || !localController) {
+      generation.start(request);
+      return;
+    }
+    if (routeCheck.current) return;
+    routeCheck.current = true;
+    const announced = route;
+    void hybrid.route().then(
+      actual => {
+        routeCheck.current = false;
+        if (actual !== announced) {
+          setSubmitNotice(ENGINE_CHANGED_NOTICE);
+          void localController.refresh();
+          reloadCaps();
+          return;
+        }
+        generation.start(request);
+      },
+      () => {
+        // Lecture impossible (cas imprévu) : rien n'est envoyé sans moteur vérifié.
+        routeCheck.current = false;
+        setSubmitNotice(ENGINE_CHANGED_NOTICE);
+        reloadCaps();
+      },
+    );
+  };
+
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     // La touche Entrée ne relance jamais une génération en cours.
     if (generation.isRunning) return;
     // Destinataire des textes pas encore annoncé : on attend la vérification (la touche Entrée contourne le bouton).
     if (verifying) {
-      setSubmitNotice("Vérification du service d'IA en cours : la génération sera possible dans quelques secondes.");
+      setSubmitNotice(localRoute
+        ? 'Vérification de Magistra locale en cours : la génération sera possible dans quelques secondes.'
+        : "Vérification du service d'IA en cours : la génération sera possible dans quelques secondes.");
+      return;
+    }
+    if (localBlocked) {
+      setSubmitNotice(localBlocked);
       return;
     }
     if (problems.length > 0) {
@@ -135,7 +258,7 @@ export default function GeneratePage() {
     }
     setShowErrors(false);
     setSubmitNotice(null);
-    generation.start(buildGenerationRequest(form, form.type, profile, passages, researchMode));
+    startGeneration(buildGenerationRequest(form, form.type, profile, passages, researchMode));
   };
 
   const running = generation.isRunning;
@@ -180,14 +303,39 @@ export default function GeneratePage() {
         </div>
 
         <div className="space-y-6">
-          <AiNotReadyCard
-            mode={mode}
-            caps={caps}
-            checkError={capabilities.error}
-            checking={capabilities.loading}
-            onRecheck={capabilities.refresh}
-            adminContact={adminContact()}
-          />
+          {engine && (
+            <EngineBanner
+              route={route}
+              providerName={providerName}
+              localAvailable={localReady}
+              onUseLocal={() => setEngineChoice('local')}
+            />
+          )}
+
+          {engine && localRoute ? (
+            caps && !caps.ready && localState && localState.kind !== 'idle' && localState.kind !== 'checking' ? (
+              <LocalEngineNotReadyPanel
+                engine={engine}
+                cause={caps.notReady}
+                providerName={providerName}
+                onUseServer={() => setEngineChoice('server')}
+              />
+            ) : caps?.ready && caps.aiWarning ? (
+              <p role="note" className="flex items-start gap-2 p-3 rounded-xl bg-white/[0.03] border border-white/8 text-xs text-mg-200">
+                <Info size={14} className="text-accent shrink-0 mt-0.5" aria-hidden="true" />
+                <span>{localEngineMessage(caps.aiWarning.code, caps.aiWarning.message)}</span>
+              </p>
+            ) : null
+          ) : (
+            <AiNotReadyCard
+              mode={mode}
+              caps={caps}
+              checkError={engine && route === null ? null : capabilities.error}
+              checking={capabilities.loading}
+              onRecheck={capabilities.refresh}
+              adminContact={adminContact()}
+            />
+          )}
 
           {mode === 'demo' && <ConnectRealAICard />}
 
@@ -213,7 +361,7 @@ export default function GeneratePage() {
               mode={mode}
               keepPreference={prefs ? prefs.keepDocuments : null}
               aiRecipient={aiRecipient}
-              aiRecipientUnknown={usesServerApi(mode) && !caps && !aiRecipient}
+              aiRecipientUnknown={usesServerApi(mode) && !caps && !aiRecipient && !localRoute && !(engine && route === null)}
             >
               <ResearchModePicker options={researchOptions} value={researchMode} onChange={setChosenMode} hints={hints} />
             </SourcesPanel>
@@ -223,17 +371,17 @@ export default function GeneratePage() {
             <div>
               <button
                 type="submit"
-                disabled={running || verifying}
+                disabled={running || verifying || localBlocked !== null}
                 className={`btn-primary w-full py-3.5 text-sm font-semibold justify-center ${FOCUS_RING}`}
               >
                 {running
                   ? <><Loader2 size={17} className="animate-spin" aria-hidden="true" /> Génération en cours…</>
                   : verifying
-                    ? <><Loader2 size={17} className="animate-spin" aria-hidden="true" /> Vérification du service d'IA…</>
+                    ? <><Loader2 size={17} className="animate-spin" aria-hidden="true" /> {localRoute ? 'Vérification de Magistra locale…' : "Vérification du service d'IA…"}</>
                     : <><Sparkles size={17} aria-hidden="true" /> Générer : {tool.label}</>}
               </button>
               <p id="gen-submit-status" role="status" aria-live="polite" className="mt-2 text-xs text-warning min-h-[1rem]">
-                {submitNotice ?? (sources.analyzing ? 'Analyse des documents en cours…' : '')}
+                {submitNotice ?? localBlocked ?? (sources.analyzing ? 'Analyse des documents en cours…' : '')}
               </p>
             </div>
           </form>
