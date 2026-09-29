@@ -10,6 +10,7 @@ import { DEFAULT_PREFERENCES, type StoredDocument } from '../../shared/ipc.js';
 import type { NewGenerationRecord } from '../../shared/pipeline.js';
 import { writeJsonAtomic } from '../../electron/jsonFile.js';
 import { excerptOf, LocalStore } from '../../electron/localStore.js';
+import { parseStoredPreferences, sanitizePreferencesUpdate } from '../../electron/validate.js';
 
 let dir: string;
 let now: Date;
@@ -101,6 +102,33 @@ describe('fichiers corrompus', () => {
     expect(prefs.academicEnabled).toBe(DEFAULT_PREFERENCES.academicEnabled);
     expect(prefs.defaultResearchMode).toBe(DEFAULT_PREFERENCES.defaultResearchMode);
     expect(prefs.searxngUrl).toBeUndefined();
+  });
+
+  it('activation de l’IA demandée (aiSetupRequested) : faux par défaut, persistée, relue ; valeur invalide ignorée', async () => {
+    expect(DEFAULT_PREFERENCES.aiSetupRequested).toBe(false);
+    const store = makeStore();
+    expect((await store.getPreferences()).aiSetupRequested).toBe(false);
+    await store.setPreferences({ aiSetupRequested: true });
+    // Nouveau lancement de Magistra : la demande est retrouvée (reprise automatique de l'activation).
+    expect((await makeStore().getPreferences()).aiSetupRequested).toBe(true);
+    expect(JSON.parse(readFileSync(path.join(dir, 'preferences.json'), 'utf8')).aiSetupRequested).toBe(true);
+    await store.setPreferences({ aiSetupRequested: false });
+    expect((await makeStore().getPreferences()).aiSetupRequested).toBe(false);
+
+    writeFileSync(path.join(dir, 'preferences.json'), JSON.stringify({ aiSetupRequested: 'oui', keepDocuments: true }));
+    const prefs = await makeStore().getPreferences();
+    expect(prefs.aiSetupRequested).toBe(false);
+    expect(prefs.keepDocuments).toBe(true);
+    // Préférences d'une version précédente (sans ce champ) : valeur par défaut.
+    expect(parseStoredPreferences({ setupCompleted: true })?.aiSetupRequested).toBe(false);
+  });
+
+  it('mise à jour venue de la fenêtre : aiSetupRequested booléen uniquement', () => {
+    expect(sanitizePreferencesUpdate({ aiSetupRequested: true })).toEqual({ aiSetupRequested: true });
+    expect(sanitizePreferencesUpdate({ aiSetupRequested: false })).toEqual({ aiSetupRequested: false });
+    for (const bad of ['true', 1, null, {}]) {
+      expect(() => sanitizePreferencesUpdate({ aiSetupRequested: bad })).toThrow(/Paramètre invalide : aiSetupRequested/);
+    }
   });
 
   it('génération illisible : ignorée et mise de côté, les autres restent listées', async () => {

@@ -1,7 +1,9 @@
 // Validation de bout en bout de l'application Windows (Electron) pilotée par Playwright, avec un Ollama simulé
-// (scripts/mock-ollama.mjs) : premier démarrage, installation du modèle (annulation, reprise, rechargement),
-// moteur absent / installé ensuite / arrêté, génération réelle par IPC, persistance, arrêt, erreurs précises,
-// sécurité à l'exécution, export PDF et Markdown, réglages de l'IA.
+// (scripts/mock-ollama.mjs) : premier lancement (animation d'ouverture → page d'accueil de Magistra → profil →
+// tableau de bord, aucun assistant imposé), « Activer l'IA » en un clic (taille annoncée avant, progression unique,
+// annulation et reprise, navigation libre, rechargement, fermeture puis relance), exemple pré-rédigé clairement marqué
+// avant l'activation, moteur absent / installé ensuite / arrêté / trop ancien, génération réelle par IPC, persistance,
+// arrêt, erreurs précises, sécurité à l'exécution, export PDF et Markdown, réglages de l'IA.
 //
 // Prérequis : `npx vite build` (dist/) puis `node scripts/build-electron.mjs` (dist-electron/).
 // Lancement (Linux sans écran) : `xvfb-run -a npx playwright test --project=electron`.
@@ -149,13 +151,19 @@ async function closeApp(session: Session | null): Promise<void> {
   await session.app.close().catch(() => undefined);
 }
 
-async function shot(page: Page, name: string): Promise<void> {
+async function shot(page: Page, name: string, options: { fullPage?: boolean } = {}): Promise<void> {
   mkdirSync(SHOTS, { recursive: true });
   // Laisse les animations d'apparition se terminer.
   await page.waitForTimeout(700);
-  // Pages à défilement interne (application) : capture de la fenêtre ; pages longues (assistant) : page entière.
-  const fullPage = !/\/app(\/|$)/.test(new URL(page.url()).pathname);
+  // Pages à défilement interne (application) : capture de la fenêtre ; pages longues (page de l'IA) : page entière.
+  const fullPage = options.fullPage ?? !/\/app(\/|$)/.test(new URL(page.url()).pathname);
   await page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage }).catch(() => undefined);
+}
+
+/** Capture immédiate de la fenêtre (animation en cours : aucune attente). */
+async function shotNow(page: Page, name: string): Promise<void> {
+  mkdirSync(SHOTS, { recursive: true });
+  await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }).catch(() => undefined);
 }
 
 /** Remplace shell.openExternal dans le processus principal : aucun navigateur n'est ouvert, les URL sont notées. */
@@ -209,16 +217,100 @@ async function completeOnboarding(page: Page, name = 'Mme Durand'): Promise<void
   await expect(page).toHaveURL(/\/app$/);
 }
 
-/** Premier démarrage avec une IA prête : assistant → « Commencer » → onboarding → tableau de bord. */
-async function setupReadyApp(page: Page): Promise<void> {
-  await expect(page.getByRole('heading', { name: /Intelligence artificielle prête/ })).toBeVisible({ timeout: 30_000 });
-  await page.getByRole('button', { name: /Commencer/ }).click();
+/** Animation d'ouverture « Magistra » (à chaque lancement ; rejouée ni au rechargement ni au changement de page). */
+function appIntro(page: Page): Locator {
+  return page.getByTestId('app-intro');
+}
+
+/**
+ * Lancement : l'animation d'ouverture s'affiche au premier rendu, puis se retire d'elle-même (≈ 2 s), ou tout de
+ * suite si l'enseignant clique ou appuie sur une touche (`skip`).
+ */
+async function passIntro(page: Page, skip?: 'click' | 'key'): Promise<void> {
+  const intro = appIntro(page);
+  await expect(intro).toBeVisible({ timeout: 30_000 });
+  if (skip === 'click') await intro.click();
+  if (skip === 'key') {
+    // Écouteur du clavier posé juste après le premier affichage.
+    await page.waitForTimeout(200);
+    await page.keyboard.press('Escape');
+  }
+  await expect(intro).toHaveCount(0, { timeout: skip ? 1_500 : 10_000 });
+}
+
+/** Premier lancement : animation → page d'accueil de Magistra → « Commencer » → profil → tableau de bord. */
+async function firstLaunchToDashboard(page: Page, skip?: 'click' | 'key'): Promise<void> {
+  await passIntro(page, skip);
+  await expect(page).toHaveURL(/^app:\/\/magistra\/$/);
+  await expect(page.getByRole('heading', { level: 1, name: /L'IA qui prépare/ })).toBeVisible();
+  await page.getByRole('link', { name: /Commencer/ }).first().click();
   await completeOnboarding(page);
-  await expect(aiBadge(page)).toContainText('IA prête');
+}
+
+/** Premier lancement avec une IA déjà prête : tableau de bord sans carte « Activer l'IA ». */
+async function setupReadyApp(page: Page, skip?: 'click' | 'key'): Promise<void> {
+  await firstLaunchToDashboard(page, skip);
+  await expect(aiBadge(page)).toContainText('IA prête', { timeout: 30_000 });
+  await expect(activateCard(page)).toHaveCount(0);
 }
 
 function aiBadge(page: Page): Locator {
   return page.getByRole('link', { name: /État de l'intelligence artificielle/ });
+}
+
+/** Carte « Activez l'IA de Magistra sur cet ordinateur » (tableau de bord, Générer, page de l'IA). */
+function activateCard(page: Page): Locator {
+  return page.getByTestId('activate-ai');
+}
+
+/** Message de fin d'activation (« L'IA de Magistra est prête. »). */
+function activationReady(page: Page): Locator {
+  return page.getByTestId('activate-ai-ready');
+}
+
+/**
+ * « Activer l'IA » (ou « Reprendre l'activation ») ; version déconseillée sur la machine de test (aucune ne l'est
+ * normalement) : la confirmation est acceptée, jamais d'installation surprise.
+ */
+async function clickActivate(page: Page, name: string | RegExp = 'Activer l’IA'): Promise<void> {
+  await activateCard(page).getByRole('button', { name }).click();
+  const confirm = page.getByRole('button', { name: 'Installer quand même' });
+  const started = activateCard(page).getByRole('heading', { name: /Activation de l’IA de Magistra|Reprise de l’activation/ });
+  await expect(started.or(confirm)).toBeVisible();
+  if (await confirm.isVisible()) await confirm.click();
+  await expect(started).toBeVisible();
+}
+
+/** Barre de progression unique de l'activation (moteur + modèle). */
+function activationBar(page: Page): Locator {
+  return activateCard(page).getByRole('progressbar', { name: 'Activation de l’IA' });
+}
+
+async function barValue(bar: Locator): Promise<number> {
+  return Number((await bar.getAttribute('aria-valuenow', { timeout: 1_000 }).catch(() => null)) ?? 0);
+}
+
+/** Taille telle que l'interface l'écrit (« 9 Go », « 5,2 Go », espace insécable), pour une expression régulière. */
+function gbPattern(gb: number): string {
+  return `${String(Math.round(gb * 10) / 10).replace('.', ',')}\\sGo`;
+}
+
+type Bridge = import('../shared/ipc').MagistraBridge;
+
+function aiStatus(page: Page) {
+  return page.evaluate(() => (window as unknown as { magistra: Bridge }).magistra.ai.status());
+}
+
+function prefs(page: Page) {
+  return page.evaluate(() => (window as unknown as { magistra: Bridge }).magistra.prefs.get());
+}
+
+function historyItems(page: Page) {
+  return page.evaluate(async () => (await (window as unknown as { magistra: Bridge }).magistra.data.list({})).items);
+}
+
+function pulls(mock: MockOllama): number {
+  return mock.state.requests.filter(r => r === 'POST /api/pull').length;
 }
 
 async function openNav(page: Page, label: 'Tableau de bord' | 'Générer' | 'Historique' | 'Favoris' | 'Réglages'): Promise<void> {
@@ -282,27 +374,58 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     userData = null;
   });
 
-  test('1. premier démarrage : moteur en marche + modèle recommandé installé → prête → onboarding → tableau de bord', async () => {
+  test('1. premier lancement : animation → accueil de Magistra (sans téléchargement) → profil → tableau de bord ; IA prête ; vérifications, présentation ; isolation', async () => {
     mock = await startMock({ models: ALL_TIER_MODELS });
     userData = newUserDataDir();
     session = await launchApp(userData, mock.url);
     const { page } = session;
 
-    await expect(page).toHaveURL(/^app:\/\/magistra\/setup/);
-    await expect(page.getByRole('heading', { name: 'Vérification de votre ordinateur' })).toBeVisible();
-    await shot(page, '01a-setup-verifications');
-    await expect(page.getByText('Vérification terminée.')).toBeVisible();
-    for (const label of ['Moteur IA installé', 'Moteur IA en marche', "Modèles d'IA disponibles", 'Modèle installé']) {
-      await expect(page.getByRole('listitem').filter({ hasText: label })).toContainText(': oui');
-    }
-    await expect(page.getByRole('heading', { name: /Intelligence artificielle prête/ })).toBeVisible();
-    await shot(page, '01b-setup-prete');
-    await page.getByRole('button', { name: /Commencer/ }).click();
+    // Animation d'ouverture : image accessible, puis retrait d'elle-même (≈ 2 s), sans aucune action.
+    const intro = page.getByRole('img', { name: 'Magistra, votre assistant pédagogique' });
+    await expect(intro).toBeVisible({ timeout: 30_000 });
+    await expect(intro).toHaveAttribute('data-testid', 'app-intro');
+    await page.waitForTimeout(900);
+    await shotNow(page, '01a-animation-ouverture');
+    await expect(intro).toHaveCount(0, { timeout: 10_000 });
+
+    // Premier lancement (aucun profil) : la page d'accueil du site, adaptée à l'application — aucun assistant imposé,
+    // ni connexion ni « Télécharger pour Windows » (l'application est déjà installée).
+    await expect(page).toHaveURL(/^app:\/\/magistra\/$/);
+    await expect(page.getByRole('heading', { level: 1, name: /L'IA qui prépare/ })).toBeVisible();
+    await expect(page.getByText('Magistra est installée sur cet ordinateur : son IA y fonctionne, gratuitement, même sans Internet.')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('windows-download')).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /Télécharger/ })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Se connecter|Connexion/ })).toHaveCount(0);
+    await shot(page, '01b-accueil-dans-l-application', { fullPage: false });
+    await page.getByRole('link', { name: /Commencer/ }).first().click();
 
     await completeOnboarding(page);
     await expect(aiBadge(page)).toContainText('IA prête');
     await expect(page.getByText('Mme Durand').first()).toBeVisible();
+    await expect(activateCard(page)).toHaveCount(0);
     await shot(page, '01c-tableau-de-bord');
+
+    // Vérifications de l'ordinateur : page de l'IA (réglages → « Assistant de configuration »), section repliée.
+    await openNav(page, 'Réglages');
+    await page.getByRole('button', { name: 'Assistant de configuration' }).click();
+    await expect(page).toHaveURL(/\/setup\?from=settings$/);
+    await expect(page.getByRole('heading', { name: /Intelligence artificielle prête/ })).toBeVisible();
+    await page.getByRole('button', { name: /Votre ordinateur et la version de l’IA/ }).click();
+    await expect(page.getByText('Vérification terminée.')).toBeVisible();
+    for (const label of ['Moteur IA installé', 'Moteur IA en marche', "Modèles d'IA disponibles", 'Modèle installé']) {
+      await expect(page.getByRole('listitem').filter({ hasText: label })).toContainText(': oui');
+    }
+    await shot(page, '01d-page-ia-verifications');
+    await page.getByRole('button', { name: /Retour aux réglages/ }).click();
+    await expect(page).toHaveURL(/\/app\/settings$/);
+
+    // Tout le site dans l'application : la présentation reste accessible (barre latérale), puis retour à l'espace.
+    await page.getByRole('link', { name: 'Présentation', exact: true }).click();
+    await expect(page).toHaveURL(/^app:\/\/magistra\/presentation$/);
+    await expect(page.getByRole('heading', { level: 1, name: /L'IA qui prépare/ })).toBeVisible();
+    await expect(appIntro(page)).toHaveCount(0);
+    await page.getByRole('link', { name: /Mon espace/ }).first().click();
+    await expect(page).toHaveURL(/^app:\/\/magistra\/app$/);
 
     // Isolation de la fenêtre : aucun accès à Node ni à Electron, seul le pont window.magistra.
     const isolation = await page.evaluate(() => {
@@ -371,179 +494,262 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     expect(withKey).toEqual([]);
   });
 
-  test('2. modèle non installé → choix « Magistra Standard » → progression → annuler → reprendre → prête', async () => {
+  test('2. modèle non installé → tableau de bord « Activer l’IA » (taille annoncée) → progression unique → annuler → reprendre → prête → génération réelle', async () => {
     mock = await startMock({ models: [], pullMs: 9_000 });
     userData = newUserDataDir();
     session = await launchApp(userData, mock.url);
     const { page } = session;
+    await firstLaunchToDashboard(page);
 
-    await expect(page.getByRole('heading', { name: "Choisissez la version de l'IA" })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole('listitem').filter({ hasText: "Modèles d'IA disponibles" })).toContainText('aucun modèle installé');
-    await expect(page.getByRole('listitem').filter({ hasText: 'Modèle recommandé installé' })).toContainText(': non');
-    await page.locator('label[data-tier="standard"]').click();
-    const install = page.getByRole('button', { name: 'Installer Magistra Standard' });
-    await expect(install).toBeVisible();
-    await expect(page.getByText(/Téléchargement de 9\sGo, une seule fois/)).toBeVisible();
-    expect(mock.state.requests.filter(r => r === 'POST /api/pull')).toHaveLength(0);
-    await shot(page, '02a-choix-standard');
-    await install.click();
+    // Une carte, un bouton : taille totale annoncée AVANT le clic (moteur déjà en marche : le modèle recommandé
+    // pour cet ordinateur, seul), durée indicative ; rien n'est téléchargé.
+    const card = activateCard(page);
+    await expect(card.getByRole('heading', { name: 'Activez l’IA de Magistra sur cet ordinateur' })).toBeVisible({ timeout: 30_000 });
+    const status = await aiStatus(page);
+    expect(status.engine.state).toBe('running');
+    const tier = status.tiers.find(t => t.id === status.recommendation.tier)!;
+    await expect(card.getByTestId('activate-ai-size')).toHaveText(new RegExp(`^${gbPattern(tier.downloadGB)} à télécharger en tout, une seule fois\\.$`));
+    await expect(card.getByText(/^Durée indicative : /)).toBeVisible();
+    await expect(card.getByText(/Rien n’est téléchargé avant votre clic\./)).toBeVisible();
+    await expect(aiBadge(page)).toContainText('Modèle non installé');
+    expect(pulls(mock)).toBe(0);
+    expect((await prefs(page)).aiSetupRequested).toBe(false);
+    await shot(page, '02a-tableau-de-bord-activer-ia');
 
-    // Machine trop modeste pour ce niveau : une confirmation est demandée (jamais d'installation surprise).
-    const bar = page.getByRole('progressbar', { name: /Téléchargement de Magistra Standard/ });
-    const confirm = page.getByRole('button', { name: 'Installer quand même' });
-    await expect(bar.or(confirm)).toBeVisible();
-    if (await confirm.isVisible()) {
-      await shot(page, '02b-confirmation-niveau-deconseille');
-      await confirm.click();
-    }
-    await expect(bar).toBeVisible();
-    await expect(page.getByText('Téléchargement de Magistra Standard', { exact: true })).toBeVisible();
-    await expect.poll(async () => Number(await bar.getAttribute('aria-valuenow') ?? 0), { timeout: 20_000 }).toBeGreaterThanOrEqual(30);
-    await expect(page.getByText(/^\d+ %$/).first()).toBeVisible();
-    await shot(page, '02c-progression');
+    // Un clic : enchaînement automatique, progression unique (étape, %, reste), indicateur de la barre latérale.
+    await clickActivate(page);
+    const bar = activationBar(page);
+    let lastSeen = 0;
+    await expect.poll(async () => (lastSeen = await barValue(bar)), { timeout: 20_000 }).toBeGreaterThanOrEqual(30);
+    await expect(card.getByText(/^\d+ %$/)).toBeVisible();
+    await expect(card.getByText(/ sur \d+(,\d)?\sGo · reste /)).toBeVisible();
+    await expect(aiBadge(page)).toContainText(/Installation de l’IA : \d+ %/);
+    expect((await prefs(page)).aiSetupRequested).toBe(true);
+    await shot(page, '02b-activation-progression');
 
-    // Annuler puis reprendre : le téléchargement repart là où il s'était arrêté.
-    await page.getByRole('button', { name: 'Annuler le téléchargement' }).click();
-    const interrupted = page.getByText(/Téléchargement de Magistra Standard interrompu/);
-    await expect(interrupted).toBeVisible();
-    const pausedAt = Number(/à (\d+) %/.exec(await interrupted.innerText())?.[1] ?? '0');
-    expect(pausedAt).toBeGreaterThanOrEqual(30);
-    await shot(page, '02d-interrompu');
-    await page.getByRole('button', { name: 'Reprendre le téléchargement' }).click();
-    await expect(bar).toBeVisible();
+    // Annuler puis reprendre : le téléchargement repart là où il s'était arrêté (jamais de zéro).
+    await card.getByRole('button', { name: 'Annuler', exact: true }).click();
+    await expect(card.getByText(/^Activation interrompue\./)).toBeVisible();
+    await expect(card.getByText(/ce qui a déjà été téléchargé est conservé/)).toBeVisible();
+    // Annulée par l'enseignant : elle ne reprendra pas toute seule au prochain lancement.
+    expect((await prefs(page)).aiSetupRequested).toBe(false);
+    await shot(page, '02c-activation-interrompue');
+    await clickActivate(page, 'Reprendre l’activation');
     let firstAfterResume = 0;
-    await expect.poll(async () => {
-      firstAfterResume = Number(await bar.getAttribute('aria-valuenow').catch(() => '0') ?? 0);
-      return firstAfterResume;
-    }, { timeout: 20_000 }).toBeGreaterThan(0);
-    expect(firstAfterResume, 'reprise du téléchargement (pas de retour à zéro)').toBeGreaterThanOrEqual(pausedAt - 1);
-    await shot(page, '02e-reprise');
+    await expect.poll(async () => (firstAfterResume = await barValue(bar)), { timeout: 20_000 }).toBeGreaterThan(0);
+    expect(firstAfterResume, 'reprise du téléchargement (pas de retour à zéro)').toBeGreaterThanOrEqual(lastSeen - 1);
+    await shot(page, '02d-activation-reprise');
 
-    await expect(page.getByRole('heading', { name: /Intelligence artificielle prête/ })).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText(/Magistra utilise Magistra Standard/)).toBeVisible();
-    expect(mock.state.requests.filter(r => r === 'POST /api/pull')).toHaveLength(2);
-    expect(mock.state.models.has('ministral-3:14b')).toBe(true);
-    await shot(page, '02f-prete');
-    await page.getByRole('button', { name: /Commencer/ }).click();
-    await completeOnboarding(page);
+    const ready = activationReady(page);
+    await expect(ready).toContainText('L’IA de Magistra est prête.', { timeout: 60_000 });
+    await expect(ready).toContainText(`${tier.label} génère désormais vos contenus sur cet ordinateur.`);
     await expect(aiBadge(page)).toContainText('IA prête');
+    expect(pulls(mock)).toBe(2);
+    expect(mock.state.models.has(tier.model)).toBe(true);
+    expect((await prefs(page)).aiSetupRequested).toBe(false);
+    await shot(page, '02e-ia-prete');
+
+    // Génération réelle, enregistrée (jamais un exemple).
+    await ready.getByRole('link', { name: 'Générer un contenu' }).click();
+    await expect(page).toHaveURL(/\/app\/generate$/);
+    await expect(page.getByRole('button', { name: 'Voir un exemple pré-rédigé' })).toHaveCount(0);
+    await submitCours(page, 'La photosynthèse');
+    const result = resultSection(page);
+    await expect(result.getByText("Enregistré dans l'historique")).toBeVisible({ timeout: 30_000 });
+    await expect(result.getByRole('note', { name: 'Exemple pré-rédigé' })).toHaveCount(0);
+    expect(mock.state.requests).toContain('POST /api/chat');
+    await shot(page, '02f-generation-reelle');
   });
 
-  test('2b. « Plus tard » pendant le téléchargement du modèle → la progression reste visible, puis « IA prête »', async () => {
-    mock = await startMock({ models: [], pullMs: 8_000 });
+  test('2b. activation : navigation libre (progression dans la barre latérale) → Magistra fermée pendant le téléchargement → relancée : reprise automatique, sans repartir de zéro → prête', async () => {
+    mock = await startMock({ models: [], pullMs: 30_000 });
     userData = newUserDataDir();
     session = await launchApp(userData, mock.url);
-    const { page } = session;
+    let { page } = session;
+    await firstLaunchToDashboard(page);
+    await clickActivate(page);
 
-    await expect(page.getByRole('heading', { name: "Choisissez la version de l'IA" })).toBeVisible({ timeout: 30_000 });
-    // Version présélectionnée : celle recommandée pour cet ordinateur (aucune confirmation demandée).
-    const install = page.getByRole('button', { name: /^Installer Magistra / });
-    const label = (await install.innerText()).replace(/^Installer\s+/, '').trim();
-    await install.click();
-    await expect(page.getByRole('progressbar', { name: `Téléchargement de ${label}` })).toBeVisible();
-    await expect(page.getByText('Le téléchargement en cours continue.', { exact: false })).toBeVisible();
-    await page.getByRole('button', { name: 'Plus tard' }).click();
-    await completeOnboarding(page);
-    await expect(aiBadge(page)).toContainText(/Installation de l’IA( : \d+ %|…)/);
-    await shot(page, '02g-plus-tard-pendant-telechargement');
-    await expect(aiBadge(page)).toContainText('IA prête', { timeout: 60_000 });
-    const status = await page.evaluate(() => (window as unknown as { magistra: import('../shared/ipc').MagistraBridge }).magistra.ai.status());
+    // L'application reste entièrement utilisable pendant l'installation.
+    await openNav(page, 'Historique');
+    await expect(page.getByText('Aucune génération pour le moment')).toBeVisible();
+    await expect(aiBadge(page)).toContainText(/Installation de l’IA : [1-9]\d* %/, { timeout: 20_000 });
+    await shot(page, '02g-navigation-pendant-activation');
+    await openNav(page, 'Tableau de bord');
+    let before = 0;
+    await expect.poll(async () => (before = await barValue(activationBar(page))), { timeout: 30_000 }).toBeGreaterThanOrEqual(20);
+    expect((await prefs(page)).aiSetupRequested).toBe(true);
+
+    // Fermeture pendant le téléchargement, puis relance (même dossier de données) : l'activation demandée par le clic
+    // initial reprend toute seule, avec ce qui a déjà été téléchargé.
+    await closeApp(session);
+    session = await launchApp(userData, mock.url);
+    page = session.page;
+    await passIntro(page);
+    await expect(page).toHaveURL(/^app:\/\/magistra\/app$/);
+    await expect(activateCard(page).getByRole('heading', { name: 'Reprise de l’activation de l’IA' })).toBeVisible({ timeout: 20_000 });
+    await expect(activateCard(page).getByText(/Magistra reprend l’installation que vous aviez lancée/)).toBeVisible();
+    let first = 0;
+    await expect.poll(async () => (first = await barValue(activationBar(page))), { timeout: 30_000 }).toBeGreaterThan(0);
+    expect(first, 'reprise après relance (pas de retour à zéro)').toBeGreaterThanOrEqual(before - 1);
+    await shot(page, '02h-reprise-au-lancement');
+    await expect(activationReady(page)).toContainText('L’IA de Magistra est prête.', { timeout: 90_000 });
+    expect(pulls(mock)).toBe(2);
+    expect((await prefs(page)).aiSetupRequested).toBe(false);
+    const status = await aiStatus(page);
     expect(status.ready).toBe(true);
-    expect(status.activeLabel).toBe(label);
   });
 
-  test('2c. rechargement de la fenêtre pendant le téléchargement du modèle → la progression reprend à l’écran', async () => {
-    mock = await startMock({ models: [], pullMs: 10_000 });
+  test('2c. rechargement de la fenêtre pendant l’activation → la progression reprend à l’écran, sans second téléchargement ni animation', async () => {
+    mock = await startMock({ models: [], pullMs: 16_000 });
     userData = newUserDataDir();
     session = await launchApp(userData, mock.url);
     const { page } = session;
-    await expect(page.getByRole('heading', { name: "Choisissez la version de l'IA" })).toBeVisible({ timeout: 30_000 });
-    const install = page.getByRole('button', { name: /^Installer Magistra / });
-    const label = (await install.innerText()).replace(/^Installer\s+/, '').trim();
-    await install.click();
-    const bar = page.getByRole('progressbar', { name: `Téléchargement de ${label}` });
-    await expect.poll(async () => Number(await bar.getAttribute('aria-valuenow') ?? 0), { timeout: 20_000 }).toBeGreaterThanOrEqual(20);
+    await firstLaunchToDashboard(page);
+    await clickActivate(page);
+    const bar = activationBar(page);
+    await expect.poll(() => barValue(bar), { timeout: 20_000 }).toBeGreaterThanOrEqual(20);
 
     await page.reload();
-    // Le téléchargement continue dans le processus principal : l'assistant l'affiche de nouveau (pas de second bouton « Installer »).
+    // Le téléchargement continue dans le processus principal : la carte l'affiche de nouveau (pas de second
+    // téléchargement, aucune erreur « déjà en cours »), et l'animation d'ouverture n'est pas rejouée.
     await expect(bar).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByRole('button', { name: 'Annuler le téléchargement' })).toBeVisible();
-    await shot(page, '02h-rechargement-pendant-telechargement');
-    await expect(page.getByRole('heading', { name: /Intelligence artificielle prête/ })).toBeVisible({ timeout: 60_000 });
-    expect(mock.state.requests.filter(r => r === 'POST /api/pull')).toHaveLength(1);
+    await expect(appIntro(page)).toHaveCount(0);
+    await expect(activateCard(page).getByRole('button', { name: 'Annuler', exact: true })).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await shot(page, '02i-rechargement-pendant-activation');
+    await expect(activationReady(page)).toContainText('L’IA de Magistra est prête.', { timeout: 60_000 });
+    expect(pulls(mock)).toBe(1);
   });
 
-  test('3. moteur absent → consentement avec la taille avant tout téléchargement → « Plus tard » → application utilisable', async () => {
+  test('3. moteur absent → « Activer l’IA » annonce moteur + modèle, rien n’est téléchargé ; exemple pré-rédigé marqué, jamais enregistré ; « Générer » → erreur précise ; réglages : même activation ; page officielle en recours', async () => {
     userData = newUserDataDir();
     session = await launchApp(userData, await unusedLocalUrl());
     const { app, page } = session;
     await stubOpenExternal(app);
 
-    await expect(page.getByRole('heading', { name: 'Installer le moteur IA' })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole('listitem').filter({ hasText: 'Moteur IA installé' })).toContainText(': non');
-    const consent = page.getByRole('region', { name: 'Avant de commencer' });
-    await expect(consent).toContainText(/Téléchargement\s*environ\s1,7\sGo/);
-    await expect(consent).toContainText(/Espace disque nécessaire\s*7\sGo/);
-    await expect(consent).toContainText("site officiel d'Ollama");
-    await expect(page.getByText("Rien n'est téléchargé tant que vous n'avez pas cliqué.")).toBeVisible();
-    const status = await page.evaluate(() => (window as unknown as { magistra: import('../shared/ipc').MagistraBridge }).magistra.ai.status());
-    expect(status.engine.state).toBe('not_installed');
-    expect(status.headline).toBe('Moteur IA non installé');
-    if (status.engineDownload.platformSupported) {
-      await expect(page.getByRole('button', { name: 'Installer le moteur IA' })).toBeVisible();
-    } else {
-      await expect(page.getByText(/L'installation automatique n'est pas disponible sur ce système/)).toBeVisible();
-    }
-    const officialPage = page.getByRole('button', { name: "Ouvrir la page officielle d'installation" });
-    await expect(officialPage).toBeVisible();
-    await shot(page, '03a-moteur-absent-consentement');
-
-    // Page officielle : ouverte dans le navigateur du système (simulé), puis attente de l'installation.
-    await officialPage.click();
-    await expect(page.getByRole('heading', { name: 'Installation depuis la page officielle' })).toBeVisible();
-    expect(await openedUrls(app)).toEqual(['https://ollama.com/download']);
-    await shot(page, '03b-attente-installation-manuelle');
-    await page.getByRole('button', { name: 'Annuler', exact: true }).click();
-    await expect(page.getByText('Installation annulée. Vous pouvez la relancer quand vous le souhaitez.')).toBeVisible();
-
-    // « Plus tard » : l'application reste utilisable sans IA.
-    await page.getByRole('button', { name: 'Plus tard' }).click();
+    // Accueil : l'IA n'est pas encore activée, dit honnêtement.
+    await passIntro(page);
+    await expect(page.getByText(/l’IA s’active en un clic depuis votre tableau de bord/)).toBeVisible({ timeout: 30_000 });
+    await page.getByRole('link', { name: /Commencer/ }).first().click();
     await completeOnboarding(page);
     await expect(aiBadge(page)).toContainText('IA non installée');
-    await shot(page, '03c-tableau-de-bord-sans-ia');
+
+    const status = await aiStatus(page);
+    expect(status.engine.state).toBe('not_installed');
+    expect(status.headline).toBe('Moteur IA non installé');
+    const tier = status.tiers.find(t => t.id === status.recommendation.tier)!;
+    const card = activateCard(page);
+    const size = card.getByTestId('activate-ai-size');
+    await expect(size).toContainText(/^Environ \d+(,\d)?\sGo à télécharger en tout, une seule fois\./);
+    await expect(size).toContainText(new RegExp(`\\(moteur IA : environ 1,7\\sGo · ${tier.label} : ${gbPattern(tier.downloadGB)}\\)`));
+    await expect(card.getByText(/Rien n’est téléchargé avant votre clic\./)).toBeVisible();
+    if (!status.engineDownload.platformSupported) {
+      await expect(card.getByText(/le moteur IA s’installe depuis sa page officielle/)).toBeVisible();
+    }
+    await shot(page, '03a-moteur-absent-activer-ia');
+
+    // Réglages : la même activation en un clic que le tableau de bord (taille annoncée, rien avant le clic, reprise au
+    // lancement suivant) — plus l'ancienne installation du moteur seul, sans suite ni reprise.
+    await openNav(page, 'Réglages');
+    const settingsCard = activateCard(page);
+    await expect(settingsCard.getByRole('heading', { name: 'Activez l’IA de Magistra sur cet ordinateur' })).toBeVisible();
+    await expect(settingsCard.getByTestId('activate-ai-size')).toContainText(/^Environ \d+(,\d)?\sGo à télécharger en tout, une seule fois\./);
+    await expect(settingsCard.getByText(/Rien n’est téléchargé avant votre clic\./)).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Installer le moteur IA' })).toHaveCount(0);
+    await shot(page, '03b-reglages-moteur-absent');
+
+    // Recours (installation automatique bloquée) : la page officielle, depuis la page de l'IA ; Magistra attend le
+    // moteur sans rien télécharger elle-même — ni pourcentage, ni Go, ni étape « modèle » promise.
+    await page.getByRole('button', { name: 'Assistant de configuration' }).click();
+    await page.getByRole('button', { name: /Votre ordinateur et la version de l’IA/ }).click();
+    const officialPage = page.getByRole('region', { name: 'Votre ordinateur et la version de l’IA' })
+      .getByRole('button', { name: "Ouvrir la page officielle d'installation" });
+    await expect(officialPage).toBeVisible();
+    await officialPage.click();
+    const waiting = activateCard(page);
+    await expect(waiting.getByText('En attente de l’installation du moteur IA depuis sa page officielle…')).toBeVisible();
+    await expect(waiting.getByRole('list', { name: 'Étapes de l’activation' })).toHaveCount(0);
+    expect(await visibleText(waiting)).not.toMatch(/\d+ %|Go sur/);
+    expect(await openedUrls(app)).toEqual(['https://ollama.com/download']);
+    await shot(page, '03c-reglages-attente-installation-manuelle');
+    await waiting.getByRole('button', { name: 'Annuler', exact: true }).click();
+    await expect(activateCard(page).getByRole('button', { name: 'Activer l’IA' })).toBeVisible();
+    await expect(activateCard(page).getByText(/Activation interrompue/)).toHaveCount(0);
+    await page.getByRole('button', { name: 'Retour aux réglages' }).click();
+    await expect(page).toHaveURL(/\/app\/settings$/);
 
     await openNav(page, 'Historique');
     await expect(page.getByText('Aucune génération pour le moment')).toBeVisible();
 
+    // Générer : « Activer l'IA » et, à côté, l'exemple pré-rédigé (même moteur d'exemples que la démonstration du site).
     await openNav(page, 'Générer');
-    const card = page.getByRole('status').filter({ has: page.getByRole('heading', { name: "L'intelligence artificielle locale n'est pas prête" }) });
-    await expect(card).toBeVisible();
-    await expect(card).toContainText('Moteur IA non installé');
-    await expect(card.getByRole('link', { name: "Configurer l'intelligence artificielle" })).toBeVisible();
+    const example = activateCard(page).getByRole('button', { name: 'Voir un exemple pré-rédigé' });
+    await expect(example).toBeVisible();
+    await expect(activateCard(page).getByRole('button', { name: 'Activer l’IA' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: "L'intelligence artificielle locale n'est pas prête" })).toHaveCount(0);
+    await shot(page, '03d-generer-activer-ia-ou-exemple');
+    await page.locator('#gen-sujet').fill('La photosynthèse');
+    await example.click();
+    const result = resultSection(page);
+    await expect(result.getByText('Exemple non enregistré')).toBeVisible({ timeout: 30_000 });
+    await expect(result.getByRole('note', { name: 'Exemple pré-rédigé' })).toContainText('Exemple pré-rédigé — ce n’est pas l’IA');
+    await expect(result.getByText('Exemple pré-rédigé', { exact: true })).toBeVisible();
+    // Le texte lui-même (copié ou exporté) le dit aussi, sans parler d'un « mode démonstration ».
+    await expect(result).toContainText('Exemple pré-rédigé : ce texte est identique quels que soient le sujet et les paramètres saisis');
+    await expect(result).not.toContainText('Mode démonstration');
+    await expect(result.getByText("Enregistré dans l'historique")).toHaveCount(0);
+    expect(await historyItems(page)).toHaveLength(0);
+    await result.scrollIntoViewIfNeeded();
+    await shot(page, '03e-exemple-pre-redige-marque');
+
+    // « Générer » tente toujours la vraie génération : erreur précise, jamais d'exemple silencieux.
     await submitCours(page, 'La photosynthèse');
-    const alert = resultSection(page).getByRole('alert');
-    await expect(alert).toContainText('Le moteur d’IA locale (Ollama) n’est pas installé.');
+    const alert = result.getByRole('alert');
+    await expect(alert).toContainText('Le moteur d’IA locale (Ollama) n’est pas installé. Cliquez sur « Activer l’IA » pour l’installer.');
     expect(await visibleText(alert)).not.toMatch(TECHNICAL);
     await expect(alert.getByRole('link', { name: "Configurer l'intelligence artificielle" })).toBeVisible();
-    await shot(page, '03d-generation-ia-non-prete');
+    await expect(result.getByRole('note', { name: 'Exemple pré-rédigé' })).toHaveCount(0);
+    await shot(page, '03f-generation-ia-non-prete');
+    expect(await historyItems(page)).toHaveLength(0);
     expect(await page.locator('#root').evaluate(el => el.childElementCount)).toBeGreaterThan(0);
   });
 
-  test('3b. moteur installé depuis la page officielle → détecté automatiquement, sans redémarrer Magistra', async () => {
+  test('3b. moteur absent → « Activer l’IA » : page officielle ouverte, Magistra attend → moteur installé : détecté sans redémarrer → modèle téléchargé tout seul → prête → génération réelle', async () => {
+    // Sous Windows, « Activer l'IA » téléchargerait et lancerait le véritable installateur du moteur IA.
+    test.skip(process.platform === 'win32', 'installation automatique réelle du moteur IA sous Windows');
     const url = await unusedLocalUrl();
     userData = newUserDataDir();
     session = await launchApp(userData, url);
     const { app, page } = session;
     await stubOpenExternal(app);
-    await expect(page.getByRole('heading', { name: 'Installer le moteur IA' })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole('button', { name: "Ouvrir la page officielle d'installation" }).click();
-    await expect(page.getByRole('heading', { name: 'Installation depuis la page officielle' })).toBeVisible();
+    await firstLaunchToDashboard(page);
 
-    // L'enseignant installe Ollama : le moteur répond maintenant à l'adresse surveillée.
-    mock = await startMock({ port: Number(new URL(url).port), models: ALL_TIER_MODELS });
-    await expect(page.getByRole('heading', { name: /Intelligence artificielle prête/ })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole('listitem').filter({ hasText: 'Moteur IA en marche' })).toContainText(': oui');
-    await shot(page, '03e-moteur-detecte-automatiquement');
+    await clickActivate(page);
+    const card = activateCard(page);
+    const steps = card.getByRole('list', { name: 'Étapes de l’activation' }).getByRole('listitem');
+    await expect(steps).toHaveCount(2);
+    await expect(steps.nth(0)).toContainText('Installation du moteur IA');
+    await expect(steps.nth(1)).toContainText(/Téléchargement de Magistra (Léger|Standard|Qualité)/);
+    await expect(card.getByText('En attente de l’installation du moteur IA depuis sa page officielle…')).toBeVisible();
+    await expect.poll(() => openedUrls(app)).toEqual(['https://ollama.com/download']);
+    expect((await prefs(page)).aiSetupRequested).toBe(true);
+    await shot(page, '03g-activation-attente-du-moteur');
+
+    // L'enseignant installe le moteur : il répond maintenant à l'adresse surveillée ; le modèle suit tout seul.
+    mock = await startMock({ port: Number(new URL(url).port), models: [], pullMs: 8_000 });
+    await expect(card.getByRole('status').filter({ hasText: 'Étape 2 sur 2' })).toBeVisible({ timeout: 30_000 });
+    await expect(steps.nth(0)).toContainText('(terminée)');
+    await expect.poll(() => barValue(activationBar(page)), { timeout: 20_000 }).toBeGreaterThan(20);
+    await shot(page, '03h-activation-telechargement-du-modele');
+    await expect(activationReady(page)).toContainText('L’IA de Magistra est prête.', { timeout: 60_000 });
+    await expect(aiBadge(page)).toContainText('IA prête');
+    expect(pulls(mock)).toBe(1);
+    await shot(page, '03i-activation-terminee');
+
+    await activationReady(page).getByRole('link', { name: 'Générer un contenu' }).click();
+    await submitCours(page, 'Le cycle de l’eau');
+    await expect(resultSection(page).getByText("Enregistré dans l'historique")).toBeVisible({ timeout: 30_000 });
+    expect(mock.state.requests).toContain('POST /api/chat');
   });
 
   test('3c. moteur installé mais arrêté → démarré automatiquement au lancement de Magistra', async () => {
@@ -567,9 +773,15 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     try {
       session = await launchApp(userData, url, { PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}` });
       const { page } = session;
-      await expect(page.getByRole('heading', { name: /Intelligence artificielle prête/ })).toBeVisible({ timeout: 45_000 });
+      // Sans aucun clic : le moteur est démarré au lancement ; l'IA est prête, aucune carte d'activation.
+      await passIntro(page);
+      await expect(page.getByText('Magistra est installée sur cet ordinateur : son IA y fonctionne, gratuitement, même sans Internet.')).toBeVisible({ timeout: 45_000 });
       expect(readFileSync(argsFile, 'utf8').trim()).toBe(`serve OLLAMA_HOST=127.0.0.1:${port}`);
-      await shot(page, '03f-moteur-arrete-demarre-automatiquement');
+      await page.getByRole('link', { name: /Commencer/ }).first().click();
+      await completeOnboarding(page);
+      await expect(aiBadge(page)).toContainText('IA prête');
+      await expect(activateCard(page)).toHaveCount(0);
+      await shot(page, '03j-moteur-arrete-demarre-automatiquement');
     } finally {
       const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, 'utf8').trim()) : 0;
       if (pid > 0) {
@@ -582,23 +794,42 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     }
   });
 
-  test('3d. moteur trop ancien → « Mettre à jour le moteur IA » (aucun modèle téléchargé) → moteur à jour → modèle installé', async () => {
+  test('3d. moteur trop ancien → « Activer l’IA » compte sa mise à jour, au tableau de bord comme dans les réglages (cause précise) → moteur à jour → « Activer l’IA » → modèle installé', async () => {
     mock = await startMock({ models: [], version: '0.12.0', pullMs: 1_500 });
     userData = newUserDataDir();
     session = await launchApp(userData, mock.url);
     const { page } = session;
+    await firstLaunchToDashboard(page);
 
-    await expect(page.getByRole('heading', { name: 'Mettre à jour le moteur IA' })).toBeVisible({ timeout: 30_000 });
+    // Tableau de bord : la mise à jour du moteur fait partie du total annoncé.
+    const size = activateCard(page).getByTestId('activate-ai-size');
+    await expect(size).toContainText(/^Environ \d+(,\d)?\sGo à télécharger en tout/);
+    await expect(size).toContainText('moteur IA : environ');
+    await shot(page, '03k-moteur-trop-ancien-activer-ia');
+
+    // Réglages : cause précise (versions) et la même activation (mise à jour du moteur comprise), jamais sans clic.
+    await openNav(page, 'Réglages');
     await expect(page.getByText(/Le moteur IA installé \(version 0\.12\.0\) est trop ancien.*0\.13\.1 minimum/)).toBeVisible();
+    const settingsCard = activateCard(page);
+    await expect(settingsCard.getByRole('button', { name: 'Activer l’IA' })).toBeVisible();
+    await expect(settingsCard.getByTestId('activate-ai-size')).toContainText('moteur IA : environ');
+    await expect(settingsCard.getByText(/Rien n’est téléchargé avant votre clic\./)).toBeVisible();
+    if (process.platform !== 'win32') {
+      // Hors Windows, la mise à jour se fait depuis la page officielle : dit avant le clic.
+      await expect(settingsCard.getByText(/le moteur IA s’installe depuis sa page officielle/)).toBeVisible();
+    }
+    await shot(page, '03l-reglages-moteur-trop-ancien');
+
+    // Vérifications (page de l'IA, section repliée) : « Moteur IA à jour : non ».
+    await page.getByRole('button', { name: 'Assistant de configuration' }).click();
+    await page.getByRole('button', { name: /Votre ordinateur et la version de l’IA/ }).click();
     await expect(page.getByRole('listitem').filter({ hasText: 'Moteur IA à jour' })).toContainText(': non');
-    const update = page.getByRole('button', { name: 'Mettre à jour le moteur IA' });
-    await expect(update).toBeVisible();
-    await expect(page.getByText("Rien n'est téléchargé tant que vous n'avez pas cliqué.")).toBeVisible();
-    await shot(page, '03g-moteur-trop-ancien');
+    await page.getByRole('button', { name: 'Retour aux réglages' }).click();
+    await expect(page).toHaveURL(/\/app\/settings$/);
 
     // Même par le pont, aucun modèle ne part au registre avec un moteur trop ancien (il répondrait 412).
     const direct = await page.evaluate(async () => {
-      const m = (window as unknown as { magistra: import('../shared/ipc').MagistraBridge }).magistra;
+      const m = (window as unknown as { magistra: Bridge }).magistra;
       try {
         await m.ai.pullModel({ tier: 'leger' });
         return 'ok';
@@ -607,49 +838,46 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
       }
     });
     expect(direct).toMatch(/ENGINE_OUTDATED\|Le moteur IA installé \(Ollama 0\.12\.0\) est trop ancien/);
-    expect(mock.state.requests.filter(r => r === 'POST /api/pull')).toHaveLength(0);
+    expect(pulls(mock)).toBe(0);
 
-    if (process.platform !== 'win32') {
-      // Hors Windows, la mise à jour automatique n'existe pas : message clair, sans détail technique.
-      await update.click();
-      const error = page.getByText("La mise à jour du moteur IA n'a pas abouti.");
-      await expect(error).toBeVisible();
-      await expect(page.getByText(/disponible sous Windows/)).toBeVisible();
-      await shot(page, '03h-mise-a-jour-hors-windows');
-    }
-
-    // Ollama mis à jour (installateur officiel, ou service informatique) : détecté au retour dans la fenêtre.
-    // (L'interface ne revérifie pas plus d'une fois toutes les 3 s au retour dans la fenêtre.)
+    // Moteur mis à jour (installateur officiel, ou service informatique) : détecté au retour dans la fenêtre ; il ne
+    // reste que le modèle à télécharger. (L'interface ne revérifie pas plus d'une fois toutes les 3 s au retour.)
     mock.options.version = '0.34.4';
-    const choose = page.getByRole('heading', { name: "Choisissez la version de l'IA" });
+    await openNav(page, 'Tableau de bord');
     await expect.poll(async () => {
       await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-      return choose.isVisible();
-    }, { timeout: 30_000, intervals: [1_000] }).toBe(true);
-    const install = page.getByRole('button', { name: /^Installer Magistra / });
-    await install.click();
-    const confirm = page.getByRole('button', { name: 'Installer quand même' });
-    if (await confirm.isVisible().catch(() => false)) await confirm.click();
-    await expect(page.getByRole('heading', { name: /Intelligence artificielle prête/ })).toBeVisible({ timeout: 60_000 });
-    expect(mock.state.requests.filter(r => r === 'POST /api/pull')).toHaveLength(1);
-    await shot(page, '03i-moteur-a-jour-modele-installe');
+      return (await size.innerText().catch(() => '')).replace(/\s+/g, ' ');
+    }, { timeout: 30_000, intervals: [1_000] }).toMatch(/^\d+(,\d)? Go à télécharger en tout, une seule fois\.$/);
+    await clickActivate(page);
+    await expect(activationReady(page)).toContainText('L’IA de Magistra est prête.', { timeout: 60_000 });
+    expect(pulls(mock)).toBe(1);
+    await shot(page, '03n-moteur-a-jour-ia-prete');
   });
 
-  test('3e. registre « requires a newer version of Ollama » (412) → mise à jour proposée, pas « Reprendre le téléchargement »', async () => {
+  test('3e. registre « requires a newer version of Ollama » (412) → « Le moteur IA doit d’abord être mis à jour. », jamais « Reprendre le téléchargement »', async () => {
     mock = await startMock({ models: [], pull412: true });
     userData = newUserDataDir();
     session = await launchApp(userData, mock.url);
     const { page } = session;
-    await expect(page.getByRole('heading', { name: "Choisissez la version de l'IA" })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole('button', { name: /^Installer Magistra / }).click();
+    await firstLaunchToDashboard(page);
+    const card = activateCard(page);
+    await card.getByRole('button', { name: 'Activer l’IA' }).click();
     const confirm = page.getByRole('button', { name: 'Installer quand même' });
-    if (await confirm.isVisible().catch(() => false)) await confirm.click();
-    await expect(page.getByText("Le moteur IA doit d'abord être mis à jour.")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText(/nécessite une version plus récente du moteur IA/)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Mettre à jour le moteur IA' })).toBeVisible();
+    if (await confirm.isVisible({ timeout: 1_000 }).catch(() => false)) await confirm.click();
+
+    await expect(card.getByText('Le moteur IA doit d’abord être mis à jour.')).toBeVisible({ timeout: 30_000 });
+    await expect(card.getByText(/nécessite une version plus récente du moteur IA/)).toBeVisible();
+    const status = await aiStatus(page);
+    if (status.engineDownload.platformSupported) {
+      // Windows : la reprise commence par la mise à jour du moteur, dont la taille rejoint le total annoncé.
+      await expect(card.getByRole('button', { name: 'Mettre à jour le moteur IA et reprendre' })).toBeVisible();
+      await expect(card.getByTestId('activate-ai-size')).toContainText('moteur IA');
+    } else {
+      await expect(card.getByRole('button', { name: 'Réessayer' })).toBeVisible();
+    }
     await expect(page.getByRole('button', { name: 'Reprendre le téléchargement' })).toHaveCount(0);
     expect(await visibleText(page.locator('#root'))).not.toMatch(/\b412\b|pull model manifest|ollama\.com\/download/);
-    await shot(page, '03j-registre-412');
+    await shot(page, '03o-registre-412');
   });
 
   test('4. génération réelle par IPC avec un document → sources citées → historique → favori → suppression → persistance', async () => {
@@ -733,8 +961,12 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     writeFileSync(path.join(userData, 'generations', 'fichier-abime.json'), '{"id": "fichier-abime", "contenu": ');
     session = await launchApp(userData, mock.url);
     page = session.page;
+    // Lancements suivants : animation (passée ici d'un clic) → tableau de bord directement, IA prête.
+    await passIntro(page, 'click');
     await expect(page).toHaveURL(/^app:\/\/magistra\/app$/, { timeout: 30_000 });
     await expect(page.getByText('Mme Durand').first()).toBeVisible();
+    await expect(aiBadge(page)).toContainText('IA prête');
+    await expect(activateCard(page)).toHaveCount(0);
     await openNav(page, 'Historique');
     const listAfter = page.getByRole('region', { name: 'Liste : Historique' });
     await expect(listAfter.getByRole('listitem')).toHaveCount(1);
@@ -757,7 +989,8 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     userData = newUserDataDir();
     session = await launchApp(userData, mock.url);
     const { page } = session;
-    await setupReadyApp(page);
+    // Animation passée par une touche (Échap), comme l'enseignant pressé.
+    await setupReadyApp(page, 'key');
     await openNav(page, 'Générer');
     await submitCours(page, 'Les fractions');
 
@@ -921,7 +1154,18 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     await expect(page.getByRole('heading', { name: 'Historique', level: 1 })).toBeVisible();
     await expect(page.getByText('Aucune génération pour le moment')).toBeVisible();
     expect(await page.locator('#root').evaluate(el => el.childElementCount)).toBeGreaterThan(0);
+    // L'animation d'ouverture n'est jouée qu'au lancement, jamais au rechargement de la fenêtre.
+    await expect(appIntro(page)).toHaveCount(0);
     await shot(page, '07a-rechargement-historique');
+
+    // Mouvement réduit (réglage du système) : image fixe très courte, sans animation, puis la page.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.evaluate(() => sessionStorage.removeItem('magistra_intro_seen'));
+    await page.reload();
+    await expect(appIntro(page)).toHaveClass(/intro-reduced/, { timeout: 30_000 });
+    await expect(appIntro(page)).toHaveCount(0, { timeout: 2_000 });
+    await expect(page.getByRole('heading', { name: 'Historique', level: 1 })).toBeVisible();
+    await page.emulateMedia({ reducedMotion: null });
 
     // Deuxième lancement (double-clic sur l'icône) : il se ferme aussitôt, la fenêtre existante reste la seule.
     const electronBinary = createRequire(import.meta.url)('electron') as string;
@@ -1089,7 +1333,8 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
       await page.getByRole('button', { name: 'Assistant de configuration' }).click();
       await expect(page.getByRole('heading', { name: 'Assistant de configuration de l’IA' })).toBeVisible();
       await expect(page.getByRole('heading', { name: /Intelligence artificielle prête/ })).toBeVisible();
-      await page.getByRole('button', { name: /Commencer/ }).click();
+      await expect(activateCard(page)).toHaveCount(0);
+      await page.getByRole('button', { name: /Retour aux réglages/ }).click();
       await expect(page).toHaveURL(/\/app\/settings$/);
     } finally {
       await distant.close();

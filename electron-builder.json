@@ -71,6 +71,7 @@
     "createStartMenuShortcut": true,
     "runAfterFinish": true,
     "shortcutName": "Magistra",
+    "uninstallDisplayName": "Magistra",
     "deleteAppDataOnUninstall": false,
     "artifactName": "Magistra-Setup-${version}.${ext}"
   },

@@ -2,6 +2,7 @@
 // Tout est calculé à partir de l'INSTANTANÉ de la requête (jamais du formulaire courant).
 
 import { getMatiereEmoji, getMatiereLabel, getToolInfo } from '@shared/catalog';
+import type { DemoExample } from '@shared/demo/content';
 import { getNiveauLabel } from '@shared/levels';
 import type { GenerationRequest } from '@shared/types';
 import type { RuntimeMode } from '@/lib/runtime/types';
@@ -44,6 +45,27 @@ export function resultHeading(req: GenerationRequest): ResultHeading {
   };
 }
 
+/** Libellé de l'exemple pré-rédigé à la place de la matière (en-tête, ligne de l'export). */
+export const EXAMPLE_HEADING_LABEL = 'Exemple pré-rédigé';
+
+/**
+ * En-tête d'un EXEMPLE pré-rédigé (application Windows, IA pas encore prête) : le sujet et le niveau de l'exemple
+ * lui-même, jamais ceux saisis par l'enseignant — le texte ne tient pas compte de sa demande ; ni le titre à l'écran,
+ * ni celui des exports (nom de fichier, titre et en-têtes du PDF) ne doivent l'y rattacher.
+ */
+export function exampleResultHeading(req: GenerationRequest, example: Pick<DemoExample, 'subject' | 'level'>): ResultHeading {
+  const tool = getToolInfo(req.type, req.niveau);
+  return {
+    icon: tool.icon,
+    emoji: getMatiereEmoji('autre'),
+    toolLabel: tool.label,
+    niveauLabel: example.level,
+    matiereLabel: EXAMPLE_HEADING_LABEL,
+    subject: example.subject,
+    title: `${tool.label} — ${example.subject} (exemple pré-rédigé)`,
+  };
+}
+
 /** Même forme que ExportDoc (@/lib/export). */
 export interface ExportDocInput {
   title: string;
@@ -51,8 +73,11 @@ export interface ExportDocInput {
   meta?: { type?: string; niveau?: string; matiere?: string; date?: string };
 }
 
-export function buildExportDoc(req: GenerationRequest, content: string, date: Date = new Date()): ExportDocInput {
-  const h = resultHeading(req);
+/** `heading` : en-tête déjà calculé (exemple pré-rédigé : exampleResultHeading), sinon celui de la requête. */
+export function buildExportDoc(
+  req: GenerationRequest, content: string, date: Date = new Date(), heading: ResultHeading = resultHeading(req),
+): ExportDocInput {
+  const h = heading;
   return {
     title: h.title,
     content,

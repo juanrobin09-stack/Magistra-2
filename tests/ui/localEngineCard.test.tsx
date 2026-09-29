@@ -69,6 +69,28 @@ describe('Carte Magistra locale — jamais appairée', () => {
     expect(engine.detect).toHaveBeenCalledTimes(2);
   });
 
+  it('téléchargement proposé : taille de l’installateur et trois étapes (avertissement SmartScreen), comme partout où l’on télécharge', async () => {
+    const engine = new FakeEngine(engineState('not-found', { permission: 'granted' }));
+    const { card, status } = await mountCard(engine);
+    const stepsOf = () => Array.from(card().querySelectorAll('ol[aria-label="Installation en trois étapes"] li')).map(li => li.textContent?.trim());
+    expect(stepsOf()).toHaveLength(3);
+    expect(stepsOf()[1]).toContain('Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur « Informations complémentaires » puis « Exécuter quand même ».');
+    const facts = card().querySelector<HTMLElement>('[data-testid="windows-installer-facts"]')!;
+    expect(facts.textContent?.replace(/\u00a0/g, ' ')).toBe('Installateur : 85,3 Mo · version 2.3.1 · Windows 10 ou 11 (64 bits)');
+    const download = Array.from(card().querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra pour Windows'))!;
+    expect(download.getAttribute('aria-describedby')).toBe(facts.id);
+
+    // Rien trouvé après une recherche : même aide, et la même durée que partout (plus « quelques minutes »).
+    await click(button(card(), "J'ai déjà Magistra : la rechercher"));
+    await engine.set(engineState('checking', { permission: 'granted' }));
+    await engine.set(engineState('not-found', { permission: 'granted' }));
+    await flush();
+    expect(status().textContent).toContain('Magistra n’est pas encore détectée.');
+    expect(status().textContent).toContain('elle s’installe en quelques secondes, sans droits d’administrateur');
+    expect(status().textContent).not.toContain('quelques minutes');
+    expect(stepsOf()).toHaveLength(3);
+  });
+
   it('version inconnue (serveur injoignable) : le téléchargement mène à la page officielle des versions, dans un nouvel onglet', async () => {
     stubReleaseFetch(new TypeError('Failed to fetch'));
     const engine = new FakeEngine(engineState('not-found'));

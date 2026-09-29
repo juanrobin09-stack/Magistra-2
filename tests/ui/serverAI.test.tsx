@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // Site web et mode personnel : la VRAIE cause quand l'IA n'est pas prête (réglages, pastille, page Générer),
-// le prestataire tiers annoncé clairement, et la carte « Brancher une vraie IA » en démonstration.
+// le prestataire tiers annoncé clairement, et, en démonstration, la carte « Passez à la vraie IA » : une seule voie
+// (Magistra pour Windows), sans rien de technique à l'écran.
 
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,15 +13,19 @@ import { RuntimeContext } from '@/lib/runtime/context';
 import { setRuntimeConfig } from '@/lib/runtime/mode';
 import { PersonalAccessContext, type PersonalAccess } from '@/lib/runtime/personal';
 import type { GenerationClient, RuntimeMode } from '@/lib/runtime/types';
-import { WINDOWS_DOWNLOAD_URL } from '@/lib/links';
+import { resetWindowsReleaseCache } from '@/components/localEngine/windowsRelease';
+import { README_AI_SECTION_URL, WINDOWS_DOWNLOAD_URL } from '@/lib/links';
 import DashboardPage from '@/pages/DashboardPage';
 import GeneratePage from '@/pages/GeneratePage';
 import SettingsPage from '@/pages/SettingsPage';
 import { button, cleanup, click, fakeRuntime, flush, MemoryStore, PROFILE_COLLEGE, render } from './helpers';
+import { RELEASE, stubReleaseFetch } from './localEngineHelpers';
 
 afterEach(() => {
   cleanup();
   setRuntimeConfig(null);
+  vi.unstubAllGlobals();
+  resetWindowsReleaseCache();
 });
 
 const READY: Capabilities = {
@@ -111,9 +116,9 @@ describe('Réglages — IA du serveur', () => {
     expect(access.forget).toHaveBeenCalledOnce();
   });
 
-  it('démonstration : carte « Brancher une vraie IA »', async () => {
+  it('démonstration : carte « Passez à la vraie IA »', async () => {
     const { container } = await mount(<SettingsPage />, 'demo', READY);
-    expect(container.querySelector('[data-testid="connect-real-ai"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="connect-real-ai"]')?.textContent).toContain('Passez à la vraie IA');
   });
 });
 
@@ -172,11 +177,13 @@ describe('Page Générer', () => {
     expect(container.textContent).toContain('seuls les passages utiles sont transmis au moment de générer');
   });
 
-  it('démonstration : carte « Brancher une vraie IA » (discrète, repliée)', async () => {
+  it('démonstration : carte « Passez à la vraie IA », visible d’emblée (rien à déplier), bouton de téléchargement', async () => {
     const { container } = await mount(<GeneratePage />, 'demo', { ...READY, privacy: { level: 'demo', message: 'Démo.' } });
-    const card = container.querySelector<HTMLDetailsElement>('[data-testid="connect-real-ai"]');
+    const card = container.querySelector<HTMLElement>('[data-testid="connect-real-ai"]');
     expect(card).not.toBeNull();
-    expect(card!.open).toBe(false);
+    expect(card!.closest('details')).toBeNull();
+    expect(card!.textContent).toContain('Passez à la vraie IA : installez Magistra sur votre ordinateur Windows.');
+    expect(Array.from(card!.querySelectorAll('a')).some(a => a.textContent?.includes('Télécharger Magistra pour Windows'))).toBe(true);
   });
 });
 
@@ -259,27 +266,83 @@ describe('Page Générer : destinataire des textes annoncé même sans réponse 
   });
 });
 
-describe('Carte « Brancher une vraie IA »', () => {
-  it('tableau de bord en démonstration : trois chemins en langage simple, liens utiles, aucun formulaire', async () => {
+describe('Carte « Passez à la vraie IA » (démonstration)', () => {
+  const cardOf = (root: HTMLElement) => root.querySelector<HTMLElement>('[data-testid="connect-real-ai"]')!;
+  const downloadOf = (card: HTMLElement) =>
+    Array.from(card.querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra pour Windows'))!;
+
+  it('une seule voie, en langage simple : Magistra pour Windows, rien de technique à l’écran', async () => {
+    stubReleaseFetch(RELEASE);
     const { container } = await mount(<DashboardPage />, 'demo', READY);
-    const card = container.querySelector('[data-testid="connect-real-ai"]')!;
+    const card = cardOf(container);
     const text = card.textContent ?? '';
-    expect(text).toContain('Brancher une vraie IA');
-    expect(text).toContain('L’application Windows');
-    expect(text).toContain('npm run dev');
-    expect(text).toContain('Ollama');
-    expect(text).toContain('AI_PRESET=ovhcloud');
-    expect(text).toContain('OVHcloud, en France');
-    // Sur le site en ligne, l'IA seule ne suffit pas : sans comptes (Clerk), il reste en démonstration (server/personal.ts,
-    // resolveAuth) ; sans base de données (Supabase), les routes de données répondent SERVER_MISCONFIGURED (server/handlers.ts).
-    expect(text).toContain('comptes enseignants (Clerk), sans lesquels il reste en démonstration');
-    expect(text).toContain('(Supabase), sans laquelle il affiche une erreur de configuration');
-    expect(card.querySelector(`a[href="${WINDOWS_DOWNLOAD_URL}"]`)).not.toBeNull();
-    expect(WINDOWS_DOWNLOAD_URL).toBe('https://github.com/juanrobin09-stack/magistra-2/releases/latest');
-    expect(card.querySelector('a[href^="https://github.com/juanrobin09-stack/magistra-2#"]')).not.toBeNull();
-    for (const a of Array.from(card.querySelectorAll('a'))) expect(a.getAttribute('rel')).toContain('noopener');
-    expect(card.querySelector('form, input, textarea, select')).toBeNull();
+    expect(text).toContain('Passez à la vraie IA : installez Magistra sur votre ordinateur Windows.');
+    expect(text).toContain('L’IA y fonctionne gratuitement, en privé, même sans Internet.');
+    // Ni commande, ni moteur, ni variable, ni service d'hébergement : c'est le mode d'emploi de l'administrateur.
+    expect(text).not.toMatch(/npm|ollama|clerk|supabase|AI_PRESET|OVHcloud|variable|localhost|127\.0\.0\.1|powershell/i);
     expect(text).not.toMatch(/clé API/i);
+    expect(text).not.toContain('trois solutions');
+    // Une seule action principale, aucun formulaire.
+    expect(card.querySelectorAll('.btn-primary')).toHaveLength(1);
+    expect(card.querySelector('form, input, textarea, select, details')).toBeNull();
+  });
+
+  it('téléchargement direct de la dernière version stable (/api/windows-release), trois étapes avec SmartScreen', async () => {
+    const fetchSpy = stubReleaseFetch(RELEASE);
+    const { container } = await mount(<DashboardPage />, 'demo', READY);
+    const card = cardOf(container);
+    // Le site public en démonstration garde son API : une seule requête, partagée avec la section « Magistra pour Windows ».
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/windows-release');
+    const download = downloadOf(card);
+    expect(download.getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(download.target).toBe('');
+    expect(download.className).toContain('btn-primary');
+    const steps = Array.from(card.querySelectorAll('ol[aria-label="Installation en trois étapes"] li')).map(li => li.textContent?.trim());
+    expect(steps).toEqual([
+      '1Téléchargez Magistra.',
+      '2Ouvrez le fichier téléchargé. Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur « Informations complémentaires » puis « Exécuter quand même ».',
+      '3Magistra s’installe en quelques secondes, sans droits d’administrateur, et s’ouvre toute seule.',
+    ]);
+    // Honnête : l'IA n'est pas dans l'installateur ; son téléchargement est annoncé avant, dans l'application.
+    expect(card.textContent).toContain('Ensuite, Magistra vous propose d’activer l’IA : un seul téléchargement de plusieurs Go, dont la taille est annoncée avant.');
+  });
+
+  it('un clic télécharge l’installateur : sa taille, sa version et la configuration requise sont annoncées à côté du bouton', async () => {
+    stubReleaseFetch(RELEASE);
+    const { container } = await mount(<DashboardPage />, 'demo', READY);
+    const card = cardOf(container);
+    const facts = card.querySelector<HTMLElement>('[data-testid="windows-installer-facts"]')!;
+    expect(facts.textContent?.replace(/\u00a0/g, ' ')).toBe('Installateur : 85,3 Mo · version 2.3.1 · Windows 10 ou 11 (64 bits)');
+    expect(downloadOf(card).getAttribute('aria-describedby')).toBe(facts.id);
+  });
+
+  it('version inconnue (hébergement sans API, erreur réseau) : page officielle des versions, dans un nouvel onglet', async () => {
+    stubReleaseFetch(new TypeError('Failed to fetch'));
+    const { container } = await mount(<DashboardPage />, 'demo', READY);
+    // Taille inconnue : la configuration requise seule, jamais une taille inventée.
+    expect(cardOf(container).querySelector('[data-testid="windows-installer-facts"]')?.textContent).toBe('Windows 10 ou 11 (64 bits)');
+    const download = downloadOf(cardOf(container));
+    expect(download.getAttribute('href')).toBe(WINDOWS_DOWNLOAD_URL);
+    expect(WINDOWS_DOWNLOAD_URL).toBe('https://github.com/juanrobin09-stack/magistra-2/releases/latest');
+    expect(download.target).toBe('_blank');
+    expect(download.rel).toContain('noopener');
+  });
+
+  it('« Déjà installée ? Ouvrir Magistra » (magistra://open) ; une ligne discrète pour l’administrateur du site', async () => {
+    stubReleaseFetch(RELEASE);
+    const { container } = await mount(<DashboardPage />, 'demo', READY);
+    const card = cardOf(container);
+    const open = card.querySelector<HTMLElement>('[data-testid="open-installed-app"]')!;
+    expect(open.textContent).toContain('Déjà installée ?');
+    const openLink = open.querySelector<HTMLAnchorElement>('a')!;
+    expect(openLink.textContent?.trim()).toBe('Ouvrir Magistra');
+    expect(openLink.getAttribute('href')).toBe('magistra://open');
+    expect(openLink.target).toBe('');
+    const admin = Array.from(card.querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Mode d’emploi'))!;
+    expect(admin.getAttribute('href')).toBe(README_AI_SECTION_URL);
+    expect(admin.closest('p')?.textContent).toContain('Vous administrez le site de l’établissement ?');
+    for (const a of Array.from(card.querySelectorAll<HTMLAnchorElement>('a[target="_blank"]'))) expect(a.rel).toContain('noopener');
   });
 
   it('absente hors démonstration', async () => {

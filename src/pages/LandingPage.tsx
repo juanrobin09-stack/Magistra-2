@@ -4,8 +4,7 @@ import { ArrowRight, Download, GraduationCap, Sparkles } from 'lucide-react';
 import { ALL_MATIERES, ALL_TYPES } from '@shared/catalog';
 import { ALL_NIVEAUX } from '@shared/levels';
 import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSection';
-import { useCapabilities } from '@/hooks/useAIStatus';
-import { WINDOWS_DOWNLOAD_URL } from '@/lib/links';
+import { useAIStatus, useCapabilities } from '@/hooks/useAIStatus';
 import { detectMode, useOptionalRuntime } from '@/lib/runtime/context';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
@@ -92,13 +91,20 @@ const FEATURES_OUTILS = [
   { icon: '🔍', title: 'Corrigé annoté', desc: 'Collez un travail d’élève ou une copie : Magistra repère les erreurs et propose une correction commentée. Avec l’IA locale, la copie reste sur votre ordinateur.' },
 ];
 
+/**
+ * Section « Magistra pour Windows » de cette page : tous les liens « Télécharger pour Windows » y mènent (téléchargement
+ * direct de la dernière version, trois étapes avec l'avertissement SmartScreen, « Déjà installée ? Ouvrir Magistra »)
+ * plutôt que vers la page des versions de GitHub, où l'enseignant devrait choisir le bon fichier.
+ */
+const WINDOWS_SECTION_HREF = '#magistra-windows';
+
 const FEATURES_PLUS: { icon: string; title: string; desc: string; link?: { href: string; label: string } }[] = [
   { icon: '🏫', title: 'De la maternelle au doctorat', desc: `${NB_NIVEAUX} niveaux et ${NB_MATIERES} matières, avec un accent sur le supérieur : CM, TD, examens, syllabus, vocabulaire universitaire.` },
   {
     icon: '💻',
     title: 'IA locale gratuite sur Windows',
     desc: 'L’application Windows fait tourner un modèle open weights sur votre ordinateur : vos documents restent sur votre ordinateur.',
-    link: { href: WINDOWS_DOWNLOAD_URL, label: 'Télécharger pour Windows' },
+    link: { href: WINDOWS_SECTION_HREF, label: 'Télécharger pour Windows' },
   },
   { icon: '🏛️', title: 'Sur le web, une IA annoncée clairement', desc: 'Sur le site, Magistra utilise en priorité l’IA de votre ordinateur quand l’application Windows y est connectée ; sinon le serveur d’IA compatible OpenAI configuré par votre établissement ou un service en ligne choisi par l’administrateur. Le site indique toujours qui traite vos textes.' },
   { icon: '📚', title: 'Sources vérifiables', desc: 'Vos documents (PDF, Word, PowerPoint…), HAL, Crossref et le web : les citations renvoient aux sources réellement utilisées.' },
@@ -139,6 +145,10 @@ export default function LandingPage() {
   const runtime = useOptionalRuntime();
   const mode = runtime?.mode ?? detectMode();
   const isDemo = mode === 'demo';
+  // Application Windows : même page d'accueil, sans connexion ni téléchargement (l'application est déjà installée).
+  const isLocal = mode === 'local';
+  // Application Windows : IA de cet ordinateur déjà prête ? (null ailleurs : aucun pont, aucune vérification)
+  const localAIReady = useAIStatus()?.status?.ready === true;
 
   return (
     <div className="min-h-screen bg-mg-900 overflow-x-hidden">
@@ -187,17 +197,20 @@ export default function LandingPage() {
                 Découvrir FutureAI
               </a>
             </div>
-            <p className="mt-4 text-sm">
-              <a
-                href={WINDOWS_DOWNLOAD_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-accent hover:underline underline-offset-4"
-              >
-                <Download size={14} aria-hidden="true" /> Télécharger pour Windows
-              </a>
-              <span className="text-mg-300"> · IA locale gratuite, sans compte</span>
-            </p>
+            {isLocal ? (
+              <p className="mt-4 text-sm text-mg-200 max-w-md mx-auto">
+                {localAIReady
+                  ? 'Magistra est installée sur cet ordinateur : son IA y fonctionne, gratuitement, même sans Internet.'
+                  : 'Magistra est installée sur cet ordinateur : l’IA s’active en un clic depuis votre tableau de bord, puis fonctionne ici, gratuitement, même sans Internet.'}
+              </p>
+            ) : (
+              <p className="mt-4 text-sm">
+                <a href={WINDOWS_SECTION_HREF} className="inline-flex items-center gap-1.5 text-accent hover:underline underline-offset-4">
+                  <Download size={14} aria-hidden="true" /> Télécharger pour Windows
+                </a>
+                <span className="text-mg-300"> · IA locale gratuite, sans compte</span>
+              </p>
+            )}
 
             {isDemo && (
               <p className="text-xs text-mg-300 mt-6 max-w-md mx-auto" role="note">
@@ -293,11 +306,10 @@ export default function LandingPage() {
                   <span className="text-2xl text-accent block mb-3 mx-auto group-hover:scale-110 transition-transform" aria-hidden="true">{f.icon}</span>
                   <h3 className="text-sm font-semibold text-white mb-2">{f.title}</h3>
                   <p className="text-sm text-mg-200 leading-relaxed">{f.desc}</p>
-                  {f.link && (
+                  {f.link && !isLocal && (
                     <a
                       href={f.link.href}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      {...(f.link.href.startsWith('#') ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
                       className="mt-3 inline-flex items-center gap-1 text-sm text-accent hover:underline underline-offset-4"
                     >
                       {f.link.label} <ArrowRight size={13} aria-hidden="true" />
@@ -311,10 +323,15 @@ export default function LandingPage() {
 
         <div className="glow-line max-w-xl mx-auto" aria-hidden="true" />
 
-        {/* Magistra pour Windows : dernière version publiée, étapes, IA locale (section publique) */}
-        <WindowsDownloadSection variant="landing" mode={mode} />
+        {/* Magistra pour Windows : dernière version publiée, étapes, IA locale (section publique ; absente de
+            l'application, déjà installée) */}
+        {!isLocal && (
+          <>
+            <WindowsDownloadSection variant="landing" mode={mode} />
 
-        <div className="glow-line max-w-xl mx-auto" aria-hidden="true" />
+            <div className="glow-line max-w-xl mx-auto" aria-hidden="true" />
+          </>
+        )}
 
         {/* Étapes */}
         <section className="py-16 sm:py-20 px-6" aria-labelledby="steps-title">

@@ -1,8 +1,7 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { Navigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useRuntime } from '@/lib/runtime/context';
-import { getBridge } from '@/lib/runtime/local';
 import { PersonalAccessScreen } from './PersonalAccess';
 
 // Chargé seulement sur le site web (dépend de Clerk, absent de l'application Windows et de la démo).
@@ -69,33 +68,5 @@ export function ProfileGuard({ children }: { children: ReactNode }) {
     );
   }
   if (!profile) return <Navigate to="/onboarding" replace />;
-  return <>{children}</>;
-}
-
-/**
- * Application Windows : au premier démarrage, l'assistant d'installation de l'IA locale s'affiche.
- * L'enseignant peut le passer (« Plus tard ») ; il n'est alors plus imposé.
- */
-export function LocalSetupGuard({ enabled, children }: { enabled: boolean; children: ReactNode }) {
-  const [state, setState] = useState<'checking' | 'ok' | 'setup'>(enabled ? 'checking' : 'ok');
-  useEffect(() => {
-    if (!enabled) return;
-    const bridge = getBridge();
-    if (!bridge) return;
-    let cancelled = false;
-    bridge.prefs.get().then(
-      prefs => {
-        if (!cancelled) setState(prefs.setupCompleted ? 'ok' : 'setup');
-      },
-      () => {
-        if (!cancelled) setState('ok');
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled]);
-  if (state === 'checking') return <FullPageSpinner />;
-  if (state === 'setup') return <Navigate to="/setup" replace />;
   return <>{children}</>;
 }

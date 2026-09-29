@@ -15,12 +15,19 @@ export function getDemoExample(req: Pick<GenerationRequest, 'type' | 'niveau'>):
   return isSuperieur(req.niveau) && entry.superieur ? entry.superieur : entry.scolaire;
 }
 
+/**
+ * Application Windows, IA pas encore prête (« Voir un exemple pré-rédigé ») : même exemple, sans parler d'un « mode
+ * démonstration » qui n'existe pas dans l'application.
+ */
+export const EXAMPLE_NOTICE =
+  "Exemple pré-rédigé : ce texte est identique quels que soient le sujet et les paramètres saisis (nombre d'appréciations, durée…). Il n'a pas été généré par une IA et n'utilise pas vos documents.";
+
 export async function* runDemoGeneration(
   req: GenerationRequest,
-  options: { signal?: AbortSignal; delayMs?: number } = {},
+  options: { signal?: AbortSignal; delayMs?: number; notice?: string } = {},
 ): AsyncGenerator<GenerationEvent> {
   const example = getDemoExample(req);
-  const content = `> ${DEMO_NOTICE}\n> Exemple : « ${example.subject} » (${example.level}).\n\n${example.markdown.trim()}\n`;
+  const content = `> ${options.notice ?? DEMO_NOTICE}\n> Exemple : « ${example.subject} » (${example.level}).\n\n${example.markdown.trim()}\n`;
   yield { type: 'sources', sources: [], internetUsed: false };
   yield { type: 'status', stage: 'generating', message: `Affichage de l'exemple « ${getToolLabel(req.type, req.niveau)} »…` };
   const delay = options.delayMs ?? 12;

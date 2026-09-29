@@ -71,13 +71,18 @@ export const ENGINE_TEMP_REQUIRED_GB = 2;
  * défini dans shared/ipc.ts car l'interface l'affiche aussi pendant « Démarrage… ».
  */
 export { ENGINE_STARTING_MESSAGE };
-export const ENGINE_NOT_INSTALLED_MESSAGE = 'Le moteur d’IA locale (Ollama) n’est pas installé. Ouvrez l’assistant de configuration pour l’installer.';
+/** Moteur absent (ou modèle absent, plus bas) : la carte « Activer l'IA » (tableau de bord, Générer, page de l'IA) l'installe en un clic. */
+export const ENGINE_NOT_INSTALLED_MESSAGE = 'Le moteur d’IA locale (Ollama) n’est pas installé. Cliquez sur « Activer l’IA » pour l’installer.';
 /** L'exécutable lancé a disparu : mise en quarantaine par un antivirus (faux positifs connus sur ollama.exe). */
 export const ENGINE_VANISHED_MESSAGE =
   'Le moteur IA (Ollama) a disparu de cet ordinateur juste après son lancement : un antivirus l’a probablement mis en quarantaine (cela arrive avec ollama.exe). Rétablissez-le depuis votre antivirus, ou demandez au service informatique de l’autoriser, puis réinstallez le moteur IA.';
-/** Fin de la surveillance d'une installation manuelle, sans moteur détecté. */
+/**
+ * Fin de la surveillance d'une installation manuelle, sans moteur détecté. Cite les boutons affichés sous une erreur
+ * du moteur, dans la carte « Activer l'IA » comme dans le panneau du moteur des réglages : « Réessayer » (jamais
+ * « Installer le moteur IA », libellé d'avant toute erreur, absent de la carte) et la page officielle.
+ */
 export const ENGINE_WATCH_TIMEOUT_MESSAGE =
-  'Magistra a cessé d’attendre : l’installation du moteur IA (Ollama) n’a pas été détectée. Relancez-la : utilisez « Installer le moteur IA » ou « Ouvrir la page officielle d’installation ». Si Ollama est installé dans un autre dossier, démarrez-le vous-même : Magistra le détectera.';
+  'Magistra a cessé d’attendre : l’installation du moteur IA (Ollama) n’a pas été détectée. Relancez-la : utilisez « Réessayer » ou « Ouvrir la page officielle d’installation ». Si Ollama est installé dans un autre dossier, démarrez-le vous-même : Magistra le détectera.';
 /** Téléchargement de modèle en échec réseau alors qu'Ollama tourne sans le proxy de l'établissement. */
 export const PROXY_RESTART_MESSAGE =
   'Le téléchargement du modèle n’a pas pu joindre Internet : votre ordinateur passe par un proxy (réseau d’établissement), mais le moteur IA (Ollama) a été démarré sans ce réglage, qu’il ne détecte pas seul. En cliquant sur « Reprendre le téléchargement », vous autorisez Magistra à relancer le moteur IA avec le proxy (il s’arrête quelques secondes) ; le téléchargement reprendra là où il s’est arrêté.';
@@ -334,6 +339,21 @@ function hostLabel(url: string): string {
   }
 }
 
+/**
+ * Modèle choisi absent. « Activer l'IA » n'installe qu'une version Magistra, sur cet ordinateur : un modèle
+ * personnalisé (options avancées) ou un moteur réglé sur un autre ordinateur renvoient aux réglages de l'IA, jamais à
+ * un bouton qui ne le téléchargerait pas (ou remplacerait le modèle choisi sans le dire).
+ */
+export function modelMissingMessage(active: { label: string; custom: boolean }, url: string): string {
+  if (active.custom) {
+    return `Le modèle personnalisé ${active.label} n’est pas installé sur le moteur IA. Pour revenir à une version de Magistra, choisissez « Aucun » dans les options avancées de l’IA (Réglages).`;
+  }
+  if (!isLoopbackUrl(url)) {
+    return `Le modèle ${active.label} n’est pas installé sur le serveur Ollama (${hostLabel(url)}) : installez-le depuis les réglages de l’IA.`;
+  }
+  return `Le modèle ${active.label} n’est pas encore installé. Cliquez sur « Activer l’IA » pour le télécharger.`;
+}
+
 function portOf(url: string): string {
   try {
     return new URL(url).port || '11434';
@@ -588,6 +608,8 @@ export class AIManager {
   private hardwareAt = 0;
   private release: { at: number; info: ReleaseInfo | null } | null = null;
   private installAbort: AbortController | null = null;
+  /** Nature de l'installation en cours (AIStatus.engine.installing) : installation ou mise à jour du moteur. */
+  private installKind: 'install' | 'update' = 'install';
   private pullAbort: AbortController | null = null;
   private watchAbort: AbortController | null = null;
   private starting: Promise<boolean> | null = null;
@@ -829,8 +851,16 @@ export class AIManager {
     return this.starting;
   }
 
-  /** Démarrage demandé par l'enseignant : vrai, ou une erreur qui explique la cause probable. */
+  /**
+   * Démarrage demandé par l'enseignant : vrai, ou une erreur qui explique la cause probable. Refusé (AI_BUSY) pendant
+   * une installation du moteur : l'installateur officiel arrête l'ancien moteur et remplace ses fichiers — le relancer
+   * en parallèle (fenêtre rechargée qui croit le moteur « arrêté ») ferait échouer l'installation ou garderait
+   * l'ancienne version. L'installateur démarre lui-même le nouveau moteur à la fin.
+   */
   async startEngineOrExplain(): Promise<true> {
+    if (this.installAbort) {
+      throw new MagistraError('AI_BUSY', this.installKind === 'update' ? 'La mise à jour du moteur IA est déjà en cours.' : 'L’installation du moteur IA est déjà en cours.');
+    }
     if (await this.startEngine()) return true;
     throw await this.startFailure();
   }
@@ -1051,6 +1081,7 @@ export class AIManager {
     }
     const controller = new AbortController();
     this.installAbort = controller;
+    this.installKind = update ? 'update' : 'install';
     const signal = controller.signal;
     const minVersion = this.requiredEngineVersion();
     try {
@@ -1564,9 +1595,7 @@ export class AIManager {
       active = this.deps.config.activeLocalModel();
       model = this.installedActiveModel(active, installed);
     }
-    if (!model) {
-      throw new MagistraError('MODEL_NOT_INSTALLED', `Le modèle ${active.label} n’est pas encore installé. Installez-le depuis l’assistant de configuration.`);
-    }
+    if (!model) throw new MagistraError('MODEL_NOT_INSTALLED', modelMissingMessage(active, url));
     // Délai du premier mot : adapté à la taille du prompt (aucun délai fixe transmis), après préchargement du modèle.
     return new LocalOllamaProvider(
       { baseUrl: url, model, label: active.label, modelLabel: active.label, contextTokens: active.contextTokens, fetch: this.fetchFor(url) },
@@ -1622,7 +1651,7 @@ export class AIManager {
         const minVersion = this.requiredEngineVersion();
         notReady = ollamaVersionStatus(version, minVersion) === 'outdated'
           ? { code: 'ENGINE_OUTDATED', message: await this.outdatedMessage(version, minVersion, active.label) }
-          : { code: 'MODEL_NOT_INSTALLED', message: `Le modèle ${active.label} n’est pas encore installé. Installez-le depuis l’assistant de configuration.` };
+          : { code: 'MODEL_NOT_INSTALLED', message: modelMissingMessage(active, cfg.ollamaUrl) };
       }
     } else if (!loopback) {
       notReady = { code: 'AI_SERVER_UNAVAILABLE', message: `Serveur Ollama injoignable (${hostLabel(cfg.ollamaUrl)}).` };
@@ -1734,6 +1763,7 @@ export class AIManager {
         ...(engine.outdated ? { outdated: true } : {}),
         ...(engine.managedByAdmin ? { managedByAdmin: true } : {}),
         ...(this.proxyRestartSuggested ? { proxyRestart: true } : {}),
+        ...(this.installAbort ? { installing: this.installKind } : {}),
       },
       installedModels: installed.map(m => ({ name: m.name, sizeGB: roundGB(m.size) })),
       tiers,

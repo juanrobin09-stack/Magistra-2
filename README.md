@@ -16,6 +16,28 @@ Magistra aide à préparer :
 
 Il s'appuie sur **vos documents** et sur des **sources vérifiables**. L'enseignant relit et adapte toujours le contenu produit.
 
+## Installer Magistra (enseignants)
+
+Installez Magistra sur votre ordinateur Windows (10 ou 11, 64 bits) : l'IA y fonctionne **gratuitement, en privé, même sans Internet**. Aucun compte, aucune clé, aucune ligne de commande.
+
+1. **Téléchargez Magistra** : [Télécharger Magistra pour Windows](https://github.com/juanrobin09-stack/magistra-2/releases/latest) (fichier `Magistra-Setup-x.y.z.exe`). Le bouton du site Magistra télécharge directement la dernière version.
+2. **Ouvrez le fichier téléchargé.** Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur **Informations complémentaires** puis **Exécuter quand même**.
+3. **Magistra s'installe en quelques secondes**, sans droits d'administrateur, et s'ouvre toute seule.
+
+**Déjà installée ?** Ouvrez Magistra depuis le menu Démarrer ou l'icône du Bureau, ou avec **Ouvrir Magistra** sur le site.
+
+Ensuite, dans Magistra, **Activer l'IA** prépare l'intelligence artificielle en un clic : la taille du téléchargement (moteur d'IA et modèle adapté à votre ordinateur, plusieurs Go) est annoncée avant, et vous pouvez utiliser l'application pendant ce temps. Ce téléchargement n'a lieu qu'une fois.
+
+> **Pourquoi cet avertissement de Windows ?** L'installateur n'est pas encore signé numériquement : un certificat de signature de code est payant et se renouvelle chaque année, et ce projet non lucratif ne l'a pas encore acquis. L'avertissement ne signale aucun problème détecté dans le fichier. N'exécutez l'installateur que s'il vient du site Magistra ou de la [page officielle des versions](https://github.com/juanrobin09-stack/magistra-2/releases).
+
+Vous administrez le site de l'établissement ou vous développez Magistra ? Voir « [Brancher une vraie IA](#brancher-une-vraie-ia) ».
+
+---
+
+## Brancher une vraie IA
+
+*Pour les administrateurs et les développeurs : l'enseignant, lui, n'a que les trois étapes de « [Installer Magistra](#installer-magistra-enseignants) ».*
+
 Magistra **ne dépend d'aucune API payante** :
 
 | Mode | IA utilisée | Compte | Données |
@@ -28,11 +50,7 @@ Magistra **ne dépend d'aucune API payante** :
 
 Magistra n'impose ni quota ni compteur. Les seules limites sont celles de la machine, du service d'IA choisi (une offre gratuite limite souvent le nombre de demandes par minute), plus des protections techniques contre les abus sur un serveur public.
 
----
-
-## Brancher une vraie IA
-
-Trois chemins, du plus simple au plus autonome. Dans les trois cas, `npm run ai:check` (site) ou l'assistant de l'application (Windows) dit précisément ce qui manque.
+Trois chemins, du plus simple au plus autonome. Dans les trois cas, `npm run ai:check` (site) ou l'application elle-même (Windows) dit précisément ce qui manque.
 
 ### 1. Site en ligne (Vercel)
 
@@ -85,9 +103,19 @@ Votre historique et votre clé d'accès sont enregistrés dans `.magistra-data` 
 
 ### 3. Application Windows
 
-1. Téléchargez **`Magistra-Setup-x.y.z.exe`** sur la [page des versions](https://github.com/juanrobin09-stack/magistra-2/releases) (chaque version y publie aussi `SHA256SUMS.txt`).
-2. Installez-le, puis laissez-vous guider : Magistra installe le moteur d'IA locale (Ollama) et un modèle adapté à votre ordinateur, sans ligne de commande, sans compte ni clé. Détails ci-dessous : « [Application Windows : installation pour l'enseignant](#application-windows--installation-pour-lenseignant) ».
-3. Facultatif : connectez-la au site pour y générer avec l'IA de l'ordinateur (« [Utiliser l'IA de votre ordinateur depuis le site](#utiliser-lia-de-votre-ordinateur-depuis-le-site-magistra-pour-windows) »).
+**Installation** : les trois étapes de « [Installer Magistra](#installer-magistra-enseignants) ». L'installateur NSIS s'installe pour l'utilisateur seul (`perMachine: false`, aucune élévation), crée les raccourcis du Bureau et du menu Démarrer et lance Magistra à la fin (`electron-builder.json`) ; c'est à ce premier lancement que Magistra enregistre le lien `magistra://` (bouton **Ouvrir Magistra** du site). Chaque version publie aussi `SHA256SUMS.txt` ; vérification facultative de l'empreinte par le service informatique : voir « [Mainteneurs](#mainteneurs--versions-variables-domaine-ports) ».
+
+**Activer l'IA** : un seul bouton, qui annonce avant toute action la taille totale du téléchargement (moteur d'IA locale, Ollama, puis modèle open weights recommandé pour cet ordinateur d'après sa mémoire, son processeur, sa carte graphique et son disque). Magistra enchaîne ensuite seule : installation du moteur s'il manque (Ollama 0.13.1 au moins ; l'installateur officiel n'est lancé qu'après vérification de son empreinte SHA-256), démarrage, téléchargement du modèle, avec une progression, **Annuler** et des messages précis (espace disque, réseau, proxy…). Un téléchargement interrompu reprend. Si le moteur est trop ancien, Magistra propose de le mettre à jour (vos modèles sont conservés) ; s'il a été installé pour tout l'ordinateur par le service informatique, elle invite à lui demander la mise à jour. Rien n'est jamais téléchargé sans ce clic.
+
+| Niveau | Pour | Téléchargement |
+|---|---|---|
+| Magistra Léger | PC modestes (8 à 16 Go de mémoire) | ≈ 6 Go |
+| Magistra Standard | PC récents (16 Go et plus) | ≈ 9 Go |
+| Magistra Qualité | PC avec carte graphique ≥ 16 Go | ≈ 15 Go |
+
+Hors connexion, Magistra fonctionne avec le modèle local et vos documents. **Mises à jour** : Magistra ne vérifie rien automatiquement. Dans Réglages → À propos, **Rechercher une mise à jour** interroge la page des versions et, si une nouvelle version existe, propose d'ouvrir sa page pour la télécharger (rien n'est téléchargé ni installé automatiquement). En mode avancé (Réglages), un établissement peut aussi connecter l'application à son propre serveur d'IA : Magistra indique alors clairement que les données de génération sont transmises à ce serveur.
+
+Facultatif : connectez l'application au site pour y générer avec l'IA de l'ordinateur (« [Utiliser l'IA de votre ordinateur depuis le site](#utiliser-lia-de-votre-ordinateur-depuis-le-site-magistra-pour-windows) »).
 
 Les versions sont produites par le workflow [`release.yml`](.github/workflows/release.yml) : un tag `vX.Y.Z` (égal à la version de `package.json`) construit l'installateur et l'archive sous Windows, calcule les empreintes et crée une **release en brouillon**, qu'un mainteneur relit puis publie.
 
@@ -110,31 +138,6 @@ Les versions sont produites par le workflow [`release.yml`](.github/workflows/re
 
 ---
 
-## Application Windows : installation pour l'enseignant
-
-1. Installez `Magistra-Setup-x.y.z.exe`, téléchargé depuis la [page officielle des versions](https://github.com/juanrobin09-stack/magistra-2/releases).
-   > **Avertissement Windows SmartScreen.** L'installateur n'est pas encore signé numériquement : Windows peut afficher « Windows a protégé votre ordinateur » (éditeur inconnu). Cliquez sur **Informations complémentaires**, puis sur **Exécuter quand même**. Cet avertissement ne signale pas un problème détecté dans le fichier : il vient de l'absence de certificat de signature de code, un certificat payant renouvelé chaque année, que ce projet non lucratif n'a pas encore acquis. N'exécutez l'installateur que s'il provient de la page officielle ci-dessus.
-   >
-   > Vérification facultative, pour le service informatique : l'empreinte SHA-256 de l'installateur est affichée sur le site (Réglages → « Magistra pour Windows ») et dans `SHA256SUMS.txt` sur la même page ; la commande est donnée dans « [Mainteneurs](#mainteneurs--versions-variables-domaine-ports) ».
-2. Au premier lancement, Magistra vérifie automatiquement si le moteur d'IA locale (Ollama) est installé et en marche, dans une version assez récente (Ollama 0.13.1 au moins), et si un modèle est disponible.
-3. **Si le moteur manque**, cliquez sur **Installer le moteur IA**. La taille du téléchargement et l'espace disque nécessaire sont affichés avant toute action. L'installateur officiel n'est lancé qu'après vérification de son empreinte SHA-256. En cas de problème, Magistra ouvre la page officielle et détecte seul la fin de l'installation. **Si le moteur est trop ancien**, Magistra propose **Mettre à jour le moteur IA** (vos modèles sont conservés) ; si Ollama a été installé pour tout l'ordinateur par le service informatique, Magistra vous invite à lui demander la mise à jour.
-4. Magistra analyse l'ordinateur (mémoire, processeur, carte graphique, disque) et **recommande un modèle**. Cliquez sur **Installer Magistra Standard** (ou un autre niveau). La progression s'affiche, et un téléchargement interrompu peut reprendre.
-5. **✓ Intelligence artificielle prête** : cliquez sur **Commencer**.
-
-| Niveau | Pour | Téléchargement |
-|---|---|---|
-| Magistra Léger | PC modestes (8 à 16 Go de mémoire) | ≈ 6 Go |
-| Magistra Standard | PC récents (16 Go et plus) | ≈ 9 Go |
-| Magistra Qualité | PC avec carte graphique ≥ 16 Go | ≈ 15 Go |
-
-Aucune clé, aucun compte, **aucune ligne de commande**. Hors connexion, Magistra fonctionne avec le modèle local et vos documents.
-
-**Mises à jour** : Magistra ne vérifie rien automatiquement. Dans Réglages → À propos, **Rechercher une mise à jour** interroge la page des versions et, si une nouvelle version existe, propose d'ouvrir sa page pour la télécharger (rien n'est téléchargé ni installé automatiquement).
-
-En mode avancé (Réglages), un établissement peut aussi connecter l'application à son propre serveur d'IA. Magistra indique alors clairement que les données de génération sont transmises à ce serveur.
-
----
-
 ## Utiliser l'IA de votre ordinateur depuis le site (Magistra pour Windows)
 
 Le site web peut confier vos générations à l'IA **locale** de l'application Windows (« Magistra locale ») :
@@ -149,8 +152,8 @@ Le navigateur ne parle jamais au moteur d'IA lui-même : l'application n'accepte
 
 1. **Compte** : sur l'ordinateur Windows 10 ou 11 où Magistra sera installée, connectez-vous au site (`https://magistra-2.vercel.app`), de préférence avec Chrome ou Edge.
 2. **Tableau de bord** : la carte « Magistra locale » affiche « Activez l’intelligence Magistra sur votre ordinateur. ».
-3. **Télécharger** : **Télécharger Magistra pour Windows** télécharge directement l'installateur de la dernière version **stable** publiée. Sa version, sa taille, sa date et son empreinte SHA-256 sont affichées dans Réglages → « Magistra pour Windows » et sur la page d'accueil.
-4. **Installer** : lancez `Magistra-Setup-x.y.z.exe` (avertissement SmartScreen : voir « [Application Windows : installation pour l'enseignant](#application-windows--installation-pour-lenseignant) »). Au premier lancement, Magistra prépare seule le moteur et le modèle. **Laissez l'application ouverte** : fermer sa fenêtre la quitte, et le site ne la trouve plus.
+3. **Télécharger** : **Télécharger Magistra pour Windows** télécharge directement l'installateur de la dernière version **stable** publiée. Sa version, sa taille, sa date et son empreinte SHA-256 sont affichées dans Réglages → « Magistra pour Windows » et sur la page d'accueil, avec les trois étapes d'installation et **Ouvrir Magistra** si elle est déjà installée.
+4. **Installer** : ouvrez `Magistra-Setup-x.y.z.exe` (avertissement SmartScreen : voir « [Installer Magistra](#installer-magistra-enseignants) ») ; Magistra s'installe et s'ouvre toute seule. Dans l'application, **Activer l'IA** prépare le moteur et le modèle (taille annoncée avant). **Laissez l'application ouverte** : fermer sa fenêtre la quitte, et le site ne la trouve plus.
 5. **Détection** : sur le tableau de bord, cliquez sur **J'ai déjà Magistra : la rechercher** (ou, dans la section « Magistra pour Windows », sur **Détecter maintenant**, sous « J’ai installé Magistra »). Si le navigateur doit demander son autorisation, le site l'explique **avant** (voir ci-dessous), puis affiche « Recherche de Magistra sur cet ordinateur… » et « ✓ Magistra trouvée ». Si l'application n'est pas trouvée, il affiche « Magistra n’est pas encore détectée. », avec **Réessayer** et **Télécharger Magistra**.
 6. **Connecter Magistra locale** : si le navigateur demande d'ouvrir Magistra, acceptez. Le site affiche « Confirmez dans l’application Magistra… » et un **code de vérification** (par exemple `K7F-2QX`).
 7. **Autoriser dans l'application** : Magistra demande « Autoriser magistra-2.vercel.app à utiliser l’intelligence locale de cet ordinateur ? », avec le même code. Si le code est identique, cliquez sur **Autoriser** ; sinon, ou si vous n'avez rien demandé, cliquez sur **Refuser** (bouton par défaut). Le site affiche « ✓ Intelligence locale connectée ». Il attend l'accord 2 minutes au plus ; la demande expire au bout de 5 minutes dans l'application.
@@ -385,11 +388,11 @@ Variables : `REAL_AI_URL` (sans `/v1`), `REAL_AI_MODEL`, `REAL_AI_API_KEY` (prox
 Les tests automatisés utilisent un Ollama simulé. Pour valider l'application avec le vrai moteur :
 
 1. Sous Windows 10/11 (16 Go de mémoire conseillés) : installez la dernière **release** (`Magistra-Setup-x.y.z.exe`, voir « Brancher une vraie IA ») ; ou, avec Node 22, `npm ci`, puis `npm run build:electron:dir`, et lancez `release\win-unpacked\Magistra.exe` (ou `npm run build:electron` et installez `release\Magistra-Setup-*.exe`).
-2. **Sans Ollama installé** : l'assistant affiche « Installer le moteur IA », avec la taille et l'espace disque. Cliquez : l'installateur officiel est vérifié (SHA-256) puis lancé. Vérifiez qu'aucune fenêtre PowerShell **ni fenêtre d'Ollama** (accueil, connexion) n'apparaît : Magistra démarre Ollama en arrière-plan (`--hide --fast-startup`), et détecte seul la fin de l'installation.
-3. **Ollama trop ancien** (version inférieure à 0.13.1, par exemple une ancienne installation conservée) : Magistra affiche que le moteur est trop ancien **avant** tout téléchargement de modèle, avec **Mettre à jour le moteur IA** ; vérifiez qu'après la mise à jour les modèles déjà présents sont conservés. Si Ollama est installé dans `C:\Program Files` (installation par le service informatique), le message doit inviter à **demander la mise à jour au service informatique**, sans bouton qui échouerait.
-4. **Installer Magistra Standard** : la progression s'affiche. Coupez le réseau pendant le téléchargement : un message clair apparaît, et « Reprendre » repart du point atteint. Un modèle déjà installé sous un autre nom (`ministral-3:latest`, `ministral-3:8b-instruct-2512-q4_K_M`…) doit être reconnu sans nouveau téléchargement. Attendez « ✓ Intelligence artificielle prête », puis **Commencer**.
+2. **Premier lancement** : l'animation « Magistra » (≈ 2 s ; un clic ou une touche la passe), puis la page d'accueil de Magistra : **Commencer**, puis créez un profil (par exemple Master 1). **Sans Ollama installé**, la carte « Activez l’IA de Magistra sur cet ordinateur » du tableau de bord annonce la taille totale (moteur et modèle recommandé) et une durée indicative. Cliquez sur **Activer l’IA** : l'installateur officiel du moteur est vérifié (SHA-256) puis lancé, et le modèle suit tout seul. Vérifiez qu'aucune fenêtre PowerShell **ni fenêtre d'Ollama** (accueil, connexion) n'apparaît : Magistra démarre Ollama en arrière-plan (`--hide --fast-startup`), et détecte seul la fin de l'installation.
+3. **Ollama trop ancien** (version inférieure à 0.13.1, par exemple une ancienne installation conservée) : la taille annoncée par **Activer l’IA** comprend la mise à jour du moteur, faite **avant** tout téléchargement de modèle (Réglages affiche aussi le moteur trop ancien, avec **Mettre à jour le moteur IA**) ; vérifiez qu'après la mise à jour les modèles déjà présents sont conservés. Si Ollama est installé dans `C:\Program Files` (installation par le service informatique), la carte doit inviter à **demander la mise à jour au service informatique**, sans bouton qui échouerait.
+4. **Téléchargement du modèle** : une seule progression (étape, pourcentage, reste), reprise dans la barre latérale ; naviguez librement pendant ce temps. Coupez le réseau pendant le téléchargement : un message clair apparaît, et « Reprendre le téléchargement » repart du point atteint. Fermez Magistra pendant le téléchargement puis rouvrez-la : l'activation reprend toute seule, sans repartir de zéro. Un modèle déjà installé sous un autre nom (`ministral-3:latest`, `ministral-3:8b-instruct-2512-q4_K_M`…) doit être reconnu sans nouveau téléchargement. Attendez « L’IA de Magistra est prête. ». Avant l'activation, **Générer** propose **Voir un exemple pré-rédigé** : il doit être marqué « Exemple pré-rédigé — ce n’est pas l’IA » et n'apparaître ni dans l'historique ni dans les statistiques.
 5. **Réseau d'établissement avec proxy** : Ollama n'utilise pas le proxy de Windows, seulement la variable `HTTPS_PROXY` ([FAQ Ollama](https://docs.ollama.com/faq#how-do-i-use-ollama-behind-a-proxy)). Magistra transmet le proxy du système à Ollama quand il le démarre. Si Ollama tournait déjà sans ce réglage, le téléchargement échoue avec un message qui parle du proxy, et « Reprendre le téléchargement » propose de relancer le moteur avec le proxy.
-6. Créez un profil (par exemple Master 1), puis dans **Générer** : choisissez « Cours », ajoutez un PDF et un DOCX, « Mes documents uniquement ». Vérifiez « Chargement du modèle… » puis le texte progressif, puis « Sources utilisées » avec les pages ou sections exactes. Recommencez en cliquant sur **Arrêter** en cours de route.
+6. Dans **Générer** : choisissez « Cours », ajoutez un PDF et un DOCX, « Mes documents uniquement ». Vérifiez « Chargement du modèle… » puis le texte progressif, puis « Sources utilisées » avec les pages ou sections exactes. Recommencez en cliquant sur **Arrêter** en cours de route.
 7. Coupez Internet et relancez une génération : elle doit aboutir. En mode « Internet », l'application doit signaler que la recherche est indisponible.
 8. Vérifiez l'historique (recherche, favori, suppression), l'export PDF (accents, « x > 3 », « H₂O », tableaux), puis Réglages : changement de niveau (Léger / Qualité), « Rechercher une mise à jour » (la release publiée, et non un brouillon, doit être proposée).
 9. Quittez Ollama (icône de la barre des tâches), puis relancez une génération : Magistra doit redémarrer le moteur, ou afficher « Moteur IA non démarré. ».

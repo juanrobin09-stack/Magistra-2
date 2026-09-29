@@ -17,6 +17,12 @@ export interface StatusOptions {
   outdated?: boolean;
   /** Ollama installé pour toute la machine (Program Files). */
   managedByAdmin?: boolean;
+  /** Proxy du système ignoré par le moteur déjà démarré : « Reprendre le téléchargement » le relance avec le proxy. */
+  proxyRestart?: boolean;
+  /** Installation (ou mise à jour) du moteur en cours dans le processus principal (AIStatus.engine.installing). */
+  installing?: 'install' | 'update';
+  /** Adresse du moteur (par défaut : cet ordinateur). */
+  ollamaUrl?: string;
 }
 
 export function makeStatus(opts: StatusOptions = {}): AIStatus {
@@ -49,14 +55,17 @@ export function makeStatus(opts: StatusOptions = {}): AIStatus {
   });
   const selectedTier = opts.selectedTier ?? recommendation.tier;
   const active = MODEL_TIERS.find(t => t.id === selectedTier)!;
-  const ready = opts.ready ?? (engine === 'running' && installed.has(selectedTier));
+  const ready = opts.ready ?? (engine === 'running' && !opts.customModel && installed.has(selectedTier));
+  const url = opts.ollamaUrl ?? 'http://127.0.0.1:11434';
   return {
     engine: {
       state: engine,
       version: engine === 'running' ? opts.engineVersion ?? '0.34.4' : undefined,
-      url: 'http://127.0.0.1:11434',
+      url,
       ...(opts.outdated !== undefined ? { outdated: opts.outdated, minVersion: MIN_OLLAMA_VERSION } : {}),
       ...(opts.managedByAdmin !== undefined ? { managedByAdmin: opts.managedByAdmin } : {}),
+      ...(opts.proxyRestart !== undefined ? { proxyRestart: opts.proxyRestart } : {}),
+      ...(opts.installing ? { installing: opts.installing } : {}),
     },
     installedModels: engine === 'running'
       ? MODEL_TIERS.filter(t => installed.has(t.id)).map(t => ({ name: t.model, sizeGB: t.downloadGB }))
@@ -66,14 +75,14 @@ export function makeStatus(opts: StatusOptions = {}): AIStatus {
     activeModel: opts.customModel ?? active.model,
     activeLabel: opts.customModel ?? active.label,
     ready,
-    headline: ready ? 'Prête' : 'Non prête',
+    headline: ready ? 'Prête' : opts.customModel ? `Modèle ${opts.customModel} non installé` : 'Non prête',
     hardware,
     recommendation,
     config: {
       mode: opts.mode ?? 'local',
       tier: selectedTier,
       customModel: opts.customModel,
-      ollamaUrl: 'http://127.0.0.1:11434',
+      ollamaUrl: url,
       ...(opts.mode === 'remote'
         ? { remote: { kind: 'openai-compatible' as const, baseUrl: 'https://ia.exemple.fr/v1', model: 'mistral-small', hasApiKey: true, label: 'Serveur du lycée' } }
         : {}),

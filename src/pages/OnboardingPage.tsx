@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BookOpen, Check, ChevronRight, GraduationCap, Loader2, School, Sparkles, Users } from 'lucide-react';
 import { defaultMatiereFor, getMatiereEmoji, getMatiereLabel, getMatieresForNiveau, isMatiereAvailableFor, type Matiere } from '@shared/catalog';
 import { toMagistraError } from '@shared/errors';
@@ -523,6 +523,10 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
               <button type="button" onClick={() => goTo(step - 1)} className="btn-ghost text-sm" disabled={saving}>
                 ← Retour
               </button>
+            ) : runtime.mode === 'local' && !canCancel ? (
+              // Application Windows, premier lancement : ni barre d'adresse ni bouton « précédent » — la présentation
+              // de Magistra (page d'accueil tant qu'aucun profil n'existe) reste à un clic, jamais une impasse.
+              <Link to="/" className="btn-ghost text-sm">← Présentation</Link>
             ) : <div />}
 
             {step < LAST_STEP ? (

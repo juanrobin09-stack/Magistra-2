@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 // « Magistra pour Windows » : dernière version STABLE publiée (GET /api/windows-release) revérifiée côté navigateur,
-// version, taille et date en français, empreinte SHA-256 repliable et copiable, repli vers la page des versions, puis
-// « J’ai installé Magistra » [Détecter maintenant].
+// version, taille et date en français, empreinte SHA-256 repliable et copiable, repli vers la page des versions ; les
+// trois étapes (avertissement SmartScreen compris) et « Déjà installée ? Ouvrir Magistra » ; puis « J’ai installé
+// Magistra » [Détecter maintenant]. Le site en démonstration la demande aussi (le site public sans comptes garde son
+// API) ; l'application Windows, jamais.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -156,8 +158,32 @@ describe('Section « Magistra pour Windows »', () => {
     for (const point of ['IA locale', 'Aucune clé API', 'Fonctionne hors connexion', 'Le site Magistra, lui, nécessite une connexion', 'Confidentialité locale']) {
       expect(text).toContain(point);
     }
-    expect(view.section().querySelectorAll('ol[aria-label="Installation en trois étapes"] li')).toHaveLength(3);
+    const steps = Array.from(view.section().querySelectorAll('ol[aria-label="Installation en trois étapes"] li')).map(li => li.textContent?.trim());
+    expect(steps).toEqual([
+      '1Téléchargez Magistra.',
+      '2Ouvrez le fichier téléchargé. Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur « Informations complémentaires » puis « Exécuter quand même ».',
+      '3Magistra s’installe en quelques secondes, sans droits d’administrateur, et s’ouvre toute seule.',
+    ]);
+    // L'IA n'est pas dans l'installateur : téléchargée dans l'application, après un clic qui en annonce la taille.
+    expect(text).toContain('Ensuite, Magistra vous propose d’activer l’IA : un seul téléchargement de plusieurs Go, dont la taille est annoncée avant.');
     expect(text).not.toMatch(/localhost|127\.0\.0\.1|ollama|powershell/i);
+  });
+
+  it('installateur conforme aux étapes annoncées : un clic, sans droits d’administrateur, Magistra s’ouvre à la fin', () => {
+    const builder = JSON.parse(readFileSync(`${process.cwd()}/electron-builder.json`, 'utf8')) as { nsis: Record<string, unknown> };
+    expect(builder.nsis).toMatchObject({
+      oneClick: true, perMachine: false, allowElevation: false, runAfterFinish: true, createDesktopShortcut: true, createStartMenuShortcut: true,
+    });
+  });
+
+  it('« Déjà installée ? Ouvrir Magistra » : magistra://open, sans nouvel onglet', async () => {
+    stubReleaseFetch(RELEASE);
+    const view = await mountSection('web', null);
+    const open = view.section().querySelector<HTMLElement>('[data-testid="open-installed-app"]')!;
+    expect(open.textContent?.replace(/\s+/g, ' ').trim()).toBe('Déjà installée ? Ouvrir Magistra');
+    const link = open.querySelector<HTMLAnchorElement>('a')!;
+    expect(link.getAttribute('href')).toBe('magistra://open');
+    expect(link.target).toBe('');
   });
 
   it('après le téléchargement : « J’ai installé Magistra » [Détecter maintenant] → recherche, avec l’explication avant la demande du navigateur', async () => {
@@ -244,29 +270,61 @@ describe('Section « Magistra pour Windows »', () => {
     expect(view.section().textContent).toContain('Aucune version stable n’est encore publiée');
   });
 
-  it('démonstration (site sans API) : aucune requête, lien direct vers la page des versions', async () => {
+  it('démonstration (site public sans comptes, API présente) : téléchargement direct ; après le clic, Magistra s’ouvre seule', async () => {
     const fetchSpy = stubReleaseFetch(RELEASE);
     const view = await mountSection('demo', null, 'landing');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(view.download().getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(view.section().querySelector('[data-testid="windows-version"]')?.textContent).toBe('2.3.1');
+    expect(view.section().querySelector('h2')?.textContent).toBe('Magistra pour Windows');
+    // Le connecteur local n'existe que pour le site avec comptes : rien n'est promis ici.
+    expect(view.section().textContent).not.toContain('Depuis ce site');
+    await click(view.download());
+    expect(view.section().textContent).toContain('Magistra s’ouvre toute seule à la fin de l’installation. Ensuite, retrouvez-la dans le menu Démarrer ou sur le Bureau.');
+    expect(view.section().querySelector('[data-testid="windows-installed"] button')).toBeNull();
+  });
+
+  it('démonstration sur un hébergement statique (aucune API : page HTML) : page des versions, sans version inventée', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<!doctype html><title>Magistra</title>', { status: 200, headers: { 'content-type': 'text/html' } })));
+    const view = await mountSection('demo', null, 'landing');
+    expect(view.download().getAttribute('href')).toBe(WINDOWS_DOWNLOAD_URL);
+    expect(view.download().target).toBe('_blank');
+    expect(view.section().querySelector('[data-testid="windows-version"]')).toBeNull();
+  });
+
+  it('site avec comptes : l’accueil annonce l’usage de l’application depuis le site', async () => {
+    stubReleaseFetch(RELEASE);
+    const view = await mountSection('web', null, 'landing');
+    expect(view.section().textContent).toContain('Depuis ce site, vous pourrez aussi l’utiliser pour vos générations.');
+  });
+
+  it('application Windows (déjà installée) : aucune requête', async () => {
+    const fetchSpy = stubReleaseFetch(RELEASE);
+    const view = await mountSection('local', null);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(view.download().getAttribute('href')).toBe(WINDOWS_DOWNLOAD_URL);
-    expect(view.section().querySelector('h2')?.textContent).toBe('Magistra pour Windows');
-    await click(view.download());
-    expect(view.section().textContent).toContain('Lancez Magistra depuis le menu Démarrer de Windows.');
   });
 });
 
 describe('Page d’accueil', () => {
-  it('section publique « Magistra pour Windows », sans toucher au bouton principal', async () => {
+  it('section publique « Magistra pour Windows » (téléchargement direct), sans toucher au bouton principal', async () => {
     const fetchSpy = stubReleaseFetch(RELEASE);
     const view = await render(
       <RuntimeContext.Provider value={fakeRuntime(new MemoryStore())}>
         <MemoryRouter><LandingPage /></MemoryRouter>
       </RuntimeContext.Provider>,
     );
-    await flush();
-    const section = view.container.querySelector('section#magistra-windows')!;
+    await flush(4);
+    const section = view.container.querySelector<HTMLElement>('section#magistra-windows')!;
     expect(section.querySelector('h2')?.textContent).toBe('Magistra pour Windows');
-    expect(fetchSpy).not.toHaveBeenCalled(); // démonstration : aucune API à interroger
+    // Démonstration du site public : la même API, une seule requête pour toute la page.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const download = Array.from(section.querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra pour Windows'))!;
+    expect(download.getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(section.querySelector('[data-testid="open-installed-app"] a')?.getAttribute('href')).toBe('magistra://open');
+    // Les autres liens « Télécharger pour Windows » de la page mènent à cette section (étapes et avertissement compris).
+    const toSection = Array.from(view.container.querySelectorAll<HTMLAnchorElement>('a[href="#magistra-windows"]'));
+    expect(toSection.length).toBeGreaterThanOrEqual(2);
     for (const a of Array.from(view.container.querySelectorAll('a.btn-primary'))) expect(a.getAttribute('href')).toBe('/onboarding');
   });
 });

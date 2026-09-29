@@ -119,8 +119,9 @@ export function resetWindowsReleaseCache(): void {
 }
 
 /**
- * Dernière version publiée. `enabled` faux (site sans API : démonstration, application Windows) : aucune requête,
- * repli immédiat sur la page des versions.
+ * Dernière version publiée. Le site en démonstration la demande aussi : le site public sans comptes garde son API (seul
+ * un hébergement statique n'en a pas, et sa réponse 404 ou HTML donne le repli). `enabled` faux (application Windows,
+ * déjà installée) : aucune requête, repli immédiat sur la page des versions.
  */
 export function useWindowsRelease(enabled: boolean): WindowsReleaseState {
   const [state, setState] = useState<{ enabled: boolean; value: WindowsReleaseState } | null>(null);

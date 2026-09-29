@@ -118,6 +118,13 @@ export interface AIStatus {
      * après accord de l'enseignant. Reprendre le téléchargement relance aussi le moteur (message d'erreur explicite).
      */
     proxyRestart?: boolean;
+    /**
+     * Installation (« install ») ou mise à jour (« update ») du moteur en cours dans le processus principal
+     * (installEngine) : téléchargement, puis installateur officiel, qui arrête l'ancien moteur et n'émet rien. Une
+     * fenêtre rechargée entre-temps l'attend au lieu de voir un moteur « arrêté » à démarrer (startEngine est alors
+     * refusé : AI_BUSY). Absent sinon.
+     */
+    installing?: 'install' | 'update';
   };
   installedModels: { name: string; sizeGB: number }[];
   tiers: TierStatus[];
@@ -198,7 +205,17 @@ export interface LocalPreferences {
   wikipediaEnabled: boolean;
   /** Conserver le texte extrait des documents pour les réutiliser (jamais l'original). */
   keepDocuments: boolean;
+  /**
+   * Ancien assistant de premier démarrage (imposé tant que ce drapeau était faux). L'assistant n'est plus imposé :
+   * le drapeau est conservé pour relire sans erreur les préférences déjà enregistrées.
+   */
   setupCompleted: boolean;
+  /**
+   * L'enseignant a cliqué sur « Activer l'IA » (taille du téléchargement annoncée) et l'activation n'est pas terminée :
+   * elle reprend toute seule au lancement suivant de Magistra (fermeture pendant le téléchargement, erreur réseau…).
+   * Remis à faux quand l'IA est prête ou quand l'enseignant annule. JAMAIS vrai sans ce clic initial.
+   */
+  aiSetupRequested: boolean;
 }
 
 export interface StoredDocument {
@@ -304,4 +321,5 @@ export const DEFAULT_PREFERENCES: LocalPreferences = {
   wikipediaEnabled: true,
   keepDocuments: false,
   setupCompleted: false,
+  aiSetupRequested: false,
 };

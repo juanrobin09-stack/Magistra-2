@@ -23,7 +23,7 @@ export const NOT_DETECTED_TEXT = 'Magistra n’est pas encore détectée.';
  */
 export const SITE_ACCESS_HINT = 'Si elle est déjà ouverte, vérifiez dans Magistra → Réglages → « Site web Magistra » que l’accès du site est activé.';
 export const NOT_DETECTED_DETAIL =
-  `Si Magistra est installée, ouvrez-la puis réessayez. ${SITE_ACCESS_HINT} Sinon, téléchargez-la : l’installation ne prend que quelques minutes.`;
+  `Si Magistra est installée, ouvrez-la puis réessayez. ${SITE_ACCESS_HINT} Sinon, téléchargez-la : elle s’installe en quelques secondes, sans droits d’administrateur.`;
 export const PAIRING_TEXT = 'Confirmez dans l’application Magistra…';
 export const PAIRING_DETAIL =
   'Magistra vous demande d’autoriser ce site : cliquez sur « Autoriser ». Si votre navigateur demande d’ouvrir Magistra, acceptez.';
@@ -91,6 +91,26 @@ export const INSTALLED_TEXT = 'J’ai installé Magistra';
 export const SIGNED_OUT_DETECT_TEXT =
   `Connectez-vous : sur votre tableau de bord, cliquez sur « ${SEARCH_EXISTING_LABEL} » pour la connecter à ce navigateur.`;
 export const DETECT_NOW_LABEL = 'Détecter maintenant';
+
+// ─── Installation de Magistra pour Windows ──────────────────────────────────
+// Mêmes trois étapes partout où l'on télécharge (carte du mode démonstration, section « Magistra pour Windows » de
+// l'accueil et des réglages) : l'installateur est un NSIS « oneClick », par utilisateur (perMachine: false,
+// allowElevation: false), qui lance Magistra à la fin (runAfterFinish: true) — electron-builder.json. Il n'est pas
+// encore signé : SmartScreen l'annonce, avec les libellés exacts de Windows en français.
+
+export const INSTALL_STEPS: readonly string[] = [
+  'Téléchargez Magistra.',
+  'Ouvrez le fichier téléchargé. Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur « Informations complémentaires » puis « Exécuter quand même ».',
+  'Magistra s’installe en quelques secondes, sans droits d’administrateur, et s’ouvre toute seule.',
+];
+export const INSTALL_STEPS_LABEL = 'Installation en trois étapes';
+/**
+ * Ce qui suit l'installation, dit honnêtement : l'IA n'est pas dans l'installateur. L'application propose de
+ * l'activer (moteur et modèle) et annonce la taille AVANT tout téléchargement ; jamais sans ce clic.
+ */
+export const ACTIVATE_AI_NOTE =
+  'Ensuite, Magistra vous propose d’activer l’IA : un seul téléchargement de plusieurs Go, dont la taille est annoncée avant. L’IA fonctionne ensuite même sans Internet.';
+export const ALREADY_INSTALLED_TEXT = 'Déjà installée ?';
 
 // ─── Moteur de génération (site web) ────────────────────────────────────────
 

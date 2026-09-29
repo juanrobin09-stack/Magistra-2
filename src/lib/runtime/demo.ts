@@ -1,7 +1,7 @@
 // Mode démonstration (site sans authentification configurée).
 // Honnête : exemples pré-rédigés, aucune IA ; historique et favoris réellement conservés dans ce navigateur.
 
-import { runDemoGeneration } from '@shared/demo';
+import { EXAMPLE_NOTICE, runDemoGeneration } from '@shared/demo';
 import { MagistraError } from '@shared/errors';
 import { getMatiereLabel, getToolLabel } from '@shared/catalog';
 import { getNiveauLabel } from '@shared/levels';
@@ -169,5 +169,30 @@ export class DemoGenerationClient implements GenerationClient {
         onEvent(event);
       }
     }
+  }
+}
+
+/**
+ * Application Windows, IA de l'ordinateur pas encore prête : « Voir un exemple pré-rédigé » (page Générer) affiche le
+ * MÊME exemple que la démonstration du site (même moteur d'exemples, runDemoGeneration), à la demande explicite de
+ * l'enseignant, marqué « Exemple pré-rédigé — ce n'est pas l'IA » (et dans le texte lui-même, copié ou exporté :
+ * EXAMPLE_NOTICE). Jamais enregistré : l'historique de l'application ne contient que des contenus générés par l'IA
+ * (choix le plus simple et le plus honnête).
+ */
+export class ExampleGenerationClient implements GenerationClient {
+  readonly kind = 'local' as const;
+
+  async capabilities(): Promise<Capabilities> {
+    return {
+      maxDocumentChars: 0,
+      research: { academic: false, web: false, institutional: false, wikipedia: false },
+      privacy: { level: 'demo', message: "Exemple pré-rédigé : aucune IA n'est utilisée et rien n'est envoyé." },
+      engineLabel: 'Exemple pré-rédigé',
+      ready: true,
+    };
+  }
+
+  async generate(request: GenerationRequest, onEvent: (event: GenerationEvent) => void, signal: AbortSignal): Promise<void> {
+    for await (const event of runDemoGeneration(request, { signal, notice: EXAMPLE_NOTICE })) onEvent(event);
   }
 }

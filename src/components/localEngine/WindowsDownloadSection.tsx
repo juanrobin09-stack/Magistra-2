@@ -1,25 +1,28 @@
 // « Magistra pour Windows » : téléchargement de la dernière version STABLE publiée (GET /api/windows-release), avec sa
-// version, sa taille, sa date et son empreinte SHA-256 ; trois étapes très courtes ; ce que l'application apporte.
-// Après le téléchargement : « J’ai installé Magistra » [Détecter maintenant]. Aucune version n'est écrite en dur :
-// sans réponse du serveur, le lien mène à la page officielle des versions.
+// version, sa taille, sa date et son empreinte SHA-256 ; les trois étapes très courtes (avertissement SmartScreen
+// compris) et « Déjà installée ? Ouvrir Magistra », communes avec la carte du mode démonstration (WindowsInstall.tsx) ;
+// ce que l'application apporte. Après le téléchargement : « J’ai installé Magistra » [Détecter maintenant] sur le site
+// avec comptes. Aucune version n'est écrite en dur : sans réponse du serveur, le lien mène à la page officielle des
+// versions.
 // Accessibilité : après « Continuer » ou « Annuler » de l'explication (qui disparaît), le focus revient sur
 // « Détecter maintenant » au lieu d'être perdu au début de la page.
 
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, Copy, Cpu, Download, ExternalLink, KeyRound, Search, ShieldCheck, WifiOff, type LucideIcon } from 'lucide-react';
+import { Check, Copy, Cpu, ExternalLink, KeyRound, Search, ShieldCheck, WifiOff, type LucideIcon } from 'lucide-react';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
 import { useLocalEngine } from '@/lib/localConnector/controller';
 import type { RuntimeMode } from '@/lib/runtime/types';
 import { useLocalActions } from './localActions';
 import LocalEngineStatus, { type LocalEngineHandle } from './LocalEngineStatus';
 import { PermissionExplainer } from './PermissionNotes';
-import { DETECT_NOW_LABEL, DOWNLOAD_WINDOWS_LABEL, INSTALLED_TEXT, SIGNED_OUT_DETECT_TEXT } from './texts';
+import { DETECT_NOW_LABEL, INSTALLED_TEXT, SIGNED_OUT_DETECT_TEXT } from './texts';
 import { formatDate, formatSize, useWindowsRelease, WINDOWS_REQUIREMENTS_TEXT, type WindowsReleaseState } from './windowsRelease';
+import { InstallSteps, OpenInstalledApp, WindowsDownloadLink } from './WindowsInstall';
 
 const POINTS: { icon: LucideIcon; title: string; text: string }[] = [
   { icon: Cpu, title: 'IA locale', text: 'L’intelligence artificielle fonctionne directement sur votre ordinateur.' },
-  { icon: KeyRound, title: 'Aucune clé API', text: 'Rien à configurer : Magistra installe et prépare l’IA toute seule.' },
+  { icon: KeyRound, title: 'Aucune clé API', text: 'Rien à configurer : Magistra installe et prépare l’IA elle-même, après votre accord.' },
   {
     icon: WifiOff,
     title: 'Fonctionne hors connexion',
@@ -28,12 +31,13 @@ const POINTS: { icon: LucideIcon; title: string; text: string }[] = [
   { icon: ShieldCheck, title: 'Confidentialité locale', text: 'Dans l’application, vos documents et vos générations restent sur votre ordinateur.' },
 ];
 
-const STEPS = ['Téléchargez l’installateur.', 'Ouvrez-le et suivez les étapes.', 'Lancez Magistra : l’IA se prépare toute seule.'];
-
 interface WindowsDownloadSectionProps {
   /** « landing » : section publique autonome (titre h2) ; « settings » : contenu d'une section des réglages. */
   variant: 'landing' | 'settings';
-  /** Mode d'exécution : la version n'est demandée qu'à un serveur Magistra (site web, mode personnel). */
+  /**
+   * Mode d'exécution : la version est demandée au serveur du site (web, mode personnel, démonstration — le site public
+   * sans comptes garde son API) ; jamais dans l'application Windows, déjà installée.
+   */
   mode: RuntimeMode;
 }
 
@@ -118,6 +122,9 @@ function DetectNow({ engine }: { engine: LocalEngineHandle }) {
 /** Annonce (lecteurs d'écran) après le clic sur « Télécharger ». */
 const AFTER_DOWNLOAD_ANNOUNCEMENT = `Téléchargement lancé. Une fois Magistra installée, la rubrique « ${INSTALLED_TEXT} », juste après, permet de la retrouver.`;
 
+/** Hors du site avec comptes (rien à connecter) : où retrouver Magistra après l'installation (raccourcis créés par l'installateur). */
+const OPENS_BY_ITSELF_TEXT = 'Magistra s’ouvre toute seule à la fin de l’installation. Ensuite, retrouvez-la dans le menu Démarrer ou sur le Bureau.';
+
 function AfterDownload({ mode }: { mode: RuntimeMode }) {
   const engine = useLocalEngine();
   return (
@@ -131,7 +138,7 @@ function AfterDownload({ mode }: { mode: RuntimeMode }) {
           <Link to="/app" className="text-accent hover:underline underline-offset-2">Se connecter</Link>
         </p>
       ) : (
-        <p className="text-sm text-mg-200">Lancez Magistra depuis le menu Démarrer de Windows.</p>
+        <p className="text-sm text-mg-200">{OPENS_BY_ITSELF_TEXT}</p>
       )}
     </div>
   );
@@ -184,25 +191,12 @@ function ReleaseFacts({ state, queried }: { state: WindowsReleaseState; queried:
 }
 
 export default function WindowsDownloadSection({ variant, mode }: WindowsDownloadSectionProps) {
-  const queried = mode === 'web' || mode === 'personal';
+  const queried = mode !== 'local';
   const release = useWindowsRelease(queried);
   const [downloaded, setDownloaded] = useState(false);
   const landing = variant === 'landing';
+  // Accueil : « btn-primary » reste réservé au bouton d'accès à l'application.
   const buttonClass = `${landing ? 'btn-secondary' : 'btn-primary'} text-sm py-2.5 px-5 justify-center ${FOCUS_RING}`;
-
-  const button = release.status === 'loading' ? (
-    <span className={`${buttonClass} opacity-60 cursor-wait`} aria-busy="true" aria-disabled="true">
-      <Download size={16} aria-hidden="true" /> {DOWNLOAD_WINDOWS_LABEL}
-    </span>
-  ) : release.status === 'ready' ? (
-    <a href={release.release.downloadUrl} rel="noopener noreferrer" className={buttonClass} onClick={() => setDownloaded(true)}>
-      <Download size={16} aria-hidden="true" /> {DOWNLOAD_WINDOWS_LABEL}
-    </a>
-  ) : (
-    <a href={release.releasesUrl} target="_blank" rel="noopener noreferrer" className={buttonClass} onClick={() => setDownloaded(true)}>
-      <Download size={16} aria-hidden="true" /> {DOWNLOAD_WINDOWS_LABEL} <ExternalLink size={13} aria-hidden="true" />
-    </a>
-  );
 
   const content = (
     <div className={landing ? 'card p-6 sm:p-8 grid gap-8 lg:grid-cols-2' : 'space-y-5'}>
@@ -220,19 +214,13 @@ export default function WindowsDownloadSection({ variant, mode }: WindowsDownloa
             </li>
           ))}
         </ul>
-        <ol className="space-y-1.5" aria-label="Installation en trois étapes">
-          {STEPS.map((step, i) => (
-            <li key={step} className="flex items-start gap-2.5 text-sm text-mg-100">
-              <span aria-hidden="true" className="w-5 h-5 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center text-[11px] font-semibold text-accent shrink-0 mt-px">
-                {i + 1}
-              </span>
-              <span className="min-w-0">{step}</span>
-            </li>
-          ))}
-        </ol>
+        <InstallSteps />
       </div>
       <div className="space-y-4 min-w-0">
-        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">{button}</div>
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
+          <WindowsDownloadLink release={release} className={buttonClass} onClick={() => setDownloaded(true)} />
+        </div>
+        <OpenInstalledApp />
         <ReleaseFacts state={release} queried={queried} />
         {/* Région présente dès l'affichage : l'apparition de « J’ai installé Magistra » est annoncée aux lecteurs
             d'écran (le focus reste sur le lien de téléchargement). */}
@@ -244,7 +232,8 @@ export default function WindowsDownloadSection({ variant, mode }: WindowsDownloa
 
   if (!landing) return <div data-testid="windows-download">{content}</div>;
   return (
-    <section id="magistra-windows" aria-labelledby="windows-title" className="py-16 sm:py-20 px-6" data-testid="windows-download">
+    // Cible des liens « Télécharger pour Windows » de l'accueil (#magistra-windows) : marge sous la barre fixe.
+    <section id="magistra-windows" aria-labelledby="windows-title" className="py-16 sm:py-20 px-6 scroll-mt-16" data-testid="windows-download">
       <div className="max-w-5xl mx-auto">
         <div className="text-center mb-10">
           <p className="text-xs uppercase tracking-widest text-accent mb-3">Application Windows</p>
@@ -252,8 +241,9 @@ export default function WindowsDownloadSection({ variant, mode }: WindowsDownloa
             Magistra pour <em className="text-accent not-italic">Windows</em>
           </h2>
           <p className="text-sm text-mg-200 mt-3 max-w-xl mx-auto leading-relaxed">
-            L’intelligence artificielle de Magistra sur votre ordinateur, gratuite et sans compte. Depuis ce site,
-            vous pourrez ensuite l’utiliser pour vos générations.
+            L’intelligence artificielle de Magistra sur votre ordinateur : gratuite, sans compte, même sans Internet.
+            {/* Seul le site avec comptes peut confier ses générations à l'application (connecteur local). */}
+            {mode === 'web' && ' Depuis ce site, vous pourrez aussi l’utiliser pour vos générations.'}
           </p>
         </div>
         {content}

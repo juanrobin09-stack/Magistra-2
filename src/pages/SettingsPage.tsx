@@ -18,6 +18,7 @@ import { isMagistraError } from '@shared/errors';
 import type { AppInfo, LocalPreferences } from '@shared/ipc';
 import { getNiveauLabel } from '@shared/levels';
 import { RESEARCH_MODES, type ResearchMode } from '@shared/types';
+import ActivateAICard from '@/components/ai/ActivateAICard';
 import AdminContactLine from '@/components/ai/AdminContactLine';
 import AdvancedAIOptions from '@/components/ai/AdvancedAIOptions';
 import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
@@ -32,8 +33,9 @@ import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSect
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import UpdateCheck from '@/components/UpdateCheck';
 import { useAIStatus, useCapabilities, type AIController, type CapabilitiesState } from '@/hooks/useAIStatus';
+import { activationPlan } from '@/lib/ai-ui/activation';
 import { providerPolicyUrl, serverAIView, type ServerMode } from '@/lib/ai-ui/server';
-import { aiPhase, engineHostIfRemote, phaseInfo, phaseLine } from '@/lib/ai-ui/status';
+import { aiPhase, engineHostIfRemote, engineOutdatedText, phaseInfo, phaseLine } from '@/lib/ai-ui/status';
 import { useLocalEngine } from '@/lib/localConnector/controller';
 import { adminContact, useRuntime } from '@/lib/runtime/context';
 import { fromIpcError, getBridge } from '@/lib/runtime/local';
@@ -259,6 +261,13 @@ function LocalAISettings({ ai }: { ai: AIController }) {
   const phase = aiPhase(status);
   const info = phaseInfo(phase);
   const remote = status.config.mode === 'remote';
+  const activating = ai.activation.state === 'running';
+  const engineStep = phase === 'engine_missing' || phase === 'engine_stopped' || phase === 'engine_outdated';
+  // Une seule action principale, la même que sur le tableau de bord : « Activer l'IA » (un clic, taille annoncée,
+  // enchaînement moteur → modèle, reprise au prochain lancement). Le panneau du moteur seul ne reste que là où cette
+  // activation ne s'applique pas : moteur trop ancien alors que l'IA fonctionne (mise à jour pour d'autres versions),
+  // modèle personnalisé ou moteur sur un autre ordinateur (options avancées).
+  const oneClick = !remote && (activating || (engineStep && activationPlan(status) !== null));
   const engineHost = remote ? null : engineHostIfRemote(status.engine.url);
   const detail = info.ok
     ? remote
@@ -266,7 +275,8 @@ function LocalAISettings({ ai }: { ai: AIController }) {
       : engineHost
         ? `${status.activeLabel}, sur le serveur Ollama « ${engineHost} » (les données de génération y sont transmises).`
         : `${status.activeLabel}, directement sur cet ordinateur.`
-    : info.description;
+    // Moteur trop ancien : la cause précise (versions), que la carte d'activation ne redit pas.
+    : phase === 'engine_outdated' ? engineOutdatedText(status) : info.description;
 
   return (
     <>
@@ -280,8 +290,9 @@ function LocalAISettings({ ai }: { ai: AIController }) {
         </button>
       </div>
 
-      {(phase === 'engine_missing' || phase === 'engine_stopped' || phase === 'engine_outdated'
-        || (!remote && status.engine.state === 'running' && status.engine.outdated)) && <EngineSetupPanel ai={ai} status={status} />}
+      {oneClick ? (
+        <ActivateAICard variant="setup" />
+      ) : (engineStep || (!remote && status.engine.state === 'running' && status.engine.outdated)) && <EngineSetupPanel ai={ai} status={status} />}
 
       {phase === 'remote_unavailable' && (
         <WarningNote>
@@ -296,7 +307,8 @@ function LocalAISettings({ ai }: { ai: AIController }) {
         </p>
       )}
 
-      {!remote && status.engine.state === 'running' && (
+      {/* Changer de version ; pas pendant une activation, dont la carte montre déjà le téléchargement. */}
+      {!remote && status.engine.state === 'running' && !activating && (
         <div className="border-t border-white/5 pt-4">
           <ModelSetupPanel ai={ai} status={status} variant="settings" />
         </div>

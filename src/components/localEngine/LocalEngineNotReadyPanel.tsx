@@ -40,7 +40,7 @@ export default function LocalEngineNotReadyPanel({ engine, cause, providerName, 
           </div>
           {/* « Ouvrez Magistra » est déjà dit par la cause ; l'indication sur l'accès du site (réglage de l'application)
               reste affichée : le site ne distingue pas une application fermée d'un accès désactivé. */}
-          <LocalEngineStatus engine={engine} headline={false} omit={causeText ? [causeText, APP_CLOSED_DETAIL] : []} idPrefix="gen" />
+          <LocalEngineStatus engine={engine} headline={false} omit={causeText ? [causeText, APP_CLOSED_DETAIL] : []} idPrefix="gen" installSteps />
           <div className="border-t border-white/5 pt-3">
             <button type="button" onClick={() => setConfirming(true)} className={`btn-ghost text-sm py-2 px-3 ${FOCUS_RING}`}>
               <Send size={15} aria-hidden="true" /> {USE_SERVER_LABEL}

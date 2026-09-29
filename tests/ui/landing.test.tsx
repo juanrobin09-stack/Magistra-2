@@ -5,7 +5,6 @@ import { ALL_NIVEAUX } from '@shared/levels';
 import LandingPage from '@/pages/LandingPage';
 import { RuntimeContext } from '@/lib/runtime/context';
 import type { RuntimeValue } from '@/lib/runtime/types';
-import { WINDOWS_DOWNLOAD_URL } from '@/lib/links';
 import { cleanup, fakeRuntime, MemoryStore, PROFILE_COLLEGE, render } from './helpers';
 import { COMMERCIAL_VENDOR } from '../vendor';
 
@@ -100,12 +99,16 @@ describe('Landing — affirmations', () => {
 });
 
 describe('Landing — application Windows et IA du site', () => {
-  it('lien « Télécharger pour Windows » vers la page des versions (nouvel onglet sûr)', async () => {
+  it('liens « Télécharger pour Windows » vers la section « Magistra pour Windows » de la page (même onglet)', async () => {
     const { container } = await mount(fakeRuntime(new MemoryStore()));
-    const links = Array.from(container.querySelectorAll<HTMLAnchorElement>(`a[href="${WINDOWS_DOWNLOAD_URL}"]`));
-    expect(links.length).toBeGreaterThanOrEqual(1);
-    expect(links.some(a => a.textContent?.includes('Télécharger pour Windows'))).toBe(true);
-    for (const a of links) expect(a.rel).toContain('noopener');
+    // Téléchargement direct, trois étapes et avertissement SmartScreen y sont réunis, plutôt que la page des versions.
+    const links = Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href="#magistra-windows"]'));
+    expect(links.length).toBeGreaterThanOrEqual(2);
+    for (const a of links) {
+      expect(a.textContent).toContain('Télécharger pour Windows');
+      expect(a.target).toBe('');
+    }
+    expect(container.querySelector('section#magistra-windows')).not.toBeNull();
     // Le bouton principal reste le seul « btn-primary » : l'accès à l'application n'est pas modifié.
     for (const a of Array.from(container.querySelectorAll('a.btn-primary'))) expect(a.getAttribute('href')).toBe('/onboarding');
   });
