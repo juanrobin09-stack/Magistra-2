@@ -34,7 +34,7 @@
 
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
-import { MagistraError, toMagistraError, type ErrorCode } from '../../shared/errors.js';
+import { defaultMessage, MagistraError, toMagistraError, type ErrorCode } from '../../shared/errors.js';
 import {
   canonicalProof, canonicalRequest, CONNECTOR_ALLOWED_REQUEST_HEADERS, CONNECTOR_EXPOSED_RESPONSE_HEADERS, CONNECTOR_FORMATS,
   CONNECTOR_HEADERS, CONNECTOR_HOST, CONNECTOR_LIMITS, CONNECTOR_PROTOCOL_VERSION, CONNECTOR_ROUTE_METHODS, CONNECTOR_ROUTES,
@@ -331,11 +331,22 @@ export class ConnectorServer {
         socket.destroy();
         return;
       }
-      const status = err.code === 'ERR_HTTP_REQUEST_TIMEOUT' ? '408 Request Timeout' : err.code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large' : '400 Bad Request';
+      const [status, message] = err.code === 'ERR_HTTP_REQUEST_TIMEOUT'
+        ? ['408 Request Timeout', 'Requête reçue trop lentement.']
+        : err.code === 'HPE_HEADER_OVERFLOW'
+          // Node 22.23 et suivants (donc Electron) refusent eux-mêmes une requête au-delà de maxHeadersCount.
+          ? ['431 Request Header Fields Too Large', 'Trop d’en-têtes dans la requête.']
+          : ['400 Bad Request', defaultMessage('INVALID_REQUEST')];
+      // Même forme que les autres refus (sendError) : erreur JSON, sans aucun en-tête CORS.
+      const body = JSON.stringify({ error: { code: 'INVALID_REQUEST', message, retryable: false } });
       // Réponse écrite, puis connexion DÉTRUITE (comme le gestionnaire par défaut de Node) : le serveur accepte les
       // connexions à moitié fermées, et un client qui ne fermerait jamais son côté garderait sinon sa place parmi les
       // MAX_CONNECTIONS indéfiniment (connecteur injoignable pour le site).
-      socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Length: 0\r\n\r\n`, () => socket.destroy());
+      socket.end(
+        `HTTP/1.1 ${status}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nVary: Origin\r\n`
+          + `Content-Type: application/json; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+        () => socket.destroy(),
+      );
     });
     return server;
   }
