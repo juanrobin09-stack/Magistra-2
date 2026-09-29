@@ -7,9 +7,10 @@
 // - au plus MAX_PROMPTS_PER_MINUTE boîtes de consentement par minute (un site ne peut pas harceler l'enseignant) ;
 // - durée de vie : CONNECTOR_LIMITS.pairingTtlMs depuis l'ouverture de l'URL (accord compris) ; ensuite 410 ;
 // - premier temps (acknowledge, sans secret) : accusé de réception `ack` = SHA-256(canonicalPairAck(pairingId,
-//   challenge)), calculé à la réception de l'URL — seule cette application connaît le défi, qui ne circule jamais
-//   dans une requête HTTP — avec l'état de la demande ('pending' ou 'consented'). Le requérant n'étant pas
-//   authentifié, ce premier temps ne MODIFIE jamais la demande (ni essai compté, ni refus consommé) ;
+//   challenge, host)) — seule cette application connaît le défi, qui ne circule jamais dans une requête HTTP ; `host`
+//   est l'hôte du port où elle écoute (fourni par le serveur à chaque réponse : un relais sur un autre port reçoit un
+//   accusé qui ne vaut pas pour le sien) — avec l'état de la demande ('pending' ou 'consented'). Le requérant n'étant
+//   pas authentifié, ce premier temps ne MODIFIE jamais la demande (ni essai compté, ni refus consommé) ;
 // - second temps (complete) : SHA-256(octets du vérificateur) doit égaler le défi de l'URL (comparaison à temps
 //   constant) ; CONNECTOR_LIMITS.maxVerifierAttempts essais faux au plus, puis la demande est supprimée ;
 // - en-tête Origin des deux temps = origine de la demande, sinon 403 FORBIDDEN ;
@@ -32,6 +33,8 @@ export type PairingState = 'awaiting' | 'approved' | 'refused';
 export interface PairingTicket {
   readonly pairingId: string;
   readonly origin: string;
+  /** Texte exact du défi de l'URL : code de vérification affiché dans la boîte de consentement (pairCode). */
+  readonly challenge: string;
   /** Interrompu quand la demande est remplacée, expire ou est annulée : la boîte de consentement doit se fermer. */
   readonly signal: AbortSignal;
 }
@@ -66,8 +69,8 @@ export interface PairingRegistryOptions {
 interface PairingEntry {
   pairingId: string;
   challenge: Buffer;
-  /** Accusé de réception (calculé une fois, à la réception de l'URL). */
-  ack: string;
+  /** Texte exact du défi dans l'URL (accusé de réception, calculé à chaque réponse pour l'hôte joint). */
+  challengeText: string;
   origin: string;
   createdAt: number;
   state: PairingState;
@@ -127,7 +130,7 @@ export class PairingRegistry {
     const entry: PairingEntry = {
       pairingId: params.pairingId,
       challenge,
-      ack: pairAck(params.pairingId, params.challenge),
+      challengeText: params.challenge,
       origin: params.origin,
       createdAt: now,
       state: 'awaiting',
@@ -138,7 +141,7 @@ export class PairingRegistry {
     };
     entry.timer.unref?.();
     this.current = entry;
-    return { kind: 'prompt', ticket: { pairingId: entry.pairingId, origin: entry.origin, signal: controller.signal } };
+    return { kind: 'prompt', ticket: { pairingId: entry.pairingId, origin: entry.origin, challenge: entry.challengeText, signal: controller.signal } };
   }
 
   /**
@@ -169,19 +172,21 @@ export class PairingRegistry {
    * contrôles : demande connue (404) → délai (410) → origine (403 FORBIDDEN) → réponse de l'enseignant : en attente
    * ('pending'), accord ('consented' : la demande attend le second temps), refus (403 CONNECTOR_PAIRING_REFUSED).
    * Ne modifie jamais la demande : un refus reste lisible jusqu'à l'expiration ou au remplacement de la demande.
+   * `host` : connectorHost(port d'écoute), inclus dans l'accusé.
    */
-  acknowledge(input: { pairingId: string; origin: string }): PairingAck {
+  acknowledge(input: { pairingId: string; origin: string; host: string }): PairingAck {
     const c = this.target(input.pairingId, input.origin);
     if (c.state === 'refused') throw new MagistraError('CONNECTOR_PAIRING_REFUSED');
-    return { status: c.state === 'approved' ? 'consented' : 'pending', ack: c.ack };
+    return { status: c.state === 'approved' ? 'consented' : 'pending', ack: pairAck(c.pairingId, c.challengeText, input.host) };
   }
 
   /**
    * Second temps de POST /v1/pair (fin d'appairage), arguments déjà au bon format. Ordre des contrôles : demande
    * connue (404) → délai (410) → origine de la requête (403 FORBIDDEN) → vérificateur (401, demande supprimée au
    * dernier essai) → réponse de l'enseignant (202 en attente, 403 refus, accord : demande consommée).
+   * `host` : connectorHost(port d'écoute), inclus dans l'accusé.
    */
-  complete(input: { pairingId: string; verifier: string; origin: string }): PairingCompletion {
+  complete(input: { pairingId: string; verifier: string; origin: string; host: string }): PairingCompletion {
     const c = this.target(input.pairingId, input.origin);
     const verifier = fromBase64Url(input.verifier, SECRET_BYTES);
     if (!verifier || !constantTimeEqual(sha256(verifier), c.challenge)) {
@@ -189,10 +194,11 @@ export class PairingRegistry {
       if (c.attempts >= this.maxAttempts) this.drop(c);
       throw new MagistraError('UNAUTHENTICATED', 'Demande de connexion invalide.');
     }
-    if (c.state === 'awaiting') return { status: 'pending', ack: c.ack };
+    const ack = pairAck(c.pairingId, c.challengeText, input.host);
+    if (c.state === 'awaiting') return { status: 'pending', ack };
     this.drop(c);
     if (c.state === 'refused') throw new MagistraError('CONNECTOR_PAIRING_REFUSED');
-    return { status: 'approved', pairingId: c.pairingId, origin: c.origin, ack: c.ack };
+    return { status: 'approved', pairingId: c.pairingId, origin: c.origin, ack };
   }
 
   /**

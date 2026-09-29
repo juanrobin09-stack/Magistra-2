@@ -2,7 +2,8 @@
 // ou serveur Magistra en ligne. Mémorisé dans ce navigateur (localStorage « magistra_engine_choice »).
 //
 // Sans choix enregistré : Magistra locale si ce navigateur est appairé (recommandé), sinon le serveur en ligne. Un
-// appairage réussi enregistre Magistra locale comme choix (adoptLocalChoiceAfterPairing), sauf choix déjà fait.
+// appairage réussi ou constaté (vérification de l'état) enregistre Magistra locale comme choix
+// (adoptLocalChoiceAfterPairing), sauf choix déjà fait.
 // Seul un choix EXPLICITE de l'enseignant (setEngineChoice) fait passer de l'un à l'autre : aucun code ne bascule
 // silencieusement du local vers un tiers, même quand Magistra locale est injoignable.
 

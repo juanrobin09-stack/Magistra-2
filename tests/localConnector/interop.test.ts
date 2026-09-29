@@ -10,13 +10,17 @@
 //
 // Parcours : détection, appairage (accepté, refusé), état prouvé, génération en flux avec le résultat à enregistrer,
 // annulation, « redémarrage » de l'application (autre port, autre programme sur l'ancien), programme qui occupe un
-// port dédié et accepte tout pendant l'appairage (jamais de vérificateur pour lui), autorisation retirée dans
-// l'application, mauvais secret, autre origine, application réglée sur un serveur distant, application occupée,
-// contrôleur et client hybride du site (enregistrement du résultat, jamais de repli vers le serveur en ligne).
+// port dédié et accepte tout pendant l'appairage (jamais de vérificateur pour lui), programme qui RELAIE tout à la vraie
+// application depuis un autre port dédié (accusé, signature et preuve liés au port : rien ne passe par lui), autorisation
+// retirée pendant la lecture d'une requête, autorisation retirée dans
+// l'application (marque de retrait), application d'une AUTRE session Windows pendant que celle de l'enseignant est
+// fermée (appairage gardé, retrait jamais « confirmé » par elle), éviction au-delà de maxClients, code de vérification
+// identique des deux côtés, mauvais secret, autre origine, application réglée sur un serveur distant, application
+// occupée, contrôleur et client hybride du site (enregistrement du résultat, jamais de repli vers le serveur en ligne).
 
 import { createECDH, randomBytes } from 'node:crypto';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
+import { createServer as createHttpServer, request as httpRequest, type Server as HttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,13 +28,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MockProvider, type MockProviderOptions } from '@shared/ai/mock';
 import { defaultMessage } from '@shared/errors';
 import { DEFAULT_PREFERENCES } from '@shared/ipc';
-import { CONNECTOR_HEADERS, CONNECTOR_LIMITS, parseAppUrl } from '@shared/localConnector';
+import { CONNECTOR_HEADERS, CONNECTOR_LIMITS, LOCAL_ENGINE_SITE_MESSAGES, parseAppUrl } from '@shared/localConnector';
 import type { Capabilities, GenerationEvent, GenerationRecordDraft, GenerationRequest } from '@shared/types';
 import type { SecretCipher } from '../../electron/aiConfig';
 import { toBase64Url } from '../../electron/connector/crypto';
 import { LocalConnector, type ConsentRequest } from '../../electron/connector/service';
 import { BUSY_WINDOW_MESSAGE, GenerationManager, type GenerationDeps } from '../../electron/generation';
-import { defaultSleep, LocalConnectorClient, type LocalConnectorClientOptions } from '@/lib/localConnector/client';
+import {
+  defaultSleep, LocalConnectorClient, STOPPED_BY_APP_MESSAGE, UNRECOGNIZED_BY_APP_MESSAGE, type LocalConnectorClientOptions,
+} from '@/lib/localConnector/client';
 import { createLocalEngineController } from '@/lib/localConnector/controller';
 import { resetEngineChoiceMemory } from '@/lib/localConnector/engineChoice';
 import { MemoryPairingStore, type PairingStore } from '@/lib/localConnector/pairingStore';
@@ -95,7 +101,7 @@ async function impostor(port: number): Promise<HttpServer> {
   const server = createHttpServer((req, res) => {
     req.resume();
     const body = req.url === '/v1/hello'
-      ? { app: 'magistra', protocol: 1, version: '9.9.9' }
+      ? { app: 'magistra', protocol: 2, version: '9.9.9' }
       : { version: '9.9.9', engine: { ready: true, local: true, label: 'Imposteur' }, capabilities: { maxDocumentChars: 1, research: { academic: false, web: false, institutional: false, wikipedia: false } }, busy: false };
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     res.end(JSON.stringify(body));
@@ -119,7 +125,7 @@ async function greedyImpostor(port: number): Promise<{ server: HttpServer; recei
       const body = Buffer.concat(chunks).toString('utf8');
       received.push({ method: req.method ?? '', path: req.url ?? '', body });
       let reply: unknown = { ok: true };
-      if (req.url === '/v1/hello') reply = { app: 'magistra', protocol: 1, version: '9.9.9' };
+      if (req.url === '/v1/hello') reply = { app: 'magistra', protocol: 2, version: '9.9.9' };
       if (req.url === '/v1/pair' && req.method === 'POST') {
         const input = JSON.parse(body || '{}') as Record<string, unknown>;
         const ack = randomBytes(32).toString('base64url');
@@ -137,6 +143,35 @@ async function greedyImpostor(port: number): Promise<{ server: HttpServer; recei
     });
   });
   await new Promise<void>(resolve => server.listen(port, '127.0.0.1', resolve));
+  return { server, received };
+}
+
+/**
+ * Programme qui occupe un autre port dédié et RELAIE tout, tel quel, à la vraie application (autre session Windows d'un
+ * PC partagé, programme lancé avant Magistra). Il ne réécrit que l'en-tête Host (sinon l'application refuserait tout),
+ * note chaque requête reçue et modifie le texte des réponses (« Fontaine » → « CONTENU-INJECTÉ »).
+ */
+async function relay(listenPort: number, target: () => number): Promise<{ server: HttpServer; received: string[] }> {
+  const received: string[] = [];
+  const server = createHttpServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks);
+      received.push(`${req.method} ${req.url} ${body.toString('utf8')}`);
+      const headers = { ...req.headers, host: `127.0.0.1:${target()}` };
+      const upstream = httpRequest({ host: '127.0.0.1', port: target(), method: req.method, path: req.url, headers, agent: false, setHost: false }, up => {
+        const { 'content-length': _length, ...upHeaders } = up.headers;
+        res.writeHead(up.statusCode ?? 502, upHeaders);
+        up.setEncoding('utf8');
+        up.on('data', (text: string) => res.write(text.replace(/Fontaine/g, 'CONTENU-INJECTÉ')));
+        up.on('end', () => res.end());
+      });
+      upstream.on('error', () => res.destroy());
+      upstream.end(body);
+    });
+  });
+  await new Promise<void>(resolve => server.listen(listenPort, '127.0.0.1', resolve));
   return { server, received };
 }
 
@@ -164,7 +199,8 @@ let engineReady: boolean;
 let opened: string[];
 let current: App | null;
 
-function startApp(ports: readonly number[], providerOptions: MockProviderOptions = {}): Promise<App> {
+/** `appFile` : local-connector.json de l'application (autre fichier : application d'une autre session Windows). */
+function startApp(ports: readonly number[], providerOptions: MockProviderOptions = {}, appFile = file, maxClients?: number): Promise<App> {
   const provider = new MockProvider({ reply: REPLY, chunkSize: 12, model: 'ministral-3:8b', ...providerOptions });
   const saved = vi.fn(async () => ({ id: 'jamais' }));
   const deps: GenerationDeps = {
@@ -186,8 +222,9 @@ function startApp(ports: readonly number[], providerOptions: MockProviderOptions
   const manager = new GenerationManager(deps);
   const consents: ConsentRequest[] = [];
   const connector = new LocalConnector({
-    file,
+    file: appFile,
     cipher,
+    ...(maxClients ? { maxClients } : {}),
     version: VERSION,
     allowedOrigins: [ORIGIN, DEV_ORIGIN],
     ports,
@@ -295,7 +332,7 @@ describe('site web ⇄ application : protocole réel', () => {
     const client = new LocalConnectorClient(options);
 
     const found = await client.hello();
-    expect(found).toEqual({ port, hello: { app: 'magistra', protocol: 1, version: VERSION } });
+    expect(found).toEqual({ port, hello: { app: 'magistra', protocol: 2, version: VERSION } });
     expect(await client.hasPairing()).toBe(false);
 
     await client.pair(new AbortController().signal);
@@ -401,6 +438,56 @@ describe('site web ⇄ application : protocole réel', () => {
     expect((await collect(reloaded)).at(-1)?.type).toBe('done');
   });
 
+  it('PC partagé : l’application de l’enseignant fermée, celle d’une AUTRE session ouverte → appairage gardé, retrait jamais « confirmé » par elle ; la sienne rouverte → reconnue', async () => {
+    const [p1, p2] = [await freePort(), await freePort()];
+    const mine = await startApp([p2]);
+    const { client, store } = await pairedClient([p1, p2]);
+    const clientId = (await store.load())!.clientId;
+    await stopApp(mine);
+    // Magistra d'un collègue (autre session : son propre fichier, ne connaît pas ce navigateur) sur l'autre port dédié.
+    const colleague = await startApp([p1], {}, path.join(dir, 'autre-session.json'));
+    expect(colleague.connector.port).toBe(p1);
+    const reloaded = new LocalConnectorClient({ ...clientOptions([p1, p2]), store });
+    expect(await rejection(reloaded.status())).toMatchObject({ code: 'CONNECTOR_UNPAIRED', message: UNRECOGNIZED_BY_APP_MESSAGE });
+    expect(await reloaded.hasPairing()).toBe(true);
+    // Rien n'est généré par l'application du collègue.
+    expect((await collect(reloaded)).at(-1)).toMatchObject({ type: 'error', code: 'CONNECTOR_UNPAIRED' });
+    expect(colleague.provider.calls).toHaveLength(0);
+    // La sienne rouverte : reconnue sans nouvel appairage.
+    const back = await startApp([p2]);
+    expect((await reloaded.status()).version).toBe(VERSION);
+    expect(back.consents).toHaveLength(0);
+    // Déconnexion pendant que la sienne est fermée : le 401 du collègue ne vaut pas confirmation du retrait.
+    await stopApp(back);
+    expect(await client.unpair()).toBe(false);
+    const again = await startApp([p2]);
+    expect(again.connector.status().clients.map(c => c.clientId)).toEqual([clientId]);
+  });
+
+  it('navigateur évincé au-delà de maxClients : sa génération en cours s’arrête ; il l’apprend (marque de retrait) et oublie son appairage', async () => {
+    const app = await startApp([0], { reply: REPLY.repeat(40), chunkSize: 4, delayMs: 15 }, file, 1);
+    const port = app.connector.port!;
+    const first = await pairedClient([port]);
+    const running = collect(first.client);
+    await until(() => app.manager.busy);
+    const second = await pairedClient([port]);
+    expect((await running).at(-1)).toMatchObject({ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: STOPPED_BY_APP_MESSAGE });
+    await until(() => !app.manager.busy);
+    expect(await rejection(first.client.status())).toMatchObject({ code: 'CONNECTOR_UNPAIRED', message: defaultMessage('CONNECTOR_UNPAIRED') });
+    expect(await first.client.hasPairing()).toBe(false);
+    expect((await second.client.status()).version).toBe(VERSION);
+  });
+
+  it('code de vérification : celui que le site affiche est celui de la boîte de consentement de l’application', async () => {
+    const app = await startApp([0]);
+    const codes: string[] = [];
+    const client = new LocalConnectorClient(clientOptions([app.connector.port!]));
+    await client.pair(new AbortController().signal, code => codes.push(code));
+    expect(codes).toHaveLength(1);
+    expect(app.consents.map(c => c.code)).toEqual(codes);
+    expect(app.consents[0].detail).toContain(codes[0]);
+  });
+
   it('programme qui occupe le premier port dédié et accepte tout : le vérificateur ne lui est JAMAIS envoyé ; appairage avec la vraie application sur le port suivant', async () => {
     const [p1, p2] = [await freePort(), await freePort()];
     const fake = await greedyImpostor(p1);
@@ -435,16 +522,65 @@ describe('site web ⇄ application : protocole réel', () => {
     await until(() => !app.manager.busy);
   });
 
+  it('programme qui RELAIE tout à la vraie application depuis un port essayé avant elle : ignoré (accusé du mauvais port), ni vérificateur, ni clé, ni document pour lui', async () => {
+    const [p1, p2] = [await freePort(), await freePort()];
+    const app = await startApp([p2]);
+    expect(app.connector.port).toBe(p2);
+    const fake = await relay(p1, () => p2);
+    servers.push(fake.server);
+
+    const { client, store } = await pairedClient([p1, p2]);
+    // Appairage fait avec l'application elle-même, sur SON port : le relais a transmis un accusé valable pour p2 seulement.
+    expect((await store.load())!.port).toBe(p2);
+    expect(app.consents).toHaveLength(1);
+    expect(fake.received.some(r => r.startsWith('POST /v1/pair'))).toBe(true);
+    for (const r of fake.received) expect(r).not.toMatch(/verifier|clientPublicKey/);
+
+    const events = await collect(client);
+    expect(events.at(-1)?.type).toBe('done');
+    expect(JSON.stringify(events)).not.toContain('CONTENU-INJECTÉ');
+    expect(fake.received.every(r => !r.includes('PASSAGE-CONFIDENTIEL-4412'))).toBe(true);
+    expect(fake.received.filter(r => !r.startsWith('GET /v1/hello') && !r.startsWith('POST /v1/pair') && !r.startsWith('OPTIONS'))).toEqual([]);
+    await until(() => !app.manager.busy);
+  });
+
+  it('appairage légitime puis redémarrage de l’application sur un autre port, un relais ayant pris l’ancien : requête relayée refusée, génération directe, port mis à jour', async () => {
+    const [p1, p2] = [await freePort(), await freePort()];
+    const first = await startApp([p1, p2]);
+    expect(first.connector.port).toBe(p1);
+    const { store, options } = await pairedClient([p1, p2]);
+    expect((await store.load())!.port).toBe(p1);
+    await stopApp(first);
+
+    // L'autre programme prend p1 et relaie tout vers l'application, redémarrée sur p2.
+    const fake = await relay(p1, () => p2);
+    servers.push(fake.server);
+    const second = await startApp([p1, p2]);
+    expect(second.connector.port).toBe(p2);
+
+    const reloaded = new LocalConnectorClient(options);
+    const events = await collect(reloaded);
+    expect(events.at(-1)?.type).toBe('done');
+    expect(JSON.stringify(events)).not.toContain('CONTENU-INJECTÉ');
+    // Le relais n'a reçu qu'une requête d'état signée pour SON port (refusée par l'application : Host réécrit, signature
+    // fausse), jamais la demande ni les extraits de documents.
+    expect(fake.received.some(r => r.startsWith('GET /v1/status'))).toBe(true);
+    expect(fake.received.every(r => !r.includes('PASSAGE-CONFIDENTIEL-4412') && !r.startsWith('POST /v1/generate'))).toBe(true);
+    expect((await store.load())!.port).toBe(p2);
+    expect(second.consents).toHaveLength(0);
+    await until(() => !second.manager.busy);
+  });
+
   it('autorisation retirée dans l’application : CONNECTOR_UNPAIRED côté site, appairage oublié, génération refusée', async () => {
     const app = await startApp([0], { reply: REPLY.repeat(40), chunkSize: 4, delayMs: 15 });
     const { client, store } = await pairedClient([app.connector.port!]);
     const clientId = (await store.load())!.clientId;
 
-    // Pendant une génération : elle est interrompue par le retrait.
+    // Pendant une génération : elle est interrompue par le retrait ; le site le dit (jamais un « Arrêter » de l'enseignant).
     const events = await collect(client, new AbortController().signal, event => {
       if (event.type === 'delta' && app.connector.status().clients.length) void app.connector.revoke(clientId);
     });
-    expect(events.at(-1)).toMatchObject({ type: 'error', code: 'GENERATION_ABORTED' });
+    expect(events.at(-1)).toMatchObject({ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: STOPPED_BY_APP_MESSAGE });
     await until(() => !app.manager.busy);
 
     const err = await rejection(client.status());
@@ -466,7 +602,7 @@ describe('site web ⇄ application : protocole réel', () => {
     await client.unpair();
     expect(app.connector.status().clients).toEqual([]);
     expect(await client.hasPairing()).toBe(false);
-    expect((await running).at(-1)).toMatchObject({ type: 'error', code: 'GENERATION_ABORTED' });
+    expect((await running).at(-1)).toMatchObject({ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: STOPPED_BY_APP_MESSAGE });
     await until(() => !app.manager.busy);
     // Une requête signée avec l'ancienne clé est désormais refusée (401 CONNECTOR_UNPAIRED, sans preuve).
     const stale = new MemoryPairingStore();
@@ -550,8 +686,9 @@ describe('site web ⇄ application : protocole réel', () => {
 
     localEngine = true;
     engineReady = false;
+    // Cause précise, par un texte neutre pour le site (jamais le message de la fenêtre de l'application).
     expect((await client.status()).engine).toMatchObject({
-      ready: false, local: true, notReady: { code: 'MODEL_NOT_INSTALLED', message: defaultMessage('MODEL_NOT_INSTALLED') },
+      ready: false, local: true, notReady: { code: 'MODEL_NOT_INSTALLED', message: LOCAL_ENGINE_SITE_MESSAGES.MODEL_NOT_INSTALLED },
     });
   });
 
@@ -609,7 +746,7 @@ describe('contrôleur et client hybride du site face au vrai connecteur', () => 
     expect(done).not.toHaveProperty('record');
     expect(drafts).toHaveLength(1);
     expect(drafts[0].contenu).toBe((done as { content: string }).content);
-    // Seul le résultat part vers le serveur Magistra : jamais la demande ni les extraits de documents.
+    // Vers le serveur Magistra : le résultat et les paramètres de la demande, jamais le texte des extraits de documents.
     expect(JSON.stringify(drafts[0])).not.toContain('PASSAGE-CONFIDENTIEL-4412');
 
     await stopApp(app);

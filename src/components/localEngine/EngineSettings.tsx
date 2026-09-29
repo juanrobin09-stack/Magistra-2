@@ -1,17 +1,21 @@
 // Réglages du site web, section « Intelligence artificielle » : ordre de priorité des moteurs (Magistra locale, serveur
 // IA de l'établissement, fournisseur web configuré), choix du moteur de vos générations, connexion de Magistra locale.
 //
-// Passer au serveur en ligne demande TOUJOURS une confirmation qui nomme le prestataire ; revenir à Magistra locale
-// est immédiat (rien ne quitte l'ordinateur). Aucune adresse, aucun port, aucun nom de moteur local à l'écran.
+// Passer au serveur en ligne demande TOUJOURS une confirmation qui nomme le prestataire (focus initial sur « Garder
+// Magistra locale » : une frappe réflexe ne vaut jamais accord) ; revenir à Magistra locale est immédiat (rien ne
+// quitte l'ordinateur). Aucune adresse, aucun port, aucun nom de moteur local à l'écran.
+// Accessibilité : quand la déconnexion (ou son explication) fait disparaître le bouton utilisé, le focus va au titre
+// « Magistra locale sur cet ordinateur » (ou revient au bouton « Déconnecter » après « Annuler »), jamais au début de
+// la page.
 
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Loader2, Unplug } from 'lucide-react';
 import type { Capabilities } from '@shared/types';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { configuredProvider } from '@/lib/runtime/context';
 import { serverProvider, serverProviderName, useEngineRoute } from './engineRoute';
-import { runLocalAction } from './localActions';
+import { runLocalAction, wasSearched } from './localActions';
 import LocalEngineStatus, { type LocalEngineHandle } from './LocalEngineStatus';
 import { PermissionExplainer } from './PermissionNotes';
 import {
@@ -50,6 +54,19 @@ export default function EngineSettings({ engine, serverCaps, serverDetails }: En
   const [askDisconnect, setAskDisconnect] = useState(false);
   const [explainDisconnect, setExplainDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const localHeadingRef = useRef<HTMLHeadingElement>(null);
+  const disconnectRef = useRef<HTMLButtonElement>(null);
+  /** Où rendre le focus quand le bouton utilisé a disparu (une seule fois, seulement s'il a été perdu). */
+  const focusAfter = useRef<'heading' | 'disconnect' | null>(null);
+  useEffect(() => {
+    const target = focusAfter.current;
+    if (!target || disconnecting) return;
+    const element = target === 'heading' ? localHeadingRef.current : disconnectRef.current;
+    if (!element) return;
+    focusAfter.current = null;
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected) element.focus({ preventScroll: true });
+  }, [disconnecting, explainDisconnect, state.paired]);
 
   const provider = serverProvider(serverCaps, configuredProvider());
   const providerName = serverProviderName(serverCaps, configuredProvider());
@@ -57,6 +74,7 @@ export default function EngineSettings({ engine, serverCaps, serverDetails }: En
   const webProvider = provider?.thirdParty ? provider.label : null;
 
   async function disconnect() {
+    focusAfter.current = 'heading';
     setExplainDisconnect(false);
     setDisconnecting(true);
     try {
@@ -73,7 +91,7 @@ export default function EngineSettings({ engine, serverCaps, serverDetails }: En
       <div>
         <h3 className="text-sm font-semibold text-white mb-2">Ordre de priorité</h3>
         <ol className="space-y-2">
-          <Row rank={1} title="Magistra locale" value={localEngineSummary(state)} used={route === 'local-connector'} />
+          <Row rank={1} title="Magistra locale" value={localEngineSummary(state, wasSearched(controller))} used={route === 'local-connector'} />
           <Row rank={2} title="Serveur IA de l’établissement" value={establishment ?? NOT_CONFIGURED_TEXT} used={route === 'server' && establishment !== null} />
           <Row rank={3} title="Fournisseur web configuré" value={webProvider ?? NOT_CONFIGURED_TEXT} used={route === 'server' && webProvider !== null} />
         </ol>
@@ -93,8 +111,9 @@ export default function EngineSettings({ engine, serverCaps, serverDetails }: En
           <span>
             <span className="block text-sm text-mg-50">{LOCAL_CHOICE_LABEL}</span>
             <span className="block text-xs text-mg-200">
-              L’intelligence artificielle de cet ordinateur, par l’application Magistra : vos demandes et vos documents
-              ne passent pas par le serveur en ligne ; seul le résultat est enregistré dans votre historique.
+              L’intelligence artificielle de cet ordinateur, par l’application Magistra : les extraits de vos documents
+              ne quittent pas cet ordinateur ; le résultat et les paramètres de la demande (sujet, consignes, contenu à
+              adapter, noms des documents) sont enregistrés dans votre historique en ligne.
             </span>
           </span>
         </label>
@@ -123,10 +142,13 @@ export default function EngineSettings({ engine, serverCaps, serverDetails }: En
       {route === 'server' && serverDetails && <div className="border-t border-white/5 pt-4">{serverDetails}</div>}
 
       <div className="border-t border-white/5 pt-4 space-y-3">
-        <h3 className="text-sm font-semibold text-white">Magistra locale sur cet ordinateur</h3>
+        <h3 ref={localHeadingRef} tabIndex={-1} className="text-sm font-semibold text-white rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          Magistra locale sur cet ordinateur
+        </h3>
         <LocalEngineStatus engine={engine} idPrefix="settings" />
         {canDisconnect && !explainDisconnect && (
           <button
+            ref={disconnectRef}
             type="button"
             onClick={() => setAskDisconnect(true)}
             disabled={disconnecting}
@@ -137,7 +159,14 @@ export default function EngineSettings({ engine, serverCaps, serverDetails }: En
           </button>
         )}
         {explainDisconnect && (
-          <PermissionExplainer onContinue={() => void disconnect()} onCancel={() => setExplainDisconnect(false)} autoFocus />
+          <PermissionExplainer
+            onContinue={() => void disconnect()}
+            onCancel={() => {
+              focusAfter.current = 'disconnect';
+              setExplainDisconnect(false);
+            }}
+            autoFocus
+          />
         )}
       </div>
 
@@ -147,6 +176,7 @@ export default function EngineSettings({ engine, serverCaps, serverDetails }: En
         message={remoteConfirmText(providerName)}
         confirmLabel={REMOTE_CONFIRM_LABEL}
         cancelLabel="Garder Magistra locale"
+        initialFocus="cancel"
         onConfirm={() => {
           setAskRemote(false);
           setChoice('server');
@@ -156,7 +186,7 @@ export default function EngineSettings({ engine, serverCaps, serverDetails }: En
       <ConfirmDialog
         open={askDisconnect}
         title="Déconnecter Magistra locale ?"
-        message="Ce navigateur ne pourra plus utiliser l’intelligence artificielle de cet ordinateur. L’autorisation est aussi retirée dans l’application Magistra ; vous pourrez la reconnecter à tout moment."
+        message="Ce navigateur ne pourra plus utiliser l’intelligence artificielle de cet ordinateur. Si l’application Magistra est ouverte, l’autorisation y est aussi retirée ; sinon, retirez-la dans Magistra → Réglages → « Site web Magistra ». Vous pourrez reconnecter Magistra locale à tout moment."
         confirmLabel="Déconnecter"
         danger
         onConfirm={() => {

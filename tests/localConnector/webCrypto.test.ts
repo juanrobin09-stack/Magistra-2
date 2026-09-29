@@ -4,12 +4,15 @@
 import { createECDH, createHash, createHmac, hkdfSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
-  buildPairingUrl, canonicalPairAck, canonicalProof, canonicalRequest, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, parseAppUrl,
+  buildPairingUrl, canonicalPairAck, canonicalProof, canonicalRequest, canonicalRevoked, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, formatPairCode,
+  PAIR_CODE_RE, parseAppUrl,
 } from '@shared/localConnector';
 import {
   constantTimeEqualText, createPairingSecrets, deriveHmacKey, expectedPairAck, fromBase64Url, generateClientKeyPair, hmacSign,
-  hmacVerify, isNonExtractableHmacKey, sha256Base64Url, signRequest, toBase64Url, verifyPairAck, verifyProof,
+  hmacVerify, isNonExtractableHmacKey, pairingCode, sha256Base64Url, signRequest, toBase64Url, verifyPairAck, verifyProof,
+  verifyRevokedMark,
 } from '@/lib/localConnector/webCrypto';
+import { pairCode, revokedMark } from '../../electron/connector/crypto';
 
 // Vecteur fixe (calculé avec node:crypto) : clés privées déterministes des deux côtés.
 const BROWSER_D = 'BRIfLDlGU2BteoeUoa67yNXi7_wJFiMwPUpXZHF-i5g';
@@ -18,7 +21,10 @@ const CONNECTOR_PUB = 'BNYp5b-MkMMRRUQbHH_jdGWsi1qMzb62I2Gi4mUAeY5dfVsUHe85zi0Nr
 const PAIRING_ID = 'AAECAwQFBgcICQoLDA0ODw';
 const CLIENT_ID = 'AAECAwQFBgcICQoLDA0ODw';
 const NONCE = 'EBESExQVFhcYGRobHB0eHw';
-const EXPECTED_PROOF = 'L7bO4JwvG2gl6KMEuW-LYcvrSj5DAKXJv8O6wFlPX2I';
+/** Hôte du port visé (inclus dans l'accusé, la signature et la preuve). */
+const HOST = '127.0.0.1:47831';
+const OTHER_HOST = '127.0.0.1:47832';
+const EXPECTED_PROOF = 'SsezZ7hYgYEp20l5RDfBB2WmkVS0t-_VXaks5VpCcc4';
 
 async function importFixedBrowserKey(): Promise<CryptoKey> {
   const pub = Buffer.from(BROWSER_PUB, 'base64url');
@@ -105,15 +111,16 @@ describe('appairage', () => {
     // Même vecteur que tests/electron/connectorPairing.test.ts (node:crypto).
     const challenge = 'ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ';
     expect(await sha256Base64Url(fromBase64Url('ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8', 32)!)).toBe(challenge);
-    const ack = await expectedPairAck(PAIRING_ID, challenge);
-    expect(ack).toBe('cDJlSHwvceFZ4grVp4db14g8zHt3v9DhOrD6rUUV85k');
-    expect(ack).toBe(createHash('sha256').update(canonicalPairAck(PAIRING_ID, challenge), 'utf8').digest('base64url'));
+    const ack = await expectedPairAck(PAIRING_ID, challenge, HOST);
+    expect(ack).toBe('FWJesznvhJom9M3AmmF_LgZOj3jjb8aI2tJHW6xP1BM');
+    expect(ack).toBe(createHash('sha256').update(canonicalPairAck(PAIRING_ID, challenge, HOST), 'utf8').digest('base64url'));
     expect(ack).toMatch(CONNECTOR_FORMATS.ack);
 
     expect(verifyPairAck(ack, ack)).toBe(true);
     expect(verifyPairAck(ack, `${ack.slice(0, -1)}A`)).toBe(false);
-    expect(verifyPairAck(ack, await expectedPairAck(PAIRING_ID, b64(Buffer.alloc(32, 9))))).toBe(false); // autre défi
-    expect(verifyPairAck(ack, await expectedPairAck('EBESExQVFhcYGRobHB0eHw', challenge))).toBe(false); // autre demande
+    expect(verifyPairAck(ack, await expectedPairAck(PAIRING_ID, b64(Buffer.alloc(32, 9)), HOST))).toBe(false); // autre défi
+    expect(verifyPairAck(ack, await expectedPairAck('EBESExQVFhcYGRobHB0eHw', challenge, HOST))).toBe(false); // autre demande
+    expect(verifyPairAck(ack, await expectedPairAck(PAIRING_ID, challenge, OTHER_HOST))).toBe(false); // autre port (relais)
     for (const wrong of [undefined, null, 42, '', ack.slice(1), `${ack}=`, ` ${ack.slice(1)}`, ack.replace(/./, '+')]) {
       expect(verifyPairAck(ack, wrong)).toBe(false);
     }
@@ -121,6 +128,39 @@ describe('appairage', () => {
     expect(constantTimeEqualText('abc', 'abd')).toBe(false);
     expect(constantTimeEqualText('abc', 'abcd')).toBe(false);
     expect(constantTimeEqualText('', '')).toBe(true);
+  });
+
+  it('code de vérification : vecteur fixe identique côté application, lisible (« 6KR-RJM »), propre à chaque défi', async () => {
+    const challenge = 'ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ';
+    expect(await pairingCode(challenge)).toBe('6KR-RJM');
+    expect(pairCode(challenge)).toBe('6KR-RJM');
+    expect(await pairingCode(b64(Buffer.alloc(32, 9)))).not.toBe('6KR-RJM');
+    for (let i = 0; i < 20; i++) {
+      const { challenge: random } = await createPairingSecrets();
+      const code = await pairingCode(random);
+      expect(code).toMatch(PAIR_CODE_RE);
+      expect(code).toBe(pairCode(random));
+    }
+    // 30 bits : 6 symboles de 5 bits, sans 0/O ni 1/I.
+    expect(formatPairCode(new Uint8Array([0, 0, 0, 0]))).toBe('222-222');
+    expect(formatPairCode(new Uint8Array([255, 255, 255, 255]))).toBe('ZZZ-ZZZ');
+    expect(formatPairCode(new Uint8Array(3))).toBe('');
+  });
+
+  it('marque de retrait : calculée par l’application avec la clé, vérifiée par le site ; rien d’autre ne la remplace', async () => {
+    const pair = await generateClientKeyPair();
+    const pairingId = b64(crypto.getRandomValues(new Uint8Array(16)));
+    const app = nodeDerive(pair.publicKey, pairingId);
+    const key = await deriveHmacKey(pair.privateKey, app.connectorPublicKey, pairingId);
+    const mark = revokedMark(app.key, CLIENT_ID);
+    expect(mark).toBe(createHmac('sha256', app.key).update(canonicalRevoked(CLIENT_ID), 'utf8').digest('base64url'));
+    expect(await verifyRevokedMark(key, CLIENT_ID, mark)).toBe(true);
+    expect(await verifyRevokedMark(key, 'EBESExQVFhcYGRobHB0eHw', mark)).toBe(false); // autre navigateur
+    expect(await verifyRevokedMark(key, CLIENT_ID, revokedMark(Buffer.alloc(32, 7), CLIENT_ID))).toBe(false); // autre clé
+    // Une preuve (autre chaîne signée) ne vaut jamais marque de retrait.
+    const proof = createHmac('sha256', app.key).update(canonicalProof(CLIENT_ID, NONCE, HOST), 'utf8').digest('base64url');
+    expect(await verifyRevokedMark(key, CLIENT_ID, proof)).toBe(false);
+    for (const wrong of [null, '', 'pas-une-marque', `${mark}=`, mark.slice(1)]) expect(await verifyRevokedMark(key, CLIENT_ID, wrong)).toBe(false);
   });
 
   it('paire ECDH : clé publique brute non compressée (65 octets, 0x04) ; clé privée NON extractible', async () => {
@@ -135,8 +175,9 @@ describe('appairage', () => {
 
   it('vecteur fixe : clé dérivée identique à celle de node:crypto (preuve attendue)', async () => {
     const key = await deriveHmacKey(await importFixedBrowserKey(), CONNECTOR_PUB, PAIRING_ID);
-    expect(await hmacSign(key, canonicalProof(CLIENT_ID, NONCE))).toBe(EXPECTED_PROOF);
-    expect(await verifyProof(key, CLIENT_ID, NONCE, EXPECTED_PROOF)).toBe(true);
+    expect(await hmacSign(key, canonicalProof(CLIENT_ID, NONCE, HOST))).toBe(EXPECTED_PROOF);
+    expect(await verifyProof(key, CLIENT_ID, NONCE, HOST, EXPECTED_PROOF)).toBe(true);
+    expect(await verifyProof(key, CLIENT_ID, NONCE, OTHER_HOST, EXPECTED_PROOF)).toBe(false);
   });
 
   it('interopérabilité avec node:crypto (clés aléatoires) : signature et preuve vérifiées de chaque côté', async () => {
@@ -146,19 +187,22 @@ describe('appairage', () => {
     const key = await deriveHmacKey(pair.privateKey, app.connectorPublicKey, pairingId);
 
     const parts = {
-      method: 'post', path: '/v1/generate', origin: 'https://magistra-2.vercel.app', clientId: CLIENT_ID,
+      method: 'post', host: HOST, path: '/v1/generate', origin: 'https://magistra-2.vercel.app', clientId: CLIENT_ID,
       timestamp: '1790000000000', nonce: NONCE, bodySha256: await sha256Base64Url('{"sujet":"é"}'),
     };
     const signature = await signRequest(key, parts);
     expect(signature).toMatch(CONNECTOR_FORMATS.mac);
     expect(signature).toBe(createHmac('sha256', app.key).update(canonicalRequest(parts), 'utf8').digest('base64url'));
+    // Signature liée au port visé : relayée vers un autre port (Host réécrit), elle ne vaut plus.
+    expect(signature).not.toBe(createHmac('sha256', app.key).update(canonicalRequest({ ...parts, host: OTHER_HOST }), 'utf8').digest('base64url'));
 
-    const proof = createHmac('sha256', app.key).update(canonicalProof(CLIENT_ID, NONCE), 'utf8').digest('base64url');
-    expect(await verifyProof(key, CLIENT_ID, NONCE, proof)).toBe(true);
-    expect(await verifyProof(key, CLIENT_ID, 'AAAAAAAAAAAAAAAAAAAAAA', proof)).toBe(false); // autre requête
-    expect(await verifyProof(key, CLIENT_ID, NONCE, b64(Buffer.alloc(32, 1)))).toBe(false); // autre clé
-    expect(await verifyProof(key, CLIENT_ID, NONCE, null)).toBe(false);
-    expect(await verifyProof(key, CLIENT_ID, NONCE, 'pas-une-preuve')).toBe(false);
+    const proof = createHmac('sha256', app.key).update(canonicalProof(CLIENT_ID, NONCE, HOST), 'utf8').digest('base64url');
+    expect(await verifyProof(key, CLIENT_ID, NONCE, HOST, proof)).toBe(true);
+    expect(await verifyProof(key, CLIENT_ID, NONCE, OTHER_HOST, proof)).toBe(false); // autre port (relais)
+    expect(await verifyProof(key, CLIENT_ID, 'AAAAAAAAAAAAAAAAAAAAAA', HOST, proof)).toBe(false); // autre requête
+    expect(await verifyProof(key, CLIENT_ID, NONCE, HOST, b64(Buffer.alloc(32, 1)))).toBe(false); // autre clé
+    expect(await verifyProof(key, CLIENT_ID, NONCE, HOST, null)).toBe(false);
+    expect(await verifyProof(key, CLIENT_ID, NONCE, HOST, 'pas-une-preuve')).toBe(false);
   });
 
   it('clé HMAC dérivée NON extractible, pour signer et vérifier seulement', async () => {

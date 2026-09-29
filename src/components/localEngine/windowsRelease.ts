@@ -10,8 +10,12 @@ import { safeExternalUrl, WINDOWS_DOWNLOAD_URL } from '@/lib/links';
 
 /** Configuration requise affichée (celle du serveur si elle est lisible). */
 export const WINDOWS_REQUIREMENTS_TEXT = 'Windows 10 ou 11 (64 bits)';
-/** Délai de la requête : au-delà, le repli est affiché. */
-export const WINDOWS_RELEASE_TIMEOUT_MS = 8_000;
+/**
+ * Délai de la requête : au-delà, le repli est affiché. Au-dessus du budget GitHub du serveur (8 s, après quoi il renvoie
+ * sa dernière réponse valide) plus une marge (démarrage à froid de la fonction, trajet), et sous sa durée maximale
+ * (15 s, vercel.json) : la réponse du serveur, même tardive, n'est jamais abandonnée en chemin.
+ */
+export const WINDOWS_RELEASE_TIMEOUT_MS = 12_000;
 
 const VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,6}$/;
 const FILE_RE = /^Magistra-Setup-(\d{1,4}\.\d{1,4}\.\d{1,6})\.exe$/;

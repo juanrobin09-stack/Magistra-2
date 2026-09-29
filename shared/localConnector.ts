@@ -11,11 +11,11 @@
 //
 // Appairage (aucun secret de longue durée dans une adresse) :
 //   1. le site tire `pairingId` (16 octets) et `verifier` (32 octets), calcule `challenge` = SHA-256(verifier) et ouvre
-//      magistra://pair?v=1&id=<pairingId>&challenge=<challenge>&origin=<origine du site> ;
+//      magistra://pair?v=2&id=<pairingId>&challenge=<challenge>&origin=<origine du site> ;
 //   2. l'application vérifie que l'origine fait partie des origines officielles, puis demande l'accord de l'enseignant ;
 //   3. PREUVE DE RÉCEPTION, avant tout secret : le site envoie POST /v1/pair { pairingId } (ni vérificateur ni clé) aux
 //      ports où Magistra répond. Le défi n'existe que dans l'URL magistra:// (jamais dans une requête HTTP) : seule
-//      l'application qui l'a reçue peut répondre ack = SHA-256(canonicalPairAck(pairingId, challenge)), avec 202
+//      l'application qui l'a reçue peut répondre ack = SHA-256(canonicalPairAck(pairingId, challenge, host)), avec 202
 //      { status: 'pending', ack } tant que l'enseignant n'a pas répondu, puis 200 { status: 'consented', ack } après son
 //      accord. Un port dont l'ack est absent ou faux est ignoré : un programme qui occupe un port dédié et se présente
 //      comme Magistra (y compris depuis une AUTRE session Windows d'un PC partagé ou d'un serveur de bureaux à distance :
@@ -33,11 +33,35 @@
 // X-Magistra-Proof = HMAC(clé, canonicalProof(...)) — un autre programme qui occuperait le port ne peut pas se faire
 // passer pour Magistra.
 //
+// LIAISON AU PORT (protocole 2) : l'accusé, la signature et la preuve portent tous `host` = « 127.0.0.1:<port> », le
+// port réellement joint (celui que vise le navigateur, celui où écoute l'application). Un programme qui occupe un AUTRE
+// port dédié et relaie tout à la vraie application ne gagne donc rien : s'il garde l'en-tête Host, l'application le
+// refuse (403) ; s'il le réécrit, la signature du navigateur ne vaut plus (401), et l'accusé comme la preuve que
+// l'application calcule pour SON port ne valent pas pour celui du relais. Il ne peut pas les calculer lui-même (défi et
+// clé inconnus) : le navigateur ignore ce port, il n'y envoie ni vérificateur, ni clé publique, ni contenu.
+//
+// RETRAIT D'UNE AUTORISATION : un 401 CONNECTOR_UNPAIRED ne peut pas porter de preuve (le programme qui répond ne
+// connaît pas, ou plus, la clé). Une autre application Magistra — celle d'une AUTRE session Windows, qui ne connaît pas
+// ce navigateur — le renvoie tout aussi légitimement. Seule une réponse accompagnée de la MARQUE DE RETRAIT
+// X-Magistra-Revoked = HMAC(clé, canonicalRevoked(clientId)) prouve que l'application qui détenait la clé de ce
+// navigateur l'a retiré : elle calcule cette marque au moment du retrait (réglages, DELETE /v1/pair, éviction au-delà
+// de maxClients), avant d'effacer la clé, et la joint ensuite à ses 401 pour ce navigateur. Le site n'oublie son
+// appairage, et ne tient un retrait pour confirmé, que sur une marque valide (ou une réponse prouvée).
+//
+// CODE DE VÉRIFICATION : le site affiche pendant l'appairage un code court dérivé du défi (pairingCode), que la boîte
+// de consentement de l'application affiche aussi. Une demande magistra://pair que l'enseignant n'a pas faite depuis le
+// site officiel (lien reçu, programme d'une autre session) présente un code qu'aucun onglet du site n'affiche.
+//
 // Encodage de tous les octets : base64url sans remplissage.
 
+import type { ErrorCode } from './errors.js';
 import type { AINotice, Capabilities } from './types.js';
 
-export const CONNECTOR_PROTOCOL_VERSION = 1;
+/**
+ * Version du protocole (hello, URL magistra://pair). 2 : accusé, signature et preuve liés au port joint (`host`) ;
+ * une application ou un site d'une autre version ne se reconnaissent pas (« mettez Magistra à jour »).
+ */
+export const CONNECTOR_PROTOCOL_VERSION = 2;
 
 /** Adresse d'écoute : boucle locale IPv4 uniquement (jamais 0.0.0.0, jamais le réseau). */
 export const CONNECTOR_HOST = '127.0.0.1';
@@ -47,6 +71,14 @@ export const CONNECTOR_HOST = '127.0.0.1';
  * n'est jamais affichée ni saisie : le site les connaît, l'application les ouvre seule.
  */
 export const CONNECTOR_PORTS: readonly number[] = [47831, 47832, 47833];
+
+/**
+ * Valeur exacte de l'en-tête Host d'une requête au connecteur sur ce port (« 127.0.0.1:47831 ») : contrôlée par
+ * l'application (anti DNS rebinding) et incluse dans l'accusé, la signature et la preuve (liaison au port joint).
+ */
+export function connectorHost(port: number): string {
+  return `${CONNECTOR_HOST}:${port}`;
+}
 
 /**
  * Origines officielles du site Magistra : les SEULES autorisées à appairer et à utiliser le connecteur de
@@ -103,6 +135,11 @@ export const CONNECTOR_HEADERS = {
   proof: 'X-Magistra-Proof',
   /** Réponse de /v1/generate : identifiant de la génération (pour /v1/cancel). */
   job: 'X-Magistra-Job',
+  /**
+   * Réponse 401 CONNECTOR_UNPAIRED : marque de retrait HMAC(clé, canonicalRevoked(clientId)), jointe seulement par
+   * l'application qui a retiré CE navigateur (preuve du retrait, sans laquelle le site garde son appairage).
+   */
+  revoked: 'X-Magistra-Revoked',
 } as const;
 
 /** En-têtes de requête autorisés en CORS (en plus des en-têtes simples). */
@@ -110,7 +147,7 @@ export const CONNECTOR_ALLOWED_REQUEST_HEADERS: readonly string[] = [
   'Content-Type', CONNECTOR_HEADERS.client, CONNECTOR_HEADERS.timestamp, CONNECTOR_HEADERS.nonce, CONNECTOR_HEADERS.signature,
 ];
 /** En-têtes de réponse lisibles par le site. */
-export const CONNECTOR_EXPOSED_RESPONSE_HEADERS: readonly string[] = [CONNECTOR_HEADERS.proof, CONNECTOR_HEADERS.job];
+export const CONNECTOR_EXPOSED_RESPONSE_HEADERS: readonly string[] = [CONNECTOR_HEADERS.proof, CONNECTOR_HEADERS.job, CONNECTOR_HEADERS.revoked];
 
 export const CONNECTOR_LIMITS = {
   /** Corps de /v1/generate (demande + extraits de documents) : REQUEST_LIMITS.bodyBytes plus une marge. */
@@ -169,10 +206,15 @@ export const CONNECTOR_CRYPTO = {
   keyBytes: 32,
 } as const;
 
-const CANONICAL_PREFIX = 'MAGISTRA-CONNECTOR-1';
+const CANONICAL_PREFIX = 'MAGISTRA-CONNECTOR-2';
 
 export interface CanonicalRequestParts {
   method: string;
+  /**
+   * Hôte joint, connectorHost(port) (« 127.0.0.1:47831 ») : le port visé par le navigateur, celui où écoute
+   * l'application. Une requête relayée vers un autre port ne vaut rien.
+   */
+  host: string;
   /** Chemin exact de la route (sans requête ni fragment), par exemple « /v1/status ». */
   path: string;
   /** Origine du site (en-tête Origin) : la signature ne vaut que pour elle. */
@@ -186,22 +228,63 @@ export interface CanonicalRequestParts {
 
 /** Chaîne signée par le navigateur pour chaque requête authentifiée. */
 export function canonicalRequest(p: CanonicalRequestParts): string {
-  return [CANONICAL_PREFIX, p.method.toUpperCase(), p.path, p.origin, p.clientId, p.timestamp, p.nonce, p.bodySha256].join('\n');
+  return [CANONICAL_PREFIX, p.method.toUpperCase(), p.host, p.path, p.origin, p.clientId, p.timestamp, p.nonce, p.bodySha256].join('\n');
 }
 
-/** Chaîne signée par le connecteur dans X-Magistra-Proof (réponse à la requête portant ce nonce). */
-export function canonicalProof(clientId: string, nonce: string): string {
-  return [`${CANONICAL_PREFIX}-PROOF`, clientId, nonce].join('\n');
+/**
+ * Chaîne signée par le connecteur dans X-Magistra-Proof (réponse à la requête portant ce nonce), pour l'hôte joint
+ * (connectorHost(port d'écoute)) : une preuve relayée depuis un autre port ne vaut pas pour celui-ci.
+ */
+export function canonicalProof(clientId: string, nonce: string, host: string): string {
+  return [`${CANONICAL_PREFIX}-PROOF`, host, clientId, nonce].join('\n');
 }
 
 /**
  * Chaîne dont le SHA-256 (UTF-8, en base64url) est l'accusé de réception `ack` des réponses de POST /v1/pair.
  * `challenge` est le texte exact du paramètre de l'URL magistra://pair : il n'est JAMAIS envoyé dans une requête
- * HTTP, donc seule l'application qui a reçu cette URL peut produire l'accusé (preuve de réception).
+ * HTTP, donc seule l'application qui a reçu cette URL peut produire l'accusé (preuve de réception). `host` est
+ * connectorHost(port) du port joint : l'accusé d'une application relayée par un autre port ne vaut pas pour ce port.
  */
-export function canonicalPairAck(pairingId: string, challenge: string): string {
-  return [`${CANONICAL_PREFIX}-PAIR-ACK`, pairingId, challenge].join('\n');
+export function canonicalPairAck(pairingId: string, challenge: string, host: string): string {
+  return [`${CANONICAL_PREFIX}-PAIR-ACK`, host, pairingId, challenge].join('\n');
 }
+
+/**
+ * Chaîne signée par l'application dans la marque de retrait X-Magistra-Revoked (HMAC avec la clé du navigateur,
+ * calculé au retrait, avant l'effacement de la clé). Indépendante du port : elle atteste un fait (l'application qui
+ * détenait cette clé a retiré ce navigateur) qui reste vrai d'où qu'elle soit relayée ; rien d'autre ne peut la
+ * produire (la clé n'a jamais circulé).
+ */
+export function canonicalRevoked(clientId: string): string {
+  return [`${CANONICAL_PREFIX}-REVOKED`, clientId].join('\n');
+}
+
+/**
+ * Chaîne dont le SHA-256 (UTF-8) donne le code de vérification d'une demande d'appairage (formatPairCode) : affiché
+ * par le site pendant l'attente et par la boîte de consentement de l'application. `challenge` : texte exact du
+ * paramètre de l'URL magistra://pair.
+ */
+export function canonicalPairCode(challenge: string): string {
+  return [`${CANONICAL_PREFIX}-PAIR-CODE`, challenge].join('\n');
+}
+
+/** Alphabet du code de vérification : 32 symboles sans 0/O ni 1/I (lecture et comparaison faciles). */
+const PAIR_CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+/**
+ * Code de vérification lisible (« K7F-2QX ») : 6 symboles de 5 bits pris dans les 30 premiers bits de `digest`
+ * (SHA-256 de canonicalPairCode). Moins de 4 octets → chaîne vide.
+ */
+export function formatPairCode(digest: Uint8Array): string {
+  if (digest.length < 4) return '';
+  const bits = ((digest[0] << 24) | (digest[1] << 16) | (digest[2] << 8) | digest[3]) >>> 0;
+  let code = '';
+  for (let i = 0; i < 6; i++) code += PAIR_CODE_ALPHABET[(bits >>> (27 - 5 * i)) & 31];
+  return `${code.slice(0, 3)}-${code.slice(3)}`;
+}
+
+/** Code de vérification bien formé (« K7F-2QX »). */
+export const PAIR_CODE_RE = /^[2-9A-HJ-NP-Z]{3}-[2-9A-HJ-NP-Z]{3}$/;
 
 // ─── URL magistra:// ────────────────────────────────────────────────────────
 
@@ -307,7 +390,7 @@ export interface PairFinishRequest {
 export type PairCompleteRequest = PairAckRequest | PairFinishRequest;
 
 /**
- * Réponse de POST /v1/pair ; `ack` = base64url(SHA-256(canonicalPairAck(pairingId, challenge))) dans chaque réponse
+ * Réponse de POST /v1/pair ; `ack` = base64url(SHA-256(canonicalPairAck(pairingId, challenge, host))) dans chaque réponse
  * réussie (le navigateur ignore un port dont l'accusé est absent ou faux) :
  *  - 202 { status: 'pending', ack } : l'enseignant n'a pas encore répondu dans l'application (le site réessaie) ;
  *  - 200 { status: 'consented', ack } : premier temps, accord donné ; le site passe au second temps sur CE port ;
@@ -324,7 +407,11 @@ export type PairCompleteResponse =
 export interface ConnectorStatus {
   version: string;
   engine: {
-    /** Une génération peut être lancée (moteur installé, modèle présent ; le moteur arrêté est démarré à la demande). */
+    /**
+     * Le moteur est prêt : installé, démarré, modèle présent. Moteur installé mais ARRÊTÉ : faux, avec notReady
+     * ENGINE_NOT_RUNNING (la présence du modèle ne peut pas être vérifiée) — le site n'empêche pas pour autant la
+     * génération : l'application démarre le moteur à la demande (et signale une erreur précise s'il ne démarre pas).
+     */
     ready: boolean;
     /**
      * Vrai si le moteur actif de l'application est sur cet ordinateur. Faux : l'application est réglée sur un serveur
@@ -345,6 +432,20 @@ export interface ConnectorStatus {
 export interface ConnectorCancelRequest {
   jobId: string;
 }
+
+/**
+ * Textes transmis au site (et affichés par lui) pour les codes du MOTEUR de l'application, à la place des messages de
+ * l'application : ceux-ci sont écrits pour sa fenêtre (nom et version du moteur, mode d'installation, extrait de son
+ * journal, boutons de son assistant de configuration) et ne la quittent jamais. Aucun nom de moteur, aucune adresse :
+ * le site renvoie simplement à l'application Magistra.
+ */
+export const LOCAL_ENGINE_SITE_MESSAGES: Readonly<Partial<Record<ErrorCode, string>>> = {
+  ENGINE_NOT_INSTALLED: 'Le moteur d’intelligence artificielle de Magistra n’est pas encore installé : ouvrez l’application Magistra pour le préparer.',
+  ENGINE_NOT_RUNNING:
+    'Le moteur d’intelligence artificielle de Magistra n’est pas démarré : Magistra le démarre au lancement d’une génération. S’il ne démarre pas, ouvrez l’application Magistra pour en voir la cause.',
+  ENGINE_OUTDATED: 'Le moteur d’intelligence artificielle de Magistra doit être mis à jour : ouvrez l’application Magistra.',
+  MODEL_NOT_INSTALLED: 'Le modèle d’IA choisi n’est pas encore installé : ouvrez l’application Magistra pour le télécharger.',
+};
 
 // ─── Gestion dans l'application (fenêtre ⇄ processus principal) ─────────────
 

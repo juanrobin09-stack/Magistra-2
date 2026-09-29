@@ -13,7 +13,7 @@ import { ENGINE_CHOICE_STORAGE_KEY, setEngineChoice } from '@/lib/localConnector
 import { LOCAL_CONNECTOR_NETWORK_NOTE, NETWORK_PRIVACY_NOTE } from '@/lib/generation/research';
 import { LOCAL_PRIVACY_MESSAGE } from '@/lib/runtime/hybrid';
 import { setRuntimeConfig } from '@/lib/runtime/mode';
-import GeneratePage, { ENGINE_CHANGED_NOTICE, LOCAL_PERMISSION_NOTICE } from '@/pages/GeneratePage';
+import GeneratePage, { ENGINE_CHANGED_NOTICE, LOCAL_PERMISSION_FIRST_NOTICE, LOCAL_PERMISSION_NOTICE } from '@/pages/GeneratePage';
 import { button, cleanup, click, flush } from './helpers';
 import {
   engineState, FakeEngine, FORBIDDEN_LOCAL_TEXT, mountWeb, OVH_INFO, READY_STATUS, RELEASE, resetEngineChoice, stubReleaseFetch,
@@ -100,6 +100,17 @@ describe('Page Générer — Magistra locale', () => {
     expect(view.server.capabilities).not.toHaveBeenCalled();
   });
 
+  it('sources de recherche sur le site : jamais « Fonctionne hors ligne » ni « SearXNG » ; réglages de l’application nommés', async () => {
+    for (const state of [engineState('connected'), engineState('not-found')]) {
+      const view = await mountGenerate(new FakeEngine(state));
+      const research = view.container.querySelector<HTMLElement>('[aria-labelledby="gen-research-title"]')!;
+      expect(research.textContent, state.kind).toContain('Aucune recherche externe.');
+      expect(research.textContent, state.kind).not.toMatch(/hors ligne|searxng/i);
+      if (state.kind === 'connected') expect(research.textContent).toContain('réglages de l’application Magistra (Windows)');
+      cleanup();
+    }
+  });
+
   it('jamais appairé : bandeau du serveur en ligne qui nomme le prestataire, génération par le serveur', async () => {
     const engine = new FakeEngine(engineState('not-found'));
     const view = await mountGenerate(engine);
@@ -138,6 +149,8 @@ describe('Page Générer — Magistra locale', () => {
     const view = await mountGenerate(engine);
     await click(button(view.panel()!, 'Utiliser le serveur en ligne…'));
     expect(dialog()?.textContent).toContain(REMOTE_CONFIRM);
+    // Focus initial sur « Rester sur Magistra locale » : une frappe réflexe ne vaut jamais accord pour le prestataire.
+    expect(document.activeElement).toBe(button(dialog()!, 'Rester sur Magistra locale'));
     await click(button(dialog()!, 'Rester sur Magistra locale'));
     expect(dialog()).toBeNull();
     expect(localStorage.getItem(ENGINE_CHOICE_STORAGE_KEY)).toBe('local');
@@ -151,6 +164,8 @@ describe('Page Générer — Magistra locale', () => {
     expect(view.server.capabilities).toHaveBeenCalled();
     expect(view.banner().textContent).toContain(REMOTE_BANNER);
     expect(view.panel()).toBeNull();
+    // Le bouton utilisé a disparu avec le panneau : le focus va au bandeau (jamais perdu au début de la page).
+    expect(document.activeElement).toBe(view.banner());
   });
 
   it('serveur choisi alors que Magistra locale est prête : rappel discret, [Utiliser l’IA locale] repasse au local sans confirmation', async () => {
@@ -160,8 +175,12 @@ describe('Page Générer — Magistra locale', () => {
     expect(view.banner().textContent).toContain(REMOTE_BANNER);
     expect(view.container.textContent).toContain('Magistra locale est disponible');
     const refreshesBefore = engine.refresh.mock.calls.length;
-    await click(button(view.container, 'Utiliser l’IA locale'));
+    const useLocal = button(view.container, 'Utiliser l’IA locale')!;
+    useLocal.focus();
+    await click(useLocal);
     await flush(6);
+    // Le rappel (et le bouton utilisé) a disparu : le focus va au bandeau, qui annonce le nouveau moteur.
+    expect(document.activeElement).toBe(view.banner());
     expect(localStorage.getItem(ENGINE_CHOICE_STORAGE_KEY)).toBe('local');
     expect(dialog()).toBeNull();
     expect(view.banner().textContent).toContain(LOCAL_BANNER);
@@ -208,6 +227,24 @@ describe('Page Générer — Magistra locale', () => {
     expect(engine.detect).toHaveBeenCalledTimes(1);
   });
 
+  it('appairé, autorisation du navigateur toujours à demander dans un autre état (« fermée » après une demande sans réponse) : génération bloquée', async () => {
+    setEngineChoice('local');
+    const engine = new FakeEngine(engineState('app-closed', { paired: true, permission: 'prompt' }));
+    const view = await mountGenerate(engine);
+    expect(view.submit().disabled).toBe(true);
+    expect(view.container.querySelector('#gen-submit-status')?.textContent).toBe(LOCAL_PERMISSION_FIRST_NOTICE);
+    const form = view.container.querySelector('form[aria-label="Demande de génération"]')!;
+    await act(async () => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(engine.localGenerate).not.toHaveBeenCalled();
+    // Les boutons de Magistra locale passent, eux, par l'explication avant la demande du navigateur.
+    await click(button(view.panel()!, /Réessayer/));
+    expect(engine.detect).not.toHaveBeenCalled();
+    expect(view.panel()!.textContent).toContain('Votre navigateur va vous demander l’autorisation');
+  });
+
   it('moteur changé juste avant l’envoi (appairage retiré dans un autre onglet) : rien n’est envoyé, l’enseignant est prévenu', async () => {
     const engine = new FakeEngine(engineState('connected'));
     const view = await mountGenerate(engine);
@@ -219,6 +256,39 @@ describe('Page Générer — Magistra locale', () => {
     expect(view.server.generate).not.toHaveBeenCalled();
     expect(view.container.querySelector('#gen-submit-status')?.textContent).toBe(ENGINE_CHANGED_NOTICE);
     expect(engine.refresh).toHaveBeenCalled();
+  });
+
+  it('« Réessayer » et « Recommencer » : mêmes garde-fous que l’envoi (autorisation du navigateur expliquée d’abord, moteur revérifié)', async () => {
+    const engine = new FakeEngine(engineState('connected'));
+    const view = await mountGenerate(engine);
+    const status = () => view.container.querySelector('#gen-submit-status')?.textContent;
+    await click(view.submit());
+    await flush(8);
+    expect(engine.localGenerate).toHaveBeenCalledTimes(1);
+    const alert = () => view.container.querySelector<HTMLElement>('[role="alert"]')!;
+    expect(alert().textContent).toContain(defaultMessage('CONNECTOR_UNREACHABLE'));
+    // Tout est en ordre : la relance part, vers le moteur annoncé.
+    await click(button(alert(), /Réessayer/));
+    await flush(8);
+    expect(engine.localGenerate).toHaveBeenCalledTimes(2);
+
+    // Autorisation du navigateur à redemander : la relance n'envoie rien (aucune demande sans explication).
+    await engine.set(engineState('needs-permission', { paired: true, permission: 'prompt' }));
+    await flush(6);
+    await click(button(alert(), /Réessayer/));
+    await flush(6);
+    expect(engine.localGenerate).toHaveBeenCalledTimes(2);
+    expect(status()).toBe(LOCAL_PERMISSION_NOTICE);
+
+    // Appairage oublié dans un autre onglet (état de cet onglet pas encore relu) : moteur revérifié, rien n'est envoyé.
+    await engine.set(engineState('connected'));
+    await flush(6);
+    engine.paired = false;
+    await click(button(view.container, /Recommencer/));
+    await flush(6);
+    expect(engine.localGenerate).toHaveBeenCalledTimes(2);
+    expect(view.server.generate).not.toHaveBeenCalled();
+    expect(status()).toBe(ENGINE_CHANGED_NOTICE);
   });
 
   it('appairage pas encore vérifié : « Vérification du moteur de génération… », bouton désactivé', async () => {
@@ -240,6 +310,26 @@ describe('Page Générer — Magistra locale', () => {
       expect(view.container.textContent, state.kind).not.toMatch(FORBIDDEN_LOCAL_TEXT);
       cleanup();
     }
+  });
+});
+
+describe('Page Générer — erreur d’une génération locale', () => {
+  it('moteur qui ne démarre pas : cause affichée sans « Ollama », port ni chemin (texte neutre), jamais de repli', async () => {
+    const engine = new FakeEngine(engineState('connected'));
+    engine.localGenerate.mockImplementation(async (_request, onEvent) => {
+      onEvent({
+        type: 'error', code: 'ENGINE_NOT_RUNNING', retryable: true,
+        message: 'Le moteur IA ne peut pas démarrer : le port 11434 est déjà utilisé (peut-être un autre Ollama). Un antivirus bloque peut-être Ollama (ollama.exe).',
+      });
+    });
+    const view = await mountGenerate(engine);
+    await click(view.submit());
+    await flush(8);
+    const alert = view.container.querySelector<HTMLElement>('[role="alert"]')!;
+    expect(alert.textContent).toContain('Le moteur d’intelligence artificielle de Magistra n’est pas démarré');
+    expect(view.container.textContent).not.toMatch(FORBIDDEN_LOCAL_TEXT);
+    expect(view.container.textContent).not.toMatch(/port 11434/);
+    expect(view.server.generate).not.toHaveBeenCalled();
   });
 });
 

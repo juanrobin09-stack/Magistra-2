@@ -2,8 +2,10 @@
 // version, sa taille, sa date et son empreinte SHA-256 ; trois étapes très courtes ; ce que l'application apporte.
 // Après le téléchargement : « J’ai installé Magistra » [Détecter maintenant]. Aucune version n'est écrite en dur :
 // sans réponse du serveur, le lien mène à la page officielle des versions.
+// Accessibilité : après « Continuer » ou « Annuler » de l'explication (qui disparaît), le focus revient sur
+// « Détecter maintenant » au lieu d'être perdu au début de la page.
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, Copy, Cpu, Download, ExternalLink, KeyRound, Search, ShieldCheck, WifiOff, type LucideIcon } from 'lucide-react';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
@@ -12,7 +14,7 @@ import type { RuntimeMode } from '@/lib/runtime/types';
 import { useLocalActions } from './localActions';
 import LocalEngineStatus, { type LocalEngineHandle } from './LocalEngineStatus';
 import { PermissionExplainer } from './PermissionNotes';
-import { DETECT_NOW_LABEL, DOWNLOAD_WINDOWS_LABEL, INSTALLED_TEXT } from './texts';
+import { DETECT_NOW_LABEL, DOWNLOAD_WINDOWS_LABEL, INSTALLED_TEXT, SIGNED_OUT_DETECT_TEXT } from './texts';
 import { formatDate, formatSize, useWindowsRelease, WINDOWS_REQUIREMENTS_TEXT, type WindowsReleaseState } from './windowsRelease';
 
 const POINTS: { icon: LucideIcon; title: string; text: string }[] = [
@@ -70,14 +72,27 @@ function Sha256({ value }: { value: string }) {
 function DetectNow({ engine }: { engine: LocalEngineHandle }) {
   const actions = useLocalActions(engine);
   const [started, setStarted] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  /** L'explication va disparaître : focus rendu à « Détecter maintenant » s'il a été perdu. */
+  const restoreFocus = useRef(false);
+  useEffect(() => {
+    if (actions.pending || !restoreFocus.current) return;
+    restoreFocus.current = false;
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected) buttonRef.current?.focus({ preventScroll: true });
+  }, [actions.pending]);
   if (actions.pending) {
     return (
       <PermissionExplainer
         onContinue={() => {
+          restoreFocus.current = true;
           setStarted(true);
           actions.confirm();
         }}
-        onCancel={actions.cancel}
+        onCancel={() => {
+          restoreFocus.current = true;
+          actions.cancel();
+        }}
         autoFocus
       />
     );
@@ -85,6 +100,7 @@ function DetectNow({ engine }: { engine: LocalEngineHandle }) {
   return (
     <div className="space-y-3">
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => {
           if (engine.state.permission !== 'prompt') setStarted(true);
@@ -99,6 +115,9 @@ function DetectNow({ engine }: { engine: LocalEngineHandle }) {
   );
 }
 
+/** Annonce (lecteurs d'écran) après le clic sur « Télécharger ». */
+const AFTER_DOWNLOAD_ANNOUNCEMENT = `Téléchargement lancé. Une fois Magistra installée, la rubrique « ${INSTALLED_TEXT} », juste après, permet de la retrouver.`;
+
 function AfterDownload({ mode }: { mode: RuntimeMode }) {
   const engine = useLocalEngine();
   return (
@@ -108,8 +127,7 @@ function AfterDownload({ mode }: { mode: RuntimeMode }) {
         <DetectNow engine={engine} />
       ) : mode === 'web' ? (
         <p className="text-sm text-mg-200">
-          Connectez-vous à Magistra sur ce site : votre tableau de bord détectera l’application et vous proposera de la
-          connecter.{' '}
+          {SIGNED_OUT_DETECT_TEXT}{' '}
           <Link to="/app" className="text-accent hover:underline underline-offset-2">Se connecter</Link>
         </p>
       ) : (
@@ -216,6 +234,9 @@ export default function WindowsDownloadSection({ variant, mode }: WindowsDownloa
       <div className="space-y-4 min-w-0">
         <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">{button}</div>
         <ReleaseFacts state={release} queried={queried} />
+        {/* Région présente dès l'affichage : l'apparition de « J’ai installé Magistra » est annoncée aux lecteurs
+            d'écran (le focus reste sur le lien de téléchargement). */}
+        <p role="status" className="sr-only">{downloaded ? AFTER_DOWNLOAD_ANNOUNCEMENT : ''}</p>
         {downloaded && <AfterDownload mode={mode} />}
       </div>
     </div>

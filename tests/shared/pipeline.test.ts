@@ -5,6 +5,7 @@ import { computeBudgets, runGeneration, type NewGenerationRecord, type PipelineD
 import { estimateTokens } from '../../shared/prompts/index';
 import type { ResearchConfig } from '../../shared/research/index';
 import type { DocumentPassage, GenerationEvent, GenerationRequest } from '../../shared/types';
+import { RECORD_LIMITS, validateGenerationRecordDraft } from '../../shared/validation';
 import { collect, jsonResponse, mockFetch, networkError, never } from './helpers';
 
 type EventOf<T extends GenerationEvent['type']> = Extract<GenerationEvent, { type: T }>;
@@ -136,6 +137,57 @@ describe('runGeneration — déroulé nominal', () => {
     const user = provider.calls[0].messages[1].content;
     expect(user).toContain("[S1] Document de l'enseignant « Cours gouvernance.pdf » — pages 14 à 18");
     expect(user).toContain("[S2] Document de l'enseignant « CM3.pdf » — pages 2 à 3");
+  });
+});
+
+describe('runGeneration — génération à enregistrer (includeRecord)', () => {
+  it('métadonnées démesurées d’une source de recherche (titre de thèse HAL, intitulé d’actes) : bornées, l’enregistrement reste valide', async () => {
+    const longTitle = 'Étude '.repeat(90).trim();
+    const fetchImpl = mockFetch(url => {
+      const host = new URL(url).hostname;
+      if (host === 'api.archives-ouvertes.fr') {
+        return jsonResponse({ response: { docs: [{
+          title_s: [longTitle], authFullName_s: ['Anne Martin', 'B'.repeat(250)], producedDateY_i: 2020,
+          journalTitle_s: 'Actes du colloque '.repeat(20), doiId_s: `10.1000/${'x'.repeat(250)}`,
+          uri_s: `https://hal.science/hal-1?${'q'.repeat(2_100)}`,
+          abstract_s: ['Résumé : la gouvernance des systèmes d’information améliore la performance des organisations publiques.'],
+        }] } });
+      }
+      if (host === 'api.crossref.org') return jsonResponse({ message: { items: [] } });
+      return jsonResponse({ query: { search: [] } });
+    });
+    const events = await collect(runGeneration(request({ researchMode: 'documents_internet', documents: [] }), {
+      provider: new MockProvider({ reply: 'La gouvernance améliore la performance [S1].' }),
+      research: { config: RESEARCH_CONFIG, deps: { fetch: fetchImpl } },
+      includeRecord: true,
+    }));
+    const done = last(events) as EventOf<'done'>;
+    expect(done.type).toBe('done');
+    const hal = done.record!.sources.find(s => s.kind === 'hal')!;
+    expect(hal.title.length).toBeLessThanOrEqual(RECORD_LIMITS.sourceTitle);
+    expect(hal.title.endsWith('…')).toBe(true);
+    expect(hal.venue!.length).toBeLessThanOrEqual(RECORD_LIMITS.venue);
+    expect(hal.authors!.every(a => a.length <= RECORD_LIMITS.author)).toBe(true);
+    expect(hal.authors![0]).toBe('Anne Martin');
+    expect(hal.doi).toBeUndefined();
+    expect(hal.url).toBeUndefined();
+    // POST /api/generation accepte la génération telle quelle (sinon elle serait perdue pour l'historique).
+    expect(() => validateGenerationRecordDraft(done.record)).not.toThrow();
+  });
+
+  it('modèle personnalisé au nom long (jusqu’à 200 caractères, accepté par l’application) : enregistrement accepté ; au-delà, nom borné', async () => {
+    // Modèle Hugging Face servi par le moteur local : « hf.co/<compte>/<dépôt>-GGUF:<quantification> ».
+    const longName = `hf.co/${'a'.repeat(130)}-GGUF:Q4_K_M`;
+    const run = (model: string) => collect(runGeneration(request({ documents: DOCS }), {
+      provider: new MockProvider({ reply: 'La gouvernance aligne SI et stratégie [S1].', model }),
+      includeRecord: true,
+    }));
+    const done = last(await run(longName)) as EventOf<'done'>;
+    expect(done.record!.model).toBe(longName);
+    expect(validateGenerationRecordDraft(done.record).model).toBe(longName);
+    const huge = last(await run(`hf.co/${'b'.repeat(300)}`)) as EventOf<'done'>;
+    expect(huge.record!.model!.length).toBeLessThanOrEqual(RECORD_LIMITS.model);
+    expect(() => validateGenerationRecordDraft(huge.record)).not.toThrow();
   });
 });
 

@@ -76,7 +76,11 @@ describe('Landing — affirmations', () => {
     expect(text).toMatch(/licence MIT/i);
     expect(text).toMatch(/IA locale gratuite sur Windows/);
     expect(text).toMatch(/vos documents restent sur votre ordinateur/);
-    expect(text).toMatch(/serveur d’IA compatible OpenAI configuré par votre établissement/);
+    // Sur le site : l'IA de l'ordinateur d'abord (application Windows connectée), sinon le serveur configuré.
+    expect(text).toMatch(/en priorité l’IA de votre ordinateur quand l’application Windows y est connectée/);
+    expect(text).toMatch(/sinon le serveur d’IA compatible OpenAI configuré par votre établissement/);
+    // Aucun nom de moteur à connaître sur l'accueil public.
+    expect(text).not.toMatch(/ollama/i);
     expect(text).toMatch(/HAL, Crossref/);
     expect(text).toMatch(/relire et adapter/);
     expect(text).not.toMatch(COMMERCIAL_VENDOR);
@@ -108,7 +112,7 @@ describe('Landing — application Windows et IA du site', () => {
 
   it('le site n’affirme plus que l’IA est forcément celle de l’établissement : le prestataire est annoncé', async () => {
     const { container } = await mount(fakeRuntime(new MemoryStore()));
-    expect(container.textContent).toMatch(/l’application indique toujours à qui vos textes sont envoyés/);
+    expect(container.textContent).toMatch(/Le site indique toujours qui traite vos textes/);
   });
 
   it('mode personnel : « Commencer » mène à l’application, sans connexion', async () => {

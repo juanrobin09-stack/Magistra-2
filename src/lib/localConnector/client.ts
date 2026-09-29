@@ -12,25 +12,36 @@
 //    redirection, targetAddressSpace 'loopback' (Local Network Access de Chrome ; ignoré ailleurs) ;
 //  - appairage : l'URL magistra://pair ne porte que l'identifiant de la demande, le défi (SHA-256 du vérificateur) et
 //    l'origine du site. Premier temps, sans secret : POST /v1/pair { pairingId } ; seul un port qui renvoie l'accusé
-//    de réception attendu (SHA-256 de canonicalPairAck(pairingId, défi) : le défi n'est dans aucune requête HTTP) a
-//    reçu l'URL, donc est l'application Magistra de CETTE session. Un port sans accusé valide (autre programme, autre
-//    session Windows d'un PC partagé ou d'un serveur de bureaux à distance) est ignoré et ne reçoit JAMAIS le
+//    de réception attendu POUR CE PORT (SHA-256 de canonicalPairAck(pairingId, défi, hôte) : le défi n'est dans aucune
+//    requête HTTP) a reçu l'URL et y écoute, donc est l'application Magistra de CETTE session. Un port sans accusé
+//    valide (autre programme, autre session Windows d'un PC partagé ou d'un serveur de bureaux à distance, y compris
+//    un programme qui relaie tout à la vraie application depuis un autre port) est ignoré et ne reçoit JAMAIS le
 //    vérificateur ni la clé publique : ils ne partent, dans le CORPS du second temps, qu'au port dont l'accusé est
 //    valide et seulement après l'accord de l'enseignant ('consented'). La clé HMAC, dérivée par ECDH des deux côtés,
 //    n'a jamais circulé et reste non extractible dans ce navigateur ;
-//  - chaque réponse à une requête signée doit porter la PREUVE (X-Magistra-Proof) que l'application détient la clé de
-//    ce navigateur pour CE nonce. Sans preuve valide (autre programme sur le port, autre session Windows), la réponse
-//    est ignorée — son texte n'est jamais affiché — et vaut CONNECTOR_UNREACHABLE ;
+//  - chaque requête signée porte l'hôte visé (connectorHost(port)) et chaque réponse doit porter la PREUVE
+//    (X-Magistra-Proof) que l'application détient la clé de ce navigateur pour CE nonce et CE port. Sans preuve valide
+//    (autre programme sur le port, autre session Windows, relais vers un autre port), la réponse est ignorée — son
+//    texte n'est jamais affiché — et vaut CONNECTOR_UNREACHABLE ;
 //  - aucun contenu de génération (demande, extraits de documents) n'est envoyé à un port qui n'a pas prouvé, dans
 //    cette session et depuis moins de 30 s, détenir la clé : sinon GET /v1/status est refait d'abord ;
-//  - 401 CONNECTOR_UNPAIRED (autorisation retirée dans l'application) : l'appairage est oublié. Cette réponse ne peut
-//    pas être prouvée (l'application ne connaît plus la clé) : elle n'est retenue que si AUCUN port ne prouve détenir
-//    la clé, pour qu'une autre application Magistra (autre session Windows) ne fasse pas oublier le bon appairage.
+//  - 401 CONNECTOR_UNPAIRED : cette réponse ne porte jamais de preuve (le programme qui répond ne connaît pas, ou
+//    plus, la clé). L'application Magistra d'une AUTRE session Windows (PC partagé, bureaux à distance : ports de la
+//    boucle locale communs) la renvoie légitimement, elle qui ne connaît pas ce navigateur. L'appairage n'est donc
+//    oublié — et un retrait n'est tenu pour confirmé — que sur la MARQUE DE RETRAIT valide (X-Magistra-Revoked,
+//    calculée avec la clé de ce navigateur par l'application qui l'a retiré), et seulement si aucun port ne prouve
+//    détenir la clé. Sans marque : l'appairage est gardé (UNRECOGNIZED_BY_APP_MESSAGE : ouvrir sa propre
+//    application, ou reconnecter si elle a perdu ses autorisations) ;
+//  - autorisation du navigateur (Local Network Access de Chrome et Edge) : Chromium ouvre la connexion AVANT de poser
+//    sa question et l'application ferme toute connexion muette au bout de 10 s ; accordée plus tard, la requête
+//    retenue échoue. Une recherche commencée à 'prompt' et terminée à 'granted' est donc refaite aussitôt. Un
+//    navigateur qui expose l'autorisation sans l'appliquer (réponse reçue, autorisation toujours à 'prompt') est
+//    traité comme sans ce mécanisme pour le reste de la visite.
 
 import { defaultMessage, isAbortError, isErrorCode, MagistraError, toMagistraError, type ErrorCode } from '@shared/errors';
 import {
-  buildPairingUrl, CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_HOST, CONNECTOR_LIMITS, CONNECTOR_PORTS,
-  CONNECTOR_PROTOCOL_VERSION, CONNECTOR_ROUTES, CONNECTOR_URL_SCHEME, type ConnectorCancelRequest, type ConnectorHello,
+  buildPairingUrl, CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS, CONNECTOR_PORTS, CONNECTOR_PROTOCOL_VERSION,
+  CONNECTOR_ROUTES, CONNECTOR_URL_SCHEME, connectorHost, type ConnectorCancelRequest, type ConnectorHello,
   type ConnectorRoute, type ConnectorStatus, type PairAckRequest, type PairFinishRequest,
 } from '@shared/localConnector';
 import type { AINotice, GenerationEvent, GenerationRequest } from '@shared/types';
@@ -38,8 +49,9 @@ import { readEventStream } from '@/lib/runtime/http';
 import { defaultPairingStore, isStoredPairing, type PairingStore, type StoredPairing } from './pairingStore';
 import { queryLoopbackPermission, type LoopbackPermission } from './permission';
 import {
-  createPairingSecrets, deriveHmacKey, expectedPairAck, generateClientKeyPair, isWebCryptoAvailable, NONCE_BYTES, randomToken,
-  sha256Base64Url, signRequest, utf8, verifyPairAck, verifyProof, type ClientKeyPair, type PairingSecrets,
+  createPairingSecrets, deriveHmacKey, expectedPairAck, generateClientKeyPair, isWebCryptoAvailable, NONCE_BYTES, pairingCode,
+  randomToken, sha256Base64Url, signRequest, utf8, verifyPairAck, verifyProof, verifyRevokedMark, type ClientKeyPair,
+  type PairingSecrets,
 } from './webCrypto';
 
 export type { LoopbackPermission } from './permission';
@@ -101,9 +113,22 @@ export const UNEXPECTED_REPLY_MESSAGE =
 /** L'application répond, mais n'a jamais reconnu la demande de connexion (URL magistra:// non reçue). */
 export const PAIRING_NOT_RECEIVED_MESSAGE =
   "La demande de connexion n'est pas parvenue à l'application Magistra. Recommencez et, si votre navigateur le demande, acceptez l'ouverture de Magistra.";
+/**
+ * Une application Magistra répond sans reconnaître ce navigateur, et aucune n'a prouvé détenir sa clé ni l'avoir
+ * retiré : celle d'une autre session Windows (la sienne étant fermée), ou la sienne qui a perdu ses autorisations.
+ * L'appairage est gardé ; l'enseignant ouvre son application, ou reconnecte Magistra locale.
+ */
+export const UNRECOGNIZED_BY_APP_MESSAGE =
+  "Une application Magistra répond sur cet ordinateur, mais elle ne reconnaît pas ce navigateur (par exemple celle d'une autre session Windows). Ouvrez votre application Magistra ; si elle est déjà ouverte, reconnectez Magistra locale.";
 /** Flux de génération coupé avant la fin. */
 export const STREAM_INTERRUPTED_MESSAGE =
   "La connexion à l'application Magistra a été interrompue pendant la génération : vérifiez qu'elle est ouverte, puis réessayez.";
+/**
+ * Génération arrêtée par l'application alors que le site ne l'a pas interrompue : autorisation de ce navigateur retirée
+ * (réglages de l'application, déconnexion depuis un autre onglet). Jamais présentée comme un « Arrêter » de l'enseignant.
+ */
+export const STOPPED_BY_APP_MESSAGE =
+  "La génération a été arrêtée par l'application Magistra : l'autorisation de ce navigateur a peut-être été retirée. Vérifiez la connexion de Magistra locale, puis réessayez.";
 /** WebCrypto indisponible (navigateur trop ancien, contexte non sécurisé). */
 export const UNSUPPORTED_BROWSER_MESSAGE =
   'Ce navigateur ne permet pas de connecter Magistra locale (fonctions de sécurité indisponibles). Utilisez une version récente de Chrome, Edge ou Firefox.';
@@ -247,7 +272,7 @@ function isVersion(value: unknown): value is string {
   return typeof value === 'string' && VERSION_RE.test(value);
 }
 
-/** GET /v1/hello : { app: 'magistra', protocol: 1, version } exactement ; tout autre programme → null. */
+/** GET /v1/hello : { app: 'magistra', protocol: CONNECTOR_PROTOCOL_VERSION, version } exactement ; sinon → null. */
 export function parseHello(raw: unknown): ConnectorHello | null {
   if (!isRecord(raw) || raw.app !== 'magistra' || raw.protocol !== CONNECTOR_PROTOCOL_VERSION || !isVersion(raw.version)) return null;
   return { app: 'magistra', protocol: CONNECTOR_PROTOCOL_VERSION, version: raw.version };
@@ -315,8 +340,12 @@ type Outcome<T> =
   | { kind: 'ok'; value: T }
   /** Réponse PROUVÉE de l'application appairée, mais en erreur : à signaler telle quelle. */
   | { kind: 'error'; error: MagistraError }
-  /** 401 CONNECTOR_UNPAIRED (non prouvable : ce programme ne connaît pas ou plus la clé de ce navigateur). */
-  | { kind: 'unpaired' }
+  /**
+   * 401 CONNECTOR_UNPAIRED (jamais prouvé : ce programme ne connaît pas ou plus la clé de ce navigateur). `confirmed` :
+   * marque de retrait valide, l'application qui détenait la clé a retiré ce navigateur ; sinon, rien ne dit que ce
+   * programme ait jamais connu ce navigateur (autre application Magistra, autre session Windows).
+   */
+  | { kind: 'unpaired'; confirmed: boolean }
   /** Réponse sans preuve valide : un autre programme, ou une autre application Magistra. */
   | { kind: 'unproven' }
   /** Aucune réponse : port fermé, délai dépassé, requête bloquée par le navigateur. */
@@ -365,6 +394,15 @@ export class LocalConnectorClient {
   private proven: ProvenPort | null = null;
   /** Dernier port où Magistra a répondu à hello (essayé tôt lors de la recherche suivante). */
   private lastFoundPort: number | null = null;
+  /** Dernière autorisation du navigateur lue (telle quelle). */
+  private lastPermission: LoopbackPermission = 'unsupported';
+  /**
+   * Le navigateur expose l'autorisation sans l'appliquer (politique d'entreprise, version ou dérivé de Chromium) : une
+   * réponse de la boucle locale est arrivée alors qu'elle valait 'prompt', et elle vaut toujours 'prompt' ensuite. Elle
+   * ne sera jamais demandée : traitée comme 'unsupported' jusqu'à la fin de la visite, jamais au-delà (si la protection
+   * était appliquée plus tard, sa demande doit de nouveau être expliquée avant d'apparaître).
+   */
+  private promptNotEnforced = false;
 
   constructor(options: LocalConnectorClientOptions = {}) {
     const ports = (options.ports ?? CONNECTOR_PORTS).filter(p => Number.isInteger(p) && p > 0 && p <= 65_535);
@@ -389,12 +427,27 @@ export class LocalConnectorClient {
    * dans ce cas.
    */
   async hello(signal?: AbortSignal): Promise<{ port: number; hello: ConnectorHello } | null> {
-    const permission = await this.permissionState();
+    const permission = await this.readPermission();
     if (permission === 'denied') throw permissionDenied();
     const found = await this.findApps(signal, permission === 'prompt' ? T.permissionPrompt : T.hello);
     if (found.length) return found[0];
-    if (permission === 'prompt' && (await this.permissionState()) === 'denied') throw permissionDenied();
+    if (permission === 'prompt') {
+      const after = await this.readPermission();
+      if (after === 'denied') throw permissionDenied();
+      // Accordée pendant la recherche, après la coupure de la connexion retenue par le navigateur : nouvel essai.
+      if (after === 'granted') return (await this.findApps(signal, T.hello))[0] ?? null;
+    }
     return null;
+  }
+
+  /**
+   * Autorisation du navigateur, lue sans la demander ; 'prompt' d'un navigateur qui ne l'applique pas (réponse déjà
+   * reçue de la boucle locale sans qu'elle change) → 'unsupported'.
+   */
+  async readPermission(): Promise<LoopbackPermission> {
+    const state = await this.rawPermission();
+    this.lastPermission = state;
+    return state === 'prompt' && this.promptNotEnforced ? 'unsupported' : state;
   }
 
   /** Un appairage est enregistré dans ce navigateur. */
@@ -410,24 +463,30 @@ export class LocalConnectorClient {
    *  2. après { status: 'consented' } (accusé valide), et à CE port seulement : POST /v1/pair { pairingId, verifier,
    *     clientPublicKey }.
    * Termine par une preuve (GET /v1/status) : la clé est la même des deux côtés.
+   * `onCode` reçoit, avant l'ouverture de magistra://pair, le code de vérification que la boîte de consentement de
+   * l'application affichera (à montrer à l'enseignant).
    * Lève CONNECTOR_PAIRING_REFUSED, CONNECTOR_PAIRING_EXPIRED, CONNECTOR_UNREACHABLE, LOCAL_NETWORK_PERMISSION_DENIED,
    * ou une AbortError si `signal` est interrompu.
    */
-  async pair(signal: AbortSignal): Promise<void> {
+  async pair(signal: AbortSignal, onCode?: (code: string) => void): Promise<void> {
     throwIfAborted(signal);
     if (!isWebCryptoAvailable()) throw new MagistraError('INTERNAL', UNSUPPORTED_BROWSER_MESSAGE);
-    const permission = await this.permissionState();
+    const permission = await this.readPermission();
     if (permission === 'denied') throw permissionDenied();
     const previous = await this.loadPairing();
     const secrets = await createPairingSecrets();
     const keys = await generateClientKeyPair();
-    const ack = await expectedPairAck(secrets.pairingId, secrets.challenge);
+    const code = await pairingCode(secrets.challenge);
+    // Accusé attendu de CHAQUE port : il inclut l'hôte joint (un relais sur un autre port ne peut pas le fournir).
+    const acks = new Map<number, string>();
+    for (const port of this.ports) acks.set(port, await expectedPairAck(secrets.pairingId, secrets.challenge, connectorHost(port)));
     const probe: PairAckRequest = { pairingId: secrets.pairingId };
     const finish: PairFinishRequest = { pairingId: secrets.pairingId, verifier: secrets.verifier, clientPublicKey: keys.publicKey };
     const probeBody = utf8(JSON.stringify(probe));
     const finishBody = utf8(JSON.stringify(finish));
     const deadline = this.now() + T.pairing;
     throwIfAborted(signal);
+    onCode?.(code);
     // Seuls l'identifiant de la demande, le défi et l'origine voyagent dans l'URL : jamais le vérificateur.
     this.openUrl(buildPairingUrl({ pairingId: secrets.pairingId, challenge: secrets.challenge, origin: this.origin }));
 
@@ -450,8 +509,9 @@ export class LocalConnectorClient {
       const wait = Math.max(1, Math.min(helloWait, deadline - this.now()));
       const candidates: number[] = acknowledged !== null ? [acknowledged] : (await this.findApps(signal, wait)).map(app => app.port);
       if (candidates.length) appSeen = true;
-      else if (permission === 'prompt' && (await this.permissionState()) === 'denied') throw permissionDenied();
+      else if (permission === 'prompt' && (await this.readPermission()) === 'denied') throw permissionDenied();
       for (const port of candidates) {
+        const ack = acks.get(port)!;
         let outcome = await this.postPair(port, probeBody, ack, 'ack', signal);
         if (outcome.kind === 'consented') {
           acknowledged = port;
@@ -485,20 +545,19 @@ export class LocalConnectorClient {
 
   /**
    * État du moteur (GET /v1/status signé, preuve exigée). Essaie le port mémorisé, puis tous les ports où Magistra
-   * répond. Lève CONNECTOR_UNPAIRED (aucun appairage, ou autorisation retirée : l'appairage est alors oublié),
-   * CONNECTOR_UNREACHABLE (application fermée, ou aucune réponse prouvée), LOCAL_NETWORK_PERMISSION_DENIED, ou
-   * l'erreur prouvée renvoyée par l'application.
+   * répond. Lève CONNECTOR_UNPAIRED (aucun appairage ; retrait prouvé par la marque de retrait : l'appairage est alors
+   * oublié ; ou, appairage GARDÉ, message UNRECOGNIZED_BY_APP_MESSAGE : une application Magistra répond sans
+   * reconnaître ce navigateur ni prouver l'avoir retiré), CONNECTOR_UNREACHABLE (application fermée, ou aucune réponse
+   * prouvée), LOCAL_NETWORK_PERMISSION_DENIED, ou l'erreur prouvée renvoyée par l'application.
    */
   async status(signal?: AbortSignal): Promise<ConnectorStatus> {
     const pairing = await this.loadPairing();
     if (!pairing) throw new MagistraError('CONNECTOR_UNPAIRED');
-    const permission = await this.permissionState();
+    const permission = await this.readPermission();
     if (permission === 'denied') throw permissionDenied();
-    const waitMs = permission === 'prompt' ? T.permissionPrompt : T.status;
-    const tried = new Set<number>();
-    let unpaired = false;
-    const attempt = async (port: number): Promise<ConnectorStatus | null> => {
-      tried.add(port);
+    let revoked = false;
+    let unrecognized = false;
+    const attempt = async (port: number, waitMs: number): Promise<ConnectorStatus | null> => {
       const outcome = await this.tryStatus(pairing, port, signal, waitMs);
       if (outcome.kind === 'ok') {
         await this.remember(pairing, port);
@@ -508,26 +567,41 @@ export class LocalConnectorClient {
         await this.remember(pairing, port);
         throw outcome.error;
       }
-      if (outcome.kind === 'unpaired') unpaired = true;
+      if (outcome.kind === 'unpaired') {
+        if (outcome.confirmed) revoked = true;
+        else unrecognized = true;
+      }
+      return null;
+    };
+    /** Port mémorisé, puis chaque port où Magistra répond (chacun essayé une fois). */
+    const round = async (statusMs: number, helloMs: number): Promise<ConnectorStatus | null> => {
+      const tried = new Set<number>();
+      if (this.ports.includes(pairing.port)) {
+        tried.add(pairing.port);
+        const status = await attempt(pairing.port, statusMs);
+        if (status) return status;
+      }
+      for (const { port } of await this.findApps(signal, helloMs)) {
+        if (tried.has(port)) continue;
+        tried.add(port);
+        const status = await attempt(port, statusMs);
+        if (status) return status;
+      }
       return null;
     };
 
-    if (this.ports.includes(pairing.port)) {
-      const status = await attempt(pairing.port);
-      if (status) return status;
-    }
-    const apps = await this.findApps(signal, permission === 'prompt' ? T.permissionPrompt : T.hello);
-    for (const { port } of apps) {
-      if (tried.has(port)) continue;
-      const status = await attempt(port);
-      if (status) return status;
-    }
+    const prompt = permission === 'prompt';
+    const status = (await round(prompt ? T.permissionPrompt : T.status, prompt ? T.permissionPrompt : T.hello))
+      // Accordée pendant la première série, après la coupure de la connexion retenue par le navigateur : nouvel essai.
+      ?? (prompt && !revoked && (await this.readPermission()) === 'granted' ? await round(T.status, T.hello) : null);
+    if (status) return status;
     if (this.proven?.clientId === pairing.clientId) this.proven = null;
-    if (unpaired) {
+    if (revoked) {
       await this.forget(pairing);
       throw new MagistraError('CONNECTOR_UNPAIRED');
     }
-    if (permission === 'prompt' && (await this.permissionState()) === 'denied') throw permissionDenied();
+    if (unrecognized) throw new MagistraError('CONNECTOR_UNPAIRED', UNRECOGNIZED_BY_APP_MESSAGE);
+    if (prompt && (await this.readPermission()) === 'denied') throw permissionDenied();
     throw new MagistraError('CONNECTOR_UNREACHABLE');
   }
 
@@ -557,28 +631,38 @@ export class LocalConnectorClient {
 
   /**
    * Retire l'autorisation de CE navigateur dans l'application (DELETE /v1/pair signé, au mieux), puis oublie
-   * l'appairage localement même si l'application est fermée ou injoignable.
+   * l'appairage localement même si l'application est fermée ou injoignable. Renvoie vrai si l'application a confirmé
+   * le retrait (réponse prouvée, ou marque de retrait valide : elle l'avait déjà retiré), ou si rien n'était appairé ;
+   * faux sinon — y compris pour le 401 d'une autre application Magistra (autre session Windows) qui ne connaît pas ce
+   * navigateur : l'enseignant doit alors vérifier dans son application (Réglages → « Site web Magistra »).
    */
-  async unpair(): Promise<void> {
+  async unpair(): Promise<boolean> {
     const pairing = await this.loadPairing();
     if (!pairing) {
       this.proven = null;
-      return;
+      return true;
     }
+    let revoked = false;
     try {
-      if ((await this.permissionState()) !== 'denied') {
-        const revoked = this.ports.includes(pairing.port) && (await this.revoke(pairing, pairing.port));
-        if (!revoked) {
+      const permission = await this.readPermission();
+      if (permission !== 'denied') {
+        const attempt = async (): Promise<boolean> => {
+          if (this.ports.includes(pairing.port) && (await this.revoke(pairing, pairing.port))) return true;
           for (const { port } of await this.findApps(undefined, T.hello)) {
-            if (port !== pairing.port && (await this.revoke(pairing, port))) break;
+            if (port !== pairing.port && (await this.revoke(pairing, port))) return true;
           }
-        }
+          return false;
+        };
+        revoked = await attempt();
+        // Accordée pendant le premier essai, après la coupure de la connexion retenue par le navigateur : nouvel essai.
+        if (!revoked && permission === 'prompt' && (await this.readPermission()) === 'granted') revoked = await attempt();
       }
     } catch {
       // Au mieux : l'enseignant peut aussi retirer l'autorisation dans l'application.
     } finally {
       await this.forget(pairing);
     }
+    return revoked;
   }
 
   // ─── Appairage mémorisé ───────────────────────────────────────────────────
@@ -635,7 +719,8 @@ export class LocalConnectorClient {
     return { pairing, port: this.proven!.port };
   }
 
-  private async permissionState(): Promise<LoopbackPermission> {
+  /** Autorisation du navigateur telle que lue (jamais d'exception). */
+  private async rawPermission(): Promise<LoopbackPermission> {
     try {
       const state = await this.permission();
       return state === 'granted' || state === 'prompt' || state === 'denied' ? state : 'unsupported';
@@ -646,7 +731,7 @@ export class LocalConnectorClient {
 
   // ─── Requêtes ─────────────────────────────────────────────────────────────
 
-  private send(port: number, path: ConnectorRoute, init: { method: string; headers?: Record<string, string>; body?: RequestBody }, signal: AbortSignal): Promise<Response> {
+  private async send(port: number, path: ConnectorRoute, init: { method: string; headers?: Record<string, string>; body?: RequestBody }, signal: AbortSignal): Promise<Response> {
     const request: RequestInit & { targetAddressSpace: 'loopback' } = {
       method: init.method,
       headers: init.headers,
@@ -659,7 +744,11 @@ export class LocalConnectorClient {
       redirect: 'error',
       targetAddressSpace: 'loopback',
     };
-    return this.fetchImpl(`http://${CONNECTOR_HOST}:${port}${path}`, request);
+    const res = await this.fetchImpl(`http://${connectorHost(port)}${path}`, request);
+    // Réponse reçue de la boucle locale alors que l'autorisation valait 'prompt' : un navigateur qui applique la
+    // protection l'a accordée avant d'envoyer la requête ; toujours 'prompt' → il ne l'applique pas.
+    if (this.lastPermission === 'prompt' && !this.promptNotEnforced && (await this.rawPermission()) === 'prompt') this.promptNotEnforced = true;
+    return res;
   }
 
   /** Exécute `run` avec un signal interrompu par `signal` OU après `ms` millisecondes. */
@@ -682,8 +771,10 @@ export class LocalConnectorClient {
     const timestamp = String(Math.floor(this.now()));
     const nonce = randomToken(NONCE_BYTES);
     const payload: RequestBody = body ?? new Uint8Array(0);
+    // Hôte visé signé : relayée vers un autre port, la requête ne vaut rien pour l'application qui y écoute.
+    const host = connectorHost(port);
     const signature = await signRequest(pairing.key, {
-      method, path, origin: this.origin, clientId: pairing.clientId, timestamp, nonce, bodySha256: await sha256Base64Url(payload),
+      method, host, path, origin: this.origin, clientId: pairing.clientId, timestamp, nonce, bodySha256: await sha256Base64Url(payload),
     });
     const headers: Record<string, string> = {
       [CONNECTOR_HEADERS.client]: pairing.clientId,
@@ -693,18 +784,22 @@ export class LocalConnectorClient {
     };
     if (body) headers['Content-Type'] = 'application/json';
     const res = await this.send(port, path, { method, headers, body: body ?? undefined }, signal);
-    const proven = await verifyProof(pairing.key, pairing.clientId, nonce, res.headers.get(CONNECTOR_HEADERS.proof));
+    const proven = await verifyProof(pairing.key, pairing.clientId, nonce, host, res.headers.get(CONNECTOR_HEADERS.proof));
     return { res, proven };
   }
 
-  /** Classe la réponse à une requête signée. Réponse non prouvée : seul le code d'un 401 est lu, jamais le message. */
-  private async classify<V>(res: Response, proven: boolean, parse: (raw: unknown) => V | null, maxBytes: number): Promise<Outcome<V>> {
+  /**
+   * Classe la réponse à une requête signée de `pairing`. Réponse non prouvée : seuls le code d'un 401 et sa marque de
+   * retrait sont lus, jamais le message.
+   */
+  private async classify<V>(pairing: StoredPairing, res: Response, proven: boolean, parse: (raw: unknown) => V | null, maxBytes: number): Promise<Outcome<V>> {
     if (!proven) {
       if (res.status !== 401) {
         await discard(res);
         return { kind: 'unproven' };
       }
-      return errorCodeOf(await readJson(res, MAX_SMALL_RESPONSE_BYTES)) === 'CONNECTOR_UNPAIRED' ? { kind: 'unpaired' } : { kind: 'unproven' };
+      if (errorCodeOf(await readJson(res, MAX_SMALL_RESPONSE_BYTES)) !== 'CONNECTOR_UNPAIRED') return { kind: 'unproven' };
+      return { kind: 'unpaired', confirmed: await verifyRevokedMark(pairing.key, pairing.clientId, res.headers.get(CONNECTOR_HEADERS.revoked)) };
     }
     if (!res.ok) return { kind: 'error', error: await provenError(res) };
     const value = parse(await readJson(res, maxBytes));
@@ -715,7 +810,7 @@ export class LocalConnectorClient {
     try {
       return await this.withTimeout(signal, waitMs, async s => {
         const { res, proven } = await this.signed(pairing, port, 'GET', CONNECTOR_ROUTES.status, null, s);
-        return this.classify(res, proven, parseConnectorStatus, MAX_STATUS_RESPONSE_BYTES);
+        return this.classify(pairing, res, proven, parseConnectorStatus, MAX_STATUS_RESPONSE_BYTES);
       });
     } catch {
       if (signal?.aborted) throw abortError();
@@ -823,13 +918,16 @@ export class LocalConnectorClient {
     if (previous && previous.clientId !== pairing.clientId) await this.revoke(previous, port);
   }
 
-  /** DELETE /v1/pair signé. Vrai si l'application a confirmé (preuve) ou ne connaît déjà plus ce navigateur. */
+  /**
+   * DELETE /v1/pair signé. Vrai si l'application a confirmé le retrait (preuve), ou l'avait déjà fait (marque de
+   * retrait valide) ; un 401 sans marque (autre application Magistra, autre session Windows) ne confirme rien.
+   */
   private async revoke(pairing: StoredPairing, port: number): Promise<boolean> {
     try {
       return await this.withTimeout(undefined, T.small, async s => {
         const { res, proven } = await this.signed(pairing, port, 'DELETE', CONNECTOR_ROUTES.pair, null, s);
-        const outcome = await this.classify(res, proven, () => true, MAX_SMALL_RESPONSE_BYTES);
-        return outcome.kind === 'ok' || outcome.kind === 'unpaired';
+        const outcome = await this.classify(pairing, res, proven, () => true, MAX_SMALL_RESPONSE_BYTES);
+        return outcome.kind === 'ok' || (outcome.kind === 'unpaired' && outcome.confirmed);
       });
     } catch {
       return false;
@@ -867,10 +965,11 @@ export class LocalConnectorClient {
         clearTimeout(headersTimer);
       }
       if (!proven) {
-        // Autre programme sur le port, ou autorisation retirée à l'instant : rien n'est lu de cette réponse.
+        // Autre programme sur le port, ou autorisation retirée à l'instant : rien n'est lu de cette réponse. Oubli
+        // seulement sur un retrait prouvé (marque de retrait) ; sinon l'état sera relu (appairage gardé).
         this.proven = null;
-        const outcome = await this.classify(res, false, () => null, MAX_SMALL_RESPONSE_BYTES);
-        if (outcome.kind === 'unpaired') {
+        const outcome = await this.classify(pairing, res, false, () => null, MAX_SMALL_RESPONSE_BYTES);
+        if (outcome.kind === 'unpaired' && outcome.confirmed) {
           await this.forget(pairing);
           fail(new MagistraError('CONNECTOR_UNPAIRED'));
         } else {
@@ -889,6 +988,11 @@ export class LocalConnectorClient {
       const relay = (event: GenerationEvent) => {
         if (event.type === 'error' && event.code === 'NETWORK_ERROR' && event.message === HTTP_STREAM_INTERRUPTED_MESSAGE) {
           onEvent({ ...event, code: 'CONNECTOR_UNREACHABLE', message: STREAM_INTERRUPTED_MESSAGE, retryable: true });
+          return;
+        }
+        if (event.type === 'error' && event.code === 'GENERATION_ABORTED' && !signal.aborted) {
+          // Arrêt venu de l'application, pas de ce site : erreur explicite (l'état de Magistra locale sera relu).
+          onEvent({ ...event, code: 'CONNECTOR_UNREACHABLE', message: STOPPED_BY_APP_MESSAGE, retryable: true });
           return;
         }
         onEvent(event);

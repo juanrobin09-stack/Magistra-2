@@ -3,13 +3,18 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { CONNECTOR_PORTS, CONNECTOR_ROUTES, OPEN_APP_URL } from '@shared/localConnector';
-import { createLocalEngineController, OPEN_APP_SEARCH_MS, type LocalEngineState } from '@/lib/localConnector/controller';
+import { UNRECOGNIZED_BY_APP_MESSAGE } from '@/lib/localConnector/client';
+import {
+  createLocalEngineController, NOT_ANSWERED_PERMISSION_MESSAGE, OPEN_APP_ENGINE_START_MS, OPEN_APP_SEARCH_MS, UNPAIR_NOT_CONFIRMED_MESSAGE,
+  type LocalEngineState,
+} from '@/lib/localConnector/controller';
+import { localCapabilities } from '@/lib/runtime/hybrid';
 import { getEngineChoice, resetEngineChoiceMemory, setEngineChoice } from '@/lib/localConnector/engineChoice';
 import { MemoryPairingStore } from '@/lib/localConnector/pairingStore';
 import type { LoopbackPermission } from '@/lib/localConnector/permission';
 import { fakeClock, FakeConnector, READY_STATUS, type PortMode } from './fakeConnector';
 
-const [P1, P2] = CONNECTOR_PORTS;
+const [P1, P2, P3] = CONNECTOR_PORTS;
 
 function setup(ports: Partial<Record<number, PortMode>> = { [P1]: 'magistra' }, initialPermission: LoopbackPermission = 'granted') {
   const clock = fakeClock();
@@ -123,7 +128,7 @@ describe('état initial et vérification automatique', () => {
   it('autorisation retirée dans l’application : appairage oublié, application trouvée, erreur expliquée', async () => {
     const ctx = setup();
     await connected(ctx);
-    ctx.connector.clients.clear();
+    ctx.connector.revokeAll();
     await ctx.controller.refresh();
     expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'found', paired: false, error: { code: 'CONNECTOR_UNPAIRED' } });
   });
@@ -131,7 +136,7 @@ describe('état initial et vérification automatique', () => {
   it('autorisation retirée : la cause reste affichée aux vérifications automatiques suivantes, une recherche de l’enseignant repart à neuf', async () => {
     const ctx = setup();
     await connected(ctx);
-    ctx.connector.clients.clear();
+    ctx.connector.revokeAll();
     await ctx.controller.refresh();
     const revoked = ctx.controller.getSnapshot();
     ctx.kinds.length = 0;
@@ -202,9 +207,144 @@ describe('recherche demandée par l’enseignant', () => {
     expect(ctx.controller.getSnapshot().kind).toBe('not-found');
     expect(ctx.kinds).toEqual(['checking', 'not-found']);
   });
+
+  it('demande du navigateur acceptée APRÈS la coupure de la connexion retenue (> 10 s) : « trouvée », jamais « non détectée »', async () => {
+    const ctx = setup({ [P1]: 'magistra' }, 'prompt');
+    let held = CONNECTOR_PORTS.length;
+    ctx.connector.intercept = () => {
+      if (held === 0) return undefined;
+      held--;
+      ctx.setPermission('granted');
+      throw new TypeError('Failed to fetch');
+    };
+    await ctx.controller.detect();
+    expect(ctx.controller.getSnapshot()).toEqual({ kind: 'found', paired: false, permission: 'granted', appVersion: '2.1.0' });
+  });
+
+  it('demande du navigateur restée sans réponse (jamais appairé) : la cause est dite, jamais « téléchargez-la » seul ; gardée aux vérifications automatiques', async () => {
+    const ctx = setup({ [P1]: 'magistra' }, 'prompt');
+    ctx.connector.intercept = () => {
+      throw new TypeError('Failed to fetch'); // bulle du navigateur fermée ou ignorée
+    };
+    await ctx.controller.detect();
+    const unanswered = ctx.controller.getSnapshot();
+    expect(unanswered).toEqual({
+      kind: 'not-found', paired: false, permission: 'prompt',
+      error: { code: 'LOCAL_NETWORK_PERMISSION_DENIED', message: NOT_ANSWERED_PERMISSION_MESSAGE },
+    });
+    await ctx.controller.autoCheck();
+    expect(ctx.controller.getSnapshot()).toBe(unanswered);
+    // Accordée ensuite (réglages du site) : la recherche suivante repart d'un état neuf.
+    ctx.connector.intercept = null;
+    ctx.setPermission('granted');
+    await ctx.controller.detect();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'found', paired: false });
+    expect(ctx.controller.getSnapshot().error).toBeUndefined();
+  });
+
+  it('demande du navigateur restée sans réponse (appairé) : « autorisation nécessaire » avec la cause, jamais « application fermée » ; la génération reste bloquée', async () => {
+    const ctx = setup();
+    await connected(ctx);
+    ctx.setPermission('prompt');
+    ctx.connector.intercept = () => {
+      throw new TypeError('Failed to fetch');
+    };
+    await ctx.controller.detect();
+    const unanswered = ctx.controller.getSnapshot();
+    expect(unanswered).toMatchObject({
+      kind: 'needs-permission', paired: true, permission: 'prompt',
+      error: { code: 'LOCAL_NETWORK_PERMISSION_DENIED', message: NOT_ANSWERED_PERMISSION_MESSAGE },
+    });
+    expect(localCapabilities(unanswered)).toMatchObject({ ready: false });
+    ctx.connector.requests.length = 0;
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot()).toBe(unanswered);
+    expect(ctx.connector.requests).toHaveLength(0);
+  });
+
+  it('ouverture de l’application pendant que la demande du navigateur reste sans réponse : arrêt, cause dite', async () => {
+    const ctx = setup({}, 'prompt');
+    ctx.connector.intercept = () => {
+      throw new TypeError('Failed to fetch');
+    };
+    await ctx.controller.openApp();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'not-found', error: { message: NOT_ANSWERED_PERMISSION_MESSAGE } });
+    expect(ctx.clock.sleeps).toEqual([]);
+  });
+});
+
+describe('PC partagé, bureaux à distance : l’application d’une AUTRE session', () => {
+  it('SA Magistra fermée, celle d’un collègue ouverte : vérification automatique → appairage GARDÉ, cause expliquée ; sa Magistra rouverte → connectée', async () => {
+    const ctx = setup({ [P1]: 'magistra' });
+    await connected(ctx);
+    ctx.connector.setPort(P1, 'closed').setPort(P2, 'other-magistra');
+    await ctx.controller.autoCheck();
+    expect(ctx.controller.getSnapshot()).toMatchObject({
+      kind: 'app-closed', paired: true, error: { code: 'CONNECTOR_UNPAIRED', message: UNRECOGNIZED_BY_APP_MESSAGE },
+    });
+    expect(await ctx.controller.client.hasPairing()).toBe(true);
+    // Magistra locale reste choisie, non prête : rien ne passe au serveur en ligne.
+    expect(localCapabilities(ctx.controller.getSnapshot())).toMatchObject({ route: 'local-connector', ready: false });
+    ctx.connector.setPort(P3, 'magistra');
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', paired: true });
+    expect(ctx.connector.consentCodes).toHaveLength(1); // aucun nouvel appairage
+  });
+
+  it('SA Magistra a perdu ses autorisations (aucune marque) : reconnexion possible depuis l’état gardé, l’ancienne autorisation retirée', async () => {
+    const ctx = setup({ [P1]: 'magistra' });
+    await connected(ctx);
+    ctx.connector.forgetAll();
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'app-closed', paired: true, error: { code: 'CONNECTOR_UNPAIRED' } });
+    await ctx.controller.connect();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', paired: true });
+    expect(ctx.connector.clients.size).toBe(1);
+  });
+
+  it('déconnexion pendant que SA Magistra est fermée et celle d’un collègue ouverte : l’enseignant est prévenu (retrait non confirmé)', async () => {
+    const ctx = setup({ [P1]: 'magistra' });
+    await connected(ctx);
+    ctx.connector.setPort(P1, 'closed').setPort(P2, 'other-magistra');
+    await ctx.controller.disconnect();
+    expect(ctx.controller.getSnapshot()).toMatchObject({
+      paired: false, error: { code: 'CONNECTOR_UNREACHABLE', message: UNPAIR_NOT_CONFIRMED_MESSAGE },
+    });
+    expect(ctx.connector.clients.size).toBe(1);
+  });
+});
+
+describe('navigateur qui expose l’autorisation SANS l’appliquer (politique d’entreprise, dérivé de Chromium)', () => {
+  it('autorisation « prompt » à vie : connectée, et le reste aux vérifications automatiques (génération possible)', async () => {
+    const ctx = setup({ [P1]: 'magistra' }, 'prompt');
+    await ctx.controller.connect();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', paired: true, permission: 'unsupported' });
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', paired: true });
+    expect(localCapabilities(ctx.controller.getSnapshot()).ready).toBe(true);
+    await ctx.controller.detect();
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot().kind).toBe('connected');
+    // Nouvelle visite : l'explication revient d'abord (rien n'est retenu au-delà de la visite).
+    const next = createLocalEngineController(ctx.options);
+    await next.autoCheck();
+    expect(next.getSnapshot()).toMatchObject({ kind: 'needs-permission', permission: 'prompt' });
+  });
 });
 
 describe('connexion (appairage)', () => {
+  it('en attente de l’accord : code de vérification affiché, identique à celui de la boîte de l’application', async () => {
+    const ctx = setup();
+    const codes: (string | undefined)[] = [];
+    ctx.controller.subscribe(() => {
+      const snapshot = ctx.controller.getSnapshot();
+      if (snapshot.kind === 'pairing') codes.push(snapshot.pairingCode);
+    });
+    await ctx.controller.connect();
+    expect(codes).toEqual([ctx.connector.consentCodes[0]]);
+    expect(ctx.controller.getSnapshot().pairingCode).toBeUndefined();
+  });
+
   it('trouvée → en attente de l’accord → connectée ; une seule URL magistra://pair', async () => {
     const ctx = setup();
     await ctx.controller.autoCheck();
@@ -225,9 +365,22 @@ describe('connexion (appairage)', () => {
     await ctx.controller.connect();
     expect(ctx.controller.getSnapshot().kind).toBe('connected');
     // Autorisation retirée plus tard dans l'application : l'appairage est oublié, le choix reste Magistra locale.
-    ctx.connector.clients.clear();
+    ctx.connector.revokeAll();
     await ctx.controller.refresh();
     expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'found', paired: false, error: { code: 'CONNECTOR_UNPAIRED' } });
+    expect(getEngineChoice(false)).toBe('local');
+  });
+
+  it('appairage présent SANS choix enregistré (enregistrement impossible à l’appairage, choix effacé) : constaté → Magistra locale ; retiré ensuite → jamais le serveur', async () => {
+    const ctx = setup();
+    await ctx.controller.connect();
+    // Nouvelle visite : l'appairage est en mémoire du navigateur, mais aucun choix n'a pu être gardé.
+    resetEngineChoiceMemory();
+    expect(getEngineChoice(false)).toBe('server');
+    ctx.connector.revokeAll(); // autorisation retirée dans l'application
+    const page = createLocalEngineController(ctx.options);
+    await page.autoCheck();
+    expect(page.getSnapshot()).toMatchObject({ kind: 'found', paired: false, error: { code: 'CONNECTOR_UNPAIRED' } });
     expect(getEngineChoice(false)).toBe('local');
   });
 
@@ -322,6 +475,41 @@ describe('ouverture de l’application', () => {
     expect(ctx.clock.sleeps).toEqual([1_500, 1_500, 1_500]);
   });
 
+  it('application ouverte, moteur encore en cours de démarrage (ENGINE_NOT_RUNNING) : « connectée » tout de suite, puis relue jusqu’à ce qu’il soit prêt', async () => {
+    const ctx = setup();
+    await connected(ctx);
+    ctx.connector.setPort(P1, 'closed');
+    await ctx.controller.refresh();
+    const starting = { ...READY_STATUS, engine: { ready: false, local: true, label: 'Magistra Standard', notReady: { code: 'ENGINE_NOT_RUNNING' as const, message: 'Le moteur IA est installé mais arrêté.' } } };
+    ctx.connector.onOpen = () => {
+      ctx.connector.setPort(P1, 'magistra');
+      ctx.connector.status = structuredClone(starting);
+    };
+    ctx.clock.onSleep = count => {
+      if (count === 3) ctx.connector.status = structuredClone(READY_STATUS);
+    };
+    const kinds: boolean[] = [];
+    const unsubscribe = ctx.controller.subscribe(() => {
+      const s = ctx.controller.getSnapshot();
+      if (s.kind === 'connected') kinds.push(s.status!.engine.ready);
+    });
+    await ctx.controller.openApp();
+    unsubscribe();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', status: { engine: { ready: true } } });
+    expect(kinds).toEqual([false, true]);
+  });
+
+  it('moteur qui reste arrêté après l’ouverture : « connectée, pas prête » au bout du délai (jamais d’attente sans fin)', async () => {
+    const ctx = setup();
+    await connected(ctx);
+    ctx.connector.status = { ...READY_STATUS, engine: { ready: false, local: true, label: 'Magistra Standard', notReady: { code: 'ENGINE_NOT_RUNNING', message: 'Arrêté.' } } };
+    await ctx.controller.openApp();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', status: { engine: { ready: false } } });
+    const waited = ctx.clock.sleeps.reduce((a, b) => a + b, 0);
+    expect(waited).toBeGreaterThanOrEqual(OPEN_APP_ENGINE_START_MS);
+    expect(waited).toBeLessThan(OPEN_APP_ENGINE_START_MS + 2_000);
+  });
+
   it('application qui ne démarre pas : abandon après 60 s', async () => {
     const ctx = setup();
     await connected(ctx);
@@ -363,13 +551,17 @@ describe('déconnexion', () => {
     expect(ctx.controller.getSnapshot()).toEqual({ kind: 'found', paired: false, permission: 'granted', appVersion: '2.1.0' });
   });
 
-  it('application fermée : appairage oublié quand même', async () => {
+  it('application fermée : appairage oublié quand même, et l’enseignant est prévenu que l’application l’autorise encore', async () => {
     const ctx = setup();
     await connected(ctx);
     ctx.connector.setPort(P1, 'closed');
     await ctx.controller.disconnect();
-    expect(ctx.controller.getSnapshot()).toEqual({ kind: 'not-found', paired: false, permission: 'granted' });
+    expect(ctx.controller.getSnapshot()).toEqual({
+      kind: 'not-found', paired: false, permission: 'granted', error: { code: 'CONNECTOR_UNREACHABLE', message: UNPAIR_NOT_CONFIRMED_MESSAGE },
+    });
+    expect(UNPAIR_NOT_CONFIRMED_MESSAGE).toContain('Magistra → Réglages → « Site web Magistra »');
     expect(await ctx.controller.client.hasPairing()).toBe(false);
+    expect(await ctx.controller.client.unpair()).toBe(true); // plus rien à retirer
   });
 
   it('pendant un appairage : l’appairage est interrompu et rien ne reste enregistré', async () => {

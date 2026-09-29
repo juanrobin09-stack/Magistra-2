@@ -7,8 +7,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SecretCipher } from '../../electron/aiConfig.js';
-import { ConnectorClientStore } from '../../electron/connector/clients.js';
-import { toBase64Url } from '../../electron/connector/crypto.js';
+import { canonicalRevoked } from '../../shared/localConnector.js';
+import { ConnectorClientStore, MAX_REVOKED_MARKS } from '../../electron/connector/clients.js';
+import { hmacBase64Url, toBase64Url } from '../../electron/connector/crypto.js';
 
 const ORIGIN = 'https://magistra-2.vercel.app';
 
@@ -141,6 +142,53 @@ describe('autorisations enregistrées', () => {
     const reloaded = store(fakeCipher(), 2);
     await reloaded.load();
     expect(reloaded.list().map(i => i.clientId)).toEqual([c.clientId, b.clientId]);
+  });
+
+  it('éviction au-delà de maxClients : navigateurs évincés signalés (génération à arrêter), marque de retrait gardée', async () => {
+    const s = store(fakeCipher(), 1);
+    await s.load();
+    const a = await s.add({ origin: ORIGIN, browser: 'Google Chrome', key: key(13) });
+    expect(a).not.toHaveProperty('evicted');
+    clock += 1_000;
+    const b = await s.add({ origin: ORIGIN, browser: 'Microsoft Edge', key: key(14) });
+    expect(b.evicted).toEqual([a.clientId]);
+    expect(s.find(a.clientId)).toBeUndefined();
+    // Marque calculée avec la clé du navigateur évincé AVANT son effacement : il saura qu'il a été retiré.
+    expect(s.revokedMark(a.clientId, ORIGIN)).toBe(hmacBase64Url(key(13), canonicalRevoked(a.clientId)));
+  });
+
+  it('marque de retrait : calculée avec la clé avant son effacement, pour ce site seulement, enregistrée et bornée', async () => {
+    const s = store();
+    await s.load();
+    const a = await s.add({ origin: ORIGIN, browser: 'Google Chrome', key: key(22) });
+    expect(s.revokedMark(a.clientId, ORIGIN)).toBeUndefined();
+    await s.revoke(a.clientId);
+    const mark = hmacBase64Url(key(22), canonicalRevoked(a.clientId));
+    expect(s.revokedMark(a.clientId, ORIGIN)).toBe(mark);
+    expect(s.revokedMark(a.clientId, 'http://localhost:5173')).toBeUndefined();
+    expect(s.revokedMark('AAAAAAAAAAAAAAAAAAAAAA', ORIGIN)).toBeUndefined();
+    // Ni la clé ni rien qui permette de signer : seule la marque est écrite.
+    const text = readFileSync(file, 'utf8');
+    for (const form of keyForms(key(22))) expect(text).not.toContain(form);
+    expect(JSON.parse(text).revoked).toEqual([{ clientId: a.clientId, origin: ORIGIN, mark, revokedAt: new Date(clock).toISOString() }]);
+    const reloaded = store();
+    await reloaded.load();
+    expect(reloaded.revokedMark(a.clientId, ORIGIN)).toBe(mark);
+    // Bornée : les plus anciennes marques sont oubliées d'abord.
+    const ids: string[] = [a.clientId];
+    for (let i = 0; i < MAX_REVOKED_MARKS; i++) {
+      clock += 1_000;
+      const info = await reloaded.add({ origin: ORIGIN, browser: 'Google Chrome', key: key(i % 200) });
+      await reloaded.revoke(info.clientId);
+      ids.push(info.clientId);
+    }
+    expect(reloaded.revokedMark(ids[0], ORIGIN)).toBeUndefined();
+    expect(reloaded.revokedMark(ids[1], ORIGIN)).toBeDefined();
+    expect(JSON.parse(readFileSync(file, 'utf8')).revoked).toHaveLength(MAX_REVOKED_MARKS);
+    const again = store();
+    await again.load();
+    expect(again.revokedMark(ids[1], ORIGIN)).toBeDefined();
+    expect(again.revokedMark(ids.at(-1)!, ORIGIN)).toBeDefined();
   });
 
   it('retrait : effet immédiat, enregistré ; retrait inconnu sans effet', async () => {

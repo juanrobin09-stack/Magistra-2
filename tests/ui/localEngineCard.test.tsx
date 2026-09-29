@@ -8,7 +8,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { defaultMessage } from '@shared/errors';
 import LocalEngineCard from '@/components/localEngine/LocalEngineCard';
 import { resetWindowsReleaseCache } from '@/components/localEngine/windowsRelease';
-import { LocalEngineContext, useLocalEngine } from '@/lib/localConnector/controller';
+import { UNRECOGNIZED_BY_APP_MESSAGE } from '@/lib/localConnector/client';
+import { LocalEngineContext, NOT_ANSWERED_PERMISSION_MESSAGE, useLocalEngine } from '@/lib/localConnector/controller';
 import { ENGINE_CHOICE_STORAGE_KEY, setEngineChoice } from '@/lib/localConnector/engineChoice';
 import { WINDOWS_DOWNLOAD_URL } from '@/lib/links';
 import { RuntimeContext } from '@/lib/runtime/context';
@@ -118,6 +119,14 @@ describe('Carte Magistra locale — appairage', () => {
     expect(engine.cancelPairing).toHaveBeenCalledTimes(1);
   });
 
+  it('en attente de l’accord : code de vérification bien visible, à comparer avec celui de la boîte de Magistra', async () => {
+    const engine = new FakeEngine(engineState('pairing', { pairingCode: 'K7F-2QX' }));
+    const { status } = await mountCard(engine);
+    const code = status().querySelector('[data-testid="pairing-code"]')!;
+    expect(code.textContent).toBe('Code de vérification : K7F-2QX. Magistra affiche le même code : s’il est différent, cliquez sur « Refuser ».');
+    expect(code.querySelector('strong')?.textContent).toBe('K7F-2QX');
+  });
+
   it('juste après l’accord : « ✓ Intelligence locale connectée » ; ensuite : « ✓ Magistra locale connectée »', async () => {
     const engine = new FakeEngine(engineState('pairing'));
     const { status, card } = await mountCard(engine);
@@ -148,6 +157,9 @@ describe('Carte Magistra locale — appairée', () => {
     const engine = new FakeEngine(engineState('app-closed'));
     const { status, card } = await mountCard(engine);
     expect(status().textContent).toContain('L’application Magistra est fermée.');
+    // Rien ne répond : c'est peut-être l'accès du site qui est coupé dans l'application (le site ne peut pas le savoir).
+    expect(status().textContent).toContain('Si elle est déjà ouverte, vérifiez dans Magistra → Réglages → « Site web Magistra » que l’accès du site est activé.');
+    expect(button(card(), /Connecter Magistra locale/)).toBeNull();
     await click(button(card(), /Ouvrir Magistra/));
     expect(engine.openApp).toHaveBeenCalledTimes(1);
     await click(button(card(), /Réessayer/));
@@ -177,10 +189,22 @@ describe('Carte Magistra locale — appairée', () => {
     expect(button(view.card(), /Ouvrir Magistra/)).not.toBeNull();
   });
 
-  it('application occupée : simple information, aucune action exigée', async () => {
+  it('une application Magistra répond sans reconnaître ce navigateur (autre session Windows) : cause dite, appairage gardé, [Ouvrir Magistra] [Réessayer] [Connecter Magistra locale]', async () => {
+    const engine = new FakeEngine(engineState('app-closed', { error: { code: 'CONNECTOR_UNPAIRED', message: UNRECOGNIZED_BY_APP_MESSAGE } }));
+    const { status, card } = await mountCard(engine);
+    expect(status().textContent).toContain(UNRECOGNIZED_BY_APP_MESSAGE);
+    expect(status().textContent).not.toContain('n’est plus autorisé');
+    expect(button(card(), /Ouvrir Magistra/)).not.toBeNull();
+    expect(button(card(), /Réessayer/)).not.toBeNull();
+    await click(button(card(), /Connecter Magistra locale/));
+    expect(engine.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('application occupée : simple information, aucune action exigée — jamais de file d’attente promise', async () => {
     const engine = new FakeEngine(engineState('connected', { status: { ...structuredClone(READY_STATUS), busy: true } }));
     const view = await mountCard(engine);
-    expect(view.status().textContent).toContain('Une génération est en cours dans l’application Magistra');
+    expect(view.status().textContent).toContain('Une génération est en cours dans l’application Magistra : lancez la vôtre quand elle sera terminée.');
+    expect(view.status().textContent).not.toContain('commencera ensuite');
     expect(view.card().querySelectorAll('button')).toHaveLength(0);
   });
 
@@ -189,13 +213,31 @@ describe('Carte Magistra locale — appairée', () => {
     const engine = new FakeEngine(engineState('connected'));
     const view = await mountCard(engine);
     expect(view.card().textContent).toContain('Vos générations utilisent actuellement le serveur en ligne.');
-    await click(button(view.card(), 'Utiliser l’IA locale'));
+    const useLocal = button(view.card(), 'Utiliser l’IA locale')!;
+    useLocal.focus();
+    await click(useLocal);
     expect(localStorage.getItem(ENGINE_CHOICE_STORAGE_KEY)).toBe('local');
     expect(view.card().textContent).not.toContain('utilisent actuellement le serveur en ligne');
+    // Le bouton utilisé a disparu : le focus va au titre de la carte (jamais perdu au début de la page).
+    expect(document.activeElement).toBe(view.card().querySelector('#local-engine-title'));
   });
 });
 
 describe('Carte Magistra locale — autorisation du navigateur', () => {
+  it('demande du navigateur restée sans réponse : la cause d’abord, jamais « fermée » ni « téléchargez-la » seul', async () => {
+    const notAnswered = { code: 'LOCAL_NETWORK_PERMISSION_DENIED' as const, message: NOT_ANSWERED_PERMISSION_MESSAGE };
+    const paired = await mountCard(new FakeEngine(engineState('needs-permission', { paired: true, permission: 'prompt', error: notAnswered })));
+    expect(paired.status().textContent).toContain(NOT_ANSWERED_PERMISSION_MESSAGE);
+    expect(paired.status().textContent).not.toContain('fermée');
+    expect(button(paired.card(), 'Rechercher Magistra…')).not.toBeNull();
+    cleanup();
+    const unpaired = await mountCard(new FakeEngine(engineState('not-found', { permission: 'prompt', error: notAnswered })));
+    expect(unpaired.status().textContent).toContain('Magistra n’est pas encore détectée.');
+    expect(unpaired.status().textContent).toContain(NOT_ANSWERED_PERMISSION_MESSAGE);
+    expect(unpaired.status().textContent).not.toContain('Sinon, téléchargez-la');
+    expect(button(unpaired.card(), /Réessayer/)).not.toBeNull();
+  });
+
   it('à demander (appairé) : explication exacte puis [Rechercher Magistra…]', async () => {
     const engine = new FakeEngine(engineState('needs-permission', { paired: true, permission: 'prompt' }));
     const view = await mountCard(engine);

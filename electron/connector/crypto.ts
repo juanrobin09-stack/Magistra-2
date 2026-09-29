@@ -7,12 +7,14 @@
 //   - clé HMAC : HKDF-SHA-256(secret, sel = UTF-8(pairingId), info = UTF-8(CONNECTOR_CRYPTO.hkdfInfo), 32 octets),
 //     celle de deriveKey({ name: 'HKDF', … }, …, { name: 'HMAC', hash: 'SHA-256', length: 256 }) ;
 //   - signature et preuve : HMAC-SHA-256 de la chaîne canonique (UTF-8), 32 octets en base64url ;
-//   - accusé de réception d'appairage : SHA-256 de canonicalPairAck(pairingId, challenge) (UTF-8), en base64url.
+//   - accusé de réception d'appairage : SHA-256 de canonicalPairAck(pairingId, challenge, host) (UTF-8), en base64url ;
+//   - marque de retrait : HMAC-SHA-256 de canonicalRevoked(clientId), en base64url ;
+//   - code de vérification d'appairage : formatPairCode(SHA-256 de canonicalPairCode(challenge)).
 //
 // Aucune fonction de ce module ne journalise de clé, de secret, de vérificateur ni de signature.
 
 import { createECDH, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
-import { canonicalPairAck, CONNECTOR_CRYPTO } from '../../shared/localConnector.js';
+import { canonicalPairAck, canonicalPairCode, canonicalRevoked, CONNECTOR_CRYPTO, formatPairCode } from '../../shared/localConnector.js';
 
 /** Longueur d'une clé publique P-256 brute non compressée. */
 export const PUBLIC_KEY_BYTES = 65;
@@ -57,10 +59,19 @@ export function sha256Base64Url(data: string | Uint8Array): string {
 
 /**
  * Accusé de réception d'une demande d'appairage (réponses de POST /v1/pair) : prouve au site que CETTE application a
- * reçu l'URL magistra://pair, seule à porter le défi (texte exact du paramètre « challenge »).
+ * reçu l'URL magistra://pair, seule à porter le défi (texte exact du paramètre « challenge »), et qu'elle écoute sur
+ * le port joint (`host` = connectorHost(port d'écoute)).
  */
-export function pairAck(pairingId: string, challenge: string): string {
-  return sha256Base64Url(canonicalPairAck(pairingId, challenge));
+export function pairAck(pairingId: string, challenge: string, host: string): string {
+  return sha256Base64Url(canonicalPairAck(pairingId, challenge, host));
+}
+
+/**
+ * Code de vérification d'une demande d'appairage (« K7F-2QX ») affiché dans la boîte de consentement : le site affiche
+ * le même, calculé sur le même défi.
+ */
+export function pairCode(challenge: string): string {
+  return formatPairCode(sha256(canonicalPairCode(challenge)));
 }
 
 /** HMAC-SHA-256 d'un message texte (UTF-8). */
@@ -71,6 +82,14 @@ export function hmacSha256(key: Uint8Array, message: string): Buffer {
 /** HMAC-SHA-256 en base64url (en-têtes X-Magistra-Signature et X-Magistra-Proof). */
 export function hmacBase64Url(key: Uint8Array, message: string): string {
   return toBase64Url(hmacSha256(key, message));
+}
+
+/**
+ * Marque de retrait d'un navigateur (en-tête X-Magistra-Revoked des 401 qui lui sont adressés) : calculée avec SA clé
+ * au moment du retrait, avant que la clé ne soit effacée. Elle ne permet de rien signer ni de rien prouver d'autre.
+ */
+export function revokedMark(key: Uint8Array, clientId: string): string {
+  return hmacBase64Url(key, canonicalRevoked(clientId));
 }
 
 /**

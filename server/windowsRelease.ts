@@ -12,9 +12,11 @@
 //  - SHA-256 : champ « digest » de l'asset (« sha256:<64 hex> ») s'il existe, sinon le fichier SHA256SUMS.txt de la
 //    même version (64 Ko au plus, ligne « <hex>  <nom> » produite par sha256sum, voir .github/workflows/release.yml) ;
 //    sinon absent — jamais inventé ;
-//  - redirections suivies à la main, 3 au plus : vers https://api.github.com seulement pour l'API (dépôt renommé),
-//    vers github.com et *.githubusercontent.com seulement pour SHA256SUMS.txt ; réponses bornées en taille ; 8 s au
-//    total pour l'ensemble.
+//  - redirections suivies à la main, 3 au plus : vers https://api.github.com seulement pour l'API (dépôt renommé ou
+//    transféré : GitHub ne redirige /repos/<dépôt> que dans ce cas, et ses liens portent alors le NOUVEAU nom — le
+//    dépôt canonique est lu dans html_url de la release, validé, et sert à vérifier les liens et à construire
+//    releaseUrl), vers github.com et *.githubusercontent.com seulement pour SHA256SUMS.txt ; réponses bornées en
+//    taille ; 8 s au total pour l'ensemble.
 // Le jeton GitHub facultatif (GITHUB_TOKEN, serveur uniquement) n'est envoyé qu'à https://api.github.com ; il n'apparaît
 // jamais dans la réponse ni dans les journaux (qui ne recopient d'ailleurs rien de ce que GitHub renvoie).
 //
@@ -142,12 +144,17 @@ async function discard(res: Response): Promise<void> {
   await res.body?.cancel().catch(() => undefined);
 }
 
-/** Suit les redirections à la main (3 au plus), uniquement vers les adresses que `allowed` accepte. */
-async function fetchFollowing(fetchImpl: FetchLike, url: string, init: RequestInit, allowed: (url: URL) => boolean): Promise<Response> {
+/**
+ * Suit les redirections à la main (3 au plus), uniquement vers les adresses que `allowed` accepte. `redirected` : au
+ * moins une redirection suivie.
+ */
+async function fetchFollowing(
+  fetchImpl: FetchLike, url: string, init: RequestInit, allowed: (url: URL) => boolean,
+): Promise<{ res: Response; redirected: boolean }> {
   let current = url;
   for (let hop = 0; ; hop++) {
     const res = await fetchImpl(current, { ...init, redirect: 'manual' });
-    if (res.type !== 'opaqueredirect' && (res.status < 300 || res.status >= 400)) return res;
+    if (res.type !== 'opaqueredirect' && (res.status < 300 || res.status >= 400)) return { res, redirected: hop > 0 };
     await discard(res);
     const location = res.headers.get('location');
     let next: URL | null;
@@ -220,6 +227,25 @@ function assetOf(raw: unknown, repo: string, tag: string, name: string, maxBytes
   if (!downloadUrl) return null;
   const digest = typeof raw.digest === 'string' ? DIGEST_RE.exec(raw.digest)?.[1]?.toLowerCase() : undefined;
   return { name, downloadUrl, size, ...(digest ? { digest } : {}) };
+}
+
+/**
+ * Dépôt canonique d'une release lu dans son html_url (« https://github.com/<propriétaire>/<dépôt>/releases/tag/<tag> »,
+ * exactement, pour CETTE étiquette) : utilisé après une redirection de l'API (dépôt renommé ou transféré). Sinon null.
+ */
+export function repoFromReleaseHtmlUrl(raw: unknown, tag: string): string | null {
+  if (typeof raw !== 'string' || raw.length > 500 || raw.includes('%') || raw.includes('\\')) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.href !== raw || url.protocol !== 'https:' || url.hostname !== 'github.com' || url.port || url.username || url.password
+    || url.search || url.hash) return null;
+  const parts = url.pathname.split('/');
+  if (parts.length !== 6 || parts[0] !== '' || parts[3] !== 'releases' || parts[4] !== 'tag' || parts[5] !== tag) return null;
+  return parseReleasesRepo(`${parts[1]}/${parts[2]}`);
 }
 
 function parseRelease(data: unknown, repo: string): ParsedRelease {
@@ -295,8 +321,9 @@ async function loadRelease(o: WindowsReleaseOptions): Promise<WindowsReleaseResp
   };
 
   let res: Response;
+  let redirected: boolean;
   try {
-    res = await fetchFollowing(o.fetch, `${API_ORIGIN}/repos/${o.repo}/releases/latest`, { headers, signal }, isApiUrl);
+    ({ res, redirected } = await fetchFollowing(o.fetch, `${API_ORIGIN}/repos/${o.repo}/releases/latest`, { headers, signal }, isApiUrl));
   } catch (err) {
     return unavailable(err instanceof ReleaseFetchError ? `GitHub : ${err.message}` : signal.aborted ? 'GitHub n’a pas répondu à temps' : 'GitHub injoignable');
   }
@@ -319,7 +346,20 @@ async function loadRelease(o: WindowsReleaseOptions): Promise<WindowsReleaseResp
     return unavailable(err instanceof ReleaseFetchError ? `GitHub : ${err.message}` : signal.aborted ? 'GitHub n’a pas répondu à temps' : 'réponse de GitHub illisible');
   }
 
-  const release = parseRelease(data, o.repo);
+  // Dépôt renommé ou transféré (redirection de l'API) : liens et page de la version au nom canonique.
+  let repo = o.repo;
+  if (redirected) {
+    const tag = isRecord(data) && typeof data.tag_name === 'string' ? data.tag_name : '';
+    const canonical = isRecord(data) ? repoFromReleaseHtmlUrl(data.html_url, tag) : null;
+    if (!canonical) {
+      // Brouillon ou préversion : aucune version stable, quel que soit le nom du dépôt.
+      if (isRecord(data) && (data.draft !== false || data.prerelease !== false)) return { available: false, reason: 'none', releasesUrl };
+      return unavailable('dépôt renommé : adresse de la version inattendue');
+    }
+    repo = canonical;
+  }
+
+  const release = parseRelease(data, repo);
   if (release.kind === 'not-stable') return { available: false, reason: 'none', releasesUrl };
   if (release.kind === 'invalid') return unavailable(release.reason);
 
@@ -327,7 +367,7 @@ async function loadRelease(o: WindowsReleaseOptions): Promise<WindowsReleaseResp
   if (!sha256 && release.checksums) {
     // Fichier public : aucun jeton transmis. Un échec ne rend pas la version indisponible, l'empreinte est seulement omise.
     try {
-      const sums = await fetchFollowing(o.fetch, release.checksums.downloadUrl, {
+      const { res: sums } = await fetchFollowing(o.fetch, release.checksums.downloadUrl, {
         headers: { Accept: 'application/octet-stream', 'User-Agent': USER_AGENT },
         signal,
       }, isReleaseFileUrl);
@@ -351,7 +391,7 @@ async function loadRelease(o: WindowsReleaseOptions): Promise<WindowsReleaseResp
     sizeBytes: release.installer.size,
     ...(sha256 ? { sha256 } : {}),
     publishedAt: release.publishedAt,
-    releaseUrl: `https://github.com/${o.repo}/releases/tag/${release.tag}`,
+    releaseUrl: `https://github.com/${repo}/releases/tag/${release.tag}`,
     requirements: WINDOWS_REQUIREMENTS,
   };
   return info;

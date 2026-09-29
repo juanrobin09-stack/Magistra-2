@@ -97,10 +97,10 @@ const FEATURES_PLUS: { icon: string; title: string; desc: string; link?: { href:
   {
     icon: '💻',
     title: 'IA locale gratuite sur Windows',
-    desc: 'L’application Windows fait tourner un modèle open weights sur votre ordinateur (Ollama) : vos documents restent sur votre ordinateur.',
+    desc: 'L’application Windows fait tourner un modèle open weights sur votre ordinateur : vos documents restent sur votre ordinateur.',
     link: { href: WINDOWS_DOWNLOAD_URL, label: 'Télécharger pour Windows' },
   },
-  { icon: '🏛️', title: 'Sur le web, une IA annoncée clairement', desc: 'Sur le site, Magistra utilise le serveur d’IA compatible OpenAI configuré par votre établissement ou un service en ligne choisi par l’administrateur : l’application indique toujours à qui vos textes sont envoyés.' },
+  { icon: '🏛️', title: 'Sur le web, une IA annoncée clairement', desc: 'Sur le site, Magistra utilise en priorité l’IA de votre ordinateur quand l’application Windows y est connectée ; sinon le serveur d’IA compatible OpenAI configuré par votre établissement ou un service en ligne choisi par l’administrateur. Le site indique toujours qui traite vos textes.' },
   { icon: '📚', title: 'Sources vérifiables', desc: 'Vos documents (PDF, Word, PowerPoint…), HAL, Crossref et le web : les citations renvoient aux sources réellement utilisées.' },
   { icon: '◉', title: 'Open source, licence MIT', desc: 'Code public et auditable, projet non lucratif : pas d’abonnement, pas de quota commercial.' },
   { icon: '✧', title: 'À relire et adapter', desc: 'Magistra propose des brouillons structurés ; vous restez l’auteur. Relisez et vérifiez, puis copiez ou exportez (Markdown, PDF) pour adapter le texte dans votre traitement de texte. Besoin d’un autre angle ? Précisez vos consignes et relancez.' },

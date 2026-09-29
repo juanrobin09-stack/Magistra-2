@@ -4,8 +4,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_ROUTES } from '@shared/apiContract';
 import { MagistraError } from '@shared/errors';
-import { CONNECTOR_PORTS, CONNECTOR_ROUTES } from '@shared/localConnector';
+import { CONNECTOR_PORTS, CONNECTOR_ROUTES, LOCAL_ENGINE_SITE_MESSAGES } from '@shared/localConnector';
 import type { Capabilities, GenerationEvent, GenerationRecordDraft, GenerationRequest } from '@shared/types';
+import { STOPPED_BY_APP_MESSAGE } from '@/lib/localConnector/client';
 import { createLocalEngineController } from '@/lib/localConnector/controller';
 import { resetEngineChoiceMemory, setEngineChoice } from '@/lib/localConnector/engineChoice';
 import { MemoryPairingStore } from '@/lib/localConnector/pairingStore';
@@ -241,6 +242,20 @@ describe('génération locale', () => {
     expect(events.at(-2)).toMatchObject({ type: 'warning', code: 'STORAGE_ERROR', message: expect.stringContaining('Session expirée : reconnectez-vous') });
   });
 
+  it('génération locale réussie alors que l’état affiché était « application fermée » : état relu (jamais « fermée » à côté du résultat)', async () => {
+    const ctx = setup();
+    await ctx.controller.connect();
+    // Page Générer ouverte application fermée ; l'enseignant lance Magistra depuis le menu Démarrer, puis « Générer ».
+    ctx.connector.setPort(P1, 'closed');
+    await ctx.controller.refresh();
+    expect(ctx.controller.getSnapshot().kind).toBe('app-closed');
+    ctx.connector.setPort(P1, 'magistra');
+    ctx.clock.advance(60_000);
+    const events = await collect(ctx.client);
+    expect(events.at(-1)).toMatchObject({ type: 'done', saved: true });
+    await vi.waitFor(() => expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', status: READY_STATUS }));
+  });
+
   it('« done » sans génération à enregistrer : non enregistré, signalé', async () => {
     const ctx = setup();
     await ctx.controller.connect();
@@ -263,6 +278,46 @@ describe('génération locale', () => {
     expect(ctx.serverCalls).toEqual([]);
     expect(ctx.saveDraft).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(ctx.controller.getSnapshot().kind).toBe('app-closed'));
+  });
+
+  it('messages de l’application qui nomment le moteur, un port ou un chemin : jamais affichés tels quels (texte neutre)', async () => {
+    const ctx = setup();
+    await ctx.controller.connect();
+    // Application ancienne ou filtre incomplet : la seconde barrière du site s'applique à chaque évènement.
+    ctx.connector.events = [
+      { type: 'warning', code: 'RESEARCH_UNAVAILABLE', message: 'Recherche impossible : le port 8080 ne répond pas.' },
+      { type: 'error', code: 'ENGINE_NOT_RUNNING', message: 'Le moteur IA ne démarre pas. Un antivirus bloque peut-être Ollama (ollama.exe). Dernière erreur : « ~\\AppData\\Local\\Programs\\x\\lib ».', retryable: true },
+    ];
+    const events = await collect(ctx.client);
+    expect(events).toEqual([
+      { type: 'warning', code: 'RESEARCH_UNAVAILABLE', message: 'Recherche Internet indisponible : génération à partir des autres sources.' },
+      { type: 'error', code: 'ENGINE_NOT_RUNNING', message: LOCAL_ENGINE_SITE_MESSAGES.ENGINE_NOT_RUNNING, retryable: true },
+    ]);
+    expect(JSON.stringify(events)).not.toMatch(/ollama|port 8080|AppData/i);
+    // Moteur trop ancien : le message générique du code cite lui-même le moteur.
+    ctx.connector.events = [{ type: 'error', code: 'ENGINE_OUTDATED', message: '', retryable: false }];
+    expect(await collect(ctx.client)).toEqual([{ type: 'error', code: 'ENGINE_OUTDATED', message: LOCAL_ENGINE_SITE_MESSAGES.ENGINE_OUTDATED, retryable: false }]);
+  });
+
+  it('génération arrêtée par l’application (autorisation retirée) : erreur explicite, jamais « interrompue » comme un Arrêter ; état relu', async () => {
+    const ctx = setup();
+    await ctx.controller.connect();
+    const refresh = vi.spyOn(ctx.controller, 'refresh');
+    ctx.connector.events = [
+      { type: 'delta', text: 'Le corbeau' },
+      { type: 'error', code: 'GENERATION_ABORTED', message: 'Génération interrompue.', retryable: true, partial: 'Le corbeau' },
+    ];
+    const events = await collect(ctx.client);
+    expect(events.at(-1)).toEqual({ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: STOPPED_BY_APP_MESSAGE, retryable: true, partial: 'Le corbeau' });
+    expect(refresh).toHaveBeenCalled();
+    // Arrêt demandé par l'enseignant sur ce site : « interrompue », comme toujours.
+    const controller = new AbortController();
+    const mine: GenerationEvent[] = [];
+    await ctx.client.generate(REQUEST, e => {
+      mine.push(e);
+      if (e.type === 'delta') controller.abort();
+    }, controller.signal);
+    expect(mine.at(-1)).toMatchObject({ type: 'error', code: 'GENERATION_ABORTED' });
   });
 
   it('erreur de l’application (409 occupée) : transmise telle quelle', async () => {

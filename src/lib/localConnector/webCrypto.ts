@@ -5,14 +5,18 @@
 //   - clé HMAC : HKDF-SHA-256(secret, sel = UTF-8(pairingId), info = UTF-8(CONNECTOR_CRYPTO.hkdfInfo), 32 octets) ;
 //   - signature et preuve : HMAC-SHA-256 de la chaîne canonique (UTF-8), 32 octets en base64url ;
 //   - défi d'appairage : SHA-256 des 32 OCTETS du vérificateur (et non de son texte base64url), en base64url ;
-//   - accusé de réception d'appairage : SHA-256 de canonicalPairAck(pairingId, défi) (UTF-8), en base64url.
+//   - accusé de réception d'appairage : SHA-256 de canonicalPairAck(pairingId, défi, hôte) (UTF-8), en base64url ;
+//   - marque de retrait : HMAC-SHA-256 de canonicalRevoked(clientId), en base64url ;
+//   - code de vérification d'appairage : formatPairCode(SHA-256 de canonicalPairCode(défi)) ;
+//   - hôte : connectorHost(port) du port VISÉ, inclus dans l'accusé, la signature et la preuve (liaison au port).
 //
 // Aucune clé ne sort jamais du navigateur : la clé privée ECDH et la clé HMAC sont NON EXTRACTIBLES (le script de la
 // page lui-même ne peut pas en lire les octets) ; seule la clé HMAC est conservée (IndexedDB, clone d'un CryptoKey).
 // Aucune fonction de ce module ne journalise de clé, de vérificateur, de signature ni de preuve.
 
 import {
-  canonicalPairAck, canonicalProof, canonicalRequest, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, type CanonicalRequestParts,
+  canonicalPairAck, canonicalPairCode, canonicalProof, canonicalRequest, canonicalRevoked, CONNECTOR_CRYPTO, CONNECTOR_FORMATS,
+  formatPairCode, type CanonicalRequestParts,
 } from '@shared/localConnector';
 
 /** Clé publique P-256 brute non compressée. */
@@ -118,11 +122,20 @@ export async function createPairingSecrets(): Promise<PairingSecrets> {
 }
 
 /**
- * Accusé de réception attendu dans les réponses de POST /v1/pair : seule l'application qui a reçu l'URL
- * magistra://pair (le défi n'est dans aucune requête HTTP) peut le produire.
+ * Accusé de réception attendu dans les réponses de POST /v1/pair envoyées à `host` (connectorHost(port visé)) : seule
+ * l'application qui a reçu l'URL magistra://pair (le défi n'est dans aucune requête HTTP) ET qui écoute sur ce port
+ * peut le produire.
  */
-export function expectedPairAck(pairingId: string, challenge: string): Promise<string> {
-  return sha256Base64Url(canonicalPairAck(pairingId, challenge));
+export function expectedPairAck(pairingId: string, challenge: string, host: string): Promise<string> {
+  return sha256Base64Url(canonicalPairAck(pairingId, challenge, host));
+}
+
+/**
+ * Code de vérification de la demande (« K7F-2QX ») : affiché par le site pendant l'appairage ; la boîte de consentement
+ * de l'application affiche le même, calculé sur le même défi.
+ */
+export async function pairingCode(challenge: string): Promise<string> {
+  return formatPairCode(await sha256(canonicalPairCode(challenge)));
 }
 
 /** Égalité de deux textes sans sortie anticipée sur le premier écart (longueurs différentes : faux). */
@@ -225,9 +238,20 @@ export function signRequest(key: CryptoKey, parts: CanonicalRequestParts): Promi
 
 /**
  * X-Magistra-Proof de la réponse : le connecteur prouve qu'il détient la clé de CE navigateur, pour CETTE requête
- * (nonce). Absente, mal formée ou fausse → faux : la réponse ne vient pas de l'application Magistra appairée.
+ * (nonce), sur CE port (`host` = connectorHost(port visé)). Absente, mal formée ou fausse → faux : la réponse ne
+ * vient pas de l'application Magistra appairée (autre programme, ou relais depuis un autre port).
  */
-export async function verifyProof(key: CryptoKey, clientId: string, nonce: string, proof: string | null): Promise<boolean> {
+export async function verifyProof(key: CryptoKey, clientId: string, nonce: string, host: string, proof: string | null): Promise<boolean> {
   if (!proof || !CONNECTOR_FORMATS.mac.test(proof)) return false;
-  return hmacVerify(key, canonicalProof(clientId, nonce), proof);
+  return hmacVerify(key, canonicalProof(clientId, nonce, host), proof);
+}
+
+/**
+ * X-Magistra-Revoked d'un 401 CONNECTOR_UNPAIRED : l'application qui détenait la clé de CE navigateur l'a retiré (seule
+ * elle a pu calculer cette marque). Absente, mal formée ou fausse → faux : le 401 peut venir d'une autre application
+ * Magistra (autre session Windows) qui ne connaît pas ce navigateur, ou d'un autre programme.
+ */
+export async function verifyRevokedMark(key: CryptoKey, clientId: string, mark: string | null): Promise<boolean> {
+  if (!mark || !CONNECTOR_FORMATS.mac.test(mark)) return false;
+  return hmacVerify(key, canonicalRevoked(clientId), mark);
 }

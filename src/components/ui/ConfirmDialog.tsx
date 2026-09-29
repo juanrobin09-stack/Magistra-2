@@ -10,6 +10,12 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   /** Action destructrice : rôle « alertdialog », focus initial sur « Annuler », bouton rouge. */
   danger?: boolean;
+  /**
+   * Bouton qui reçoit le focus à l'ouverture (défaut : « Annuler » pour une action destructrice, sinon la
+   * confirmation). « cancel » : accord qui engage (envoi à un tiers…) — une frappe réflexe d'Entrée ou d'Espace
+   * n'y vaut jamais accord.
+   */
+  initialFocus?: 'confirm' | 'cancel';
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -22,7 +28,7 @@ const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select
  * focus rendu à l'élément déclencheur à la fermeture.
  */
 export default function ConfirmDialog({
-  open, title, message, confirmLabel, cancelLabel = 'Annuler', danger = false, onConfirm, onCancel,
+  open, title, message, confirmLabel, cancelLabel = 'Annuler', danger = false, initialFocus, onConfirm, onCancel,
 }: ConfirmDialogProps) {
   const titleId = useId();
   const messageId = useId();
@@ -33,12 +39,13 @@ export default function ConfirmDialog({
   useEffect(() => {
     if (!open) return;
     const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    (danger ? cancelRef.current : confirmRef.current)?.focus();
+    const focusCancel = (initialFocus ?? (danger ? 'cancel' : 'confirm')) === 'cancel';
+    (focusCancel ? cancelRef.current : confirmRef.current)?.focus();
     return () => {
       // Rend le focus au déclencheur s'il est toujours présent dans la page.
       if (trigger && trigger.isConnected) trigger.focus();
     };
-  }, [open, danger]);
+  }, [open, danger, initialFocus]);
 
   if (!open || typeof document === 'undefined') return null;
 

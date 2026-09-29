@@ -6,9 +6,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSection';
+import { readFileSync } from 'node:fs';
 import {
-  fetchWindowsRelease, formatDate, formatSize, parseWindowsRelease, resetWindowsReleaseCache, WINDOWS_REQUIREMENTS_TEXT,
+  fetchWindowsRelease, formatDate, formatSize, parseWindowsRelease, resetWindowsReleaseCache, WINDOWS_RELEASE_TIMEOUT_MS,
+  WINDOWS_REQUIREMENTS_TEXT,
 } from '@/components/localEngine/windowsRelease';
+import { WINDOWS_RELEASE_LIMITS } from '../../server/windowsRelease';
 import { LocalEngineContext } from '@/lib/localConnector/controller';
 import { WINDOWS_DOWNLOAD_URL } from '@/lib/links';
 import { RuntimeContext } from '@/lib/runtime/context';
@@ -109,6 +112,13 @@ describe('Réponse de /api/windows-release revérifiée', () => {
     expect(hanging.mock.calls[0][0]).toBe('/api/windows-release');
   });
 
+  it('délai du navigateur : au-dessus du budget GitHub du serveur (marge incluse), sous la durée maximale de la fonction', () => {
+    // Sinon le navigateur abandonne pile quand le serveur renvoie sa dernière réponse valide (GitHub lent).
+    expect(WINDOWS_RELEASE_TIMEOUT_MS).toBeGreaterThanOrEqual(WINDOWS_RELEASE_LIMITS.timeoutMs + 3_000);
+    const vercel = JSON.parse(readFileSync(`${process.cwd()}/vercel.json`, 'utf8')) as { functions: Record<string, { maxDuration: number }> };
+    expect(WINDOWS_RELEASE_TIMEOUT_MS).toBeLessThan(vercel.functions['api/windows-release.ts'].maxDuration * 1_000);
+  });
+
   it('mise en forme française : taille en Mo, date en toutes lettres', () => {
     expect(formatSize(RELEASE.sizeBytes)).toBe('85,3 Mo');
     expect(formatSize(150 * 1024 * 1024)).toBe('150 Mo');
@@ -155,7 +165,13 @@ describe('Section « Magistra pour Windows »', () => {
     const engine = new FakeEngine(engineState('not-found', { permission: 'prompt' }));
     const view = await mountSection('web', engine);
     expect(view.section().textContent).not.toContain('J’ai installé Magistra');
+    // Région d'annonce présente dès l'affichage (vide), remplie au clic : l'apparition du bloc est annoncée.
+    const announcements = () => Array.from(view.section().querySelectorAll<HTMLElement>('[role="status"]')).map(e => e.textContent ?? '');
+    expect(announcements().some(t => t.includes('J’ai installé Magistra'))).toBe(false);
+    const regionsBefore = view.section().querySelectorAll('[role="status"]').length;
     await click(view.download());
+    expect(announcements().some(t => t.includes('Téléchargement lancé') && t.includes('« J’ai installé Magistra »'))).toBe(true);
+    expect(view.section().querySelectorAll('[role="status"]').length).toBeGreaterThanOrEqual(regionsBefore);
     const installed = view.section().querySelector<HTMLElement>('[data-testid="windows-installed"]')!;
     expect(installed.textContent).toContain('J’ai installé Magistra');
     await click(button(installed, /Détecter maintenant/));
@@ -168,6 +184,26 @@ describe('Section « Magistra pour Windows »', () => {
     expect(installed.textContent).toContain('✓ Magistra trouvée');
     await click(button(installed, /Connecter Magistra locale/));
     expect(engine.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('« Détecter maintenant » : après « Annuler » ou « Continuer » de l’explication, le focus revient sur le bouton (jamais perdu)', async () => {
+    stubReleaseFetch(RELEASE);
+    const engine = new FakeEngine(engineState('not-found', { permission: 'prompt' }));
+    const view = await mountSection('web', engine);
+    await click(view.download());
+    const installed = view.section().querySelector<HTMLElement>('[data-testid="windows-installed"]')!;
+    const detectNow = () => button(installed, /Détecter maintenant/);
+    await click(detectNow());
+    expect(document.activeElement).toBe(button(installed, 'Continuer'));
+    await click(button(installed, 'Annuler'));
+    await flush();
+    expect(engine.detect).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(detectNow());
+    await click(detectNow());
+    await click(button(installed, 'Continuer'));
+    await flush();
+    expect(engine.detect).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(detectNow());
   });
 
   it('autorisation déjà accordée : « Détecter maintenant » recherche aussitôt', async () => {
@@ -186,6 +222,9 @@ describe('Section « Magistra pour Windows »', () => {
     const installed = view.section().querySelector('[data-testid="windows-installed"]')!;
     expect(installed.querySelector('a[href="/app"]')?.textContent).toBe('Se connecter');
     expect(button(installed, /Détecter maintenant/)).toBeNull();
+    // Le tableau de bord ne cherche pas Magistra de lui-même : le bouton à utiliser est nommé (jamais « détectera »).
+    expect(installed.textContent).toContain('Connectez-vous : sur votre tableau de bord, cliquez sur « J\'ai déjà Magistra : la rechercher » pour la connecter à ce navigateur.');
+    expect(installed.textContent).not.toContain('détectera');
   });
 
   it('information indisponible : lien vers la page officielle des versions (nouvel onglet), sans version inventée', async () => {

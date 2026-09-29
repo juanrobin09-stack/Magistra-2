@@ -220,6 +220,15 @@ describe('SupabaseStore : générations simultanées (magistra_begin_generation 
     expect(f.captured).toHaveLength(1);
   });
 
+  it('enregistrement (« save ») : p_kind transmis ; génération : jamais (compatible avec une base pas encore migrée)', async () => {
+    const f = fakeSupabase({ begin: { status: 'ok', id: null } });
+    await store(f).beginGeneration('user_A', limits);
+    await store(f).beginGeneration('user_A', { ...limits, maxGlobalRequests: 0, maxActive: 0, kind: 'save' });
+    const bodies = f.captured.filter(c => c.url.pathname.endsWith('/rpc/magistra_begin_generation')).map(c => c.body as Record<string, unknown>);
+    expect(bodies[0]).not.toHaveProperty('p_kind');
+    expect(bodies[1]).toMatchObject({ p_kind: 'save', p_max_global_requests: 0, p_max_active: 0 });
+  });
+
   it('« busy » → 429 GENERATION_BUSY, « rate_limited » → 429 RATE_LIMITED, « saturated » → 503 AI_BUSY, sans flux ni libération', async () => {
     for (const [status, code, http] of [['busy', 'GENERATION_BUSY', 429], ['rate_limited', 'RATE_LIMITED', 429], ['saturated', 'AI_BUSY', 503]] as const) {
       const f = fakeSupabase({ begin: { status } });

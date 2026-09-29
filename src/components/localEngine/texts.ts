@@ -4,8 +4,8 @@
 // Règles d'écriture : jamais d'adresse (localhost, 127.0.0.1…), jamais de port, jamais le nom du moteur (« Ollama »),
 // jamais de clé à saisir ; l'enseignant n'a qu'à ouvrir Magistra et cliquer.
 
-import { defaultMessage, type ErrorCode } from '@shared/errors';
 import type { LocalEngineState } from '@/lib/localConnector/controller';
+import { isDisplayableText } from '@/lib/localConnector/texts';
 
 // ─── États de Magistra locale ───────────────────────────────────────────────
 
@@ -16,15 +16,26 @@ export const SEARCHING_TEXT = 'Recherche de Magistra sur cet ordinateur…';
 export const FOUND_TEXT = '✓ Magistra trouvée';
 export const FOUND_DETAIL = 'Connectez-la à ce navigateur : l’application vous demandera votre accord.';
 export const NOT_DETECTED_TEXT = 'Magistra n’est pas encore détectée.';
+/**
+ * Rien ne répond sur les ports dédiés : application fermée ou absente, mais aussi accès du site désactivé dans
+ * l'application (ou accès réservés à Magistra occupés) — le site ne peut pas faire la différence, il le dit.
+ */
+export const SITE_ACCESS_HINT = 'Si elle est déjà ouverte, vérifiez dans Magistra → Réglages → « Site web Magistra » que l’accès du site est activé.';
 export const NOT_DETECTED_DETAIL =
-  'Si Magistra est installée, ouvrez-la puis réessayez. Sinon, téléchargez-la : l’installation ne prend que quelques minutes.';
+  `Si Magistra est installée, ouvrez-la puis réessayez. ${SITE_ACCESS_HINT} Sinon, téléchargez-la : l’installation ne prend que quelques minutes.`;
 export const PAIRING_TEXT = 'Confirmez dans l’application Magistra…';
 export const PAIRING_DETAIL =
   'Magistra vous demande d’autoriser ce site : cliquez sur « Autoriser ». Si votre navigateur demande d’ouvrir Magistra, acceptez.';
+/** Code de vérification de la demande en cours, que la boîte de Magistra affiche aussi (« K7F-2QX »). */
+export const PAIRING_CODE_LABEL = 'Code de vérification :';
+export const PAIRING_CODE_HINT = 'Magistra affiche le même code : s’il est différent, cliquez sur « Refuser ».';
+export function pairingCodeText(code: string): string {
+  return `${PAIRING_CODE_LABEL} ${code}. ${PAIRING_CODE_HINT}`;
+}
 export const CONNECTED_TEXT = '✓ Magistra locale connectée';
 export const JUST_CONNECTED_TEXT = '✓ Intelligence locale connectée';
 export const APP_CLOSED_TEXT = 'L’application Magistra est fermée.';
-export const APP_CLOSED_DETAIL = 'Ouvrez Magistra sur cet ordinateur pour utiliser l’intelligence locale.';
+export const APP_CLOSED_DETAIL = `Ouvrez Magistra sur cet ordinateur pour utiliser l’intelligence locale. ${SITE_ACCESS_HINT}`;
 export const NEEDS_PERMISSION_TEXT = 'Autorisation du navigateur nécessaire';
 export const PERMISSION_EXPLANATION =
   'Votre navigateur va vous demander l’autorisation d’accéder aux applications de cet appareil : acceptez-la. Elle permet uniquement à ce site de dialoguer avec l’application Magistra installée sur cet ordinateur.';
@@ -37,7 +48,8 @@ export const PERMISSION_DENIED_STEPS: readonly string[] = [
   "à la ligne « Applications sur l'appareil » (ou « Réseau local »), choisissez « Autoriser » ;",
   'puis cliquez sur « Réessayer ».',
 ];
-export const ENGINE_BUSY_TEXT = 'Une génération est en cours dans l’application Magistra : la vôtre commencera ensuite.';
+/** Aucune file d'attente : une demande envoyée pendant ce temps est refusée (GENERATION_BUSY), jamais mise en attente. */
+export const ENGINE_BUSY_TEXT = 'Une génération est en cours dans l’application Magistra : lancez la vôtre quand elle sera terminée.';
 
 // ─── Boutons ────────────────────────────────────────────────────────────────
 
@@ -54,6 +66,12 @@ export const CONTINUE_LABEL = 'Continuer';
 export const USE_SERVER_LABEL = 'Utiliser le serveur en ligne…';
 export const USE_LOCAL_LABEL = 'Utiliser l’IA locale';
 export const INSTALLED_TEXT = 'J’ai installé Magistra';
+/**
+ * Section « Magistra pour Windows », visiteur non connecté : le tableau de bord ne cherche PAS Magistra de lui-même
+ * (aucune requête vers l'ordinateur sans action de l'enseignant) ; le texte dit quel bouton utiliser.
+ */
+export const SIGNED_OUT_DETECT_TEXT =
+  `Connectez-vous : sur votre tableau de bord, cliquez sur « ${SEARCH_EXISTING_LABEL} » pour la connecter à ce navigateur.`;
 export const DETECT_NOW_LABEL = 'Détecter maintenant';
 
 // ─── Moteur de génération (site web) ────────────────────────────────────────
@@ -94,44 +112,8 @@ export const NOT_PERSISTENT_NOTE =
 
 // ─── Textes sûrs ────────────────────────────────────────────────────────────
 
-/**
- * Motifs jamais affichés à propos de Magistra locale : nom du moteur, adresse de la boucle locale, adresse IP, port,
- * URL. L'application filtre déjà ses messages (electron/connector/status.ts) ; ce filtre est une seconde barrière
- * (message générique d'un code qui cite le moteur, application ancienne…).
- */
-const HIDDEN_PATTERNS: readonly RegExp[] = [
-  /ollama/i,
-  /\blocalhost\b/i,
-  /\b\d{1,3}(?:\.\d{1,3}){3}\b/,
-  /\[?::1\]?/,
-  /[A-Za-z0-9\])]:\d{2,5}\b/,
-  /\b[a-z][a-z0-9+.-]{1,20}:\/\//i,
-];
-
-/** Textes neutres, par code, quand le message reçu ne peut pas être affiché tel quel. */
-const NEUTRAL_MESSAGES: Partial<Record<ErrorCode, string>> = {
-  ENGINE_NOT_INSTALLED: 'Le moteur d’intelligence artificielle de Magistra n’est pas encore installé : ouvrez l’application Magistra pour le préparer.',
-  ENGINE_NOT_RUNNING: 'Le moteur d’intelligence artificielle de Magistra n’est pas démarré : ouvrez l’application Magistra.',
-  ENGINE_OUTDATED: 'Le moteur d’intelligence artificielle de Magistra doit être mis à jour : ouvrez l’application Magistra.',
-  MODEL_NOT_INSTALLED: 'Le modèle d’IA choisi n’est pas encore installé : ouvrez l’application Magistra pour le télécharger.',
-};
-
-const GENERIC_NOT_READY =
-  "L'intelligence locale de Magistra n'est pas prête : ouvrez l'application Magistra pour la préparer.";
-
-export function isDisplayableText(text: string): boolean {
-  return HIDDEN_PATTERNS.every(re => !re.test(text));
-}
-
-/** Message de Magistra locale affichable : le message reçu s'il est sûr, sinon un texte neutre pour son code. */
-export function localEngineMessage(code: ErrorCode, message: string | undefined): string {
-  const text = message?.trim() ?? '';
-  if (text && isDisplayableText(text)) return text;
-  const neutral = NEUTRAL_MESSAGES[code];
-  if (neutral) return neutral;
-  const fallback = defaultMessage(code);
-  return isDisplayableText(fallback) ? fallback : GENERIC_NOT_READY;
-}
+// Filtre partagé avec la bibliothèque (erreurs d'une génération locale, src/lib/runtime/hybrid.ts).
+export { isDisplayableText, localEngineMessage } from '@/lib/localConnector/texts';
 
 /** Libellé du modèle affiché (« Magistra Standard ») ; jamais le nom du moteur ni une adresse. */
 export function localModelLabel(label: string | undefined): string | null {
@@ -139,8 +121,12 @@ export function localModelLabel(label: string | undefined): string | null {
   return text && isDisplayableText(text) ? text : null;
 }
 
-/** Résumé d'une ligne de l'état de Magistra locale (liste des priorités). */
-export function localEngineSummary(state: LocalEngineState): string {
+/**
+ * Résumé d'une ligne de l'état de Magistra locale (liste des priorités). `searched` : l'enseignant a lancé une
+ * recherche pendant cette visite — sans elle, un navigateur jamais appairé n'est pas sondé (sauf autorisation déjà
+ * accordée) : « non détectée » affirmerait un résultat qui n'existe pas.
+ */
+export function localEngineSummary(state: LocalEngineState, searched = false): string {
   switch (state.kind) {
     case 'idle':
     case 'checking':
@@ -150,13 +136,13 @@ export function localEngineSummary(state: LocalEngineState): string {
     case 'permission-denied':
       return 'bloquée par le navigateur';
     case 'not-found':
-      return 'non détectée sur cet ordinateur';
+      return searched || state.error || state.permission === 'granted' ? 'non détectée sur cet ordinateur' : 'pas encore connectée à ce navigateur';
     case 'found':
       return 'trouvée, pas encore connectée';
     case 'pairing':
       return 'connexion en cours…';
     case 'app-closed':
-      return 'connectée, application fermée';
+      return state.error?.code === 'CONNECTOR_UNPAIRED' ? 'connectée, pas reconnue par l’application Magistra qui répond' : 'connectée, application fermée';
     case 'connected': {
       const engine = state.status?.engine;
       if (engine && !engine.local) return 'connectée, réglée sur un serveur distant dans l’application';

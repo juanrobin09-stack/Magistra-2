@@ -215,7 +215,11 @@ export const RECORD_LIMITS = {
   sujet: 400,
   contenu: 200_000,
   discipline: REQUEST_LIMITS.discipline,
-  model: 120,
+  /**
+   * Nom du modèle : même borne que les noms acceptés par l'application Windows (modèle personnalisé ou distant, jusqu'à
+   * 200 caractères : electron/validate.ts) — sinon chaque génération locale d'un tel modèle serait refusée en entier.
+   */
+  model: 200,
   maxSources: 100,
   /** Numéro de citation [n] le plus grand accepté. */
   maxSourceNumber: 999,

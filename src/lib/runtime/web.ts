@@ -66,8 +66,9 @@ export class ApiDataStore implements DataStore {
   }
 
   /**
-   * Enregistre dans l'historique du compte une génération faite par Magistra locale (connecteur local) : seul le
-   * résultat est envoyé au serveur, jamais la demande ni les extraits de documents (POST /api/generation).
+   * Enregistre dans l'historique du compte une génération faite par Magistra locale (connecteur local) : résultat,
+   * sources citées et paramètres de la demande (sujet, consignes, contenu à adapter, noms des documents…), jamais le
+   * texte des extraits de documents ni le travail d'élève (POST /api/generation).
    */
   async saveGenerationDraft(draft: GenerationRecordDraft): Promise<{ id: string }> {
     const body: SaveGenerationBody = { record: draft };

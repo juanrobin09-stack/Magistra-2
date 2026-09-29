@@ -1,8 +1,10 @@
 // Textes transmis au site par le connecteur local : état du moteur (GET /v1/status) et messages d'erreur, jamais
-// d'adresse, de port, de chemin ni de nom d'hôte d'un serveur distant ; libellé du navigateur (User-Agent).
+// d'adresse, de port, de chemin, de nom d'hôte d'un serveur distant ni de nom, version ou installation du moteur ;
+// libellé du navigateur (User-Agent).
 
 import { describe, expect, it } from 'vitest';
 import { defaultMessage } from '../../shared/errors.js';
+import { LOCAL_ENGINE_SITE_MESSAGES } from '../../shared/localConnector.js';
 import type { Capabilities } from '../../shared/types.js';
 import { buildConnectorStatus, isShareableText, publicEvent, publicMessage, REMOTE_ENGINE_LABEL } from '../../electron/connector/status.js';
 import { browserFromUserAgent } from '../../electron/connector/userAgent.js';
@@ -20,7 +22,6 @@ describe('textes transmis au site', () => {
     for (const ok of [
       'Le modèle Magistra Standard n’est pas encore installé. Installez-le depuis l’assistant de configuration.',
       'Le moteur IA est installé mais arrêté : Magistra le démarrera au lancement de la génération.',
-      'Le moteur IA installé (Ollama 0.12.3) est trop ancien.',
       'Réessayez dans quelques instants (heure de Paris).',
     ]) {
       expect(isShareableText(ok), ok).toBe(true);
@@ -29,6 +30,11 @@ describe('textes transmis au site', () => {
       'Serveur injoignable (http://127.0.0.1:11434).', 'Moteur sur localhost', 'Adresse 192.168.1.20 refusée', 'Hôte ollama:11434',
       'Fichier C:\\Users\\prof\\AppData\\Roaming\\Magistra\\ai-config.json', 'Chemin /home/prof/.ollama/models introuvable',
       'Partage \\\\serveur\\modeles\\ inaccessible', 'Adresse [::1]:11434',
+      // Nom, version et installation du moteur, extraits de son journal : jamais sur le site.
+      'Le moteur IA installé (Ollama 0.12.3) est trop ancien.', 'Un antivirus bloque peut-être Ollama (ollama.exe).',
+      'Le moteur IA ne peut pas démarrer : le port 11434 est déjà utilisé par un autre programme.',
+      'Dernière erreur signalée par le moteur : « error loading model ~\\.cache\\models\\blobs\\sha256-6a07 ».',
+      'Le moteur a été installé pour tous les utilisateurs de cet ordinateur (dossier Program Files).',
     ]) {
       expect(isShareableText(leak), leak).toBe(false);
       expect(publicMessage('AI_SERVER_UNREACHABLE', leak)).toBe(defaultMessage('AI_SERVER_UNREACHABLE'));
@@ -55,10 +61,28 @@ describe('textes transmis au site', () => {
     });
   });
 
-  it('moteur local non prêt : cause précise ; cause absente : message générique', () => {
+  it('codes du moteur : toujours un texte neutre pour le site (jamais le message de la fenêtre de l’application)', () => {
+    const cases: [keyof typeof LOCAL_ENGINE_SITE_MESSAGES & string, string][] = [
+      ['ENGINE_OUTDATED', 'Le moteur IA installé (Ollama 0.5.7) est trop ancien pour ce modèle. Ollama a été installé pour tous les utilisateurs de cet ordinateur (dossier Program Files).'],
+      ['ENGINE_NOT_RUNNING', 'Le moteur IA ne démarre pas. Un antivirus bloque peut-être Ollama (ollama.exe). Dernière erreur signalée par le moteur : « Error: error loading model ~\\.ollama\\models\\blobs\\sha256-6a07 (CUDA0 GeForce GTX 1050 Ti, driver 472.12) ».'],
+      ['ENGINE_NOT_INSTALLED', 'Le moteur d’IA locale (Ollama) n’est pas installé. Ouvrez l’assistant de configuration.'],
+      ['MODEL_NOT_INSTALLED', 'Le modèle Magistra Standard n’est pas encore installé. Installez-le depuis l’assistant de configuration.'],
+    ];
+    for (const [code, message] of cases) {
+      const neutral = LOCAL_ENGINE_SITE_MESSAGES[code]!;
+      expect(neutral).not.toMatch(/ollama|assistant|port|\d+\.\d+/i);
+      expect(publicMessage(code, message)).toBe(neutral);
+      expect(publicEvent({ type: 'error', code, message, retryable: true })).toEqual({ type: 'error', code, message: neutral, retryable: true });
+    }
+    // Le message générique d'ENGINE_OUTDATED cite lui-même le moteur : jamais transmis tel quel.
+    expect(defaultMessage('ENGINE_OUTDATED')).toMatch(/ollama/i);
+    expect(publicMessage('ENGINE_OUTDATED', '')).toBe(LOCAL_ENGINE_SITE_MESSAGES.ENGINE_OUTDATED);
+  });
+
+  it('moteur local non prêt : cause (texte neutre pour le site) ; cause absente : message générique', () => {
     const notReady = { code: 'MODEL_NOT_INSTALLED' as const, message: 'Le modèle Magistra Standard n’est pas encore installé.' };
     expect(buildConnectorStatus({ version: '2', capabilities: { ...LOCAL, ready: false, notReady }, busy: false }).engine)
-      .toEqual({ ready: false, local: true, label: 'Magistra Standard', notReady });
+      .toEqual({ ready: false, local: true, label: 'Magistra Standard', notReady: { code: 'MODEL_NOT_INSTALLED', message: LOCAL_ENGINE_SITE_MESSAGES.MODEL_NOT_INSTALLED } });
     expect(buildConnectorStatus({ version: '2', capabilities: { ...LOCAL, ready: false }, busy: false }).engine.notReady?.code).toBe('AI_SERVER_UNAVAILABLE');
   });
 

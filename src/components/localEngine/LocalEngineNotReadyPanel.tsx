@@ -1,6 +1,6 @@
 // Page Générer (site web), Magistra locale choisie mais pas prête : la cause précise, les actions utiles (ouvrir
 // Magistra, réessayer, connecter…) et le passage au serveur en ligne SEULEMENT après une confirmation explicite qui
-// nomme le prestataire. Aucune bascule automatique vers un tiers.
+// nomme le prestataire (focus initial sur « Rester sur Magistra locale »). Aucune bascule automatique vers un tiers.
 
 import { useState } from 'react';
 import { AlertTriangle, Send } from 'lucide-react';
@@ -52,6 +52,7 @@ export default function LocalEngineNotReadyPanel({ engine, cause, providerName, 
         message={remoteConfirmText(providerName)}
         confirmLabel={REMOTE_CONFIRM_LABEL}
         cancelLabel="Rester sur Magistra locale"
+        initialFocus="cancel"
         onConfirm={() => {
           setConfirming(false);
           onUseServer();

@@ -15,8 +15,9 @@ import { getLevelGroup, getNiveauLabel } from './levels.js';
 import { unwrapDocumentFence } from './markdownFence.js';
 import { buildMessages, estimateTokens, type PromptSource } from './prompts/index.js';
 import { planResearch, runResearch, type ResearchConfig, type ResearchDeps, type ResearchOutcome } from './research/index.js';
+import type { ResearchSource } from './research/types.js';
 import { modeUsesDocuments, type DocumentPassage, type GenerationEvent, type GenerationRecordDraft, type GenerationRequest, type SourceRef } from './types.js';
-import { displaySujet } from './validation.js';
+import { displaySujet, RECORD_LIMITS } from './validation.js';
 
 export type NewGenerationRecord = GenerationRecordDraft;
 
@@ -163,6 +164,43 @@ function fitPassages(passages: DocumentPassage[], query: string, budget: number)
   return { passages: [...keep.entries()].sort((a, b) => a[0] - b[0]).map(([, p]) => p), reduced: true };
 }
 
+/** Texte borné à `max` caractères (UTF-16, comme la validation), terminé par « … » s'il a été coupé ; vide → undefined. */
+function clipMeta(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text) return undefined;
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max - 1);
+  // Jamais une moitié de caractère (paire de substitution coupée).
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${cut.trimEnd()}…`;
+}
+
+/**
+ * Référence d'une source de RECHERCHE, métadonnées bornées comme l'enregistrement de l'historique (RECORD_LIMITS de
+ * validateGenerationRecordDraft) : un titre de thèse ou un intitulé d'actes démesuré est raccourci, une adresse ou un
+ * DOI hors format est omis. Sinon POST /api/generation refuserait toute la génération faite par Magistra locale.
+ */
+function researchSourceRef(n: number, s: ResearchSource): SourceRef {
+  const authors = s.authors
+    ?.slice(0, RECORD_LIMITS.maxAuthors)
+    .map(a => clipMeta(a, RECORD_LIMITS.author))
+    .filter((a): a is string => a !== undefined);
+  const year = typeof s.year === 'number' && Number.isInteger(s.year) && s.year >= 0 && s.year <= 9_999 ? s.year : undefined;
+  const doi = typeof s.doi === 'string' && s.doi.trim() && s.doi.trim().length <= RECORD_LIMITS.doi ? s.doi.trim() : undefined;
+  const url = typeof s.url === 'string' && s.url.length <= RECORD_LIMITS.url && /^https?:\/\//i.test(s.url) ? s.url : undefined;
+  return {
+    n,
+    kind: s.kind,
+    title: clipMeta(s.title, RECORD_LIMITS.sourceTitle) ?? 'Source sans titre',
+    authors: authors?.length ? authors : undefined,
+    year,
+    venue: clipMeta(s.venue, RECORD_LIMITS.venue),
+    doi,
+    url,
+  };
+}
+
 function recordParams(req: GenerationRequest): Record<string, unknown> {
   const params: Record<string, unknown> = {
     researchMode: req.researchMode,
@@ -255,9 +293,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
       if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
       for (const w of outcome.warnings) yield { type: 'warning', code: w.code, message: w.message };
       for (const s of outcome.sources) {
-        const n = sources.length + 1;
-        const ref: SourceRef = { n, kind: s.kind, title: s.title, authors: s.authors, year: s.year, venue: s.venue, doi: s.doi, url: s.url };
-        sources.push({ ref, text: s.text });
+        sources.push({ ref: researchSourceRef(sources.length + 1, s), text: s.text });
       }
     }
 
@@ -363,6 +399,8 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     // ─── Sauvegarde ──────────────────────────────────────────────────────
     let saved = false;
     let id: string | undefined;
+    // Nom du modèle borné comme l'enregistrement (RECORD_LIMITS) : un nom plus long ne fait jamais refuser la génération.
+    const recordModel = clipMeta(provider.model, RECORD_LIMITS.model);
     const record: NewGenerationRecord = {
       type: req.type,
       niveau: req.niveau,
@@ -374,7 +412,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
       params: recordParams(req),
       truncated,
       internetUsed,
-      model: provider.model,
+      ...(recordModel ? { model: recordModel } : {}),
     };
     if (deps.save) {
       try {

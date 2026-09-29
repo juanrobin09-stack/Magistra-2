@@ -112,7 +112,7 @@ describe('ECDH P-256 + HKDF : interopérabilité avec WebCrypto', () => {
 
     // Signature d'une requête par le navigateur, vérifiée par l'application…
     const request = canonicalRequest({
-      method: 'post', path: '/v1/generate', origin: 'https://magistra-2.vercel.app', clientId: randomToken(16),
+      method: 'post', host: '127.0.0.1:47831', path: '/v1/generate', origin: 'https://magistra-2.vercel.app', clientId: randomToken(16),
       timestamp: String(Date.now()), nonce: randomToken(16), bodySha256: sha256Base64Url('{"sujet":"Les fractions"}'),
     });
     const signature = toBase64Url(new Uint8Array(await subtle.sign('HMAC', browserKey, utf8(request))));
@@ -120,10 +120,12 @@ describe('ECDH P-256 + HKDF : interopérabilité avec WebCrypto', () => {
     expect(hmacBase64Url(app.key, request)).toBe(signature);
 
     // … et preuve de l'application, vérifiée par le navigateur.
-    const proofText = canonicalProof('client', 'nonce');
+    const proofText = canonicalProof('client', 'nonce', '127.0.0.1:47831');
     const proof = decoded(hmacBase64Url(app.key, proofText), 32);
     expect(await subtle.verify('HMAC', browserKey, proof, utf8(proofText))).toBe(true);
-    expect(await subtle.verify('HMAC', browserKey, proof, utf8(canonicalProof('client', 'autre')))).toBe(false);
+    expect(await subtle.verify('HMAC', browserKey, proof, utf8(canonicalProof('client', 'autre', '127.0.0.1:47831')))).toBe(false);
+    // Preuve liée au port : celle de l'application sur 47831 ne vaut pas pour un autre port (relais).
+    expect(await subtle.verify('HMAC', browserKey, proof, utf8(canonicalProof('client', 'nonce', '127.0.0.1:47832')))).toBe(false);
   });
 
   it('HKDF : mêmes octets que WebCrypto (sel = UTF-8 de pairingId, info du protocole)', async () => {

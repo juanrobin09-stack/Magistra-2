@@ -159,6 +159,13 @@ describe('déploiement', () => {
       expect(active).toMatch(new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${fn}\\([^)]*\\) TO service_role`));
     }
     expect(active).toMatch(/pg_advisory_xact_lock/);
+    // Limite globale : générations seulement (« save » = enregistrement de Magistra locale, hors budget du serveur d'IA).
+    expect(active).toMatch(/ALTER TABLE public\.api_requests ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'generate'/);
+    expect(active).toMatch(/WHERE created_at >= now\(\) - make_interval\(secs => p_window_seconds\)\s+AND kind = 'generate'/);
+    expect(active).toMatch(/INSERT INTO public\.api_requests \(user_id, created_at, kind\) VALUES \(p_user_id, now\(\), p_kind\)/);
+    expect(active).toMatch(/DROP FUNCTION IF EXISTS public\.magistra_begin_generation\(text, integer, integer, integer, integer, integer\);/);
+    // Ménage des places de génération : seulement par un appel qui les gère (jamais avec la durée d'une autre demande).
+    expect(active).toMatch(/IF p_max_active > 0 THEN\s+DELETE FROM public\.active_generations WHERE started_at < now\(\) - make_interval\(secs => p_active_ttl_seconds\);\s+END IF;/);
     // Réexécutable : aucune création qui échouerait la seconde fois.
     expect(active).toMatch(/CREATE TABLE IF NOT EXISTS public\.active_generations/);
     expect(active).not.toMatch(/CREATE FUNCTION/i);

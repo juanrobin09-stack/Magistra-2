@@ -8,14 +8,14 @@ import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, ExternalLink, Info, Loader2, Monitor, Plug, RefreshCw, Search } from 'lucide-react';
 import { defaultMessage } from '@shared/errors';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
-import type { LocalEngineController, LocalEngineState } from '@/lib/localConnector/controller';
+import { NOT_ANSWERED_PERMISSION_MESSAGE, type LocalEngineController, type LocalEngineState } from '@/lib/localConnector/controller';
 import { useLocalActions, wasSearched, type LocalAction } from './localActions';
 import { PermissionDeniedHelp, PermissionExplainer } from './PermissionNotes';
 import {
   APP_CLOSED_DETAIL, APP_CLOSED_TEXT, CANCEL_LABEL, CONNECT_LABEL, CONNECTED_TEXT, DOWNLOAD_SHORT_LABEL, DOWNLOAD_WINDOWS_LABEL,
   ENGINE_BUSY_TEXT, FOUND_DETAIL, FOUND_TEXT, JUST_CONNECTED_TEXT, LOCAL_INTRO_DETAIL, LOCAL_INTRO_TEXT, localEngineMessage,
   localModelLabel, NEEDS_PERMISSION_TEXT, NOT_DETECTED_DETAIL, NOT_DETECTED_TEXT, OPEN_APP_LABEL, PAIRING_DETAIL, PAIRING_TEXT,
-  PERMISSION_DENIED_TEXT, RETRY_LABEL, SEARCH_EXISTING_LABEL, SEARCH_WITH_PERMISSION_LABEL, SEARCHING_TEXT,
+  PAIRING_CODE_HINT, PAIRING_CODE_LABEL, PERMISSION_DENIED_TEXT, RETRY_LABEL, SEARCH_EXISTING_LABEL, SEARCH_WITH_PERMISSION_LABEL, SEARCHING_TEXT,
 } from './texts';
 import { useWindowsRelease } from './windowsRelease';
 
@@ -42,6 +42,8 @@ interface View {
   details: string[];
   /** Détail mis en avant (moteur non prêt, erreur utile). */
   alert?: string;
+  /** Code de vérification de l'appairage en cours (affiché aussi par la boîte de Magistra). */
+  code?: string;
 }
 
 const TONE_CLASS: Record<Tone, string> = {
@@ -59,6 +61,19 @@ function errorText(state: LocalEngineState): string | undefined {
   return state.error ? localEngineMessage(state.error.code, state.error.message) : undefined;
 }
 
+/** Demande du navigateur restée sans réponse : rien n'a pu être cherché (jamais « fermée » ni « téléchargez-la » seul). */
+function permissionNotAnswered(state: LocalEngineState): boolean {
+  return state.error?.code === 'LOCAL_NETWORK_PERMISSION_DENIED' && state.error.message === NOT_ANSWERED_PERMISSION_MESSAGE;
+}
+
+/**
+ * Une application Magistra répond sans reconnaître ce navigateur (celle d'une autre session Windows, ou la sienne qui
+ * a perdu ses autorisations) : appairage gardé, « Connecter » proposé en plus de « Ouvrir Magistra ».
+ */
+function unrecognized(state: LocalEngineState): boolean {
+  return state.kind === 'app-closed' && state.paired && state.error?.code === 'CONNECTOR_UNPAIRED';
+}
+
 /** Texte, ton et détails de l'état (fonction pure, testée à travers les composants). */
 function describe(state: LocalEngineState, searched: boolean, justConnected: boolean): View {
   const error = errorText(state);
@@ -67,18 +82,20 @@ function describe(state: LocalEngineState, searched: boolean, justConnected: boo
     case 'checking':
       return { tone: 'busy', headline: SEARCHING_TEXT, details: [] };
     case 'needs-permission':
-      return { tone: 'info', headline: NEEDS_PERMISSION_TEXT, details: [] };
+      return { tone: 'info', headline: NEEDS_PERMISSION_TEXT, details: [], ...(error ? { alert: error } : {}) };
     case 'permission-denied':
       return { tone: 'warn', headline: PERMISSION_DENIED_TEXT, details: [] };
     case 'not-found': {
       const plainUnreachable = state.error?.code === 'CONNECTOR_UNREACHABLE' && state.error.message === defaultMessage('CONNECTOR_UNREACHABLE');
       if (!searched && !error) return { tone: 'info', headline: LOCAL_INTRO_TEXT, details: [LOCAL_INTRO_DETAIL] };
+      // Cause d'abord : l'autorisation du navigateur, pas l'absence de Magistra.
+      if (permissionNotAnswered(state)) return { tone: 'warn', headline: NOT_DETECTED_TEXT, details: [], alert: error };
       return { tone: 'warn', headline: NOT_DETECTED_TEXT, details: [NOT_DETECTED_DETAIL], ...(error && !plainUnreachable ? { alert: error } : {}) };
     }
     case 'found':
       return { tone: 'ok', headline: FOUND_TEXT, details: [FOUND_DETAIL], ...(error ? { alert: error } : {}) };
     case 'pairing':
-      return { tone: 'busy', headline: PAIRING_TEXT, details: [PAIRING_DETAIL] };
+      return { tone: 'busy', headline: PAIRING_TEXT, details: [PAIRING_DETAIL], ...(state.pairingCode ? { code: state.pairingCode } : {}) };
     case 'app-closed':
       return { tone: 'warn', headline: APP_CLOSED_TEXT, details: error ? [] : [APP_CLOSED_DETAIL], ...(error ? { alert: error } : {}) };
     case 'connected': {
@@ -253,6 +270,11 @@ export default function LocalEngineStatus({ engine, headline = true, omit = [], 
             <button type="button" onClick={act('detect')} className={BTN_SECONDARY}>
               <RefreshCw size={15} aria-hidden="true" /> {RETRY_LABEL}
             </button>
+            {unrecognized(state) && (
+              <button type="button" onClick={act('connect')} className={BTN_SECONDARY}>
+                <Plug size={15} aria-hidden="true" /> {CONNECT_LABEL}
+              </button>
+            )}
           </div>
         );
       case 'connected':
@@ -302,6 +324,11 @@ export default function LocalEngineStatus({ engine, headline = true, omit = [], 
         {details.map(text => (
           <p key={text} className="text-sm text-mg-200 leading-relaxed [overflow-wrap:anywhere]">{text}</p>
         ))}
+        {view.code && (
+          <p className="text-sm text-mg-100 leading-relaxed [overflow-wrap:anywhere]" data-testid="pairing-code">
+            {PAIRING_CODE_LABEL} <strong className="font-mono text-base tracking-widest text-white">{view.code}</strong>. {PAIRING_CODE_HINT}
+          </p>
+        )}
         {alert && (
           <p className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/5 px-3 py-2 text-sm text-mg-100 [overflow-wrap:anywhere]">
             <AlertTriangle size={15} className="text-warning shrink-0 mt-0.5" aria-hidden="true" />

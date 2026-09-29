@@ -59,6 +59,10 @@ const T = {
   justConnected: '✓ Intelligence locale connectée',
   connected: '✓ Magistra locale connectée',
   appClosed: 'L’application Magistra est fermée.',
+  unrecognized:
+    "Une application Magistra répond sur cet ordinateur, mais elle ne reconnaît pas ce navigateur (par exemple celle d'une autre session Windows). Ouvrez votre application Magistra ; si elle est déjà ouverte, reconnectez Magistra locale.",
+  notAnswered:
+    'Magistra n’a pas pu être recherchée : votre navigateur n’a pas reçu votre accord. Relancez la recherche, puis acceptez sa demande. S’il ne vous demande rien, vérifiez que l’application Magistra est ouverte.',
   openApp: 'Ouvrir Magistra',
   retry: 'Réessayer',
   needsPermission: 'Autorisation du navigateur nécessaire',
@@ -228,7 +232,7 @@ async function startImpostor(port: number): Promise<Impostor> {
         return;
       }
       let reply: unknown = { ok: true };
-      if (req.url === '/v1/hello') reply = { app: 'magistra', protocol: 1, version: '9.9.9' };
+      if (req.url === '/v1/hello') reply = { app: 'magistra', protocol: 2, version: '9.9.9' };
       if (req.url === '/v1/pair' && req.method === 'POST') {
         let input: Record<string, unknown> = {};
         try {
@@ -785,6 +789,10 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
       });
       expect(call.detail).toContain('Il n’aura aucun accès à vos fichiers, à vos autres applications ni aux réglages de Magistra.');
       expect(call.detail).toContain('Magistra → Réglages → « Site web Magistra »');
+      // Code de vérification : celui que le site affiche est celui de la boîte (demande liée à cet onglet).
+      const code = await card(page).getByTestId('pairing-code').locator('strong').innerText();
+      expect(code).toMatch(/^[2-9A-HJ-NP-Z]{3}-[2-9A-HJ-NP-Z]{3}$/);
+      expect(call.detail).toContain(`Code de vérification : ${code}.`);
       // L'URL magistra://pair ne contient ni vérificateur ni clé : identifiant, défi et origine seulement.
       const pairUrl = d.urls.at(-1)!;
       expect([...new URL(pairUrl).searchParams.keys()].sort()).toEqual(['challenge', 'id', 'origin', 'v']);
@@ -909,8 +917,10 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
         await shot(page, '13-reconnectee-apres-redemarrage');
       } else {
         // Sans trousseau du système : autorisation gardée en mémoire seulement, perdue au redémarrage (documenté).
+        // L'application ne reconnaît plus ce navigateur sans l'avoir retiré (aucune marque de retrait) : le site garde
+        // son appairage, dit la cause et propose de reconnecter.
         test.info().annotations.push({ type: 'limite', description: 'gnome-keyring indisponible : autorisation non conservée au redémarrage' });
-        await expect(card(page).getByText(defaultMessage('CONNECTOR_UNPAIRED'))).toBeVisible({ timeout: 60_000 });
+        await expect(card(page).getByText(T.unrecognized)).toBeVisible({ timeout: 60_000 });
         d.consentAuto = true;
         await d.session!.app.evaluate(() => {
           (globalThis as unknown as { __magistraE2EConsent: { auto: number | null } }).__magistraE2EConsent.auto = 0;
@@ -987,12 +997,13 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
 
     await nav(page, 'Tableau de bord');
     await expect(card(page).getByText(T.connected)).toBeVisible();
-    await expect(card(page).getByText(/Le modèle Magistra .+ n’est pas encore installé/)).toBeVisible();
+    // Cause précise, par le texte neutre du site (jamais le message de la fenêtre de l'application).
+    await expect(card(page).getByText('Le modèle d’IA choisi n’est pas encore installé : ouvrez l’application Magistra pour le télécharger.')).toBeVisible();
     await expect(card(page).getByRole('button', { name: T.openApp })).toBeVisible();
     await expectNoTechnicalText(page, d.options.ports);
     await shot(page, '21-modele-absent');
     await nav(page, 'Générer');
-    await expect(page.getByTestId('local-not-ready').getByText(/Le modèle Magistra .+ n’est pas encore installé/)).toBeVisible();
+    await expect(page.getByTestId('local-not-ready').getByText('Le modèle d’IA choisi n’est pas encore installé : ouvrez l’application Magistra pour le télécharger.')).toBeVisible();
 
     for (const model of ALL_TIER_MODELS) mock.state.models.add(model);
     await nav(page, 'Tableau de bord');
@@ -1167,6 +1178,8 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     // « Continuer » : le navigateur demande l'autorisation (refusée d'office sans écran) → requêtes bloquées.
     await explainer.getByRole('button', { name: 'Continuer' }).click();
     await expect(card(page).getByText(T.notDetected)).toBeVisible();
+    // Demande restée sans réponse : la cause est dite (jamais « téléchargez-la » seul).
+    await expect(card(page).getByText(T.notAnswered)).toBeVisible();
     expect(requests.length).toBeGreaterThan(0);
     expect(failures.length).toBe(requests.length);
     await shot(page, '41-demande-non-accordee');

@@ -370,8 +370,10 @@ async function history(userId: string, req: ApiRequest, deps: ServerDeps): Promi
 /**
  * Limitation de débit d'un enregistrement (POST /api/generation) : même compteur partagé, même opération atomique et
  * même limite par utilisateur (RATE_LIMIT_PER_MINUTE) que POST /api/generate — une génération faite par Magistra
- * locale compte comme une demande de génération. Ni place de génération (rien ne s'exécute ici), ni limite globale
- * (elle protège le serveur d'IA, que l'enregistrement n'utilise pas). Une panne du compteur ne bloque pas les
+ * locale compte comme une demande de génération POUR L'ENSEIGNANT. Ni place de génération (rien ne s'exécute ici), ni
+ * limite globale : l'enregistrement est compté comme « save », hors du budget global qui protège le serveur d'IA (il
+ * ne le consomme pas non plus). Durée de vie des places transmise telle quelle (celle d'une génération) : le ménage de
+ * la base ne libère jamais trop tôt les places des générations en cours. Une panne du compteur ne bloque pas les
  * enseignants, comme pour les générations.
  */
 async function admitSave(userId: string, store: GenerationStore, deps: ServerDeps): Promise<void> {
@@ -384,7 +386,8 @@ async function admitSave(userId: string, store: GenerationStore, deps: ServerDep
       maxRequests,
       maxGlobalRequests: 0,
       maxActive: 0,
-      activeTtlSeconds: RATE_WINDOW_SECONDS,
+      activeTtlSeconds: generationSlotTtlSeconds(deps.config),
+      kind: 'save',
     });
   } catch (err) {
     deps.log('Anti-abus indisponible (enregistrement accepté)', err);

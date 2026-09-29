@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Capabilities } from '@shared/types';
 import {
-  ACADEMIC_ONLY_NOTE, describeResearchOptions, DEMO_RESEARCH_NOTE, effectiveResearchMode, LOCAL_CONNECTOR_NETWORK_NOTE,
+  ACADEMIC_DISABLED_CONNECTOR_NOTE, ACADEMIC_DISABLED_LOCAL_NOTE, ACADEMIC_ONLY_NOTE, describeResearchOptions, DEMO_RESEARCH_NOTE,
+  DOCUMENTS_ONLY_ONLINE_DESCRIPTION, effectiveResearchMode, LOCAL_CONNECTOR_NETWORK_NOTE, NO_INTERNET_CONNECTOR_NOTE,
+  WEB_LIMITED_SCOLAIRE_CONNECTOR_NOTE,
   LOCAL_CONNECTOR_PRIVACY_MESSAGE, LOCAL_PRIVACY_NOTE, NETWORK_PRIVACY_NOTE, NO_INTERNET_LOCAL_NOTE, NO_INTERNET_SERVER_NOTE,
   privacyNotes, researchHints, WEB_LIMITED_ACADEMIC_NOTE, WEB_LIMITED_NOTE, WEB_LIMITED_SCOLAIRE_LOCAL_NOTE,
   WEB_LIMITED_SCOLAIRE_SERVER_NOTE,
@@ -66,6 +68,32 @@ describe('modes de recherche', () => {
     expect(effectiveResearchMode('internet', options)).toBe('internet');
   });
 
+  it('« Mes documents uniquement » : « Fonctionne hors ligne » dans l’application Windows SEULEMENT (le site nécessite Internet)', () => {
+    const documents = (mode: Parameters<typeof describeResearchOptions>[1], route?: Capabilities['route']) =>
+      describeResearchOptions(caps(), mode, '4eme', route).find(o => o.value === 'documents')!;
+    expect(documents('local').description).toBe('Aucune recherche externe. Fonctionne hors ligne.');
+    for (const [mode, route] of [['web', 'server'], ['web', 'local-connector'], ['web', undefined], ['personal', undefined], ['demo', undefined]] as const) {
+      expect(documents(mode, route).description, `${mode} ${route}`).toBe(DOCUMENTS_ONLY_ONLINE_DESCRIPTION);
+      expect(documents(mode, route).description).not.toMatch(/hors ligne/i);
+    }
+  });
+
+  it('site web, Magistra locale : notes qui renvoient aux réglages de l’application Windows, sans nom technique', () => {
+    const connector = (partial: Parameters<typeof caps>[0], niveau: Parameters<typeof describeResearchOptions>[2]) =>
+      describeResearchOptions(caps(partial), 'web', niveau, 'local-connector');
+    expect(connector({ research: { web: false, academic: true } }, 'cm2').find(o => o.value === 'internet')?.note).toBe(WEB_LIMITED_SCOLAIRE_CONNECTOR_NOTE);
+    expect(connector({ research: { web: false, wikipedia: false, academic: true } }, '4eme').find(o => o.value === 'internet'))
+      .toMatchObject({ available: false, note: NO_INTERNET_CONNECTOR_NOTE });
+    expect(connector({ research: { academic: false } }, 'doctorat').find(o => o.value === 'academic'))
+      .toMatchObject({ available: false, note: ACADEMIC_DISABLED_CONNECTOR_NOTE });
+    for (const note of [WEB_LIMITED_SCOLAIRE_CONNECTOR_NOTE, NO_INTERNET_CONNECTOR_NOTE, ACADEMIC_DISABLED_CONNECTOR_NOTE]) {
+      expect(note).toContain('réglages de l’application Magistra (Windows)');
+      expect(note).not.toMatch(/searxng/i);
+    }
+    // Dans l'application Windows elle-même : ses propres réglages (inchangé).
+    expect(describeResearchOptions(caps({ research: { academic: false } }), 'local', 'doctorat').find(o => o.value === 'academic')?.note).toBe(ACADEMIC_DISABLED_LOCAL_NOTE);
+  });
+
   it('capacités inconnues : tout reste sélectionnable', () => {
     expect(describeResearchOptions(null, 'web', '4eme').every(o => o.available)).toBe(true);
   });
@@ -117,12 +145,15 @@ describe('confidentialité : Magistra locale depuis le site web (route « local-
   const local = (partial: Parameters<typeof caps>[0] = {}) =>
     caps({ route: 'local-connector', privacy: { level: 'local', message: LOCAL_PRIVACY_MESSAGE }, engineLabel: 'Magistra locale — Magistra Standard', ...partial });
 
-  it('notes exactes : générée sur cet ordinateur par l’application, demande et extraits jamais envoyés au serveur en ligne, résultat dans l’historique en ligne', () => {
+  it('notes exactes : générée sur cet ordinateur par l’application, extraits jamais envoyés ; résultat ET paramètres de la demande dans l’historique en ligne', () => {
     const notes = privacyNotes(local(), 'documents', { runtimeMode: 'web' });
     expect(notes).toEqual({ message: LOCAL_CONNECTOR_PRIVACY_MESSAGE, network: null, local: null });
     expect(LOCAL_CONNECTOR_PRIVACY_MESSAGE).toBe(
-      "IA locale : vos contenus sont générés sur cet ordinateur par l'application Magistra. Votre demande et les extraits de vos documents ne sont pas transmis au serveur Magistra en ligne ; seul le résultat est enregistré dans l'historique de votre compte en ligne.",
+      "IA locale : vos contenus sont générés sur cet ordinateur par l'application Magistra ; les extraits de vos documents n'en sortent pas. Le résultat et les paramètres de la demande (sujet, objectifs, consignes, contenu à adapter, profils, noms des documents) sont enregistrés dans l'historique de votre compte en ligne.",
     );
+    // La génération enregistrée (done.record → POST /api/generation) contient le sujet, les consignes, le contenu à
+    // adapter et les noms des documents : jamais « votre demande n'est pas transmise » ni « seul le résultat ».
+    expect(LOCAL_CONNECTOR_PRIVACY_MESSAGE).not.toMatch(/demande[^.;]*(ne sont pas|n'est pas|ne passent pas|pas transmis)|seul le résultat/i);
     // Même texte que les capacités du client hybride (une seule source).
     expect(LOCAL_PRIVACY_MESSAGE).toBe(LOCAL_CONNECTOR_PRIVACY_MESSAGE);
     // Le résultat part dans l'historique en ligne : jamais « restent sur cet ordinateur », aucun prestataire tiers.

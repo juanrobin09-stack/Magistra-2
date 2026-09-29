@@ -4,10 +4,10 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { isAbortError } from '@shared/errors';
-import { CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS, CONNECTOR_PORTS, CONNECTOR_ROUTES, parseAppUrl } from '@shared/localConnector';
+import { CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS, CONNECTOR_PORTS, CONNECTOR_ROUTES, PAIR_CODE_RE, parseAppUrl } from '@shared/localConnector';
 import type { GenerationEvent, GenerationRequest } from '@shared/types';
 import {
-  LocalConnectorClient, PAIRING_NOT_RECEIVED_MESSAGE, STREAM_INTERRUPTED_MESSAGE, UNEXPECTED_REPLY_MESSAGE,
+  LocalConnectorClient, PAIRING_NOT_RECEIVED_MESSAGE, STREAM_INTERRUPTED_MESSAGE, UNEXPECTED_REPLY_MESSAGE, UNRECOGNIZED_BY_APP_MESSAGE,
   type LocalConnectorClientOptions,
 } from '@/lib/localConnector/client';
 import { MemoryPairingStore } from '@/lib/localConnector/pairingStore';
@@ -93,13 +93,13 @@ describe('hello : recherche sans adresse', () => {
 
   it('application sur le deuxième port : trouvée, version connue', async () => {
     const ctx = setup({ [P2]: 'magistra' });
-    expect(await ctx.client.hello()).toEqual({ port: P2, hello: { app: 'magistra', protocol: 1, version: '2.1.0' } });
+    expect(await ctx.client.hello()).toEqual({ port: P2, hello: { app: 'magistra', protocol: 2, version: '2.1.0' } });
   });
 
   it('autre programme sur un port (réponse qui n’est pas Magistra) : ignoré', async () => {
     const ctx = setup({ [P2]: 'magistra' });
     ctx.connector.intercept = (port, path) => (port === P1 && path === CONNECTOR_ROUTES.hello
-      ? new Response(JSON.stringify({ app: 'autre', protocol: 1, version: '1.0.0' }), { headers: { 'Content-Type': 'application/json' } })
+      ? new Response(JSON.stringify({ app: 'autre', protocol: 2, version: '1.0.0' }), { headers: { 'Content-Type': 'application/json' } })
       : undefined);
     expect((await ctx.client.hello())?.port).toBe(P2);
     ctx.connector.intercept = port => (port === P2 ? new Response('<html>', { headers: { 'Content-Type': 'text/html' } }) : undefined);
@@ -110,8 +110,9 @@ describe('hello : recherche sans adresse', () => {
   it('protocole incompatible ou réponse démesurée : ignorés', async () => {
     const ctx = setup({});
     ctx.connector.intercept = (port) => {
-      if (port === P1) return new Response(JSON.stringify({ app: 'magistra', protocol: 2, version: '9.0.0' }), { headers: { 'Content-Type': 'application/json' } });
-      if (port === P2) return new Response(JSON.stringify({ app: 'magistra', protocol: 1, version: '2.0.0', pad: 'x'.repeat(40_000) }), { headers: { 'Content-Type': 'application/json' } });
+      // Ancienne application (protocole 1 : accusé, signature et preuve non liés au port) : incompatible.
+      if (port === P1) return new Response(JSON.stringify({ app: 'magistra', protocol: 1, version: '9.0.0' }), { headers: { 'Content-Type': 'application/json' } });
+      if (port === P2) return new Response(JSON.stringify({ app: 'magistra', protocol: 2, version: '2.0.0', pad: 'x'.repeat(40_000) }), { headers: { 'Content-Type': 'application/json' } });
       return undefined;
     };
     expect(await ctx.client.hello()).toBeNull();
@@ -130,6 +131,48 @@ describe('hello : recherche sans adresse', () => {
       return undefined;
     };
     expect(await rejection(ctx.client.hello())).toMatchObject({ code: 'LOCAL_NETWORK_PERMISSION_DENIED' });
+  });
+
+  it('autorisation accordée APRÈS la coupure par l’application de la connexion retenue par le navigateur (> 10 s) : recherche refaite aussitôt', async () => {
+    const ctx = setup({ [P2]: 'magistra' }, 'prompt');
+    let held = CONNECTOR_PORTS.length;
+    ctx.connector.intercept = () => {
+      if (held === 0) return undefined;
+      held--;
+      // Chromium ouvre la connexion avant sa question ; l'application la ferme au bout de 10 s ; l'enseignant accepte
+      // ensuite : la requête retenue échoue, sans nouvel envoi du navigateur.
+      ctx.setPermission('granted');
+      throw new TypeError('Failed to fetch');
+    };
+    expect(await ctx.client.hello()).toEqual({ port: P2, hello: { app: 'magistra', protocol: 2, version: '2.1.0' } });
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.hello).length).toBeGreaterThan(CONNECTOR_PORTS.length);
+  });
+
+  it('demande du navigateur restée sans réponse (toujours « prompt ») : aucun nouvel essai, null', async () => {
+    const ctx = setup({ [P1]: 'magistra' }, 'prompt');
+    ctx.connector.intercept = () => {
+      throw new TypeError('Failed to fetch');
+    };
+    expect(await ctx.client.hello()).toBeNull();
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.hello)).toHaveLength(CONNECTOR_PORTS.length);
+  });
+
+  it('navigateur qui expose l’autorisation SANS l’appliquer (réponse reçue, toujours « prompt ») : traitée comme absente jusqu’à la fin de la visite', async () => {
+    const ctx = setup({ [P1]: 'magistra' }, 'prompt');
+    expect(await ctx.client.readPermission()).toBe('prompt');
+    expect((await ctx.client.hello())?.port).toBe(P1);
+    expect(await ctx.client.readPermission()).toBe('unsupported');
+    // Jamais retenu au-delà de la visite : si la protection s'applique un jour, sa demande sera expliquée d'abord.
+    expect(await ctx.reload().readPermission()).toBe('prompt');
+    // Navigateur qui l'applique : la réponse n'arrive qu'après l'accord (« granted ») ; réinitialisée : « prompt ».
+    const enforced = setup({ [P1]: 'magistra' }, 'prompt');
+    enforced.connector.intercept = () => {
+      enforced.setPermission('granted');
+      return undefined;
+    };
+    await enforced.client.hello();
+    enforced.setPermission('prompt');
+    expect(await enforced.client.readPermission()).toBe('prompt');
   });
 
   it('port qui ne répond jamais : abandonné après 1,5 s', async () => {
@@ -190,6 +233,19 @@ describe('pair : appairage', () => {
     expect(statusCalls).toHaveLength(1);
     expect(statusCalls[0].headers[CONNECTOR_HEADERS.client.toLowerCase()]).toBe(stored!.clientId);
     expect(await ctx.client.hasPairing()).toBe(true);
+  });
+
+  it('code de vérification : donné AVANT l’ouverture de magistra://pair, identique à celui de la boîte de l’application', async () => {
+    const ctx = setup({ [P1]: 'magistra' });
+    const codes: { code: string; urlsOpened: number }[] = [];
+    await ctx.client.pair(new AbortController().signal, code => codes.push({ code, urlsOpened: ctx.connector.openedUrls.length }));
+    expect(codes).toEqual([{ code: ctx.connector.consentCodes[0], urlsOpened: 0 }]);
+    expect(codes[0].code).toMatch(PAIR_CODE_RE);
+    // Chaque demande a son code (dérivé de son défi).
+    const again: string[] = [];
+    await ctx.client.pair(new AbortController().signal, code => again.push(code));
+    expect(again[0]).toBe(ctx.connector.consentCodes[1]);
+    expect(again[0]).not.toBe(codes[0].code);
   });
 
   it('application fermée au départ : magistra://pair l’ouvre, recherche toutes les secondes, puis appairage', async () => {
@@ -428,7 +484,7 @@ describe('status : requêtes signées et preuve', () => {
   it('autorisation retirée dans l’application (401 CONNECTOR_UNPAIRED) : appairage oublié', async () => {
     const ctx = setup();
     await pairClient(ctx);
-    ctx.connector.clients.clear();
+    ctx.connector.revokeAll();
     expect(await rejection(ctx.client.status())).toMatchObject({ code: 'CONNECTOR_UNPAIRED' });
     expect(await ctx.client.hasPairing()).toBe(false);
   });
@@ -440,6 +496,50 @@ describe('status : requêtes signées et preuve', () => {
     ctx.connector.setPort(P1, 'other-magistra').setPort(P2, 'magistra');
     expect(await ctx.client.status()).toEqual(READY_STATUS);
     expect((await ctx.store.load())?.port).toBe(P2);
+  });
+
+  it('PC partagé : SA Magistra fermée, celle d’une autre session répond 401 sans marque de retrait → appairage GARDÉ, cause expliquée', async () => {
+    const ctx = setup({ [P1]: 'magistra' });
+    await pairClient(ctx);
+    // L'application de l'enseignant est fermée ; celle d'un collègue (autre session Windows) écoute sur P2.
+    ctx.connector.setPort(P1, 'closed').setPort(P2, 'other-magistra');
+    expect(await rejection(ctx.client.status())).toMatchObject({ code: 'CONNECTOR_UNPAIRED', message: UNRECOGNIZED_BY_APP_MESSAGE });
+    expect(await ctx.client.hasPairing()).toBe(true);
+    // L'autre application a même repris le port mémorisé : toujours gardé.
+    ctx.connector.setPort(P1, 'other-magistra').setPort(P2, 'closed');
+    expect(await rejection(ctx.client.status())).toMatchObject({ code: 'CONNECTOR_UNPAIRED', message: UNRECOGNIZED_BY_APP_MESSAGE });
+    expect(await ctx.client.hasPairing()).toBe(true);
+    // L'enseignant rouvre sa Magistra : reconnue sans nouvel appairage.
+    ctx.connector.setPort(P3, 'magistra');
+    expect(await ctx.client.status()).toEqual(READY_STATUS);
+    expect((await ctx.store.load())?.port).toBe(P3);
+  });
+
+  it('401 avec une marque de retrait fausse, ou sans marque (application qui a perdu ses autorisations) : appairage gardé', async () => {
+    for (const mode of ['wrong', 'none'] as const) {
+      const ctx = setup();
+      await pairClient(ctx);
+      ctx.connector.revokedMarkMode = mode;
+      ctx.connector.revokeAll();
+      expect(await rejection(ctx.client.status())).toMatchObject({ code: 'CONNECTOR_UNPAIRED', message: UNRECOGNIZED_BY_APP_MESSAGE });
+      expect(await ctx.client.hasPairing()).toBe(true);
+    }
+  });
+
+  it('autorisation accordée APRÈS la coupure de la connexion retenue (> 10 s) : état relu aussitôt, jamais « fermée » à tort', async () => {
+    const ctx = setup();
+    await pairClient(ctx);
+    const client = ctx.reload();
+    ctx.setPermission('prompt');
+    // Première série : GET /v1/status sur le port mémorisé puis recherche sur chaque port, toutes retenues puis coupées.
+    let held = 1 + CONNECTOR_PORTS.length;
+    ctx.connector.intercept = () => {
+      if (held === 0) return undefined;
+      held--;
+      ctx.setPermission('granted');
+      throw new TypeError('Failed to fetch');
+    };
+    expect(await client.status()).toEqual(READY_STATUS);
   });
 
   it('autorisation du navigateur refusée : erreur précise, aucune requête', async () => {
@@ -534,9 +634,17 @@ describe('generate : flux NDJSON', () => {
   it('autorisation retirée entre-temps (401) : CONNECTOR_UNPAIRED et appairage oublié', async () => {
     const ctx = setup();
     await pairClient(ctx);
-    ctx.connector.clients.clear();
+    ctx.connector.revokeAll();
     expect(await collect(ctx.client)).toEqual([expect.objectContaining({ type: 'error', code: 'CONNECTOR_UNPAIRED' })]);
     expect(await ctx.client.hasPairing()).toBe(false);
+  });
+
+  it('port repris entre la preuve et l’envoi par l’application d’une autre session (401 sans marque) : appairage gardé, rien de lu', async () => {
+    const ctx = setup();
+    await pairClient(ctx);
+    ctx.connector.setPort(P1, 'other-magistra');
+    expect(await collect(ctx.client)).toEqual([expect.objectContaining({ type: 'error', code: 'CONNECTOR_UNREACHABLE' })]);
+    expect(await ctx.client.hasPairing()).toBe(true);
   });
 
   it('arrêt demandé : connexion fermée, POST /v1/cancel signé avec l’identifiant de la génération', async () => {
@@ -601,6 +709,29 @@ describe('unpair', () => {
     await ctx.client.unpair();
     expect(ctx.connector.calls(CONNECTOR_ROUTES.pair, 'DELETE')).toHaveLength(1);
     expect(ctx.connector.clients.has(clientId)).toBe(false);
+    expect(await ctx.client.hasPairing()).toBe(false);
+  });
+
+  it('SA Magistra fermée, celle d’une autre session ouverte : son 401 (sans marque) ne confirme PAS le retrait', async () => {
+    const ctx = setup({ [P1]: 'magistra' });
+    await pairClient(ctx);
+    ctx.connector.setPort(P1, 'closed').setPort(P2, 'other-magistra');
+    expect(await ctx.client.unpair()).toBe(false);
+    expect(await ctx.client.hasPairing()).toBe(false);
+    // L'application de l'enseignant autorise toujours ce navigateur : l'avertissement est justifié.
+    expect(ctx.connector.clients.size).toBe(1);
+    // Même avec le port mémorisé repris par l'autre application.
+    const again = setup({ [P1]: 'magistra' });
+    await pairClient(again);
+    again.connector.setPort(P1, 'other-magistra');
+    expect(await again.client.unpair()).toBe(false);
+  });
+
+  it('retrait déjà fait dans l’application (marque de retrait valide) : confirmé', async () => {
+    const ctx = setup();
+    await pairClient(ctx);
+    ctx.connector.revokeAll();
+    expect(await ctx.client.unpair()).toBe(true);
     expect(await ctx.client.hasPairing()).toBe(false);
   });
 

@@ -1,6 +1,6 @@
 // Demandes d'appairage du connecteur local : une seule à la fois, 3 boîtes de consentement par minute au plus,
 // durée de vie, preuve de réception (accusé, sans effet sur la demande), vérificateur (5 essais), origine, usage
-// unique. Horloge simulée.
+// unique, liaison de l'accusé au port d'écoute (hôte). Horloge simulée.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalPairAck, CONNECTOR_FORMATS, CONNECTOR_LIMITS, type PairingUrlParams } from '../../shared/localConnector.js';
@@ -8,6 +8,8 @@ import { pairAck, randomToken, sha256Base64Url, fromBase64Url } from '../../elec
 import { MAX_PROMPTS_PER_MINUTE, PairingRegistry, type PairingTicket } from '../../electron/connector/pairing.js';
 
 const ORIGIN = 'https://magistra-2.vercel.app';
+/** Hôte du port d'écoute de l'application (fourni par le serveur à chaque réponse). */
+const HOST = '127.0.0.1:47831';
 
 /** Ce que fait le site : vérificateur de 32 octets, défi = SHA-256 de ces octets. */
 function sitePairing(origin = ORIGIN): PairingUrlParams & { verifier: string } {
@@ -27,12 +29,12 @@ function prompt(registry: PairingRegistry, p: PairingUrlParams): PairingTicket {
   return opened.ticket;
 }
 
-const complete = (registry: PairingRegistry, p: { pairingId: string; verifier: string }, origin = ORIGIN) =>
-  registry.complete({ pairingId: p.pairingId, verifier: p.verifier, origin });
-const acknowledge = (registry: PairingRegistry, p: { pairingId: string }, origin = ORIGIN) =>
-  registry.acknowledge({ pairingId: p.pairingId, origin });
-/** Accusé attendu par le site : SHA-256 de la chaîne canonique (défi de l'URL). */
-const ackOf = (p: { pairingId: string; challenge: string }) => sha256Base64Url(canonicalPairAck(p.pairingId, p.challenge));
+const complete = (registry: PairingRegistry, p: { pairingId: string; verifier: string }, origin = ORIGIN, host = HOST) =>
+  registry.complete({ pairingId: p.pairingId, verifier: p.verifier, origin, host });
+const acknowledge = (registry: PairingRegistry, p: { pairingId: string }, origin = ORIGIN, host = HOST) =>
+  registry.acknowledge({ pairingId: p.pairingId, origin, host });
+/** Accusé attendu par le site : SHA-256 de la chaîne canonique (défi de l'URL, hôte du port visé). */
+const ackOf = (p: { pairingId: string; challenge: string }, host = HOST) => sha256Base64Url(canonicalPairAck(p.pairingId, p.challenge, host));
 
 afterEach(() => vi.useRealTimers());
 
@@ -61,7 +63,7 @@ describe('demande d’appairage', () => {
     const ack = acknowledge(registry, p);
     expect(ack).toEqual({ status: 'pending', ack: ackOf(p) });
     expect(ack.ack).toMatch(CONNECTOR_FORMATS.ack);
-    expect(pairAck(p.pairingId, p.challenge)).toBe(ack.ack);
+    expect(pairAck(p.pairingId, p.challenge, HOST)).toBe(ack.ack);
     // L'accusé ne révèle ni le défi ni le vérificateur.
     expect(ack.ack).not.toBe(p.challenge);
     registry.answer(ticket, true);
@@ -73,11 +75,23 @@ describe('demande d’appairage', () => {
   });
 
   it('accusé : vecteur fixe (identique côté site, tests/localConnector/webCrypto.test.ts)', () => {
-    expect(canonicalPairAck('AAECAwQFBgcICQoLDA0ODw', 'ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ'))
-      .toBe('MAGISTRA-CONNECTOR-1-PAIR-ACK\nAAECAwQFBgcICQoLDA0ODw\nctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ');
-    expect(pairAck('AAECAwQFBgcICQoLDA0ODw', 'ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ')).toBe('cDJlSHwvceFZ4grVp4db14g8zHt3v9DhOrD6rUUV85k');
+    expect(canonicalPairAck('AAECAwQFBgcICQoLDA0ODw', 'ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ', HOST))
+      .toBe('MAGISTRA-CONNECTOR-2-PAIR-ACK\n127.0.0.1:47831\nAAECAwQFBgcICQoLDA0ODw\nctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ');
+    expect(pairAck('AAECAwQFBgcICQoLDA0ODw', 'ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ', HOST)).toBe('FWJesznvhJom9M3AmmF_LgZOj3jjb8aI2tJHW6xP1BM');
     // Le défi du vecteur est bien le SHA-256 des 32 octets du vérificateur.
     expect(sha256Base64Url(fromBase64Url('ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8', 32)!)).toBe('ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ');
+  });
+
+  it('accusé lié au port d’écoute : celui d’un autre port (relais) ne vaut pas pour le port visé', () => {
+    const { registry } = setup();
+    const p = sitePairing();
+    const ticket = prompt(registry, p);
+    const here = acknowledge(registry, p, ORIGIN, '127.0.0.1:47832');
+    // L'application écoute sur 47832 : son accusé, relayé par un programme sur 47831, n'est pas celui qu'attend le site.
+    expect(here.ack).toBe(ackOf(p, '127.0.0.1:47832'));
+    expect(here.ack).not.toBe(ackOf(p, '127.0.0.1:47831'));
+    registry.answer(ticket, true);
+    expect(complete(registry, p, ORIGIN, '127.0.0.1:47832')).toMatchObject({ status: 'approved', ack: ackOf(p, '127.0.0.1:47832') });
   });
 
   it('premier temps : demande inconnue (404), expirée (410), autre origine (403) ; refus lisible mais jamais consommé', () => {

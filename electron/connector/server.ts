@@ -16,14 +16,19 @@
 //      blocage temporaire après trop d'échecs d'authentification : 429 (toutes les routes sauf hello) ;
 //   6. POST : Content-Type application/json (charset utf-8 toléré) → sinon 415 ; taille annoncée bornée → 413 ;
 //   7. routes signées : format des en-têtes → navigateur connu ET appairé pour CETTE origine (401
-//      CONNECTOR_UNPAIRED) → horodatage (±clockSkewMs) → nonce jamais vu (401 UNAUTHENTICATED), puis lecture du corps
-//      (bornée, avec délai : 413 / 408) → signature HMAC sur les octets exacts du corps (401 UNAUTHENTICATED) ;
+//      CONNECTOR_UNPAIRED, avec la marque de retrait X-Magistra-Revoked si CETTE application l'a retiré) → horodatage
+//      (±clockSkewMs, et jamais antérieur au début de l'écoute) → nonce jamais vu (401 UNAUTHENTICATED), puis lecture du corps
+//      (bornée, avec délai : 413 / 408) → autorisation TOUJOURS valable (retirée pendant la lecture : 401
+//      CONNECTOR_UNPAIRED) → signature HMAC sur les octets exacts du corps et l'hôte joint (401 UNAUTHENTICATED) ;
 //      les contrôles sans corps sont faits AVANT la lecture : une requête non authentifiable ne fait rien lire ;
 //      appairage (POST /v1/pair, non signé) : deux temps (pairing.ts) — l'accusé de réception `ack` prouve d'abord au
-//      site que CETTE application a reçu l'URL magistra://pair ; le vérificateur ne vient qu'ensuite ;
+//      site que CETTE application a reçu l'URL magistra://pair et écoute sur CE port ; le vérificateur ne vient
+//      qu'ensuite ;
 //   8. toutes les réponses : Cache-Control: no-store, X-Content-Type-Options: nosniff, Vary: Origin, et, pour une
 //      origine autorisée, Access-Control-Allow-Origin exact + Access-Control-Expose-Headers ; après une
-//      authentification réussie (erreurs comprises) : X-Magistra-Proof = HMAC(clé, canonicalProof(client, nonce)).
+//      authentification réussie (erreurs comprises) : X-Magistra-Proof = HMAC(clé, canonicalProof(client, nonce, hôte)).
+// Accusé, signature et preuve portent l'hôte du port d'écoute (connectorHost) : un programme qui relaie les requêtes
+// du site depuis un autre port dédié n'obtient rien d'utilisable (voir shared/localConnector.ts).
 // Corps d'erreur : ApiErrorBody, messages en français sans trace, adresse, port, chemin, réglage ni secret.
 // Journal : jamais de clé, de vérificateur, de signature ni de contenu de requête.
 
@@ -33,7 +38,7 @@ import { MagistraError, toMagistraError, type ErrorCode } from '../../shared/err
 import {
   canonicalProof, canonicalRequest, CONNECTOR_ALLOWED_REQUEST_HEADERS, CONNECTOR_EXPOSED_RESPONSE_HEADERS, CONNECTOR_FORMATS,
   CONNECTOR_HEADERS, CONNECTOR_HOST, CONNECTOR_LIMITS, CONNECTOR_PROTOCOL_VERSION, CONNECTOR_ROUTE_METHODS, CONNECTOR_ROUTES,
-  isSignedRoute, type ConnectorHello, type ConnectorRoute, type ConnectorStatus, type PairCompleteResponse,
+  connectorHost, isSignedRoute, type ConnectorHello, type ConnectorRoute, type ConnectorStatus, type PairCompleteResponse,
 } from '../../shared/localConnector.js';
 import type { GenerationEvent } from '../../shared/types.js';
 import type { ExternalGenerationHandle, ExternalGenerationOptions } from '../generation.js';
@@ -49,14 +54,18 @@ import { browserFromUserAgent } from './userAgent.js';
 export interface ConnectorClientDirectory {
   find(clientId: string): ConnectorClientKey | undefined;
   touch(clientId: string): void;
-  add(input: { origin: string; browser: string; key: Uint8Array }): Promise<{ clientId: string }>;
+  /** `evicted` : navigateurs retirés pour rester sous maxClients (leurs générations doivent être arrêtées). */
+  add(input: { origin: string; browser: string; key: Uint8Array }): Promise<{ clientId: string; evicted?: readonly string[] }>;
+  /** Retrait : effectif en mémoire dès l'appel (partie synchrone), puis enregistré. */
   revoke(clientId: string): Promise<boolean>;
+  /** Marque de retrait d'un navigateur retiré par cette application pour ce site (sinon undefined). */
+  revokedMark(clientId: string, origin: string): string | undefined;
 }
 
-/** Demandes d'appairage (PairingRegistry). */
+/** Demandes d'appairage (PairingRegistry) ; `host` : connectorHost(port d'écoute), inclus dans l'accusé. */
 export interface ConnectorPairing {
-  acknowledge(input: { pairingId: string; origin: string }): PairingAck;
-  complete(input: { pairingId: string; verifier: string; origin: string }): PairingCompletion;
+  acknowledge(input: { pairingId: string; origin: string; host: string }): PairingAck;
+  complete(input: { pairingId: string; verifier: string; origin: string; host: string }): PairingCompletion;
 }
 
 /** Générations du site (GenerationManager). */
@@ -128,6 +137,8 @@ const RETRY_AFTER_SECONDS: Partial<Record<ErrorCode, number>> = { GENERATION_BUS
 interface RequestContext {
   /** Origine autorisée de la requête (en-têtes CORS) ; null avant le contrôle 3 ou si refusée. */
   origin: string | null;
+  /** Hôte joint, connectorHost(port d'écoute) (contrôle 2) : inclus dans l'accusé, la signature et la preuve. */
+  host?: string;
   /** Preuve à joindre à toutes les réponses après authentification réussie. */
   proof?: string;
   /**
@@ -217,6 +228,12 @@ export class ConnectorServer {
   private readonly log: (message: string) => void;
   private server: Server | null = null;
   private listeningPort: number | null = null;
+  /**
+   * Début de l'écoute actuelle (horloge du serveur, commune au navigateur : même ordinateur). Une requête signée AVANT
+   * n'a jamais pu être destinée à cette écoute : captée par un programme qui occupait ce port auparavant (autre
+   * session Windows), elle ne peut pas être rejouée ici (les nonces vus ne sont mémorisés que depuis cette écoute).
+   */
+  private listeningSince = Number.POSITIVE_INFINITY;
   private readonly sockets = new Set<Socket>();
   private failures: number[] = [];
   private blockedUntil = 0;
@@ -267,6 +284,7 @@ export class ConnectorServer {
       server.on('error', err => this.log(`Connecteur local : erreur du serveur (${(err as NodeJS.ErrnoException).code ?? err.name}).`));
       this.server = server;
       this.listeningPort = (server.address() as AddressInfo).port;
+      this.listeningSince = this.now();
       return this.listeningPort;
     }
     return null;
@@ -278,6 +296,7 @@ export class ConnectorServer {
     if (!server) return;
     this.server = null;
     this.listeningPort = null;
+    this.listeningSince = Number.POSITIVE_INFINITY;
     await new Promise<void>(resolve => {
       server.close(() => resolve());
       server.closeAllConnections();
@@ -313,7 +332,10 @@ export class ConnectorServer {
         return;
       }
       const status = err.code === 'ERR_HTTP_REQUEST_TIMEOUT' ? '408 Request Timeout' : err.code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large' : '400 Bad Request';
-      socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Length: 0\r\n\r\n`);
+      // Réponse écrite, puis connexion DÉTRUITE (comme le gestionnaire par défaut de Node) : le serveur accepte les
+      // connexions à moitié fermées, et un client qui ne fermerait jamais son côté garderait sinon sa place parmi les
+      // MAX_CONNECTIONS indéfiniment (connecteur injoignable pour le site).
+      socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Length: 0\r\n\r\n`, () => socket.destroy());
     });
     return server;
   }
@@ -412,12 +434,21 @@ export class ConnectorServer {
         req.socket.destroy();
         return;
       }
+      // Au-delà de MAX_HEADERS_COUNT en-têtes, Node ignore les suivants EN SILENCE (ni headersDistinct ni rawHeaders ne
+      // les contiennent) : un Host ou un Origin répété, ou un Transfer-Encoding, pourrait s'y cacher. Une requête qui
+      // a pu être tronquée est refusée (sans CORS, connexion fermée) ; un navigateur envoie une vingtaine d'en-têtes.
+      if (req.rawHeaders.length >= 2 * MAX_HEADERS_COUNT) {
+        this.sendError(res, { origin: null, closeConnection: true }, new HttpError(431, new MagistraError('INVALID_REQUEST', 'Trop d’en-têtes dans la requête.')));
+        return;
+      }
       // 2. Hôte exact (anti DNS rebinding).
       const port = this.listeningPort;
-      if (port === null || singleHeader(req, 'host') !== `${CONNECTOR_HOST}:${port}`) {
+      if (port === null || singleHeader(req, 'host') !== connectorHost(port)) {
         this.refuseWithoutCors(res);
         return;
       }
+      const host = connectorHost(port);
+      ctx.host = host;
       // 3. Origine exacte parmi les origines autorisées.
       const origin = singleHeader(req, 'origin');
       if (!origin || !this.options.allowedOrigins.includes(origin)) {
@@ -467,8 +498,8 @@ export class ConnectorServer {
       // 6b. Lecture du corps (bornée, avec délai).
       const body = await this.readBody(req, limit, ctx);
 
-      // 7b. Signature sur les octets exacts du corps.
-      if (auth) this.verifySignature(auth, method, route, origin, body, ctx);
+      // 7b. Autorisation toujours valable, puis signature sur les octets exacts du corps et l'hôte joint.
+      if (auth) this.verifySignature(auth, method, route, origin, host, body, ctx);
 
       await this.dispatch(req, res, ctx, route, method, body, auth);
     } catch (err) {
@@ -517,15 +548,38 @@ export class ConnectorServer {
     }
     const client = this.options.clients.find(clientId);
     // Navigateur inconnu, autorisation retirée, ou appairé pour un autre site : il doit se reconnecter.
-    if (!client || client.origin !== origin) throw new AuthFailure(401, new MagistraError('CONNECTOR_UNPAIRED'));
+    if (!client || client.origin !== origin) throw this.unpaired(clientId, origin);
     if (Math.abs(this.now() - Number(timestamp)) > CONNECTOR_LIMITS.clockSkewMs) throw unauthenticated();
+    // Signée avant le début de cette écoute : rejeu d'une requête captée par le programme qui occupait ce port.
+    if (Number(timestamp) < this.listeningSince) throw unauthenticated();
     if (this.nonces.has(`${clientId}.${nonce}`)) throw unauthenticated();
     return { client, timestamp, nonce, signature };
   }
 
-  private verifySignature(auth: Authenticated, method: string, route: ConnectorRoute, origin: string, body: Buffer, ctx: RequestContext): void {
+  /**
+   * 401 CONNECTOR_UNPAIRED, avec la marque de retrait si CETTE application a retiré ce navigateur : sans elle, le site
+   * ne peut pas distinguer un retrait d'une autre application Magistra (autre session Windows) qui ne le connaît pas.
+   */
+  private unpaired(clientId: string, origin: string): AuthFailure {
+    const mark = this.options.clients.revokedMark(clientId, origin);
+    return new AuthFailure(401, new MagistraError('CONNECTOR_UNPAIRED'), mark ? { [CONNECTOR_HEADERS.revoked]: mark } : {});
+  }
+
+  /**
+   * Le navigateur est-il TOUJOURS autorisé, avec la même clé ? L'autorisation a pu être retirée (réglages de
+   * l'application, DELETE /v1/pair d'un autre onglet) ou évincée (au-delà de maxClients) pendant la lecture du corps :
+   * sa clé est alors effacée sur place (32 octets nuls, connus de tous) et ne doit plus rien vérifier.
+   */
+  private stillAuthorized(auth: Authenticated, origin: string): void {
+    const current = this.options.clients.find(auth.client.clientId);
+    if (!current || current.origin !== origin || current.key !== auth.client.key) throw this.unpaired(auth.client.clientId, origin);
+  }
+
+  private verifySignature(auth: Authenticated, method: string, route: ConnectorRoute, origin: string, host: string, body: Buffer, ctx: RequestContext): void {
+    this.stillAuthorized(auth, origin);
     const message = canonicalRequest({
       method,
+      host,
       path: route,
       origin,
       clientId: auth.client.clientId,
@@ -543,7 +597,7 @@ export class ConnectorServer {
     if (this.nonces.size >= NONCE_PURGE_THRESHOLD) this.purgeNonces();
     if (this.nonces.size >= MAX_NONCES) throw new HttpError(429, new MagistraError('RATE_LIMITED'), { 'Retry-After': '30' });
     this.nonces.set(key, Number(auth.timestamp) + CONNECTOR_LIMITS.clockSkewMs + 1_000);
-    ctx.proof = hmacBase64Url(auth.client.key, canonicalProof(auth.client.clientId, auth.nonce));
+    ctx.proof = hmacBase64Url(auth.client.key, canonicalProof(auth.client.clientId, auth.nonce, host));
     this.options.clients.touch(auth.client.clientId);
   }
 
@@ -607,10 +661,16 @@ export class ConnectorServer {
     if (!auth) throw new Error('route signée sans authentification');
     const clientId = auth.client.clientId;
     if (route === CONNECTOR_ROUTES.pair) {
-      // DELETE : ce navigateur retire sa propre autorisation (la preuve a été calculée avant le retrait).
-      await this.options.clients.revoke(clientId);
+      // DELETE : ce navigateur retire sa propre autorisation (la preuve a été calculée avant le retrait). Comme dans
+      // LocalConnector.revoke : retrait en mémoire (partie synchrone), arrêt de ses générations, PUIS enregistrement
+      // — un enregistrement lent (verrou d'antivirus) ou impossible ne laisse jamais tourner sa génération.
+      const revoking = this.options.clients.revoke(clientId);
       this.options.generations.cancelOwner(clientId);
-      this.options.onClientsChanged?.();
+      try {
+        await revoking;
+      } finally {
+        this.options.onClientsChanged?.();
+      }
       this.sendJson(res, ctx, 200, { ok: true });
       return;
     }
@@ -627,7 +687,10 @@ export class ConnectorServer {
       return;
     }
     if (route === CONNECTOR_ROUTES.generate) {
-      await this.generate(res, ctx, clientId, parseJsonObject(body));
+      const raw = parseJsonObject(body);
+      // Dernier contrôle juste avant le lancement (la preuve est déjà calculée : ce refus reste lisible par le site).
+      this.stillAuthorized(auth, ctx.origin!);
+      await this.generate(res, ctx, clientId, raw);
       return;
     }
     throw new HttpError(404, new MagistraError('NOT_FOUND', 'Service introuvable.'));
@@ -640,11 +703,12 @@ export class ConnectorServer {
    */
   private async completePairing(req: IncomingMessage, res: ServerResponse, ctx: RequestContext, body: Buffer): Promise<void> {
     const origin = ctx.origin!;
+    const host = ctx.host!;
     const raw = parseJsonObject(body);
     if (Object.keys(raw).length === 1) {
       const { pairingId } = exactStrings(raw, ['pairingId'] as const);
       if (!CONNECTOR_FORMATS.pairingId.test(pairingId)) throw invalid();
-      const acknowledged = this.options.pairing.acknowledge({ pairingId, origin });
+      const acknowledged = this.options.pairing.acknowledge({ pairingId, origin, host });
       const reply: PairCompleteResponse = { status: acknowledged.status, ack: acknowledged.ack };
       this.sendJson(res, ctx, acknowledged.status === 'pending' ? 202 : 200, reply);
       return;
@@ -663,7 +727,7 @@ export class ConnectorServer {
     }
     let completion: PairingCompletion;
     try {
-      completion = this.options.pairing.complete({ pairingId: input.pairingId, verifier: input.verifier, origin });
+      completion = this.options.pairing.complete({ pairingId: input.pairingId, verifier: input.verifier, origin, host });
     } catch (err) {
       derived.key.fill(0);
       const e = toMagistraError(err);
@@ -678,6 +742,8 @@ export class ConnectorServer {
     }
     try {
       const client = await this.options.clients.add({ origin, browser: browserFromUserAgent(req.headers['user-agent']), key: derived.key });
+      // Navigateurs évincés (au-delà de maxClients) : autorisation retirée, génération en cours arrêtée comme pour un retrait.
+      for (const evicted of client.evicted ?? []) this.options.generations.cancelOwner(evicted);
       this.log('Connecteur local : nouveau navigateur autorisé.');
       this.options.onClientsChanged?.();
       const approved: PairCompleteResponse = {

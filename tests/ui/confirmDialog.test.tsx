@@ -4,7 +4,7 @@ import { useState } from 'react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { button, cleanup, click, keyDown, render } from './helpers';
 
-function Harness({ onConfirm, onCancel, danger = true }: { onConfirm: () => void; onCancel: () => void; danger?: boolean }) {
+function Harness({ onConfirm, onCancel, danger = true, initialFocus }: { onConfirm: () => void; onCancel: () => void; danger?: boolean; initialFocus?: 'confirm' | 'cancel' }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -12,6 +12,7 @@ function Harness({ onConfirm, onCancel, danger = true }: { onConfirm: () => void
       <ConfirmDialog
         open={open}
         danger={danger}
+        initialFocus={initialFocus}
         title="Supprimer ce contenu ?"
         message="Cette action est irréversible."
         confirmLabel="Supprimer"
@@ -94,6 +95,15 @@ describe('ConfirmDialog', () => {
     await click(button(container, 'Supprimer…'));
     expect(dialog()!.getAttribute('role')).toBe('dialog');
     expect(document.activeElement?.textContent).toBe('Supprimer');
+  });
+
+  it('accord qui engage (envoi à un tiers) : focus initial sur « Annuler » sans action destructrice — Entrée ou Espace réflexe ne vaut pas accord', async () => {
+    const onConfirm = vi.fn();
+    const { container } = await render(<Harness onConfirm={onConfirm} onCancel={vi.fn()} danger={false} initialFocus="cancel" />);
+    await click(button(container, 'Supprimer…'));
+    expect(dialog()!.getAttribute('role')).toBe('dialog');
+    expect(document.activeElement?.textContent).toBe('Annuler');
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 
   it('un clic sur le fond annule', async () => {

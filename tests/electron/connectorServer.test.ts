@@ -5,8 +5,8 @@
 // signées (signature, clé, nonce, horodatage, retrait, origine), blocage après échecs, flux NDJSON, arrêt.
 
 import { request as httpRequest, type ClientRequest, type IncomingHttpHeaders, type IncomingMessage } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { createServer as createNetServer, type Server as NetServer } from 'node:net';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { connect as netConnect, createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,15 +15,15 @@ import type { AIProvider } from '../../shared/ai/provider.js';
 import { MagistraError } from '../../shared/errors.js';
 import { DEFAULT_PREFERENCES } from '../../shared/ipc.js';
 import {
-  buildPairingUrl, canonicalPairAck, canonicalProof, canonicalRequest, CONNECTOR_ALLOWED_REQUEST_HEADERS, CONNECTOR_CRYPTO, CONNECTOR_FORMATS,
-  CONNECTOR_HEADERS, CONNECTOR_LIMITS, parseAppUrl, type ConnectorStatus,
+  buildPairingUrl, canonicalPairAck, canonicalProof, canonicalRequest, canonicalRevoked, CONNECTOR_ALLOWED_REQUEST_HEADERS, CONNECTOR_CRYPTO,
+  CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS, parseAppUrl, type ConnectorStatus,
 } from '../../shared/localConnector.js';
 import type { GenerationEvent, PrivacyInfo } from '../../shared/types.js';
 import type { SecretCipher } from '../../electron/aiConfig.js';
 import { ConnectorClientStore } from '../../electron/connector/clients.js';
 import { fromBase64Url, randomToken, sha256Base64Url, toBase64Url } from '../../electron/connector/crypto.js';
 import { PairingRegistry, type PairingTicket } from '../../electron/connector/pairing.js';
-import { ConnectorServer } from '../../electron/connector/server.js';
+import { ConnectorServer, type ConnectorServerOptions } from '../../electron/connector/server.js';
 import { buildConnectorStatus } from '../../electron/connector/status.js';
 import { BUSY_EXTERNAL_MESSAGE, BUSY_WINDOW_MESSAGE, GenerationManager, type GenerationDeps, type GenerationPayload } from '../../electron/generation.js';
 
@@ -219,9 +219,9 @@ class Browser {
     });
   }
 
-  /** Accusé de réception attendu, calculé avec le défi de l'URL (WebCrypto, comme le site). */
-  async expectedAck(p: { pairingId: string; challenge: string }): Promise<string> {
-    return toBase64Url(new Uint8Array(await subtle.digest('SHA-256', utf8(canonicalPairAck(p.pairingId, p.challenge)))));
+  /** Accusé de réception attendu du port visé, calculé avec le défi de l'URL (WebCrypto, comme le site). */
+  async expectedAck(p: { pairingId: string; challenge: string }, host = `127.0.0.1:${port}`): Promise<string> {
+    return toBase64Url(new Uint8Array(await subtle.digest('SHA-256', utf8(canonicalPairAck(p.pairingId, p.challenge, host)))));
   }
 
   async finish(reply: Reply, pairingId: string): Promise<void> {
@@ -239,12 +239,12 @@ class Browser {
   }
 
   /** En-têtes d'une requête signée ; `over` modifie les valeurs signées ou envoyées (tests d'attaque). */
-  async sign(method: string, route: string, body = '', over: { timestamp?: string; nonce?: string; origin?: string; clientId?: string; key?: CryptoKey } = {}) {
+  async sign(method: string, route: string, body = '', over: { timestamp?: string; nonce?: string; origin?: string; clientId?: string; key?: CryptoKey; host?: string } = {}) {
     const timestamp = over.timestamp ?? String(clock);
     const nonce = over.nonce ?? randomToken(16);
     const clientId = over.clientId ?? this.clientId;
     const message = canonicalRequest({
-      method, path: route, origin: over.origin ?? this.origin, clientId, timestamp, nonce, bodySha256: sha256Base64Url(body),
+      method, host: over.host ?? `127.0.0.1:${port}`, path: route, origin: over.origin ?? this.origin, clientId, timestamp, nonce, bodySha256: sha256Base64Url(body),
     });
     const signature = toBase64Url(new Uint8Array(await subtle.sign('HMAC', over.key ?? this.key!, utf8(message))));
     return {
@@ -266,12 +266,12 @@ class Browser {
     return { reply, nonce };
   }
 
-  /** Preuve X-Magistra-Proof vérifiée comme le fait le site (clé non extractible). */
-  async proofValid(headers: IncomingHttpHeaders, nonce: string): Promise<boolean> {
+  /** Preuve X-Magistra-Proof vérifiée comme le fait le site (clé non extractible) pour le port visé. */
+  async proofValid(headers: IncomingHttpHeaders, nonce: string, host = `127.0.0.1:${port}`): Promise<boolean> {
     const proof = headers[CONNECTOR_HEADERS.proof.toLowerCase()];
     if (typeof proof !== 'string') return false;
     if (!fromBase64Url(proof, 32)) return false;
-    return subtle.verify('HMAC', this.key!, decoded(proof, 32), utf8(canonicalProof(this.clientId, nonce)));
+    return subtle.verify('HMAC', this.key!, decoded(proof, 32), utf8(canonicalProof(this.clientId, nonce, host)));
   }
 }
 
@@ -281,6 +281,8 @@ let dir: string;
 let clients: ConnectorClientStore;
 let pairing: PairingRegistry;
 let server: ConnectorServer;
+/** Options du serveur du banc d'essai (pour en créer un autre : autre magasin, autre port). */
+let serverOptions: ConnectorServerOptions;
 let gm: GenerationManager;
 let provider: AIProvider;
 let localEngine = true;
@@ -317,7 +319,7 @@ beforeEach(async () => {
     },
     isLocalEngine: () => localEngine,
   });
-  server = new ConnectorServer({
+  serverOptions = {
     version: VERSION,
     allowedOrigins: [ORIGIN, DEV_ORIGIN],
     ports: [0],
@@ -328,7 +330,8 @@ beforeEach(async () => {
     now: () => clock,
     log: () => undefined,
     timeouts: { bodyMs: 400 },
-  });
+  };
+  server = new ConnectorServer(serverOptions);
   port = (await server.start())!;
 });
 
@@ -370,7 +373,7 @@ async function paired(origin = ORIGIN): Promise<Browser> {
 
 function expectCors(reply: Reply, origin = ORIGIN) {
   expect(reply.headers['access-control-allow-origin']).toBe(origin);
-  expect(reply.headers['access-control-expose-headers']).toBe('X-Magistra-Proof, X-Magistra-Job');
+  expect(reply.headers['access-control-expose-headers']).toBe('X-Magistra-Proof, X-Magistra-Job, X-Magistra-Revoked');
 }
 
 function expectNoCors(reply: Reply) {
@@ -397,7 +400,7 @@ describe('présence et contrôles d’accès (avant toute authentification)', ()
   it('GET /v1/hello : présence de Magistra, sans configuration ni adresse, CORS exact', async () => {
     const reply = await send();
     expect(reply.status).toBe(200);
-    expect(reply.json).toEqual({ app: 'magistra', protocol: 1, version: VERSION });
+    expect(reply.json).toEqual({ app: 'magistra', protocol: 2, version: VERSION });
     expectCors(reply);
     expect(reply.headers[CONNECTOR_HEADERS.proof.toLowerCase()]).toBeUndefined();
     const dev = await send({ headers: { origin: DEV_ORIGIN } });
@@ -446,6 +449,38 @@ describe('présence et contrôles d’accès (avant toute authentification)', ()
     const host = await withRaw(['Host', `127.0.0.1:${port}`, 'Host', `127.0.0.1:${port}`, 'Origin', ORIGIN]);
     expect([400, 403]).toContain(host.status);
     expectNoCors(host);
+  });
+
+  it('au-delà de 40 en-têtes (Node ignorerait les suivants en silence) : 431 sans CORS, rien de caché derrière', async () => {
+    const raw = (headers: string[], body?: string) => new Promise<Reply>((resolve, reject) => {
+      const req = httpRequest({ host: '127.0.0.1', port, method: 'GET', path: '/v1/hello', agent: false, setHost: false, headers }, res => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          const reply = { status: res.statusCode ?? 0, headers: res.headers, text, json: parseOrNull(text) };
+          seen.push(reply);
+          resolve(reply);
+        });
+      });
+      req.on('error', reject);
+      req.end(body);
+    });
+    const filler = (n: number) => Array.from({ length: n }, (_, i) => [`X-F${i}`, 'x']).flat();
+    const base = ['Host', `127.0.0.1:${port}`, 'Origin', ORIGIN];
+    // Origin ou Host répété APRÈS 45 autres en-têtes, Transfer-Encoding caché après 40 : jamais acceptés.
+    for (const headers of [
+      [...base, ...filler(45), 'Origin', 'https://evil.example'],
+      [...base, ...filler(45), 'Host', `evil.example:${port}`],
+      [...base, ...filler(40), 'Transfer-Encoding', 'chunked'],
+    ]) {
+      const reply = await raw(headers, headers.includes('Transfer-Encoding') ? '{}' : undefined);
+      expectError(reply, 431, 'INVALID_REQUEST');
+      expectNoCors(reply);
+      expect(reply.headers.connection).toBe('close');
+    }
+    // Une requête ordinaire (un navigateur envoie une vingtaine d'en-têtes) passe.
+    expect((await raw([...base, ...filler(30)])).status).toBe(200);
   });
 
   it('aucune route Ollama ni autre API : 404 (le navigateur n’obtient jamais d’accès général au moteur)', async () => {
@@ -622,6 +657,8 @@ describe('appairage', () => {
     const ticket = openPairing(p);
     const ack = await browser.expectedAck(p);
     expect(ack).toMatch(CONNECTOR_FORMATS.ack);
+    // Accusé lié au port d'écoute : relayé par un programme sur un autre port, il ne vaut pas pour celui-ci.
+    expect(ack).not.toBe(await browser.expectedAck(p, `127.0.0.1:${port + 1}`));
     const pending = await browser.ackRequest(p);
     expect(pending.status).toBe(202);
     expect(pending.json).toEqual({ status: 'pending', ack });
@@ -788,6 +825,49 @@ describe('requêtes signées', () => {
     expect(clients.find(browser.clientId)).toBeDefined();
   });
 
+  it('requête relayée depuis un autre port (signée pour cet autre hôte, Host réécrit) : 401 sans preuve ; preuve valable pour CE port seulement', async () => {
+    const browser = await paired();
+    const relayed = await browser.call('GET', '/v1/status', '', { host: `127.0.0.1:${port + 1}` });
+    expectError(relayed.reply, 401, 'UNAUTHENTICATED');
+    expect(relayed.reply.headers[CONNECTOR_HEADERS.proof.toLowerCase()]).toBeUndefined();
+    const { reply, nonce } = await browser.call('GET', '/v1/status');
+    expect(reply.status).toBe(200);
+    expect(await browser.proofValid(reply.headers, nonce)).toBe(true);
+    expect(await browser.proofValid(reply.headers, nonce, `127.0.0.1:${port + 1}`)).toBe(false);
+  });
+
+  it('autorisation retirée PENDANT la lecture du corps : 401 CONNECTOR_UNPAIRED, jamais de génération (même signée avec la clé effacée)', async () => {
+    const zeroKey = await subtle.importKey('raw', new Uint8Array(32), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const slowPost = (headers: Record<string, string>, body: Buffer, whileReading: () => Promise<unknown>) => new Promise<Reply>((resolve, reject) => {
+      const req = buildRequest({ method: 'POST', path: '/v1/generate', headers: { ...headers, 'content-length': String(body.length) } });
+      req.on('error', reject);
+      req.on('response', res => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          const reply = { status: res.statusCode ?? 0, headers: res.headers, text, json: parseOrNull(text) };
+          seen.push(reply);
+          resolve(reply);
+        });
+      });
+      req.write(body.subarray(0, 10));
+      // En-têtes contrôlés (navigateur encore autorisé), corps en cours de lecture : l'autorisation est retirée.
+      setTimeout(() => void whileReading().then(() => req.end(body.subarray(10)), reject), 60);
+    });
+    const body = Buffer.from(JSON.stringify(REQUEST), 'utf8');
+    for (const signWith of ['clé effacée', 'vraie clé'] as const) {
+      const browser = await paired();
+      // La clé gardée par le serveur est remise à zéro sur place au retrait : 32 octets nuls, connus de tous.
+      const { headers } = await browser.sign('POST', '/v1/generate', body.toString('utf8'), signWith === 'clé effacée' ? { key: zeroKey } : {});
+      const reply = await slowPost(headers, body, () => clients.revoke(browser.clientId));
+      expectError(reply, 401, 'CONNECTOR_UNPAIRED');
+      expect(reply.headers[CONNECTOR_HEADERS.proof.toLowerCase()]).toBeUndefined();
+    }
+    expect(gm.busy).toBe(false);
+    expect((provider as MockProvider).calls).toHaveLength(0);
+  });
+
   it('en-têtes absents ou mal formés : 401 UNAUTHENTICATED', async () => {
     const browser = await paired();
     const { headers } = await browser.sign('GET', '/v1/status');
@@ -814,6 +894,8 @@ describe('requêtes signées', () => {
 
   it('horodatage hors de la tolérance (passé ou futur) : 401', async () => {
     const browser = await paired();
+    // Écoute commencée depuis plus longtemps que la tolérance (sinon la limite passée serait avant l'écoute).
+    clock += CONNECTOR_LIMITS.clockSkewMs;
     const stale = await browser.call('GET', '/v1/status', '', { timestamp: String(clock - CONNECTOR_LIMITS.clockSkewMs - 1) });
     expectError(stale.reply, 401, 'UNAUTHENTICATED');
     const future = await browser.call('GET', '/v1/status', '', { timestamp: String(clock + CONNECTOR_LIMITS.clockSkewMs + 1) });
@@ -840,6 +922,41 @@ describe('requêtes signées', () => {
     const second = await paired();
     await clients.revoke(second.clientId);
     expectError((await second.call('GET', '/v1/status')).reply, 401, 'CONNECTOR_UNPAIRED');
+  });
+
+  it('401 CONNECTOR_UNPAIRED : marque de retrait jointe SEULEMENT pour un navigateur que cette application a retiré (preuve du retrait pour le site)', async () => {
+    const browser = await paired();
+    const revoked = (reply: Reply) => reply.headers[CONNECTOR_HEADERS.revoked.toLowerCase()];
+    const markValid = async (reply: Reply) => {
+      const mark = revoked(reply);
+      return typeof mark === 'string' && Boolean(fromBase64Url(mark, 32))
+        && subtle.verify('HMAC', browser.key!, decoded(mark, 32), utf8(canonicalRevoked(browser.clientId)));
+    };
+    // Navigateur inconnu de cette application (ce que répond celle d'une autre session Windows) : aucune marque.
+    const unknown = await browser.call('GET', '/v1/status', '', { clientId: randomToken(16) });
+    expectError(unknown.reply, 401, 'CONNECTOR_UNPAIRED');
+    expect(revoked(unknown.reply)).toBeUndefined();
+    // Retiré dans les réglages : la marque, calculée avec SA clé avant l'effacement, accompagne chaque refus.
+    await clients.revoke(browser.clientId);
+    const after = await browser.call('GET', '/v1/status');
+    expectError(after.reply, 401, 'CONNECTOR_UNPAIRED');
+    expect(after.reply.headers[CONNECTOR_HEADERS.proof.toLowerCase()]).toBeUndefined();
+    expect(await markValid(after.reply)).toBe(true);
+    const generate = await browser.call('POST', '/v1/generate', JSON.stringify(REQUEST));
+    expectError(generate.reply, 401, 'CONNECTOR_UNPAIRED');
+    expect(await markValid(generate.reply)).toBe(true);
+    // Même navigateur, autre origine autorisée : aucune marque (le retrait valait pour le site qui l'avait appairé).
+    const { headers } = await browser.sign('GET', '/v1/status', '', { origin: DEV_ORIGIN });
+    const other = await send({ path: '/v1/status', headers: { ...headers, origin: DEV_ORIGIN } });
+    expectError(other, 401, 'CONNECTOR_UNPAIRED');
+    expect(revoked(other)).toBeUndefined();
+    // Retrait par le navigateur lui-même (DELETE /v1/pair) : marque aussi.
+    const second = await paired();
+    expect((await second.call('DELETE', '/v1/pair')).reply.status).toBe(200);
+    const gone = (await second.call('GET', '/v1/status')).reply;
+    expectError(gone, 401, 'CONNECTOR_UNPAIRED');
+    expect(typeof revoked(gone)).toBe('string');
+    expect(revoked(gone)).not.toBe(revoked(after.reply));
   });
 
   it('navigateur appairé pour une origine, requête depuis une autre origine autorisée : refus (CONNECTOR_UNPAIRED)', async () => {
@@ -1013,6 +1130,51 @@ describe('génération (flux NDJSON)', () => {
     expect(events.at(-1)).toMatchObject({ type: 'error', code: 'GENERATION_ABORTED' });
   });
 
+  it('DELETE /v1/pair dont l’enregistrement échoue : la génération du navigateur s’arrête quand même (retrait en mémoire, arrêt, PUIS écriture)', async () => {
+    provider = new MockProvider({ reply: 'v'.repeat(20_000), chunkSize: 10, delayMs: 5 });
+    const browser = await paired();
+    const body = JSON.stringify(REQUEST);
+    const { headers } = await browser.sign('POST', '/v1/generate', body);
+    const s = await stream({ method: 'POST', path: '/v1/generate', headers, body });
+    await s.waitFor(e => e.type === 'delta');
+    // local-connector.json impossible à remplacer (dossier non vide à sa place : verrou qui dure).
+    const file = path.join(dir, 'local-connector.json');
+    rmSync(file, { force: true });
+    mkdirSync(file);
+    writeFileSync(path.join(file, 'verrou'), '');
+    const { reply } = await browser.call('DELETE', '/v1/pair');
+    expectError(reply, 500, 'STORAGE_ERROR');
+    expect(clients.find(browser.clientId)).toBeUndefined();
+    const events = await s.done;
+    expect(events.at(-1)).toMatchObject({ type: 'error', code: 'GENERATION_ABORTED' });
+    await waitUntil(() => !gm.busy, 1_500);
+  });
+
+  it('navigateur évincé (au-delà de maxClients) pendant sa génération : elle s’arrête, comme pour un retrait', async () => {
+    provider = new MockProvider({ reply: 'u'.repeat(20_000), chunkSize: 10, delayMs: 5 });
+    await server.stop();
+    clients = new ConnectorClientStore(path.join(dir, 'un-seul.json'), fakeCipher(), { now: () => new Date(clock), warn: () => undefined, maxClients: 1 });
+    await clients.load();
+    server = new ConnectorServer({ ...serverOptions, clients });
+    port = (await server.start())!;
+    const first = await paired();
+    const body = JSON.stringify(REQUEST);
+    const { headers } = await first.sign('POST', '/v1/generate', body);
+    const s = await stream({ method: 'POST', path: '/v1/generate', headers, body });
+    await s.waitFor(e => e.type === 'delta');
+    clock += 1_000;
+    const second = await paired();
+    expect(clients.find(first.clientId)).toBeUndefined();
+    const events = await s.done;
+    expect(events.at(-1)).toMatchObject({ type: 'error', code: 'GENERATION_ABORTED' });
+    await waitUntil(() => !gm.busy, 1_500);
+    // Le navigateur évincé apprend qu'il a été retiré (marque) ; le nouveau génère normalement.
+    const evicted = (await first.call('GET', '/v1/status')).reply;
+    expectError(evicted, 401, 'CONNECTOR_UNPAIRED');
+    expect(evicted.headers[CONNECTOR_HEADERS.revoked.toLowerCase()]).toEqual(expect.any(String));
+    expect((await second.call('GET', '/v1/status')).reply.status).toBe(200);
+  });
+
   it('erreur du moteur : message transmis sans adresse ni chemin', async () => {
     // Code non « transitoire » : aucun nouvel essai automatique de la pipeline (test rapide).
     provider = new MockProvider({ failWith: new MagistraError('AI_TIMEOUT', 'Le moteur IA local (http://127.0.0.1:11434) n’a pas répondu à temps.') });
@@ -1055,6 +1217,59 @@ describe('écoute', () => {
       expect(await none.start()).toBeNull();
     } finally {
       await Promise.all(blockers.map(s => new Promise<void>(r => s.close(() => r()))));
+    }
+  });
+
+  it('requête signée AVANT le début de l’écoute (captée par le programme qui occupait ce port) : jamais acceptée ensuite', async () => {
+    const browser = await paired();
+    const squatter = createNetServer();
+    await new Promise<void>(r => squatter.listen(0, '127.0.0.1', r));
+    const reused = (squatter.address() as { port: number }).port;
+    // Le programme de l'autre session reçoit une requête valablement signée pour CE port, puis le libère.
+    const mainPort = port;
+    port = reused;
+    const { headers } = await browser.sign('GET', '/v1/status');
+    await new Promise<void>(r => squatter.close(() => r()));
+    clock += 1_000;
+    const later = new ConnectorServer({ ...serverOptions, ports: [reused] });
+    try {
+      expect(await later.start()).toBe(reused);
+      // Rejouée telle quelle (horodatage valide, nonce jamais vu PAR CETTE écoute) : refusée.
+      const replay = await send({ path: '/v1/status', headers });
+      expectError(replay, 401, 'UNAUTHENTICATED');
+      expect(replay.headers[CONNECTOR_HEADERS.proof.toLowerCase()]).toBeUndefined();
+      // Requête signée pendant l'écoute : acceptée, prouvée.
+      const fresh = await browser.call('GET', '/v1/status');
+      expect(fresh.reply.status).toBe(200);
+      expect(await browser.proofValid(fresh.reply.headers, fresh.nonce)).toBe(true);
+    } finally {
+      port = mainPort;
+      await later.stop();
+    }
+  });
+
+  it('requêtes malformées de clients qui ne ferment jamais leur côté : connexions détruites, le site joint toujours l’application', async () => {
+    const sockets: Socket[] = [];
+    try {
+      // Autant de connexions que la limite (32) : réponse 400 puis FIN reçus, mais le client ne ferme jamais son côté.
+      await Promise.all(Array.from({ length: 32 }, () => new Promise<void>((resolve, reject) => {
+        const socket = netConnect({ host: '127.0.0.1', port, allowHalfOpen: true });
+        sockets.push(socket);
+        let data = '';
+        socket.on('error', reject);
+        socket.on('data', chunk => (data += String(chunk)));
+        socket.on('end', () => (data.startsWith('HTTP/1.1 400') ? resolve() : reject(new Error(data))));
+        socket.write('X\r\n\r\n');
+      })));
+      // Aucune place n'est gardée : GET /v1/hello répond (sinon la connexion serait refusée au-delà de 32).
+      let reply: Reply | null = null;
+      for (const deadline = Date.now() + 2_000; !reply && Date.now() < deadline;) {
+        reply = await send().catch(() => null);
+        if (!reply) await new Promise(r => setTimeout(r, 20));
+      }
+      expect(reply?.status).toBe(200);
+    } finally {
+      for (const socket of sockets) socket.destroy();
     }
   });
 

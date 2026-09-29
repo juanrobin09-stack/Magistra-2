@@ -344,10 +344,40 @@ describe('fetchLatestWindowsRelease — GitHub sans version ou en erreur', () =>
   });
 
   it('dépôt renommé : redirection suivie à l’intérieur de api.github.com, jeton conservé pour l’API seulement', async () => {
+    // Après un renommage, GitHub renvoie des liens au NOUVEAU propriétaire/nom (html_url, browser_download_url).
+    const NEW = 'magistra-edu/magistra';
     const moved = 'https://api.github.com/repositories/987654/releases/latest';
-    const fetch = fakeGitHub({ [API]: () => redirect(moved, 301), [moved]: () => jsonResponse(release()) });
-    expect(await run(fetch, { token: TOKEN })).toMatchObject({ available: true, version: '2.1.0' });
+    const renamed = release({
+      html_url: `https://github.com/${NEW}/releases/tag/${TAG}`,
+      assets: [asset(EXE, { digest: `sha256:${HEX}`, browser_download_url: download(EXE, TAG, NEW) })],
+    });
+    const fetch = fakeGitHub({ [API]: () => redirect(moved, 301), [moved]: () => jsonResponse(renamed) });
+    expect(await run(fetch, { token: TOKEN })).toMatchObject({
+      available: true, version: '2.1.0', downloadUrl: download(EXE, TAG, NEW), releaseUrl: `https://github.com/${NEW}/releases/tag/${TAG}`,
+    });
     expect(fetch.calls.map(c => [c.url, c.headers.get('authorization')])).toEqual([[API, `Bearer ${TOKEN}`], [moved, `Bearer ${TOKEN}`]]);
+  });
+
+  it('dépôt renommé : dépôt canonique lu dans html_url seulement s’il est exact ; sans redirection, jamais d’autre dépôt', async () => {
+    const NEW = 'magistra-edu/magistra';
+    const moved = 'https://api.github.com/repositories/987654/releases/latest';
+    const withLinks = (htmlUrl: unknown) => release({
+      html_url: htmlUrl,
+      assets: [asset(EXE, { digest: `sha256:${HEX}`, browser_download_url: download(EXE, TAG, NEW) })],
+    });
+    for (const htmlUrl of [
+      undefined, 42, `https://evil.example/${NEW}/releases/tag/${TAG}`, `https://github.com/${NEW}/releases/tag/v9.9.9`,
+      `https://github.com/${NEW}/releases/tag/${TAG}?x=1`, `https://github.com/${NEW}/../x/releases/tag/${TAG}`,
+      `https://github.com/-bad/repo/releases/tag/${TAG}`, `https://github.com/${NEW}/releases/${TAG}`, `http://github.com/${NEW}/releases/tag/${TAG}`,
+    ]) {
+      const fetch = fakeGitHub({ [API]: () => redirect(moved, 301), [moved]: () => jsonResponse(withLinks(htmlUrl)) });
+      expect(await run(fetch), String(htmlUrl)).toEqual(UNAVAILABLE);
+    }
+    // html_url d'un autre dépôt, liens au bon nom mais pour un AUTRE dépôt que celui de html_url : refusés.
+    const mismatch = release({ html_url: `https://github.com/autre/depot/releases/tag/${TAG}`, assets: [asset(EXE, { browser_download_url: download(EXE, TAG, NEW) })] });
+    expect(await run(fakeGitHub({ [API]: () => redirect(moved, 301), [moved]: () => jsonResponse(mismatch) }))).toEqual(UNAVAILABLE);
+    // Sans redirection : le dépôt configuré fait foi (un html_url différent ne change rien, les liens doivent y être).
+    expect(await run(fakeGitHub({ [API]: () => jsonResponse(withLinks(`https://github.com/${NEW}/releases/tag/${TAG}`)) }))).toEqual(UNAVAILABLE);
   });
 
   it('limite de l’API GitHub atteinte : cause journalisée, avec le conseil GITHUB_TOKEN seulement sans jeton', async () => {

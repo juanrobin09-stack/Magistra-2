@@ -69,6 +69,11 @@ describe('Réglages du site — Intelligence artificielle', () => {
     expect(ai().textContent).toContain('Serveur en ligne : OVHcloud AI Endpoints');
     expect(ai().textContent).toContain('IA locale — Vos contenus sont générés sur cet ordinateur.');
     expect(ai().textContent).not.toMatch(FORBIDDEN_LOCAL_TEXT);
+    // Ce qui part vers l'historique en ligne est dit exactement : le résultat ET les paramètres de la demande.
+    const localChoice = ai().querySelector('input[type="radio"][value="local"]')!.closest('label')!.textContent!.replace(/\s+/g, ' ');
+    expect(localChoice).toContain('les extraits de vos documents ne quittent pas cet ordinateur');
+    expect(localChoice).toContain('le résultat et les paramètres de la demande (sujet, consignes, contenu à adapter, noms des documents)');
+    expect(localChoice).not.toMatch(/demandes?[^.;]*ne passent pas|seul le résultat/);
   });
 
   it('serveur de l’établissement (IA non tierce) : ligne 2 renseignée, ligne 3 « non configuré »', async () => {
@@ -90,6 +95,9 @@ describe('Réglages du site — Intelligence artificielle', () => {
     await click(view.radio('server'));
     expect(dialog()?.textContent).toContain(REMOTE_CONFIRM);
     expect(view.radio('local').checked).toBe(true);
+    // Focus initial sur « Garder Magistra locale » : la flèche du clavier qui ouvre la boîte, suivie d'Espace ou
+    // d'Entrée par réflexe, ne vaut jamais accord pour un envoi au prestataire.
+    expect(document.activeElement).toBe(button(dialog()!, 'Garder Magistra locale'));
     await click(button(dialog()!, 'Garder Magistra locale'));
     expect(dialog()).toBeNull();
     expect(localStorage.getItem(ENGINE_CHOICE_STORAGE_KEY)).toBeNull();
@@ -116,12 +124,56 @@ describe('Réglages du site — Intelligence artificielle', () => {
     const view = await mountSettings(engine);
     await click(button(view.ai(), /Déconnecter Magistra locale/));
     expect(dialog()?.getAttribute('role')).toBe('alertdialog');
+    // Le retrait dans l'application n'a lieu que si elle répond : jamais affirmé sans condition.
+    expect(dialog()?.textContent).toContain('Si l’application Magistra est ouverte, l’autorisation y est aussi retirée ; sinon, retirez-la dans Magistra → Réglages → « Site web Magistra ».');
+    expect(dialog()?.textContent).not.toContain('L’autorisation est aussi retirée dans l’application Magistra ;');
     await click(button(dialog()!, 'Annuler'));
     expect(engine.disconnect).not.toHaveBeenCalled();
     await click(button(view.ai(), /Déconnecter Magistra locale/));
     await click(button(dialog()!, 'Déconnecter'));
     await flush();
     expect(engine.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('ordre de priorité, navigateur jamais appairé et pas encore cherché : « pas encore connectée », jamais « non détectée » sans recherche', async () => {
+    const view = await mountSettings(new FakeEngine(engineState('not-found', { permission: 'prompt' })));
+    const first = () => view.ai().querySelector('ol li')!.textContent!.replace(/\s+/g, ' ');
+    expect(first()).toContain('Magistra locale — pas encore connectée à ce navigateur');
+    expect(first()).not.toContain('non détectée');
+    // Recherche demandée par l'enseignant (explication, puis « Continuer ») sans résultat : « non détectée ».
+    await click(button(view.ai(), "J'ai déjà Magistra : la rechercher"));
+    await click(button(view.ai(), 'Continuer'));
+    await view.engine.set(engineState('not-found', { permission: 'prompt' }));
+    expect(first()).toContain('Magistra locale — non détectée sur cet ordinateur');
+    cleanup();
+    // Autorisation déjà accordée : la vérification automatique a réellement cherché.
+    const granted = await mountSettings(new FakeEngine(engineState('not-found', { permission: 'granted' })));
+    expect(granted.ai().querySelector('ol li')!.textContent).toContain('non détectée sur cet ordinateur');
+  });
+
+  it('déconnexion avec explication : « Annuler » rend le focus à « Déconnecter », « Continuer » au titre de la section (jamais perdu)', async () => {
+    const engine = new FakeEngine(engineState('needs-permission', { paired: true, permission: 'prompt' }));
+    const view = await mountSettings(engine);
+    const disconnectButton = () => button(view.ai(), /Déconnecter Magistra locale/);
+    await click(disconnectButton());
+    await click(button(dialog()!, 'Déconnecter'));
+    const explainers = () => view.ai().querySelectorAll<HTMLElement>('[aria-label="Autorisation du navigateur"]');
+    await click(button(explainers()[explainers().length - 1], 'Annuler'));
+    await flush();
+    expect(document.activeElement).toBe(disconnectButton());
+
+    await click(disconnectButton());
+    await click(button(dialog()!, 'Déconnecter'));
+    const continueButton = button(explainers()[explainers().length - 1], 'Continuer')!;
+    expect(document.activeElement).toBe(continueButton);
+    engine.disconnect.mockImplementationOnce(async () => {
+      await engine.set(engineState('not-found', { permission: 'prompt' }));
+    });
+    await click(continueButton);
+    await flush(6);
+    expect(engine.disconnect).toHaveBeenCalledTimes(1);
+    const heading = Array.from(view.ai().querySelectorAll('h3')).find(h => h.textContent?.includes('Magistra locale sur cet ordinateur'));
+    expect(document.activeElement).toBe(heading);
   });
 
   it('déconnexion avec l’autorisation du navigateur à redemander : explication d’abord', async () => {
@@ -133,7 +185,14 @@ describe('Réglages du site — Intelligence artificielle', () => {
     const explainers = view.ai().querySelectorAll('[aria-label="Autorisation du navigateur"]');
     const last = explainers[explainers.length - 1] as HTMLElement;
     expect(last.textContent).toContain('Votre navigateur va vous demander l’autorisation');
-    await click(button(last, 'Continuer'));
+    // Focus sur « Continuer », qui est DÉCRIT par l'explication : un lecteur d'écran la lit avant la demande.
+    const continueButton = button(last, 'Continuer')!;
+    expect(document.activeElement).toBe(continueButton);
+    const describedBy = continueButton.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)?.textContent).toContain('Votre navigateur va vous demander l’autorisation d’accéder aux applications de cet appareil');
+    expect(last.getAttribute('aria-describedby')).toBe(describedBy);
+    await click(continueButton);
     await flush();
     expect(engine.disconnect).toHaveBeenCalledTimes(1);
   });

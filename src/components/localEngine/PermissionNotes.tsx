@@ -1,7 +1,7 @@
 // Autorisation « applications de cet appareil » du navigateur : l'expliquer AVANT que le navigateur ne la demande,
 // et dire comment l'accorder quand elle a été refusée. Jamais de contournement : c'est l'enseignant qui décide.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import { ShieldAlert, ShieldCheck } from 'lucide-react';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
 import {
@@ -18,20 +18,24 @@ interface PermissionExplainerProps {
   autoFocus?: boolean;
 }
 
-/** Explication montrée avant la demande d'autorisation du navigateur. */
+/**
+ * Explication montrée avant la demande d'autorisation du navigateur. Elle DÉCRIT le groupe et le bouton principal
+ * (aria-describedby) : un lecteur d'écran la lit quand le focus arrive sur « Continuer », avant la demande.
+ */
 export function PermissionExplainer({ actionLabel = CONTINUE_LABEL, onContinue, onCancel, autoFocus = false }: PermissionExplainerProps) {
   const continueRef = useRef<HTMLButtonElement>(null);
+  const explanationId = useId();
   useEffect(() => {
     if (autoFocus) continueRef.current?.focus();
   }, [autoFocus]);
   return (
-    <div role="group" aria-label="Autorisation du navigateur" className="rounded-xl border border-accent/20 bg-accent/5 p-3.5 space-y-3">
+    <div role="group" aria-label="Autorisation du navigateur" aria-describedby={explanationId} className="rounded-xl border border-accent/20 bg-accent/5 p-3.5 space-y-3">
       <p className="flex items-start gap-2 text-sm text-mg-100 leading-relaxed">
         <ShieldCheck size={16} className="text-accent shrink-0 mt-0.5" aria-hidden="true" />
-        <span>{PERMISSION_EXPLANATION}</span>
+        <span id={explanationId}>{PERMISSION_EXPLANATION}</span>
       </p>
       <div className="flex flex-wrap gap-2">
-        <button ref={continueRef} type="button" onClick={onContinue} className={`btn-primary text-sm py-2 px-4 ${FOCUS_RING}`}>
+        <button ref={continueRef} type="button" onClick={onContinue} aria-describedby={explanationId} className={`btn-primary text-sm py-2 px-4 ${FOCUS_RING}`}>
           {actionLabel}
         </button>
         {onCancel && (

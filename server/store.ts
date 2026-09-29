@@ -24,17 +24,28 @@ export interface HistoryQuery {
   limit: number;
 }
 
+/**
+ * Nature d'une demande comptée par l'anti-abus : « generate » = génération par le serveur d'IA ; « save » =
+ * enregistrement d'une génération faite par Magistra locale (POST /api/generation), qui n'utilise pas le serveur d'IA.
+ */
+export type RequestKind = 'generate' | 'save';
+
 /** Limites anti-abus vérifiées au début de chaque génération. */
 export interface GenerationLimits {
   /** Contrôle de débit : au plus `maxRequests` demandes acceptées sur `windowSeconds` secondes (0 = désactivé). */
   windowSeconds: number;
   maxRequests: number;
-  /** Au plus `maxGlobalRequests` demandes acceptées sur la même fenêtre pour tout le déploiement (0 = désactivé). */
+  /**
+   * Au plus `maxGlobalRequests` GÉNÉRATIONS (kind « generate ») acceptées sur la même fenêtre pour tout le déploiement
+   * (0 = désactivé) : les enregistrements (« save ») n'entrent jamais dans ce budget du serveur d'IA.
+   */
   maxGlobalRequests: number;
   /** Générations en cours au plus pour l'utilisateur, toutes instances confondues (0 = pas de limite). */
   maxActive: number;
   /** Au-delà (secondes), une génération jamais marquée terminée ne compte plus comme « en cours ». */
   activeTtlSeconds: number;
+  /** Nature de la demande (défaut « generate ») : toutes comptent pour le débit de l'utilisateur. */
+  kind?: RequestKind;
 }
 
 export type GenerationAdmission =
@@ -150,7 +161,8 @@ export class MemoryStore implements GenerationStore {
   readonly kind = 'memory' as const;
   private readonly generations = new Map<string, MemoryEntry>();
   private readonly profiles = new Map<string, TeacherProfile>();
-  private readonly requests = new Map<string, number[]>();
+  /** Demandes récentes par utilisateur : instant (ms) et nature (limite globale : générations seulement). */
+  private readonly requests = new Map<string, { at: number; kind: RequestKind }[]>();
   /** Générations en cours : utilisateur → (place → début, en ms). */
   private readonly active = new Map<string, Map<string, number>>();
   private readonly now: () => Date;
@@ -291,15 +303,15 @@ export class MemoryStore implements GenerationStore {
     }
     if (limits.maxRequests > 0 || limits.maxGlobalRequests > 0) {
       const since = now - limits.windowSeconds * 1_000;
-      const recent = (this.requests.get(uid) ?? []).filter(t => t > since);
+      const recent = (this.requests.get(uid) ?? []).filter(r => r.at > since);
       this.requests.set(uid, recent);
       if (limits.maxRequests > 0 && recent.length >= limits.maxRequests) return { status: 'rate_limited' };
       if (limits.maxGlobalRequests > 0) {
         let total = 0;
-        for (const times of this.requests.values()) total += times.filter(t => t > since).length;
+        for (const entries of this.requests.values()) total += entries.filter(r => r.at > since && r.kind === 'generate').length;
         if (total >= limits.maxGlobalRequests) return { status: 'saturated' };
       }
-      recent.push(now);
+      recent.push({ at: now, kind: limits.kind ?? 'generate' });
     }
     if (limits.maxActive <= 0) return { status: 'ok', slotId: null };
     const slotId = randomUUID();
@@ -558,6 +570,9 @@ export class SupabaseStore implements GenerationStore {
       p_max_global_requests: limits.maxGlobalRequests,
       p_max_active: limits.maxActive,
       p_active_ttl_seconds: limits.activeTtlSeconds,
+      // Enregistrement seulement : une génération appelle toujours la fonction sans ce paramètre (défaut « generate »),
+      // ce qui la garde utilisable si supabase-schema.sql n'a pas encore été réappliqué.
+      ...(limits.kind === 'save' ? { p_kind: 'save' } : {}),
     });
     const result = data as { status?: unknown; id?: unknown } | null;
     if (error || !result || typeof result !== 'object') throw writeError(error);

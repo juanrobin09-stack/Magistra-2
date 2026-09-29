@@ -44,13 +44,19 @@ import {
 import { formFromRecord, type ReusableRecord } from '@/lib/generation/reuse';
 import { useLocalEngine } from '@/lib/localConnector/controller';
 import { adminContact, configuredProvider, useRuntime } from '@/lib/runtime/context';
-import { HybridGenerationClient } from '@/lib/runtime/hybrid';
+import { HybridGenerationClient, type EngineRoute } from '@/lib/runtime/hybrid';
 import { usesServerApi } from '@/lib/runtime/types';
 
 /** Magistra locale attend l'accord du navigateur : la génération ne doit pas faire apparaître sa demande sans explication. */
 export const LOCAL_PERMISSION_NOTICE =
   'Autorisez d’abord votre navigateur à joindre Magistra : bouton « Rechercher Magistra… » ci-dessus.';
 export const LOCAL_PAIRING_NOTICE = 'Terminez d’abord la connexion de Magistra locale (confirmation dans l’application Magistra).';
+/**
+ * Autorisation du navigateur encore à demander, dans un autre état que « Autorisation du navigateur nécessaire » : la
+ * génération ne doit pas faire apparaître sa demande sans explication (les boutons de Magistra locale l'expliquent).
+ */
+export const LOCAL_PERMISSION_FIRST_NOTICE =
+  'Autorisez d’abord votre navigateur à joindre Magistra : utilisez les boutons de Magistra locale ci-dessus, puis acceptez sa demande.';
 export const ENGINE_CHANGED_NOTICE =
   'Le moteur de génération vient de changer : vérifiez le bandeau en haut de la page, puis relancez la génération.';
 
@@ -103,13 +109,12 @@ export default function GeneratePage() {
   // Capacités du moteur qui traitera RÉELLEMENT la prochaine génération (jamais celles de l'autre moteur).
   const caps = engine ? (capabilities.caps?.route === route ? capabilities.caps : null) : capabilities.caps;
 
-  // Recherche : préférence locale par défaut, sinon « Mes documents uniquement » (fonctionne hors ligne). Magistra
-  // locale : sources de l'application (réglages de l'application) ; pas encore prête : rien n'est promis ni retiré.
+  // Recherche : préférence enregistrée par défaut, sinon « Mes documents uniquement ». Magistra locale : sources de
+  // l'application (réglées dans l'application Windows) ; pas encore prête : rien n'est promis ni retiré.
   const researchCaps = localRoute && caps && !caps.ready ? null : caps;
-  const researchRuntime = localRoute ? 'local' : mode;
   const researchOptions = useMemo(
-    () => describeResearchOptions(researchCaps, researchRuntime, form.niveau),
-    [researchCaps, researchRuntime, form.niveau],
+    () => describeResearchOptions(researchCaps, mode, form.niveau, route),
+    [researchCaps, mode, form.niveau, route],
   );
   const researchMode = effectiveResearchMode(chosenMode ?? prefs?.defaultResearchMode ?? 'documents', researchOptions);
   const hints = researchHints(researchMode, sources.docs.filter(d => d.status !== 'error').length, form.niveau, researchOptions, mode);
@@ -137,7 +142,10 @@ export default function GeneratePage() {
   const localBlocked = !localRoute || !localState ? null
     : localState.kind === 'needs-permission' ? LOCAL_PERMISSION_NOTICE
       : localState.kind === 'pairing' ? LOCAL_PAIRING_NOTICE
-        : localState.kind === 'checking' || localState.kind === 'idle' ? SEARCHING_TEXT : null;
+        : localState.kind === 'checking' || localState.kind === 'idle' ? SEARCHING_TEXT
+          // Appairé, autorisation toujours à demander (« application fermée » après une demande restée sans réponse…) :
+          // l'envoi (preuve GET /v1/status) ferait apparaître la demande du navigateur sans explication.
+          : localState.paired && localState.permission === 'prompt' ? LOCAL_PERMISSION_FIRST_NOTICE : null;
 
   // Capacités relues quand le moteur choisi ou l'état de Magistra locale (utilisée) change. Moteur inconnu → connu :
   // les capacités lues au montage sont déjà celles de ce moteur (même règle de choix), rien à relire.
@@ -152,6 +160,17 @@ export default function GeneratePage() {
   }, [capsKey, reloadCaps]);
 
   useRouteCapsHeal(localController, route, capabilities.caps, capabilities.loading, reloadCaps);
+
+  // Passage au serveur en ligne confirmé depuis le panneau « Magistra locale n'est pas prête » : le panneau (et le
+  // bouton qui avait le focus) disparaît ; le focus va au bandeau du moteur, qui annonce le nouveau moteur (jamais
+  // perdu au début de la page).
+  const bannerRef = useRef<HTMLDivElement>(null);
+  const focusBannerOnRoute = useRef<EngineRoute | null>(null);
+  useEffect(() => {
+    if (focusBannerOnRoute.current === null || focusBannerOnRoute.current !== route) return;
+    focusBannerOnRoute.current = null;
+    bannerRef.current?.focus({ preventScroll: true });
+  }, [route]);
 
   // Le résultat apparaît sous le formulaire : on l'amène à l'écran à chaque nouvelle génération.
   const runId = generation.state.runId;
@@ -206,21 +225,39 @@ export default function GeneratePage() {
     );
   };
 
-  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    // La touche Entrée ne relance jamais une génération en cours.
-    if (generation.isRunning) return;
+  /**
+   * Garde-fous communs à l'envoi et à la relance : destinataire des textes vérifié, et Magistra locale qui n'attend
+   * aucune action de l'enseignant (autorisation du navigateur expliquée d'abord, appairage, recherche). Faux : rien
+   * n'est envoyé, la raison est affichée sous le bouton.
+   */
+  const readyToSend = (): boolean => {
     // Destinataire des textes pas encore annoncé : on attend la vérification (la touche Entrée contourne le bouton).
     if (verifying) {
       setSubmitNotice(localRoute
         ? 'Vérification de Magistra locale en cours : la génération sera possible dans quelques secondes.'
         : "Vérification du service d'IA en cours : la génération sera possible dans quelques secondes.");
-      return;
+      return false;
     }
     if (localBlocked) {
       setSubmitNotice(localBlocked);
-      return;
+      return false;
     }
+    return true;
+  };
+
+  /** « Recommencer » / « Réessayer » : mêmes garde-fous que l'envoi, moteur réel revérifié (startGeneration). */
+  const restartGeneration = () => {
+    const request = generation.state.request;
+    if (!request || generation.isRunning || !readyToSend()) return;
+    setSubmitNotice(null);
+    startGeneration(request);
+  };
+
+  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    // La touche Entrée ne relance jamais une génération en cours.
+    if (generation.isRunning) return;
+    if (!readyToSend()) return;
     if (problems.length > 0) {
       setShowErrors(true);
       setSubmitNotice(problems[0].message);
@@ -295,7 +332,12 @@ export default function GeneratePage() {
               route={route}
               providerName={providerName}
               localAvailable={localReady}
-              onUseLocal={() => setEngineChoice('local')}
+              onUseLocal={() => {
+                // Le rappel (et son bouton, qui avait le focus) disparaît : le focus va au bandeau du moteur.
+                focusBannerOnRoute.current = 'local-connector';
+                setEngineChoice('local');
+              }}
+              focusRef={bannerRef}
             />
           )}
 
@@ -305,7 +347,10 @@ export default function GeneratePage() {
                 engine={engine}
                 cause={caps.notReady}
                 providerName={providerName}
-                onUseServer={() => setEngineChoice('server')}
+                onUseServer={() => {
+                  focusBannerOnRoute.current = 'server';
+                  setEngineChoice('server');
+                }}
               />
             ) : caps?.ready && caps.aiWarning ? (
               <p role="note" className="flex items-start gap-2 p-3 rounded-xl bg-white/[0.03] border border-white/8 text-xs text-mg-200">
@@ -379,7 +424,7 @@ export default function GeneratePage() {
           mode={mode}
           store={store}
           onStop={generation.stop}
-          onRestart={generation.restart}
+          onRestart={restartGeneration}
           containerRef={resultRef}
         />
       </div>

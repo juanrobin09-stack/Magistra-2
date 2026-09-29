@@ -27,6 +27,20 @@ export const WEB_LIMITED_SCOLAIRE_SERVER_NOTE =
   'Internet : Wikipédia seulement. Éduscol et le Bulletin officiel ne sont pas interrogés : aucun moteur de recherche web configuré sur ce serveur.';
 export const ACADEMIC_ONLY_NOTE = 'Internet : sources académiques seulement (aucun moteur web configuré, Wikipédia désactivé)';
 export const NO_INTERNET_LOCAL_NOTE = 'Internet indisponible : aucun moteur web configuré et Wikipédia désactivé dans les réglages.';
+export const ACADEMIC_DISABLED_LOCAL_NOTE = 'Recherche académique désactivée dans les réglages.';
+export const ACADEMIC_DISABLED_SERVER_NOTE = 'Recherche académique non activée sur ce serveur.';
+// Site web, Magistra locale (route 'local-connector') : les sources sont celles de l'application Windows, réglées dans
+// SES réglages (ceux du site sont en lecture seule) ; aucun nom technique (moteur de recherche web, sans « SearXNG »).
+export const WEB_LIMITED_SCOLAIRE_CONNECTOR_NOTE =
+  'Internet : Wikipédia seulement. Éduscol et le Bulletin officiel demandent un moteur de recherche web, à indiquer dans les réglages de l’application Magistra (Windows).';
+export const NO_INTERNET_CONNECTOR_NOTE =
+  'Internet indisponible : aucun moteur web configuré et Wikipédia désactivé dans les réglages de l’application Magistra (Windows).';
+export const ACADEMIC_DISABLED_CONNECTOR_NOTE = 'Recherche académique désactivée dans les réglages de l’application Magistra (Windows).';
+/**
+ * « Mes documents uniquement » hors de l'application Windows : le site nécessite Internet (jamais « Fonctionne hors
+ * ligne », réservé à l'application).
+ */
+export const DOCUMENTS_ONLY_ONLINE_DESCRIPTION = 'Aucune recherche externe.';
 export const NO_INTERNET_SERVER_NOTE = 'Recherche Internet non activée sur ce serveur.';
 export const DEMO_RESEARCH_NOTE = 'Recherche indisponible en mode démonstration.';
 export const DOCUMENTS_IGNORED_NOTE = 'Vos documents ne seront pas utilisés dans ce mode.';
@@ -34,54 +48,60 @@ export const NETWORK_PRIVACY_NOTE =
   'La recherche en ligne transmet uniquement votre sujet et vos mots-clés (jamais vos documents) aux services de recherche.';
 export const LOCAL_PRIVACY_NOTE = 'Vos documents et générations restent sur cet ordinateur.';
 /**
- * Site web, Magistra locale (route 'local-connector') : génération par l'application Magistra de cet ordinateur ; la
- * demande et les extraits de documents ne vont qu'à elle (jamais au serveur Magistra en ligne) ; le résultat, lui, est
- * enregistré dans l'historique du compte en ligne. Jamais « restent sur cet ordinateur ».
+ * Site web, Magistra locale (route 'local-connector') : génération par l'application Magistra de cet ordinateur, seule
+ * à recevoir les extraits de documents (jamais le serveur Magistra en ligne). Ce qui part EXACTEMENT vers le serveur :
+ * la génération enregistrée dans l'historique du compte (done.record : résultat, sources citées, et paramètres de la
+ * demande — sujet, objectifs, consignes, contenu à adapter, profils, noms des documents ; jamais le texte des extraits
+ * ni le travail d'élève, dont seule la longueur est notée). Jamais « restent sur cet ordinateur ».
  */
 export const LOCAL_CONNECTOR_PRIVACY_MESSAGE =
-  "IA locale : vos contenus sont générés sur cet ordinateur par l'application Magistra. Votre demande et les extraits de vos documents ne sont pas transmis au serveur Magistra en ligne ; seul le résultat est enregistré dans l'historique de votre compte en ligne.";
+  "IA locale : vos contenus sont générés sur cet ordinateur par l'application Magistra ; les extraits de vos documents n'en sortent pas. Le résultat et les paramètres de la demande (sujet, objectifs, consignes, contenu à adapter, profils, noms des documents) sont enregistrés dans l'historique de votre compte en ligne.";
 /** Magistra locale et recherche en ligne : faite par l'application, depuis cet ordinateur (réglages de l'application). */
 export const LOCAL_CONNECTOR_NETWORK_NOTE =
   "Les recherches Internet ou académiques sont faites depuis cet ordinateur par l'application Magistra : elles transmettent uniquement votre sujet et vos mots-clés (jamais vos documents) aux services de recherche.";
 
+/** Où se règlent les sources : application Windows (sur place), application depuis le site, serveur en ligne. */
+type ResearchSettingsSide = 'app' | 'connector' | 'server';
+
+const NOTES_BY_SIDE: Record<ResearchSettingsSide, { academicDisabled: string; noInternet: string; scolaireLimited: string }> = {
+  app: { academicDisabled: ACADEMIC_DISABLED_LOCAL_NOTE, noInternet: NO_INTERNET_LOCAL_NOTE, scolaireLimited: WEB_LIMITED_SCOLAIRE_LOCAL_NOTE },
+  connector: { academicDisabled: ACADEMIC_DISABLED_CONNECTOR_NOTE, noInternet: NO_INTERNET_CONNECTOR_NOTE, scolaireLimited: WEB_LIMITED_SCOLAIRE_CONNECTOR_NOTE },
+  server: { academicDisabled: ACADEMIC_DISABLED_SERVER_NOTE, noInternet: NO_INTERNET_SERVER_NOTE, scolaireLimited: WEB_LIMITED_SCOLAIRE_SERVER_NOTE },
+};
+
 /**
  * Décrit les 4 modes de recherche selon les capacités du moteur.
  * `caps` null = capacités encore inconnues : tout reste sélectionnable, sans promesse.
+ * `mode` : mode d'exécution RÉEL (« Fonctionne hors ligne » dans l'application Windows seulement) ; `route` : sur le
+ * site, moteur qui traitera la génération ('local-connector' : sources et réglages de l'application Windows).
  */
 export function describeResearchOptions(
   caps: Capabilities | null,
   mode: RuntimeMode,
   niveau: NiveauScolaire,
+  route?: Capabilities['route'] | null,
 ): ResearchOption[] {
+  const side: ResearchSettingsSide = mode === 'local' ? 'app' : route === 'local-connector' ? 'connector' : 'server';
+  const notes = NOTES_BY_SIDE[side];
   return RESEARCH_MODES.map(m => {
     const base: ResearchOption = { ...m, available: true };
-    if (m.value === 'documents') return base;
+    if (m.value === 'documents') return mode === 'local' ? base : { ...base, description: DOCUMENTS_ONLY_ONLINE_DESCRIPTION };
     if (mode === 'demo') return { ...base, available: false, note: DEMO_RESEARCH_NOTE };
     if (!caps) return base;
 
     if (m.value === 'academic') {
       if (caps.research.academic) return base;
-      return {
-        ...base,
-        available: false,
-        note: mode === 'local'
-          ? 'Recherche académique désactivée dans les réglages.'
-          : 'Recherche académique non activée sur ce serveur.',
-      };
+      return { ...base, available: false, note: notes.academicDisabled };
     }
 
     // Internet / Documents + Internet : on annonce seulement ce qui sera réellement consulté.
     if (caps.research.web) return base;
     const academicUsed = isSuperieur(niveau) && caps.research.academic;
     const wikipedia = caps.research.wikipedia;
-    if (!academicUsed && !wikipedia) {
-      return { ...base, available: false, note: mode === 'local' ? NO_INTERNET_LOCAL_NOTE : NO_INTERNET_SERVER_NOTE };
-    }
+    if (!academicUsed && !wikipedia) return { ...base, available: false, note: notes.noInternet };
     if (!wikipedia) return { ...base, note: ACADEMIC_ONLY_NOTE };
     if (academicUsed) return { ...base, note: WEB_LIMITED_ACADEMIC_NOTE };
-    if (!isSuperieur(niveau)) {
-      return { ...base, note: mode === 'local' ? WEB_LIMITED_SCOLAIRE_LOCAL_NOTE : WEB_LIMITED_SCOLAIRE_SERVER_NOTE };
-    }
+    if (!isSuperieur(niveau)) return { ...base, note: notes.scolaireLimited };
     return { ...base, note: WEB_LIMITED_NOTE };
   });
 }

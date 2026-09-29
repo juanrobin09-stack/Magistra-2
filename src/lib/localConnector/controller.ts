@@ -6,7 +6,9 @@
 //    navigateur : autorisation encore à demander ('prompt') → état 'needs-permission' si appairé (l'interface explique
 //    avant de lancer la recherche), sinon 'not-found' sans rien sonder ; navigateur sans ce mécanisme ('unsupported')
 //    et jamais appairé → rien n'est sondé non plus (aucune requête vers cet ordinateur sans action de l'enseignant) ;
-//  - seules les actions de l'enseignant (detect, connect, openApp, disconnect) peuvent la faire apparaître ;
+//  - seules les actions de l'enseignant (detect, connect, openApp, disconnect) peuvent la faire apparaître ; si elle
+//    reste sans réponse (bulle fermée ou ignorée : autorisation toujours à 'prompt', rien n'a répondu), l'état le dit
+//    (NOT_ANSWERED_PERMISSION_MESSAGE) au lieu d'affirmer « application fermée » ou « non détectée » ;
 //  - l'opération la plus récente l'emporte : le résultat d'une vérification dépassée n'est jamais affiché ; une
 //    vérification automatique ne remplace jamais un appairage ou une recherche en cours ;
 //  - l'état n'est publié que s'il change (pas de rendu inutile, pas de boucle « état → capacités → état »).
@@ -41,6 +43,11 @@ export interface LocalEngineState {
   appVersion?: string;
   /** Dernière erreur utile (appairage refusé/expiré, autorisation retirée, permission refusée…). */
   error?: { code: ErrorCode; message: string };
+  /**
+   * Pendant l'appairage ('pairing') : code de vérification (« K7F-2QX ») que la boîte de consentement de l'application
+   * affiche aussi.
+   */
+  pairingCode?: string;
 }
 
 export interface LocalEngineController {
@@ -72,6 +79,28 @@ export interface LocalEngineController {
 export const OPEN_APP_SEARCH_MS = 60_000;
 /** Intervalle entre deux recherches après magistra://open. */
 export const OPEN_APP_POLL_MS = 1_500;
+/**
+ * Après magistra://open, application trouvée mais moteur encore arrêté (ENGINE_NOT_RUNNING : l'application le démarre
+ * à son lancement) : l'état est relu pendant ce délai au plus, pour ne pas rester « pas prête » à tort.
+ */
+export const OPEN_APP_ENGINE_START_MS = 20_000;
+
+/**
+ * Déconnexion alors que l'application n'a pas confirmé le retrait (fermée, injoignable, ou seule répond celle d'une
+ * autre session Windows, qui ne connaît pas ce navigateur) : ce navigateur a oublié la connexion, mais l'application
+ * de l'enseignant liste peut-être encore ce navigateur parmi ceux qu'elle autorise.
+ */
+export const UNPAIR_NOT_CONFIRMED_MESSAGE =
+  'Ce navigateur a oublié la connexion à Magistra locale, mais votre application Magistra n’a pas confirmé le retrait (fermée ou injoignable) : retirez aussi l’autorisation dans Magistra → Réglages → « Site web Magistra ».';
+
+/**
+ * Recherche lancée par l'enseignant alors que le navigateur devait lui demander son autorisation, et restée sans
+ * réponse (bulle fermée ou ignorée) : rien n'a pu être joint, l'application est peut-être ouverte. Un navigateur qui
+ * expose l'autorisation sans l'appliquer, application fermée, donne le même constat (aucune réponse, toujours
+ * 'prompt') : le texte couvre aussi ce cas.
+ */
+export const NOT_ANSWERED_PERMISSION_MESSAGE =
+  'Magistra n’a pas pu être recherchée : votre navigateur n’a pas reçu votre accord. Relancez la recherche, puis acceptez sa demande. S’il ne vous demande rien, vérifiez que l’application Magistra est ouverte.';
 
 const INITIAL_STATE: LocalEngineState = { kind: 'idle', paired: false, permission: 'unsupported' };
 
@@ -82,13 +111,23 @@ function notice(error: MagistraError | ErrorCode): { code: ErrorCode; message: s
 /** Construit un état avec un ordre de clés stable (comparaison par JSON). */
 function makeState(
   kind: LocalEngineStateKind, paired: boolean, permission: LoopbackPermission,
-  extra: { status?: ConnectorStatus; appVersion?: string; error?: { code: ErrorCode; message: string } } = {},
+  extra: { status?: ConnectorStatus; appVersion?: string; error?: { code: ErrorCode; message: string }; pairingCode?: string } = {},
 ): LocalEngineState {
   const state: LocalEngineState = { kind, paired, permission };
   if (extra.status) state.status = extra.status;
   if (extra.appVersion) state.appVersion = extra.appVersion;
   if (extra.error) state.error = extra.error;
+  if (extra.pairingCode) state.pairingCode = extra.pairingCode;
   return state;
+}
+
+/** Notice « autorisation du navigateur restée sans réponse ». */
+function notAnsweredNotice(): { code: ErrorCode; message: string } {
+  return { code: 'LOCAL_NETWORK_PERMISSION_DENIED', message: NOT_ANSWERED_PERMISSION_MESSAGE };
+}
+
+function isNotAnsweredNotice(error: LocalEngineState['error']): boolean {
+  return error?.code === 'LOCAL_NETWORK_PERMISSION_DENIED' && error.message === NOT_ANSWERED_PERMISSION_MESSAGE;
 }
 
 function sameState(a: LocalEngineState, b: LocalEngineState): boolean {
@@ -96,11 +135,10 @@ function sameState(a: LocalEngineState, b: LocalEngineState): boolean {
 }
 
 export function createLocalEngineController(options: LocalConnectorClientOptions = {}): LocalEngineController {
-  const readPermissionRaw = options.permission ?? (() => queryLoopbackPermission());
   const openUrl = options.openUrl ?? openMagistraUrl;
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? defaultSleep;
-  const client = new LocalConnectorClient({ ...options, permission: readPermissionRaw, openUrl, now, sleep });
+  const client = new LocalConnectorClient({ ...options, permission: options.permission ?? (() => queryLoopbackPermission()), openUrl, now, sleep });
 
   let state: LocalEngineState = INITIAL_STATE;
   const listeners = new Set<() => void>();
@@ -119,13 +157,9 @@ export function createLocalEngineController(options: LocalConnectorClientOptions
     for (const listener of [...listeners]) listener();
   }
 
-  async function readPermission(): Promise<LoopbackPermission> {
-    try {
-      const value = await readPermissionRaw();
-      return value === 'granted' || value === 'prompt' || value === 'denied' ? value : 'unsupported';
-    } catch {
-      return 'unsupported';
-    }
+  /** Autorisation du navigateur, lue par le client ('prompt' d'un navigateur qui ne l'applique pas : 'unsupported'). */
+  function readPermission(): Promise<LoopbackPermission> {
+    return client.readPermission();
   }
 
   /** Démarre une action de l'enseignant : interrompt la précédente (recherche), rend les résultats antérieurs caducs. */
@@ -149,6 +183,11 @@ export function createLocalEngineController(options: LocalConnectorClientOptions
 
   /** Appairé : état du moteur (GET /v1/status prouvé). */
   async function evaluatePaired(signal?: AbortSignal): Promise<LocalEngineState> {
+    // Appairage constaté (appelée seulement pour un navigateur appairé) : Magistra locale devient le choix explicite,
+    // sauf choix déjà enregistré — même si l'enregistrement a échoué lors de l'appairage (stockage plein ou refusé :
+    // le choix vaut alors au moins pour cette visite) ou si le choix a disparu depuis. Une autorisation retirée ensuite
+    // (401 : appairage oublié) ne fait jamais passer la génération suivante au serveur en ligne d'elle-même.
+    adoptLocalChoiceAfterPairing();
     try {
       const status = await client.status(signal);
       return makeState('connected', true, await readPermission(), { status, appVersion: status.version });
@@ -158,8 +197,13 @@ export function createLocalEngineController(options: LocalConnectorClientOptions
       const permission = await readPermission();
       const paired = await client.hasPairing();
       if (e.code === 'LOCAL_NETWORK_PERMISSION_DENIED' || permission === 'denied') return permissionDeniedState(paired);
-      // Autorisation retirée dans l'application (appairage oublié par le client) : l'application, elle, répond.
-      if (e.code === 'CONNECTOR_UNPAIRED') return makeState('found', paired, permission, { appVersion: state.appVersion, error: notice(e) });
+      if (e.code === 'CONNECTOR_UNPAIRED') {
+        // Retrait prouvé par l'application (appairage oublié par le client) : l'application, elle, répond.
+        if (!paired) return makeState('found', false, permission, { appVersion: state.appVersion, error: notice(e) });
+        // Une application Magistra répond sans reconnaître ce navigateur ni prouver l'avoir retiré (autre session
+        // Windows, la sienne fermée ; ou la sienne qui a perdu ses autorisations) : appairage gardé, cause expliquée.
+        return makeState('app-closed', true, permission, { appVersion: state.appVersion, error: notice(e) });
+      }
       if (!paired) return makeState('not-found', false, permission, { error: notice(e) });
       if (e.code === 'CONNECTOR_UNREACHABLE' && e.message === defaultMessage('CONNECTOR_UNREACHABLE')) {
         return makeState('app-closed', true, permission, { appVersion: state.appVersion });
@@ -197,7 +241,14 @@ export function createLocalEngineController(options: LocalConnectorClientOptions
       // accordée (aucune demande possible).
       if (!paired && permission !== 'granted') return makeState('not-found', false, permission);
     }
-    return paired ? evaluatePaired(signal) : evaluateUnpaired(signal);
+    const next = paired ? await evaluatePaired(signal) : await evaluateUnpaired(signal);
+    // Demande du navigateur restée sans réponse : rien n'a répondu et l'autorisation vaut toujours 'prompt'. La cause
+    // probable est dite (jamais « application fermée » ni « téléchargez-la » à tort) ; appairé, la génération reste
+    // bloquée derrière l'explication.
+    const unanswered = permission === 'prompt' && next.permission === 'prompt' && !next.error
+      && (next.kind === 'not-found' || next.kind === 'app-closed');
+    if (!unanswered) return next;
+    return makeState(next.paired ? 'needs-permission' : 'not-found', next.paired, 'prompt', { appVersion: next.appVersion, error: notAnsweredNotice() });
   }
 
   // ─── Vérifications automatiques ───────────────────────────────────────────
@@ -216,21 +267,25 @@ export function createLocalEngineController(options: LocalConnectorClientOptions
   }
 
   /**
-   * Autorisation retirée dans l'application : la cause (« Ce navigateur n'est plus autorisé… ») reste affichée aux
-   * vérifications automatiques suivantes tant que l'application est trouvée sans appairage. Sinon elle disparaîtrait
-   * aussitôt : la vérification suivante (relecture des capacités déclenchée par ce changement d'état, retour sur une
-   * page) ne voit plus qu'un navigateur jamais appairé. Une action de l'enseignant (recherche, connexion) repart d'un
-   * état neuf.
+   * Causes gardées par les vérifications automatiques suivantes (une action de l'enseignant — recherche, connexion —
+   * repart d'un état neuf) ; sinon elles disparaîtraient aussitôt, la vérification suivante (relecture des capacités
+   * déclenchée par ce changement d'état, retour sur une page) ne sondant rien ou ne voyant plus la cause :
+   *  - autorisation retirée dans l'application (« Ce navigateur n'est plus autorisé… »), tant que l'application est
+   *    trouvée sans appairage : la vérification suivante ne voit plus qu'un navigateur jamais appairé ;
+   *  - demande du navigateur restée sans réponse, tant que l'autorisation est toujours à demander (même état).
    */
-  function keepUnpairedNotice(next: LocalEngineState): LocalEngineState {
+  function keepNotice(next: LocalEngineState): LocalEngineState {
     const previous = state.error;
-    if (previous?.code !== 'CONNECTOR_UNPAIRED' || next.kind !== 'found' || next.paired || next.error) return next;
-    return makeState(next.kind, next.paired, next.permission, { appVersion: next.appVersion, error: previous });
+    if (!previous || next.error || next.kind !== state.kind || next.paired !== state.paired) return next;
+    const keep = previous.code === 'CONNECTOR_UNPAIRED'
+      ? next.kind === 'found' && !next.paired
+      : isNotAnsweredNotice(previous) && next.permission === 'prompt';
+    return keep ? makeState(next.kind, next.paired, next.permission, { appVersion: next.appVersion, error: previous }) : next;
   }
 
   async function runAutomatic(opSeq: number): Promise<void> {
     try {
-      const next = keepUnpairedNotice(await evaluate(false));
+      const next = keepNotice(await evaluate(false));
       if (opSeq === seq) publish(next);
     } catch {
       // evaluate ne lève pas hors interruption ; par prudence, l'état reste cohérent.
@@ -269,8 +324,10 @@ export function createLocalEngineController(options: LocalConnectorClientOptions
           if (op.seq === seq) publish(permissionDeniedState(paired));
           return;
         }
-        if (op.seq === seq) publish(makeState('pairing', paired, permission, { appVersion: before.appVersion }));
-        await client.pair(abort.signal);
+        // « En attente de l'accord » publié avec le code de vérification, juste avant l'ouverture de magistra://pair.
+        await client.pair(abort.signal, code => {
+          if (op.seq === seq && !abort.signal.aborted) publish(makeState('pairing', paired, permission, { appVersion: before.appVersion, pairingCode: code }));
+        });
         // Magistra locale devient le choix explicite (sauf choix déjà enregistré) : perdre l'appairage plus tard ne
         // fera jamais passer les générations au serveur en ligne sans l'accord de l'enseignant.
         adoptLocalChoiceAfterPairing();
@@ -289,15 +346,19 @@ export function createLocalEngineController(options: LocalConnectorClientOptions
         }
         const e = toMagistraError(err, 'CONNECTOR_UNREACHABLE');
         const permission = await readPermission();
+        const plainUnreachable = e.code === 'CONNECTOR_UNREACHABLE' && e.message === defaultMessage('CONNECTOR_UNREACHABLE');
         if (e.code === 'LOCAL_NETWORK_PERMISSION_DENIED' || permission === 'denied') {
           publish(permissionDeniedState(paired));
+        } else if (plainUnreachable && permission === 'prompt') {
+          // Rien n'a répondu et la demande du navigateur est restée sans réponse : c'est elle qu'il faut accepter.
+          publish(makeState(paired ? 'needs-permission' : 'not-found', paired, permission, { appVersion: before.appVersion, error: notAnsweredNotice() }));
         } else if (paired) {
           // L'appairage a abouti mais l'application ne répond plus, ou ancien appairage conservé.
           publish(makeState('app-closed', true, permission, { appVersion: before.appVersion, error: notice(e) }));
         } else if (e.code === 'CONNECTOR_PAIRING_REFUSED' || e.code === 'CONNECTOR_PAIRING_EXPIRED') {
           // L'application a répondu : elle est bien là.
           publish(makeState('found', false, permission, { appVersion: before.appVersion, error: notice(e) }));
-        } else if (e.code === 'CONNECTOR_UNREACHABLE' && e.message === defaultMessage('CONNECTOR_UNREACHABLE')) {
+        } else if (plainUnreachable) {
           publish(makeState('not-found', false, permission, { error: notice(e) }));
         } else {
           publish(makeState(before.kind === 'found' ? 'found' : 'not-found', false, permission, { appVersion: before.appVersion, error: notice(e) }));
@@ -329,15 +390,22 @@ export function createLocalEngineController(options: LocalConnectorClientOptions
     }
     publish(makeState('checking', state.paired, state.permission, { appVersion: state.appVersion }));
     const deadline = now() + OPEN_APP_SEARCH_MS;
+    let engineDeadline: number | null = null;
     try {
       for (;;) {
         const next = await evaluate(true, op.signal);
         if (op.seq !== seq) return;
         const searching = (next.kind === 'app-closed' || next.kind === 'not-found') && !next.error;
-        if (!searching || now() >= deadline) {
+        // Application ouverte à l'instant : son moteur démarre peut-être encore. L'état « connectée » est montré tout
+        // de suite, puis relu jusqu'à ce que le moteur soit prêt (ou qu'il reste arrêté au-delà du délai).
+        const engineStarting = next.kind === 'connected' && next.status?.engine.notReady?.code === 'ENGINE_NOT_RUNNING';
+        if (engineStarting) engineDeadline ??= now() + OPEN_APP_ENGINE_START_MS;
+        const waiting = searching || (engineStarting && now() < engineDeadline!);
+        if (!waiting || now() >= deadline) {
           publish(next);
           return;
         }
+        if (engineStarting) publish(next);
         await sleep(OPEN_APP_POLL_MS, op.signal);
         if (op.signal.aborted || op.seq !== seq) return;
       }
@@ -358,20 +426,23 @@ export function createLocalEngineController(options: LocalConnectorClientOptions
       pending.abort.abort();
       await pending.promise;
     }
+    let revoked = false;
     try {
-      await client.unpair();
+      revoked = await client.unpair();
     } catch {
       // unpair oublie l'appairage local dans tous les cas ; une erreur du magasin n'empêche pas la suite.
     }
+    // Retrait non confirmé par l'application : l'enseignant est prévenu (jamais « retirée » à tort).
+    const unconfirmed = revoked ? undefined : { code: 'CONNECTOR_UNREACHABLE' as const, message: UNPAIR_NOT_CONFIRMED_MESSAGE };
     try {
       const permission = await readPermission();
-      let next = makeState('not-found', false, permission);
+      let next = makeState('not-found', false, permission, { error: unconfirmed });
       if (permission === 'denied') {
         next = permissionDeniedState(false);
       } else if (permission !== 'prompt') {
         // Action de l'enseignant, autorisation déjà acquise (ou sans objet) : l'application est-elle toujours là ?
         const found = await client.hello(op.signal).catch(() => null);
-        if (found) next = makeState('found', false, permission, { appVersion: found.hello.version });
+        if (found) next = makeState('found', false, permission, { appVersion: found.hello.version, error: unconfirmed });
       }
       if (op.seq === seq) publish(makeState(next.kind, await client.hasPairing(), next.permission, { appVersion: next.appVersion, error: next.error }));
     } finally {

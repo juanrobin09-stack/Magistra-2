@@ -6,6 +6,9 @@
 // - URL magistra:// (ligne de commande, deuxième instance, macOS) : « open » → fenêtre au premier plan ; « pair » →
 //   origine hors de la liste autorisée : ignorée (journal seulement, aucune boîte) ; sinon une demande à la fois,
 //   au plus 3 boîtes de consentement par minute, puis accord (réactive le connecteur s'il était désactivé) ou refus.
+//   La boîte affiche le code de vérification de la demande (pairCode, dérivé du défi), que le site affiche aussi :
+//   une demande que l'enseignant n'a pas faite depuis le site (lien reçu, programme d'une autre session) ne
+//   correspond à aucun code affiché par le site.
 // - Retrait d'un navigateur ou désactivation : effet immédiat, générations du site concernées interrompues.
 
 import { MagistraError } from '../../shared/errors.js';
@@ -15,6 +18,7 @@ import {
 import type { Capabilities } from '../../shared/types.js';
 import type { SecretCipher } from '../aiConfig.js';
 import { ConnectorClientStore } from './clients.js';
+import { pairCode } from './crypto.js';
 import { PairingRegistry, type PairingTicket } from './pairing.js';
 import { ConnectorServer, type ConnectorGenerations, type ConnectorTimeouts } from './server.js';
 import { buildConnectorStatus } from './status.js';
@@ -32,29 +36,50 @@ export interface ConsentRequest {
   site: string;
   message: string;
   detail: string;
+  /** Code de vérification de la demande (« K7F-2QX »), affiché aussi par le site. */
+  code: string;
   /** Le connecteur est désactivé : l'accord le réactive. */
   reenables: boolean;
 }
 
 /**
+ * Arguments de la commande inscrite pour le schéma magistra:// sous Windows : « "<exe>" -- "%1" ». Après « -- »,
+ * Chromium n'analyse plus aucune option : une URL piégée (guillemets non encodés transmis par un raccourci, un document
+ * ou une autre application) ne peut pas injecter d'option comme --gpu-launcher ou --no-sandbox (classe
+ * CVE-2018-1000006 ; la parade intégrée d'Electron, appliquée après le réordonnancement des options par Chromium, ne
+ * bloque plus ce cas). Les MÊMES arguments servent à vérifier l'inscription, pour réécrire celle d'une version
+ * précédente (« "<exe>" "%1" »).
+ */
+export const PROTOCOL_HANDLER_ARGS: readonly string[] = ['--'];
+
+/**
  * URL magistra:// passée en argument (premier lancement par le site, ou deuxième instance sous Windows et Linux).
- * Le premier élément (exécutable) est ignoré ; seule la première URL du schéma est retenue, sans autre analyse ici
- * (parseAppUrl la vérifie ensuite strictement).
+ * Le premier élément (exécutable) est ignoré. Commande inscrite avec « -- » (PROTOCOL_HANDLER_ARGS) : l'URL doit être le
+ * SEUL argument qui le suit ; plusieurs arguments (URL coupée par des guillemets piégés) → null, rien n'est fait.
+ * Sans « -- » (développement, ancienne inscription) : première URL du schéma. Aucune autre analyse ici (parseAppUrl la
+ * vérifie ensuite strictement).
  */
 export function appUrlFromArgv(argv: readonly string[]): string | null {
   const prefix = `${CONNECTOR_URL_SCHEME}:`;
-  for (const arg of argv.slice(1)) {
-    if (typeof arg === 'string' && arg.slice(0, prefix.length).toLowerCase() === prefix) return arg;
+  const isAppUrl = (arg: unknown): arg is string => typeof arg === 'string' && arg.slice(0, prefix.length).toLowerCase() === prefix;
+  const args = argv.slice(1);
+  const terminator = args.indexOf('--');
+  if (terminator >= 0) {
+    const rest = args.slice(terminator + 1);
+    return rest.length === 1 && isAppUrl(rest[0]) ? rest[0] : null;
   }
-  return null;
+  return args.find(isAppUrl) ?? null;
 }
 
 export function consentMessage(origin: string): string {
   return `Autoriser ${originLabel(origin)} à utiliser l’intelligence locale de cet ordinateur ?`;
 }
 
-export function consentDetail(reenables: boolean): string {
+export function consentDetail(reenables: boolean, code?: string): string {
   const parts = [
+    ...(code
+      ? [`Code de vérification : ${code}. Le site Magistra affiche le même code pendant la connexion : s’il est différent, ou si vous n’avez pas demandé cette connexion à l’instant, cliquez sur « Refuser ».`]
+      : []),
     'Depuis ce navigateur, le site pourra envoyer des demandes de génération à l’intelligence artificielle de cet ordinateur et recevoir les contenus produits.',
     'Il n’aura aucun accès à vos fichiers, à vos autres applications ni aux réglages de Magistra.',
     'Vous pourrez retirer cette autorisation à tout moment dans Magistra → Réglages → « Site web Magistra ».',
@@ -232,10 +257,15 @@ export class LocalConnector {
     await this.clients.flush().catch(() => undefined);
   }
 
-  /** Réglages : retire l'autorisation d'un navigateur (effet immédiat, génération éventuelle interrompue). */
+  /**
+   * Réglages : retire l'autorisation d'un navigateur (effet immédiat, génération éventuelle interrompue). Le retrait
+   * en mémoire (partie synchrone de clients.revoke) précède l'arrêt de ses générations : aucune requête de ce
+   * navigateur ne peut plus en lancer une entre les deux.
+   */
   async revoke(clientId: string): Promise<ConnectorAppStatus> {
+    const revoked = this.clients.revoke(clientId);
     this.deps.generation.cancelOwner(clientId);
-    await this.clients.revoke(clientId);
+    await revoked;
     return this.status();
   }
 
@@ -294,11 +324,13 @@ export class LocalConnector {
 
   private async consent(ticket: PairingTicket): Promise<void> {
     const reenables = !this.clients.enabled;
+    const code = pairCode(ticket.challenge);
     const request: ConsentRequest = {
       origin: ticket.origin,
       site: originLabel(ticket.origin),
       message: consentMessage(ticket.origin),
-      detail: consentDetail(reenables),
+      detail: consentDetail(reenables, code),
+      code,
       reenables,
     };
     let approved: boolean;

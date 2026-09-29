@@ -5,14 +5,17 @@
 //  - le moteur est choisi AU MOMENT de l'appel (choix enregistré, sinon Magistra locale si ce navigateur est appairé) ;
 //  - JAMAIS de repli silencieux : Magistra locale injoignable ou non prête → capacités « non prête » (route
 //    'local-connector') et génération en erreur ; seul un choix explicite de l'enseignant passe au serveur en ligne ;
-//  - route locale : la demande et les extraits de documents vont UNIQUEMENT au connecteur local ; seul le résultat
-//    (done.record) est envoyé au serveur Magistra pour l'historique du compte (POST /api/generation).
+//  - route locale : la demande complète et les extraits de documents vont UNIQUEMENT au connecteur local ; la génération
+//    à enregistrer (done.record : résultat, sources citées et paramètres de la demande — sujet, consignes, contenu à
+//    adapter, noms des documents… ; jamais le texte des extraits ni le travail d'élève) est envoyée au serveur Magistra
+//    pour l'historique du compte (POST /api/generation). Le texte affiché le dit exactement (LOCAL_PRIVACY_MESSAGE).
 
 import { defaultMessage, MagistraError, toMagistraError, type ErrorCode } from '@shared/errors';
 import type { AINotice, Capabilities, GenerationEvent, GenerationRecordDraft, GenerationRequest } from '@shared/types';
 import { LOCAL_CONNECTOR_PRIVACY_MESSAGE } from '@/lib/generation/research';
 import { getEngineChoice } from '@/lib/localConnector/engineChoice';
 import type { LocalEngineController, LocalEngineState } from '@/lib/localConnector/controller';
+import { localEngineMessage } from '@/lib/localConnector/texts';
 import type { GenerationClient } from './types';
 
 /**
@@ -45,6 +48,16 @@ const STATE_CHANGING_ERRORS = new Set<ErrorCode>([
 ]);
 
 export type SaveGenerationDraft = (draft: GenerationRecordDraft) => Promise<{ id: string }>;
+
+/**
+ * Évènement de Magistra locale tel qu'affiché : messages d'erreur et d'avertissement filtrés (jamais le nom du moteur,
+ * d'adresse, de port ni de chemin ; texte neutre pour les codes du moteur), seconde barrière après l'application.
+ */
+function displayableEvent(event: GenerationEvent): GenerationEvent {
+  if (event.type !== 'error' && event.type !== 'warning') return event;
+  const message = localEngineMessage(event.code, event.message);
+  return message === event.message ? event : { ...event, message };
+}
 
 export type EngineRoute = NonNullable<Capabilities['route']>;
 
@@ -140,8 +153,9 @@ export class HybridGenerationClient implements GenerationClient {
       return;
     }
     let final: Extract<GenerationEvent, { type: 'done' | 'error' }> | null = null;
-    await this.local.client.generate(request, event => {
+    await this.local.client.generate(request, received => {
       if (final) return; // rien n'est transmis après l'évènement final
+      const event = displayableEvent(received);
       if (event.type === 'done') {
         final = event; // transmis après l'enregistrement du résultat
         return;
@@ -161,6 +175,9 @@ export class HybridGenerationClient implements GenerationClient {
       if (STATE_CHANGING_ERRORS.has(last.code)) void this.local.refresh();
       return;
     }
+    // Génération réussie : l'application a répondu (prouvé). L'état affiché (« application fermée », moteur pas encore
+    // démarré, occupée…) est relu, sans attendre — refresh ne publie que s'il change.
+    void this.local.refresh();
     await this.finish(last, onEvent);
   }
 

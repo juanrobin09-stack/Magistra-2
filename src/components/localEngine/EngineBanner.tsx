@@ -2,6 +2,7 @@
 // serveur en ligne → le prestataire est nommé (« serveur distant »). Changement de moteur : jamais silencieux, toujours
 // affiché ici (et annoncé aux lecteurs d'écran).
 
+import type { Ref } from 'react';
 import { Link } from 'react-router-dom';
 import { Cpu, Loader2, Send } from 'lucide-react';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
@@ -16,20 +17,24 @@ interface EngineBannerProps {
   /** Rappel discret : Magistra locale est connectée et prête alors que le serveur en ligne est choisi. */
   localAvailable: boolean;
   onUseLocal(): void;
+  /** Bandeau focalisable par programme (tabIndex -1) : focus rendu ici quand le bouton utilisé disparaît. */
+  focusRef?: Ref<HTMLDivElement>;
 }
 
-export default function EngineBanner({ route, providerName, localAvailable, onUseLocal }: EngineBannerProps) {
+export default function EngineBanner({ route, providerName, localAvailable, onUseLocal, focusRef }: EngineBannerProps) {
   const local = route === 'local-connector';
   const frame = local ? 'bg-success/5 border-success/20' : route === 'server' ? 'bg-accent/5 border-accent/20' : 'bg-white/[0.03] border-white/10';
   const Icon = route === null ? Loader2 : local ? Cpu : Send;
   return (
     <div className="space-y-2">
       <div
+        ref={focusRef}
+        tabIndex={-1}
         role="status"
         aria-live="polite"
         aria-label="Moteur de génération"
         data-testid="engine-banner"
-        className={`flex flex-wrap items-start gap-x-3 gap-y-1.5 p-3.5 rounded-xl border ${frame}`}
+        className={`flex flex-wrap items-start gap-x-3 gap-y-1.5 p-3.5 rounded-xl border ${frame} ${FOCUS_RING}`}
       >
         <Icon size={16} className={`shrink-0 mt-0.5 ${local ? 'text-success' : 'text-accent'} ${route === null ? 'animate-spin' : ''}`} aria-hidden="true" />
         <p className="flex-1 min-w-[12rem] text-sm text-mg-50 [overflow-wrap:anywhere]">

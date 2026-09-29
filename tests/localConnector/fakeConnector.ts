@@ -3,14 +3,15 @@
 // le vrai connecteur (electron/connector) est vérifiée par les tests d'intégration.
 //
 // Chaque port simule : rien (connexion refusée), l'application Magistra de l'enseignant, une AUTRE application
-// Magistra (autre session Windows : ne connaît pas ce navigateur), un imposteur (répond comme Magistra et accepte
-// tout, sans clé ni URL magistra:// reçue : jamais d'accusé de réception ni de preuve valides), ou un port qui ne
-// répond jamais.
+// Magistra (autre session Windows : ne connaît pas ce navigateur, 401 CONNECTOR_UNPAIRED sans marque de retrait), un
+// imposteur (répond comme Magistra et accepte tout, sans clé ni URL magistra:// reçue : jamais d'accusé de réception ni
+// de preuve valides), ou un port qui ne répond jamais. Un retrait dans l'application (revoke, revokeAll, DELETE
+// /v1/pair) garde la marque de retrait du navigateur, jointe ensuite à ses 401 (comme electron/connector).
 
 import { createECDH, createHash, createHmac, hkdfSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
-  canonicalPairAck, canonicalProof, canonicalRequest, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS,
-  CONNECTOR_PROTOCOL_VERSION, CONNECTOR_ROUTES, parseAppUrl, type ConnectorStatus,
+  canonicalPairAck, canonicalPairCode, canonicalProof, canonicalRequest, canonicalRevoked, CONNECTOR_CRYPTO, CONNECTOR_FORMATS,
+  CONNECTOR_HEADERS, CONNECTOR_LIMITS, CONNECTOR_PROTOCOL_VERSION, CONNECTOR_ROUTES, formatPairCode, parseAppUrl, type ConnectorStatus,
 } from '@shared/localConnector';
 import type { ErrorCode } from '@shared/errors';
 import type { GenerationEvent } from '@shared/types';
@@ -41,6 +42,8 @@ interface Demand {
   origin: string;
   state: 'awaiting' | 'approved' | 'refused';
   polls: number;
+  /** Code de vérification que la boîte de consentement afficherait. */
+  code: string;
 }
 
 export const READY_STATUS: ConnectorStatus = {
@@ -101,8 +104,14 @@ export class FakeConnector {
   version = '2.1.0';
   readonly ports = new Map<number, PortMode>();
   readonly clients = new Map<string, FakeClient>();
+  /** Marques de retrait des navigateurs retirés dans l'application (clientId → marque, origine). */
+  readonly revokedMarks = new Map<string, { mark: string; origin: string }>();
+  /** Marque jointe aux 401 d'un navigateur retiré : 'valid', absente (ancienne application), ou fausse. */
+  revokedMarkMode: 'valid' | 'none' | 'wrong' = 'valid';
   readonly requests: RecordedRequest[] = [];
   readonly openedUrls: string[] = [];
+  /** Codes de vérification affichés par les boîtes de consentement (un par demande reçue). */
+  readonly consentCodes: string[] = [];
   readonly cancelled: string[] = [];
   readonly seenNonces = new Set<string>();
   demand: Demand | null = null;
@@ -160,7 +169,9 @@ export class FakeConnector {
     if (parsed?.kind === 'pair') {
       this.onPairUrl?.();
       if (this.receivesUrls && this.allowedOrigins.includes(parsed.origin)) {
-        this.demand = { pairingId: parsed.pairingId, challenge: parsed.challenge, origin: parsed.origin, state: 'awaiting', polls: 0 };
+        const code = formatPairCode(createHash('sha256').update(canonicalPairCode(parsed.challenge), 'utf8').digest());
+        this.demand = { pairingId: parsed.pairingId, challenge: parsed.challenge, origin: parsed.origin, state: 'awaiting', polls: 0, code };
+        this.consentCodes.push(code);
       }
     }
   };
@@ -168,6 +179,33 @@ export class FakeConnector {
   /** Appairage direct (sans passer par le client) : renvoie la clé partagée, pour les tests du contrôleur. */
   addClient(clientId: string, key: Buffer, origin = SITE_ORIGIN): void {
     this.clients.set(clientId, { clientId, key, origin });
+  }
+
+  /** Retrait dans l'application (réglages) : marque de retrait calculée avec la clé, puis autorisation oubliée. */
+  revoke(clientId: string): void {
+    const client = this.clients.get(clientId);
+    if (!client) return;
+    const mark = createHmac('sha256', client.key).update(canonicalRevoked(clientId), 'utf8').digest('base64url');
+    this.revokedMarks.set(clientId, { mark, origin: client.origin });
+    this.clients.delete(clientId);
+  }
+
+  /** Retrait de tous les navigateurs autorisés dans l'application. */
+  revokeAll(): void {
+    for (const clientId of [...this.clients.keys()]) this.revoke(clientId);
+  }
+
+  /** L'application perd ses autorisations SANS retrait (fichier perdu, redémarrage sans chiffrement) : aucune marque. */
+  forgetAll(): void {
+    this.clients.clear();
+  }
+
+  /** 401 CONNECTOR_UNPAIRED, avec la marque de retrait si CETTE application a retiré ce navigateur. */
+  private unpaired(clientId: string, origin: string, mode: PortMode): Response {
+    const revoked = mode === 'magistra' ? this.revokedMarks.get(clientId) : undefined;
+    if (!revoked || revoked.origin !== origin || this.revokedMarkMode === 'none') return apiError(401, 'CONNECTOR_UNPAIRED');
+    const mark = this.revokedMarkMode === 'wrong' ? b64(randomBytes(32)) : revoked.mark;
+    return apiError(401, 'CONNECTOR_UNPAIRED', { [CONNECTOR_HEADERS.revoked]: mark });
   }
 
   fetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
@@ -208,7 +246,9 @@ export class FakeConnector {
       }
       return json(200, { ok: true });
     }
-    if (path === CONNECTOR_ROUTES.pair && method === 'POST') return mode === 'other-magistra' ? apiError(404, 'NOT_FOUND') : this.completePairing(body, origin);
+    // Hôte joint (en-tête Host que le navigateur envoie) : inclus dans l'accusé, la signature et la preuve.
+    const host = `127.0.0.1:${port}`;
+    if (path === CONNECTOR_ROUTES.pair && method === 'POST') return mode === 'other-magistra' ? apiError(404, 'NOT_FOUND') : this.completePairing(body, origin, host);
 
     // Routes signées.
     const clientId = headers[CONNECTOR_HEADERS.client.toLowerCase()] ?? '';
@@ -220,22 +260,22 @@ export class FakeConnector {
       return apiError(401, 'UNAUTHENTICATED');
     }
     const client = mode === 'magistra' ? this.clients.get(clientId) : undefined;
-    if (!client || client.origin !== origin) return apiError(401, 'CONNECTOR_UNPAIRED');
+    if (!client || client.origin !== origin) return this.unpaired(clientId, origin, mode);
     if (Math.abs(this.now() - Number(timestamp)) > CONNECTOR_LIMITS.clockSkewMs) return apiError(401, 'UNAUTHENTICATED');
     if (this.seenNonces.has(`${clientId}.${nonce}`)) return apiError(401, 'UNAUTHENTICATED');
     const bodySha256 = createHash('sha256').update(Buffer.from(body, 'utf8')).digest('base64url');
     const expected = createHmac('sha256', client.key)
-      .update(canonicalRequest({ method, path, origin, clientId, timestamp, nonce, bodySha256 }), 'utf8')
+      .update(canonicalRequest({ method, host, path, origin, clientId, timestamp, nonce, bodySha256 }), 'utf8')
       .digest();
     if (!sameMac(signature, expected)) return apiError(401, 'UNAUTHENTICATED');
     this.seenNonces.add(`${clientId}.${nonce}`);
     const proofKey = this.proofMode === 'wrong' ? randomBytes(32) : client.key;
     const proof: Record<string, string> = this.proofMode === 'none'
       ? {}
-      : { [CONNECTOR_HEADERS.proof]: createHmac('sha256', proofKey).update(canonicalProof(clientId, nonce), 'utf8').digest('base64url') };
+      : { [CONNECTOR_HEADERS.proof]: createHmac('sha256', proofKey).update(canonicalProof(clientId, nonce, host), 'utf8').digest('base64url') };
 
     if (path === CONNECTOR_ROUTES.pair && method === 'DELETE') {
-      this.clients.delete(clientId);
+      this.revoke(clientId);
       return json(200, { ok: true }, proof);
     }
     if (path === CONNECTOR_ROUTES.status && method === 'GET') return json(200, this.status, proof);
@@ -257,7 +297,7 @@ export class FakeConnector {
    * puis { pairingId, verifier, clientPublicKey } après l'accord. La réponse de l'enseignant arrive après
    * `answerAfterPolls` essais du premier temps.
    */
-  private completePairing(body: string, origin: string): Response {
+  private completePairing(body: string, origin: string, host: string): Response {
     const input = JSON.parse(body) as { pairingId: string; verifier?: string; clientPublicKey?: string };
     const d = this.demand;
     if (!d || d.pairingId !== input.pairingId) return apiError(404, 'NOT_FOUND');
@@ -265,7 +305,7 @@ export class FakeConnector {
     if (origin !== d.origin) return apiError(403, 'FORBIDDEN');
     const ack = this.ackMode === 'wrong'
       ? b64(randomBytes(32))
-      : createHash('sha256').update(canonicalPairAck(d.pairingId, d.challenge), 'utf8').digest('base64url');
+      : createHash('sha256').update(canonicalPairAck(d.pairingId, d.challenge, host), 'utf8').digest('base64url');
     const withAck = (reply: Record<string, unknown>) => (this.ackMode === 'none' ? reply : { ...reply, ack });
     if (input.verifier === undefined) {
       d.polls++;

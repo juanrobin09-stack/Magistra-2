@@ -186,8 +186,16 @@ CREATE INDEX IF NOT EXISTS generations_user_favorite_idx
 
 CREATE TABLE IF NOT EXISTS public.api_requests (
   user_id    text NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  kind       text NOT NULL DEFAULT 'generate'
 );
+
+-- Nature de la demande : « generate » (génération par le serveur d'IA) ou « save » (enregistrement d'une génération
+-- faite par Magistra locale, POST /api/generation). Les deux comptent pour le débit de l'utilisateur ; seules les
+-- générations comptent dans la limite globale, qui protège le serveur d'IA. Lignes antérieures : générations.
+ALTER TABLE public.api_requests ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'generate';
+ALTER TABLE public.api_requests DROP CONSTRAINT IF EXISTS api_requests_kind_check;
+ALTER TABLE public.api_requests ADD CONSTRAINT api_requests_kind_check CHECK (kind IN ('generate', 'save'));
 
 CREATE INDEX IF NOT EXISTS api_requests_user_created_idx ON public.api_requests (user_id, created_at);
 CREATE INDEX IF NOT EXISTS api_requests_created_idx ON public.api_requests (created_at);
@@ -285,8 +293,10 @@ $$;
 -- Début d'une génération : contrôles de concurrence et de débit en une seule transaction.
 --   p_max_active          : générations en cours au plus pour l'utilisateur (0 = pas de limite) ;
 --   p_max_requests        : demandes acceptées au plus pour l'utilisateur sur p_window_seconds s (0 = pas de contrôle) ;
---   p_max_global_requests : demandes acceptées au plus pour TOUT le déploiement sur la même fenêtre (0 = pas de contrôle) ;
---   p_active_ttl_seconds  : au-delà, une génération jamais marquée terminée ne compte plus.
+--   p_max_global_requests : GÉNÉRATIONS (kind « generate ») acceptées au plus pour TOUT le déploiement sur la même
+--                           fenêtre (0 = pas de contrôle) ; les enregistrements (« save ») n'y comptent jamais ;
+--   p_active_ttl_seconds  : au-delà, une génération jamais marquée terminée ne compte plus ;
+--   p_kind                : nature de la demande enregistrée (« generate » par défaut, « save »).
 -- Résultat : {"status": "ok", "id": <uuid à transmettre à magistra_end_generation, ou null>}
 --          | {"status": "busy"} | {"status": "rate_limited"} | {"status": "saturated"}.
 -- Une demande refusée n'est pas comptée.
@@ -294,13 +304,16 @@ $$;
 -- magistra_register_request sérialise les demandes d'un utilisateur (compte puis insertion) ; le
 -- contrôle global prend en plus un verrou commun, toujours APRÈS celui de l'utilisateur (ordre fixe :
 -- pas d'interblocage).
+-- Version précédente (sans p_kind) supprimée : un appel sans p_kind ne doit jamais être ambigu.
+DROP FUNCTION IF EXISTS public.magistra_begin_generation(text, integer, integer, integer, integer, integer);
 CREATE OR REPLACE FUNCTION public.magistra_begin_generation(
   p_user_id text,
   p_window_seconds integer,
   p_max_requests integer,
   p_max_global_requests integer,
   p_max_active integer,
-  p_active_ttl_seconds integer)
+  p_active_ttl_seconds integer,
+  p_kind text DEFAULT 'generate')
 RETURNS jsonb
 LANGUAGE plpgsql
 VOLATILE
@@ -318,7 +331,8 @@ BEGIN
      OR p_max_requests IS NULL OR p_max_requests < 0 OR p_max_requests > 100000
      OR p_max_global_requests IS NULL OR p_max_global_requests < 0 OR p_max_global_requests > 1000000
      OR p_max_active IS NULL OR p_max_active < 0 OR p_max_active > 1000
-     OR p_active_ttl_seconds IS NULL OR p_active_ttl_seconds < 1 OR p_active_ttl_seconds > 86400 THEN
+     OR p_active_ttl_seconds IS NULL OR p_active_ttl_seconds < 1 OR p_active_ttl_seconds > 86400
+     OR p_kind IS NULL OR p_kind NOT IN ('generate', 'save') THEN
     RAISE EXCEPTION 'magistra_begin_generation : paramètres invalides' USING ERRCODE = '22023';
   END IF;
 
@@ -348,29 +362,34 @@ BEGIN
       END IF;
     END IF;
 
-    -- 3. Débit de tout le déploiement.
+    -- 3. Débit de tout le déploiement (générations par le serveur d'IA seulement).
     IF p_max_global_requests > 0 THEN
       PERFORM pg_advisory_xact_lock(hashtextextended('magistra_rate_global', 0));
       SELECT count(*) INTO v_count
         FROM public.api_requests
-       WHERE created_at >= now() - make_interval(secs => p_window_seconds);
+       WHERE created_at >= now() - make_interval(secs => p_window_seconds)
+         AND kind = 'generate';
       IF v_count >= p_max_global_requests THEN
         RETURN jsonb_build_object('status', 'saturated');
       END IF;
     END IF;
 
-    INSERT INTO public.api_requests (user_id, created_at) VALUES (p_user_id, now());
+    INSERT INTO public.api_requests (user_id, created_at, kind) VALUES (p_user_id, now(), p_kind);
   END IF;
 
   IF p_max_active > 0 THEN
     INSERT INTO public.active_generations (user_id, started_at) VALUES (p_user_id, now()) RETURNING id INTO v_id;
   END IF;
 
-  -- Ménage occasionnel des traces anciennes des autres utilisateurs (un seul nettoyage à la fois).
+  -- Ménage occasionnel des traces anciennes des autres utilisateurs (un seul nettoyage à la fois). Places de
+  -- génération : seulement par un appel qui les gère (p_max_active > 0), donc avec leur vraie durée de vie — jamais
+  -- avec celle d'une autre sorte de demande, qui libérerait trop tôt les générations en cours des autres enseignants.
   IF random() < 0.02 THEN
     IF pg_try_advisory_xact_lock(hashtextextended('magistra_cleanup', 0)) THEN
       DELETE FROM public.api_requests WHERE created_at < now() - interval '2 days';
-      DELETE FROM public.active_generations WHERE started_at < now() - make_interval(secs => p_active_ttl_seconds);
+      IF p_max_active > 0 THEN
+        DELETE FROM public.active_generations WHERE started_at < now() - make_interval(secs => p_active_ttl_seconds);
+      END IF;
     END IF;
   END IF;
   RETURN jsonb_build_object('status', 'ok', 'id', v_id);
@@ -465,12 +484,12 @@ REVOKE ALL ON TABLE public.profiles, public.generations, public.api_requests, pu
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.profiles, public.generations, public.api_requests, public.active_generations TO service_role;
 
 REVOKE ALL ON FUNCTION public.magistra_register_request(text, integer, integer) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.magistra_begin_generation(text, integer, integer, integer, integer, integer) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.magistra_begin_generation(text, integer, integer, integer, integer, integer, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.magistra_end_generation(text, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.magistra_stats(text, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.magistra_touch_updated_at() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.magistra_register_request(text, integer, integer) TO service_role;
-GRANT EXECUTE ON FUNCTION public.magistra_begin_generation(text, integer, integer, integer, integer, integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.magistra_begin_generation(text, integer, integer, integer, integer, integer, text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.magistra_end_generation(text, uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.magistra_stats(text, text) TO service_role;
 

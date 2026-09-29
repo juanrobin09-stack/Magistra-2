@@ -8,6 +8,7 @@ import type { SaveGenerationBody } from '../../shared/apiContract.js';
 import { MagistraError } from '../../shared/errors.js';
 import { runGeneration } from '../../shared/pipeline.js';
 import type { GenerationEvent, GenerationRecord, GenerationRecordDraft, HistoryPage } from '../../shared/types.js';
+import { generationSlotTtlSeconds } from '../../server/config.js';
 import { MemoryStore, type GenerationStore } from '../../server/store.js';
 import { collect, jsonResponse, mockFetch } from '../shared/helpers.js';
 import { call, startApi, testDeps, validRequest, type TestServer } from './helpers.js';
@@ -160,6 +161,46 @@ describe('POST /api/generation — enregistrement d’une génération de Magist
     expect((await store.listGenerations('user_A', { limit: 10 })).items).toHaveLength(3);
     // Aucune place de génération n'est réservée par un enregistrement.
     expect(store.activeCount('user_A')).toBe(0);
+  });
+
+  it('limite GLOBALE du serveur d’IA : les enregistrements de Magistra locale ne la consomment jamais (jamais de faux AI_BUSY)', async () => {
+    const store = new MemoryStore();
+    // Cinq enseignants (token-A … token-E).
+    const verifier = async (token: string) => {
+      const m = /^token-([A-E])$/.exec(token);
+      if (!m) throw new MagistraError('UNAUTHENTICATED');
+      return `user_${m[1]}`;
+    };
+    server = await startApi(testDeps({ store, env: { RATE_LIMIT_PER_MINUTE: '10', RATE_LIMIT_GLOBAL_PER_MINUTE: '2' }, overrides: { verifier } }));
+    for (const token of ['token-A', 'token-A', 'token-C', 'token-C']) expect((await save(server.url, token, { record: draft })).status).toBe(201);
+    // Le serveur d'IA n'a rien fait : les générations en ligne passent.
+    for (const token of ['token-B', 'token-D']) {
+      const generated = await call(server.url, '/api/generate', token, { method: 'POST', body: JSON.stringify(validRequest) });
+      expect(generated.status).toBe(200);
+      await generated.text();
+    }
+    // La limite globale s'applique bien aux générations elles-mêmes.
+    const saturated = await call(server.url, '/api/generate', 'token-E', { method: 'POST', body: JSON.stringify(validRequest) });
+    expect(saturated.status).toBe(503);
+    expect((await saturated.json()).error.code).toBe('AI_BUSY');
+    // Et les enregistrements restent possibles (ils ne passent pas par le serveur d'IA).
+    expect((await save(server.url, 'token-E', { record: draft })).status).toBe(201);
+  });
+
+  it('compteur partagé (Supabase) : enregistrement compté « save », avec la durée de vie des places d’une génération', async () => {
+    const store = new MemoryStore();
+    const seen: Parameters<GenerationStore['beginGeneration']>[1][] = [];
+    const begin = store.beginGeneration.bind(store);
+    store.beginGeneration = async (userId, limits) => {
+      seen.push(limits);
+      return begin(userId, limits);
+    };
+    const deps = testDeps({ store, env: { RATE_LIMIT_PER_MINUTE: '10' } });
+    server = await startApi(deps);
+    expect((await save(server.url, 'token-A', { record: draft })).status).toBe(201);
+    expect(seen).toEqual([{ windowSeconds: 60, maxRequests: 10, maxGlobalRequests: 0, maxActive: 0, activeTtlSeconds: generationSlotTtlSeconds(deps.config), kind: 'save' }]);
+    // Jamais la fenêtre de débit (60 s) : le ménage de la base libérerait trop tôt les générations en cours des autres.
+    expect(generationSlotTtlSeconds(deps.config)).toBeGreaterThan(60);
   });
 
   it('RATE_LIMIT_PER_MINUTE=0 : aucune limite, aucun compteur', async () => {

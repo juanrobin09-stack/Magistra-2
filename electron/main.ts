@@ -29,7 +29,7 @@ import type { FetchLike } from '../shared/ai/provider.js';
 import { IPC, type AIProgressEvent, type UpdateCheckResult } from '../shared/ipc.js';
 import { CONNECTOR_PORTS, CONNECTOR_URL_SCHEME, OFFICIAL_WEB_ORIGINS } from '../shared/localConnector.js';
 import { AIConfigStore, safeStorageCipher } from './aiConfig.js';
-import { appUrlFromArgv, LocalConnector, type ConsentRequest } from './connector/service.js';
+import { appUrlFromArgv, LocalConnector, PROTOCOL_HANDLER_ARGS, type ConsentRequest } from './connector/service.js';
 import { GenerationManager } from './generation.js';
 import { detectHardware, freeDiskBytes, ollamaModelsDir, systemHardwareDeps } from './hardware.js';
 import { registerIpcHandlers } from './ipc.js';
@@ -554,7 +554,12 @@ async function startConnector(): Promise<void> {
   if (!current || smoke) return;
   if (app.isPackaged) {
     try {
-      if (!app.isDefaultProtocolClient(CONNECTOR_URL_SCHEME)) app.setAsDefaultProtocolClient(CONNECTOR_URL_SCHEME);
+      // Commande « "<exe>" -- "%1" » : aucune option ne peut être injectée par l'URL (PROTOCOL_HANDLER_ARGS). Vérifiée
+      // avec les mêmes arguments : l'inscription d'une version précédente, sans « -- », est réécrite.
+      const args = [...PROTOCOL_HANDLER_ARGS];
+      if (!app.isDefaultProtocolClient(CONNECTOR_URL_SCHEME, process.execPath, args)) {
+        app.setAsDefaultProtocolClient(CONNECTOR_URL_SCHEME, process.execPath, args);
+      }
     } catch (err) {
       console.warn('[magistra] Enregistrement du schéma magistra:// impossible :', err instanceof Error ? err.message : err);
     }

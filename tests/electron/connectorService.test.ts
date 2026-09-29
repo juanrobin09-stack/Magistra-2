@@ -2,17 +2,17 @@
 // réactivation, remplacement, limite par minute), réglage « activé », retrait d'un navigateur, ports occupés.
 // Boîte de consentement simulée ; vrai serveur HTTP sur un port éphémère.
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer as createNetServer, type Server as NetServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { buildPairingUrl, type ConnectorAppStatus } from '../../shared/localConnector.js';
+import { buildPairingUrl, PAIR_CODE_RE, parseAppUrl, type ConnectorAppStatus } from '../../shared/localConnector.js';
 import type { Capabilities } from '../../shared/types.js';
 import type { SecretCipher } from '../../electron/aiConfig.js';
-import { randomToken } from '../../electron/connector/crypto.js';
+import { pairCode, randomToken } from '../../electron/connector/crypto.js';
 import {
-  appUrlFromArgv, DEV_DISABLED_PROBLEM, LocalConnector, NO_PORT_PROBLEM, type ConnectorGenerationHost, type ConsentRequest, type LocalConnectorDeps,
+  appUrlFromArgv, DEV_DISABLED_PROBLEM, LocalConnector, NO_PORT_PROBLEM, PROTOCOL_HANDLER_ARGS, type ConnectorGenerationHost, type ConsentRequest, type LocalConnectorDeps,
 } from '../../electron/connector/service.js';
 
 const ORIGIN = 'https://magistra-2.vercel.app';
@@ -99,6 +99,27 @@ describe('URL magistra:// sur la ligne de commande', () => {
     expect(appUrlFromArgv(['magistra://open'])).toBeNull();
     expect(appUrlFromArgv(['electron', '.', 'https://magistra-2.vercel.app'])).toBeNull();
     expect(appUrlFromArgv([])).toBeNull();
+  });
+
+  it('commande inscrite « "<exe>" -- "%1" » : aucune option après « -- » ; l’URL doit y être SEULE (sinon URL piégée ignorée)', () => {
+    // Windows remplace %1 tel quel : une URL piégée par des guillemets se retrouve en plusieurs arguments.
+    expect(PROTOCOL_HANDLER_ARGS).toEqual(['--']);
+    const url = 'magistra://pair?v=2&id=AAAAAAAAAAAAAAAAAAAAAA&challenge=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB&origin=https%3A%2F%2Fmagistra-2.vercel.app';
+    expect(appUrlFromArgv(['Magistra.exe', '--', url])).toBe(url);
+    // Deuxième instance : options ajoutées par Chromium AVANT « -- ».
+    expect(appUrlFromArgv(['Magistra.exe', '--allow-file-access-from-files', '--', 'magistra://open'])).toBe('magistra://open');
+    expect(appUrlFromArgv(['Magistra.exe', '--', 'magistra://open', '--gpu-launcher=cmd /c calc.exe &&', '--no-sandbox'])).toBeNull();
+    expect(appUrlFromArgv(['Magistra.exe', '--', 'magistra://open', 'magistra://pair'])).toBeNull();
+    expect(appUrlFromArgv(['Magistra.exe', 'magistra://open', '--'])).toBeNull();
+    expect(appUrlFromArgv(['Magistra.exe', '--', 'https://evil.example'])).toBeNull();
+    expect(appUrlFromArgv(['Magistra.exe', '--'])).toBeNull();
+  });
+
+  it('l’application inscrit ET vérifie le schéma avec ces arguments (jamais « "<exe>" "%1" » sans « -- »)', () => {
+    const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8');
+    const calls = [...main.matchAll(/\b(?:setAs|is)DefaultProtocolClient\(([^)]*)\)/g)].map(m => m[1].replace(/\s+/g, ' ').trim());
+    expect(calls).toEqual(['CONNECTOR_URL_SCHEME, process.execPath, args', 'CONNECTOR_URL_SCHEME, process.execPath, args']);
+    expect(main).toContain('const args = [...PROTOCOL_HANDLER_ARGS];');
   });
 });
 
@@ -216,14 +237,23 @@ describe('URL magistra:// et consentement', () => {
     });
     await c.init();
     await c.start();
-    await c.handleAppUrl(pairUrl(), focus);
+    const url = pairUrl();
+    await c.handleAppUrl(url, focus);
+    const parsed = parseAppUrl(url);
+    if (parsed?.kind !== 'pair') throw new Error('URL magistra://pair attendue');
     expect(requests[0]).toEqual({
       origin: ORIGIN,
       site: 'magistra-2.vercel.app',
       message: 'Autoriser magistra-2.vercel.app à utiliser l’intelligence locale de cet ordinateur ?',
       detail: expect.stringContaining('demandes de génération'),
+      code: pairCode(parsed.challenge),
       reenables: false,
     });
+    // Code de vérification de CETTE demande (le site affiche le même) : une demande que l'enseignant n'a pas faite
+    // depuis le site ne correspond à aucun code affiché.
+    expect(requests[0].code).toMatch(PAIR_CODE_RE);
+    expect(requests[0].detail).toContain(`Code de vérification : ${requests[0].code}.`);
+    expect(requests[0].detail).toContain('si vous n’avez pas demandé cette connexion à l’instant, cliquez sur « Refuser »');
     expect(requests[0].detail).toContain('aucun accès à vos fichiers, à vos autres applications ni aux réglages');
     expect(requests[0].detail).toContain('Magistra → Réglages → « Site web Magistra »');
     expect(requests[0].detail).not.toContain('réactivera');

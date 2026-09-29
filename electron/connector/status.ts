@@ -1,13 +1,16 @@
 // État du moteur transmis au site (GET /v1/status) et textes rendus au navigateur par le connecteur local.
 // Module PUR Node (aucun import d'Electron).
 //
-// Rien de ce qui part vers le site ne contient d'adresse, de port, de chemin de fichier ni de réglage du moteur :
-// le libellé d'un moteur distant (souvent son nom d'hôte) est remplacé par un libellé neutre, et tout message
-// d'erreur ou d'avertissement qui ressemble à une adresse ou à un chemin est remplacé par le message générique de
-// son code (défense en profondeur : les messages du moteur local n'en contiennent normalement pas).
+// Rien de ce qui part vers le site ne contient d'adresse, de port, de chemin de fichier, de nom ni de réglage du
+// moteur : le libellé d'un moteur distant (souvent son nom d'hôte) est remplacé par un libellé neutre ; les codes du
+// MOTEUR (installé, démarré, à jour, modèle présent) reçoivent toujours un texte neutre pour le site
+// (LOCAL_ENGINE_SITE_MESSAGES : les messages de l'application pour ces codes citent le moteur, sa version, son dossier
+// d'installation, un extrait de son journal ou des boutons de l'assistant de configuration) ; tout autre message qui
+// ressemble à une adresse, à un port, à un chemin ou qui nomme le moteur est remplacé par le message générique de son
+// code.
 
 import { defaultMessage, type ErrorCode } from '../../shared/errors.js';
-import type { ConnectorStatus } from '../../shared/localConnector.js';
+import { LOCAL_ENGINE_SITE_MESSAGES, type ConnectorStatus } from '../../shared/localConnector.js';
 import type { AINotice, Capabilities, GenerationEvent } from '../../shared/types.js';
 
 /** Libellé d'un moteur qui n'est pas sur cet ordinateur (son nom d'hôte n'est jamais transmis). */
@@ -16,8 +19,9 @@ const MAX_TEXT = 600;
 const MAX_LABEL = 120;
 
 /**
- * Motifs qui ne doivent jamais sortir de l'application : URL (tout schéma), boucle locale, adresse IP, port,
- * chemins Windows (C:\…, \\serveur\…) ou Unix (/home/…).
+ * Motifs qui ne doivent jamais sortir de l'application : URL (tout schéma), boucle locale, adresse IP, port (« :11434 »,
+ * « le port 11434 »), chemins Windows (C:\…, \\serveur\…, ~\…), Unix (/home/…, ~/…) ou dossier d'installation,
+ * nom du moteur (Ollama, ollama.exe : jamais affiché sur le site).
  */
 const LEAK_PATTERNS: readonly RegExp[] = [
   /\b[a-z][a-z0-9+.-]{1,20}:\/\//i,
@@ -25,21 +29,34 @@ const LEAK_PATTERNS: readonly RegExp[] = [
   /\b\d{1,3}(?:\.\d{1,3}){3}\b/,
   /\[?[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}\]?(?::\d+)?/i,
   /[A-Za-z0-9\])]:\d{2,5}\b/,
+  /\bport\s+\d{2,5}\b/i,
   /\b[A-Za-z]:[\\/]/,
   /\\\\[^\s\\]+\\/,
   /(?:^|[\s("'«])\/(?:[\w.-]+\/)+[\w.-]*/,
+  /~[\\/]/,
+  /program\s*files/i,
+  /ollama/i,
 ];
+
+/** Dernier recours quand le message générique du code lui-même ne peut pas partir. */
+const GENERIC_ENGINE_MESSAGE = "L'intelligence locale de Magistra a rencontré un problème : ouvrez l'application Magistra pour en voir la cause.";
 
 /** Vrai si le texte peut être transmis tel quel au site (aucune adresse, aucun port, aucun chemin). */
 export function isShareableText(text: string): boolean {
   return LEAK_PATTERNS.every(re => !re.test(text));
 }
 
-/** Message transmis au site pour ce code : le message d'origine s'il est sûr, sinon le message générique. */
+/**
+ * Message transmis au site pour ce code : texte neutre pour les codes du moteur (toujours), sinon le message d'origine
+ * s'il est sûr, sinon le message générique du code (ou, s'il nomme lui-même le moteur, un texte générique).
+ */
 export function publicMessage(code: ErrorCode, message: string): string {
+  const neutral = LOCAL_ENGINE_SITE_MESSAGES[code];
+  if (neutral) return neutral;
   const text = typeof message === 'string' ? message.trim() : '';
-  if (!text || text.length > MAX_TEXT || !isShareableText(text)) return defaultMessage(code);
-  return text;
+  if (text && text.length <= MAX_TEXT && isShareableText(text)) return text;
+  const fallback = defaultMessage(code);
+  return isShareableText(fallback) ? fallback : GENERIC_ENGINE_MESSAGE;
 }
 
 export function publicNotice(notice: AINotice | undefined): AINotice | undefined {
