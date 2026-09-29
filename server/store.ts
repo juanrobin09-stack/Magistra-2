@@ -5,6 +5,7 @@
 // pas à l'utilisateur est indiscernable d'un contenu inexistant (NOT_FOUND).
 //
 //  - SupabaseStore : production (clé service_role, côté serveur uniquement) ;
+//  - FileStore     : fichiers JSON sur le disque du serveur (mode personnel, serveur autonome) : voir fileStore.ts ;
 //  - MemoryStore   : tests automatiques et développement local sans base de données.
 
 import { randomUUID } from 'node:crypto';
@@ -47,7 +48,7 @@ export type GenerationAdmission =
   | { status: 'saturated' };
 
 export interface GenerationStore {
-  readonly kind: 'supabase' | 'memory';
+  readonly kind: 'supabase' | 'memory' | 'file';
   listGenerations(userId: string, query: HistoryQuery): Promise<HistoryPage>;
   getGeneration(userId: string, id: string): Promise<GenerationRecord>;
   setFavorite(userId: string, id: string, value: boolean): Promise<void>;

@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:real-ai": "node scripts/real-ai-check.mjs",
     "preview": "vite preview",
     "electron:build": "node scripts/build-electron.mjs",
     "dev:electron": "node scripts/dev-electron.mjs",
@@ -20,6 +21,7 @@
     "build:electron": "npm run build && node scripts/build-electron.mjs && electron-builder --win --x64",
     "build:electron:dir": "npm run build && node scripts/build-electron.mjs && electron-builder --dir",
     "build:server": "node scripts/build-server.mjs",
+    "ai:check": "node scripts/build-server.mjs --run-ai-check",
     "start": "node dist-server/standalone.js",
     "licenses": "node scripts/check-licenses.mjs"
   },

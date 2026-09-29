@@ -4,14 +4,17 @@
 //
 // Sert l'application (dossier dist/, avec repli sur index.html pour les routes de l'interface)
 // et l'API /api/* (même code que sur Vercel). Aucune dépendance d'hébergeur.
-// Variables : voir .env.example (PORT, HOST, MAGISTRA_STATIC_DIR, CSP_EXTRA_ORIGINS…).
+// Variables : voir .env.example (PORT, HOST, MAGISTRA_STATIC_DIR, CSP_EXTRA_ORIGINS, MAGISTRA_AUTH…).
+//
+// Sans Clerk et avec HOST=127.0.0.1 : mode personnel (un seul utilisateur, cet ordinateur uniquement, jeton
+// secret affiché dans le terminal). Le serveur REFUSE de démarrer en mode personnel sur une autre adresse.
 
 import { createReadStream, existsSync, realpathSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { getProcessDeps } from './deps.js';
+import { createServerDeps, describeStartup } from './deps.js';
 import { handleNodeRequest, type DepsSource } from './node.js';
 
 const MIME_TYPES: Record<string, string> = {
@@ -221,18 +224,29 @@ function main(): void {
       console.error('[magistra] Fichier de configuration illisible : il est ignoré.');
     }
   }
-  const deps = getProcessDeps();
+  const host = process.env.HOST?.trim() || undefined;
+  const requestedPort = Number(process.env.PORT ?? 3000);
+  const port = Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort < 65_536 ? requestedPort : 3000;
+  // HOST vide = toutes les interfaces : le mode personnel (sans compte) n'est alors jamais choisi.
+  const deps = createServerDeps(process.env, { listen: { host: host ?? null, port } });
+  if (deps.startupError) {
+    console.error(`[magistra] Démarrage refusé : ${deps.startupError}`);
+    process.exit(1);
+  }
   const staticDir = process.env.MAGISTRA_STATIC_DIR ? path.resolve(process.env.MAGISTRA_STATIC_DIR) : defaultStaticDir();
   if (!existsSync(path.join(staticDir, 'index.html'))) {
     console.error(`[magistra] Application non construite (${staticDir}/index.html absent) : exécutez « npm run build ».`);
   }
-  const port = Number(process.env.PORT ?? 3000);
-  const host = process.env.HOST || undefined;
   const server = createStandaloneServer({ staticDir, deps, cspExtraOrigins: parseExtraOrigins(process.env.CSP_EXTRA_ORIGINS) });
-  server.listen(Number.isInteger(port) && port > 0 && port < 65_536 ? port : 3000, host, () => {
+  server.listen(port, host, () => {
     const address = server.address();
+    const actualPort = typeof address === 'object' && address ? address.port : port;
+    deps.personal?.setPort(actualPort);
     const shown = typeof address === 'object' && address ? `${host ?? 'localhost'}:${address.port}` : String(address);
     console.log(`[magistra] Serveur démarré : http://${shown}`);
+    void describeStartup(deps, actualPort).then(lines => {
+      for (const line of lines) console.log(`[magistra] ${line}`);
+    });
   });
   const stop = () => {
     console.log('[magistra] Arrêt du serveur…');

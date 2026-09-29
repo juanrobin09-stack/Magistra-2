@@ -271,6 +271,7 @@ export async function handleNodeRequest(req: IncomingMessage, res: ServerRespons
         }
       },
       signal: controller.signal,
+      ...(req.socket?.remoteAddress ? { remoteAddress: req.socket.remoteAddress } : {}),
     };
     const result = await handleApi(route, apiRequest, deps);
     if (result.type === 'json') {

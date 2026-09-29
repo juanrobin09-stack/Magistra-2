@@ -39,7 +39,7 @@ describe('déploiement', () => {
 
   it('une fonction Vercel par route du contrat, et plus aucune ancienne route', () => {
     const files = readdirSync(path.join(root, 'api')).sort();
-    expect(files).toEqual(['account.ts', 'clerk-webhook.ts', 'generate.ts', 'generation.ts', 'history.ts', 'profile.ts', 'stats.ts', 'status.ts']);
+    expect(files).toEqual(['account.ts', 'clerk-webhook.ts', 'generate.ts', 'generation.ts', 'history.ts', 'mode.ts', 'profile.ts', 'stats.ts', 'status.ts']);
     // Chaque route du serveur a sa fonction Vercel, servie hors de la réécriture vers l'interface.
     for (const route of Object.keys(ROUTE_METHODS)) {
       expect(files, route).toContain(`${route}.ts`);
@@ -90,6 +90,30 @@ describe('déploiement', () => {
       'CLERK_AUTHORIZED_PARTIES', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_URL', 'PORT', 'CSP_EXTRA_ORIGINS']) {
       expect(vars.some(v => v.name === name), name).toBe(true);
     }
+  });
+
+  it('.env.example : préréglages (solution gratuite la plus simple), mode personnel, détection locale, transparence', () => {
+    const env = read('.env.example');
+    for (const name of ['AI_PRESET', 'AI_AUTODETECT', 'AI_HEALTH_TIMEOUT_MS', 'AI_PROVIDER_PRIVACY_URL', 'MAGISTRA_AUTH', 'MAGISTRA_ADMIN_CONTACT',
+      'MAGISTRA_STORE', 'MAGISTRA_DATA_DIR', 'HOST']) {
+      expect(env, name).toMatch(new RegExp(`^${name}=`, 'm'));
+    }
+    // Préréglage conseillé présent mais commenté : aucun envoi à un tiers sans décision de l'administrateur.
+    expect(env).toMatch(/^# AI_PRESET=ovhcloud$/m);
+    expect(env).toMatch(/^AI_PRESET=$/m);
+    expect(env).toContain('SOLUTION GRATUITE LA PLUS SIMPLE');
+    expect(env).toContain("L'interface l'annonce");
+    expect(env).toMatch(/^HOST=127\.0\.0\.1$/m);
+  });
+
+  it('npm run ai:check et dist-server/ai-check.js ; données du mode personnel ignorées par git', () => {
+    const pkg = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
+    expect(pkg.scripts['ai:check']).toBe('node scripts/build-server.mjs --run-ai-check');
+    const build = read('scripts/build-server.mjs');
+    expect(build).toContain("'aiCheck.ts'");
+    expect(build).toContain("'ai-check.js'");
+    expect(build).toContain('projectRoot: root');
+    expect(read('.gitignore')).toMatch(/^\.magistra-data$/m);
   });
 
   it('supabase-schema.sql : aucune politique permissive active, fonctions protégées', () => {

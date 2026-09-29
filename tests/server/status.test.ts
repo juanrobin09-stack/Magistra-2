@@ -43,7 +43,7 @@ describe('configuration', () => {
     });
     expect(cfg.ai.provider).toEqual({
       kind: 'openai-compatible', baseUrl: 'https://ia.univ.fr/v1', model: 'mistral-small', apiKey: 'cle-ia-ultra-secrete',
-      label: 'Serveur universitaire', contextTokens: 65_536, local: false,
+      label: 'Serveur universitaire', contextTokens: 65_536, local: false, recipient: 'administrateur', timeZone: 'Europe/Paris',
     });
     expect(cfg.research.academic).toBe(false);
     expect(cfg.research.searxngUrl).toBe('https://searx.univ.fr');
@@ -53,6 +53,14 @@ describe('configuration', () => {
   it('Ollama sans URL : adresse locale par défaut', () => {
     const cfg = loadConfig({ AI_PROVIDER: 'ollama', AI_MODEL: 'ministral-3:14b' });
     expect(cfg.ai.provider).toMatchObject({ kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: 'ministral-3:14b' });
+  });
+
+  it('Ollama : contexte du niveau Magistra, 12 288 tokens pour un autre modèle (mémoire), AI_CONTEXT_TOKENS prioritaire', () => {
+    expect(loadConfig({ AI_PROVIDER: 'ollama', AI_MODEL: 'ministral-3:14b' }).ai.contextTokens).toBe(12_288);
+    expect(loadConfig({ AI_PROVIDER: 'ollama', AI_MODEL: 'qwen3:0.6b' }).ai.contextTokens).toBe(12_288);
+    expect(loadConfig({ AI_PROVIDER: 'ollama', AI_MODEL: 'qwen3:0.6b', AI_CONTEXT_TOKENS: '4096' }).ai.contextTokens).toBe(4_096);
+    // Serveur compatible OpenAI : contexte non réservé par Magistra, valeur par défaut inchangée.
+    expect(loadConfig({ AI_BASE_URL: 'https://ia.univ.fr/v1', AI_MODEL: 'qwen3:0.6b' }).ai.contextTokens).toBe(32_768);
   });
 
   it('valeurs invalides : signalées et remplacées par les valeurs par défaut', () => {
@@ -89,7 +97,14 @@ describe('GET /api/status', () => {
     expect(raw).not.toContain('ia.univ.fr');
     const status = JSON.parse(raw) as ServerStatus;
     expect(status).toEqual({
-      ai: { ok: true, label: 'IA simulée', model: 'mistral-small' },
+      ai: {
+        ok: true, label: 'IA simulée', model: 'mistral-small',
+        // Prestataire non identifié : le libellé de l'administrateur est repris, jamais l'adresse.
+        providerInfo: {
+          label: 'Serveur universitaire', thirdParty: true, country: 'Inconnu',
+          retention: 'Selon les conditions du prestataire', training: 'Selon les conditions du prestataire',
+        },
+      },
       research: { academic: true, web: true, institutional: true, wikipedia: true },
       maxDocumentChars: maxDocumentCharsFor(32_768),
     });
@@ -119,8 +134,8 @@ describe('GET /api/status', () => {
     expect((await res.json()).error.code).toBe('SERVER_MISCONFIGURED');
   });
 
-  it('mode développement : le message indique la variable à renseigner', async () => {
-    const deps = createServerDeps({}, { log: silentLog, dev: true });
+  it('mode développement (comptes Clerk demandés) : le message indique la variable à renseigner', async () => {
+    const deps = createServerDeps({ MAGISTRA_AUTH: 'clerk' }, { log: silentLog, dev: true });
     expect(deps.store?.kind).toBe('memory');
     server = await startApi(deps);
     const res = await call(server.url, '/api/history', 'token-A');

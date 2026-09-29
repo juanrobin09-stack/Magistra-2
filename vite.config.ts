@@ -20,6 +20,8 @@ export default defineConfig(({ mode }) => {
         '@shared': path.resolve(root, 'shared'),
       },
     },
+    // server.fs.deny est complété par magistraDevApi : le dossier de données du mode personnel (.magistra-data ou
+    // MAGISTRA_DATA_DIR : jeton d'accès secret, historique, profil) n'est jamais servi par Vite.
     server: { port: 5173 },
     worker: { format: 'es' },
     build: {

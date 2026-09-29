@@ -28,7 +28,10 @@ export interface TestDepsOptions {
 
 export function testDeps(options: TestDepsOptions = {}): ServerDeps & { store: GenerationStore | null } {
   const deps = createServerDeps(
-    { RATE_LIMIT_PER_MINUTE: '1000', ...options.env },
+    // Détection automatique de l'IA locale coupée : sinon un vrai Ollama en marche sur le poste du développeur
+    // (127.0.0.1:11434) serait détecté et fausserait les tests « IA non configurée » (constaté avec un vrai Ollama).
+    // Les tests de la détection (tests/server/localAI.test.ts) utilisent createServerDeps avec de faux serveurs.
+    { RATE_LIMIT_PER_MINUTE: '1000', AI_AUTODETECT: 'false', ...options.env },
     {
       verifier: fakeVerifier,
       store: options.store === undefined ? new MemoryStore() : options.store,

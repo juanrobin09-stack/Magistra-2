@@ -2,7 +2,8 @@
 // Contrat : shared/apiContract.ts.
 //
 // Ordre des vérifications pour chaque requête :
-//   méthode autorisée → serveur configuré → jeton Clerk vérifié (identité = claim « sub »)
+//   (mode personnel : connexion locale, Host et Origin) → méthode autorisée → route publique /api/mode
+//   → serveur configuré → jeton vérifié (Clerk : identité = claim « sub » ; mode personnel : jeton secret)
 //   → paramètres validés → opération filtrée par l'utilisateur du jeton.
 
 import type { ServerStatus } from '../shared/apiContract.js';
@@ -12,16 +13,18 @@ import type { GenerationEvent, TeacherProfile } from '../shared/types.js';
 import { validateGenerationRequest } from '../shared/validation.js';
 import { authenticate } from './auth.js';
 import { verifyWebhook, WEBHOOK_BODY_LIMIT } from './clerkWebhook.js';
-import { generationSlotTtlSeconds } from './config.js';
-import type { ServerDeps } from './deps.js';
+import { generationSlotTtlSeconds, maxDocumentCharsFor } from './config.js';
+import type { ActiveAI, ServerDeps } from './deps.js';
 import { isValidUserId, requireUuid } from './ids.js';
+import { personalUnauthenticated } from './personal.js';
 import { sanitizeProfile } from './profile.js';
 import { HISTORY_LIMITS, type GenerationAdmission, type GenerationStore } from './store.js';
 import { normalizeTimeZone } from './time.js';
 
-export type RouteName = 'status' | 'generate' | 'history' | 'generation' | 'stats' | 'profile' | 'account' | 'clerk-webhook';
+export type RouteName = 'mode' | 'status' | 'generate' | 'history' | 'generation' | 'stats' | 'profile' | 'account' | 'clerk-webhook';
 
 export const ROUTE_METHODS: Record<RouteName, readonly string[]> = {
+  mode: ['GET'],
   status: ['GET'],
   generate: ['POST'],
   history: ['GET'],
@@ -56,6 +59,8 @@ export interface ApiRequest {
   readRaw(limit: number): Promise<{ text: string; exact: boolean }>;
   /** Annulé quand le client ferme la connexion. */
   signal: AbortSignal;
+  /** Adresse de la connexion (contrôle du mode personnel), si l'hébergeur la fournit. */
+  remoteAddress?: string;
 }
 
 export type ApiResult =
@@ -114,9 +119,10 @@ export function notFoundRoute(): ApiResult {
 
 function misconfigured(deps: ServerDeps, what: 'auth' | 'store'): MagistraError {
   if (!deps.exposeConfigProblems) return new MagistraError('SERVER_MISCONFIGURED');
+  if (what === 'auth' && deps.startupError) return new MagistraError('SERVER_MISCONFIGURED', deps.startupError);
   const detail = what === 'auth'
-    ? 'renseignez CLERK_SECRET_KEY (ou CLERK_JWT_KEY) dans le fichier .env'
-    : 'renseignez SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY dans le fichier .env';
+    ? 'renseignez CLERK_SECRET_KEY (ou CLERK_JWT_KEY) dans le fichier .env, ou utilisez le mode personnel sur cet ordinateur (MAGISTRA_AUTH=personal)'
+    : 'renseignez SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY dans le fichier .env, ou MAGISTRA_STORE=file';
   return new MagistraError('SERVER_MISCONFIGURED', `Le serveur Magistra n'est pas configuré : ${detail} (voir .env.example).`);
 }
 
@@ -132,42 +138,70 @@ function requireObject(body: unknown): Record<string, unknown> {
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
-async function aiStatus(deps: ServerDeps): Promise<ServerStatus['ai']> {
-  const label = deps.config.ai.label;
+interface AIStatusValue {
+  ai: ServerStatus['ai'];
+  maxDocumentChars: number;
+}
+
+/**
+ * État de l'IA pour /api/status : cause précise (code et message) quand elle n'est pas utilisable, avertissement non
+ * bloquant (état non vérifié…), fiche du prestataire qui reçoit les textes. Test borné par AI_HEALTH_TIMEOUT_MS
+ * (un délai dépassé donne « état non vérifié », jamais « indisponible »). Jamais d'adresse ni de clé.
+ */
+async function aiStatus(deps: ServerDeps): Promise<AIStatusValue> {
   const cache = deps.healthCache;
-  if (cache && Date.now() - cache.at < cache.ttl) return cache.value as ServerStatus['ai'];
-  let value: ServerStatus['ai'];
+  if (cache && Date.now() - cache.at < cache.ttl) return cache.value as AIStatusValue;
+  let value: AIStatusValue;
   try {
-    const provider = deps.getProvider();
+    const active = await deps.resolveAI();
+    const { provider } = active;
+    const label = provider.label || active.label;
+    const info = active.providerInfo ? { providerInfo: active.providerInfo } : {};
     const health = await provider.health(AbortSignal.timeout(deps.config.ai.healthTimeoutMs));
-    value = health.ok
-      ? { ok: true, label: provider.label || label, model: provider.model }
-      : {
-          ok: false,
-          label: provider.label || label,
-          model: provider.model,
-          code: health.error?.code ?? 'AI_SERVER_UNAVAILABLE',
-          message: health.error?.message ?? new MagistraError('AI_SERVER_UNAVAILABLE').message,
-        };
+    value = {
+      ai: health.ok
+        ? {
+            ok: true,
+            label,
+            model: provider.model,
+            ...(health.warning ? { warning: { code: health.warning.code, message: health.warning.message } } : {}),
+            ...info,
+          }
+        : {
+            ok: false,
+            label,
+            model: provider.model,
+            code: health.error?.code ?? 'AI_SERVER_UNAVAILABLE',
+            message: health.error?.message ?? new MagistraError('AI_SERVER_UNAVAILABLE').message,
+            ...info,
+          },
+      // IA détectée : les extraits acceptés suivent son contexte réel.
+      maxDocumentChars: active.origin === 'detection' ? maxDocumentCharsFor(active.contextTokens) : deps.config.maxDocumentChars,
+    };
   } catch (err) {
     const e = toMagistraError(err, 'AI_SERVER_UNAVAILABLE');
-    value = { ok: false, label, ...(deps.config.ai.model ? { model: deps.config.ai.model } : {}), code: e.code, message: e.message };
+    const { label, model, providerInfo } = deps.config.ai;
+    value = {
+      ai: { ok: false, label, ...(model ? { model } : {}), code: e.code, message: e.message, ...(providerInfo ? { providerInfo } : {}) },
+      maxDocumentChars: deps.config.maxDocumentChars,
+    };
   }
-  deps.healthCache = { at: Date.now(), ttl: value.ok ? 30_000 : 10_000, value };
+  deps.healthCache = { at: Date.now(), ttl: value.ai.ok && !value.ai.warning ? 30_000 : 10_000, value };
   return value;
 }
 
 async function status(deps: ServerDeps): Promise<ApiResult> {
   const research = deps.research.config;
+  const { ai, maxDocumentChars } = await aiStatus(deps);
   const body: ServerStatus = {
-    ai: await aiStatus(deps),
+    ai,
     research: {
       academic: research.academic,
       web: Boolean(research.searxngUrl),
       institutional: Boolean(research.searxngUrl),
       wikipedia: research.wikipedia,
     },
-    maxDocumentChars: deps.config.maxDocumentChars,
+    maxDocumentChars,
   };
   return json(body);
 }
@@ -197,9 +231,9 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
  *     débit de tout le déploiement (AI_BUSY : saturation du service, l'enseignant n'y est pour rien).
  * Renvoie la fonction (idempotente, qui ne lève jamais) libérant les places réservées.
  */
-async function admitGeneration(userId: string, store: GenerationStore, deps: ServerDeps): Promise<() => Promise<void>> {
+async function admitGeneration(userId: string, store: GenerationStore, deps: ServerDeps, timeoutMs: number): Promise<() => Promise<void>> {
   const { config } = deps;
-  const ttlSeconds = generationSlotTtlSeconds(config);
+  const ttlSeconds = generationSlotTtlSeconds({ ai: { timeoutMs } });
   const local = deps.activeGenerations.acquire(userId, {
     max: config.maxConcurrentGenerations,
     maxPerUser: config.maxConcurrentGenerationsPerUser,
@@ -246,15 +280,35 @@ async function admitGeneration(userId: string, store: GenerationStore, deps: Ser
   };
 }
 
+/**
+ * Journal d'une génération échouée (F8) : code, libellé du serveur d'IA et modèle UNIQUEMENT. Jamais le sujet, la
+ * demande, un extrait, le contenu produit, l'identifiant de l'enseignant ni une clé.
+ */
+function logGenerationFailure(deps: ServerDeps, active: Pick<ActiveAI, 'label' | 'model'>, code: ErrorCode): void {
+  deps.log(`Génération échouée : ${code} (${active.label.slice(0, 80)}, modèle ${(active.model || 'non renseigné').slice(0, 120)})`);
+}
+
 async function generate(userId: string, req: ApiRequest, deps: ServerDeps): Promise<ApiResult> {
   const store = requireStore(deps);
   // Toute propriété « userId » éventuellement présente dans le corps est ignorée par la validation.
   const request = validateGenerationRequest(await req.readJson());
-  const provider = deps.getProvider();
-  const release = await admitGeneration(userId, store, deps);
+  let active: ActiveAI;
+  try {
+    active = await deps.resolveAI();
+  } catch (err) {
+    // Erreur inattendue : journalisée en détail par handleApi.
+    if (!isMagistraError(err)) throw err;
+    // Aucune IA utilisable (non configurée, adresse impossible, rien de détecté) : même ligne de journal que les
+    // autres échecs, puis réponse d'erreur sans nouvelle journalisation.
+    const label = deps.localAI ? 'IA locale (détection automatique)' : deps.config.ai.label;
+    logGenerationFailure(deps, { label, model: deps.config.ai.model ?? '' }, err.code);
+    return errorResult(err);
+  }
+  const { provider } = active;
+  const release = await admitGeneration(userId, store, deps, active.timeoutMs);
 
   const clientSignal = req.signal;
-  const timeout = AbortSignal.timeout(deps.config.ai.timeoutMs);
+  const timeout = AbortSignal.timeout(active.timeoutMs);
   const signal = AbortSignal.any([clientSignal, timeout]);
 
   async function* events(): AsyncGenerator<GenerationEvent> {
@@ -268,12 +322,20 @@ async function generate(userId: string, req: ApiRequest, deps: ServerDeps): Prom
         maxOutputTokens: deps.config.ai.maxOutputTokens,
         // Les nouveaux essais ont lieu dans ce flux : la place de génération reste tenue jusqu'à la fin.
         retryDelaysMs: deps.config.ai.retryDelaysMs,
+        // Ollama sur la machine du serveur : chargement du modèle annoncé (« Chargement du modèle… »).
+        preloadModel: provider.kind === 'ollama' && provider.local,
       });
       for await (const event of pipeline) {
         if (event.type === 'error' && event.code === 'GENERATION_ABORTED' && timeout.aborted && !clientSignal.aborted) {
           const e = new MagistraError('AI_TIMEOUT', 'La génération a dépassé la durée maximale autorisée par le serveur. Réessayez avec une demande plus courte.');
+          logGenerationFailure(deps, active, e.code);
           yield { type: 'error', code: e.code, message: e.message, retryable: e.retryable };
           continue;
+        }
+        // Arrêt demandé par l'enseignant (ou déconnexion) : pas un échec.
+        if (event.type === 'error' && !(event.code === 'GENERATION_ABORTED' && clientSignal.aborted)) {
+          logGenerationFailure(deps, active, event.code);
+          deps.onGenerationError(event.code);
         }
         yield event;
       }
@@ -369,14 +431,28 @@ async function clerkWebhook(req: ApiRequest, deps: ServerDeps): Promise<ApiResul
 }
 
 /** Traite une requête API déjà associée à une route. Ne lève jamais : toute erreur devient une réponse JSON. */
+/** Authentifie la requête ; en mode personnel, le message indique comment retrouver l'adresse d'accès. */
+async function authenticateRequest(req: ApiRequest, deps: ServerDeps): Promise<string> {
+  if (!deps.verifier) throw misconfigured(deps, 'auth');
+  try {
+    return await authenticate(req.headers, deps.verifier);
+  } catch (err) {
+    if (deps.personal && isMagistraError(err) && err.code === 'UNAUTHENTICATED') throw personalUnauthenticated();
+    throw err;
+  }
+}
+
 export async function handleApi(route: RouteName, req: ApiRequest, deps: ServerDeps): Promise<ApiResult> {
   try {
+    // Mode personnel : connexion locale, en-tête Host local et Origin identique, avant toute autre chose.
+    deps.personal?.checkRequest(req);
     const allowed = ROUTE_METHODS[route];
     if (!allowed.includes(req.method)) return methodNotAllowed(allowed);
+    // Mode d'authentification : public, sans aucun secret (clé PUBLIABLE Clerk seulement).
+    if (route === 'mode') return json(deps.modeInfo);
     // Webhook Clerk : authentifié par sa signature, jamais par un jeton de session.
     if (route === 'clerk-webhook') return await clerkWebhook(req, deps);
-    if (!deps.verifier) throw misconfigured(deps, 'auth');
-    const userId = await authenticate(req.headers, deps.verifier);
+    const userId = await authenticateRequest(req, deps);
     switch (route) {
       case 'status':
         return await status(deps);

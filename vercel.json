@@ -5,6 +5,7 @@
   "outputDirectory": "dist",
   "regions": ["cdg1"],
   "functions": {
+    "api/mode.ts": { "maxDuration": 10 },
     "api/generate.ts": { "maxDuration": 300 },
     "api/status.ts": { "maxDuration": 15 },
     "api/history.ts": { "maxDuration": 15 },
