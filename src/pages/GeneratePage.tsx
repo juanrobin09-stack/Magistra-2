@@ -15,7 +15,7 @@ import { getToolInfo, type TypeContenu } from '@shared/catalog';
 import { toMagistraError } from '@shared/errors';
 import type { NiveauScolaire } from '@shared/levels';
 import {
-  modeUsesDocuments, type Capabilities, type DocumentPassage, type GenerationRequest, type ResearchMode,
+  modeUsesDocuments, type DocumentPassage, type GenerationRequest, type ResearchMode,
 } from '@shared/types';
 import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import AiNotReadyCard from '@/components/generate/AiNotReadyCard';
@@ -39,12 +39,12 @@ import {
 } from '@/lib/generation/request';
 import {
   describeResearchOptions, effectiveResearchMode, modeUsesNetwork, NETWORK_PRIVACY_NOTE, privacyNotes, providerAnnounced,
-  researchHints, type PrivacyNotes,
+  researchHints,
 } from '@/lib/generation/research';
 import { formFromRecord, type ReusableRecord } from '@/lib/generation/reuse';
 import { useLocalEngine } from '@/lib/localConnector/controller';
 import { adminContact, configuredProvider, useRuntime } from '@/lib/runtime/context';
-import { HybridGenerationClient, LOCAL_PRIVACY_MESSAGE } from '@/lib/runtime/hybrid';
+import { HybridGenerationClient } from '@/lib/runtime/hybrid';
 import { usesServerApi } from '@/lib/runtime/types';
 
 /** Magistra locale attend l'accord du navigateur : la génération ne doit pas faire apparaître sa demande sans explication. */
@@ -53,18 +53,6 @@ export const LOCAL_PERMISSION_NOTICE =
 export const LOCAL_PAIRING_NOTICE = 'Terminez d’abord la connexion de Magistra locale (confirmation dans l’application Magistra).';
 export const ENGINE_CHANGED_NOTICE =
   'Le moteur de génération vient de changer : vérifiez le bandeau en haut de la page, puis relancez la génération.';
-
-/**
- * Confidentialité quand Magistra locale génère : son message, sans « restent sur cet ordinateur » (le résultat est
- * enregistré dans l'historique en ligne du compte).
- */
-function localRoutePrivacy(caps: Capabilities | null, researchMode: ResearchMode): PrivacyNotes {
-  return {
-    message: caps?.privacy.message ?? LOCAL_PRIVACY_MESSAGE,
-    network: modeUsesNetwork(researchMode) ? NETWORK_PRIVACY_NOTE : null,
-    local: null,
-  };
-}
 
 const FIELD_IDS: Record<string, string> = {
   sujet: 'gen-sujet',
@@ -128,13 +116,12 @@ export default function GeneratePage() {
   // Destinataire des textes : fiche de /api/status, sinon celle annoncée au démarrage par /api/mode, sinon annonce
   // prudente. Pendant la première vérification, sans prestataire annoncé, la génération attend (quelques secondes).
   const fallbackProvider = configuredProvider();
-  const privacyContext = { runtimeMode: mode, fallbackProvider };
+  // Site web : moteur choisi (Magistra locale ou serveur en ligne), connu avant ses capacités.
+  const privacyContext = { runtimeMode: mode, fallbackProvider, route };
   // Moteur pas encore connu : aucune annonce (ni locale ni distante) tant qu'il n'est pas vérifié ; l'envoi attend.
-  const privacy = localRoute
-    ? localRoutePrivacy(caps, researchMode)
-    : engine && route === null
-      ? { message: null, network: modeUsesNetwork(researchMode) ? NETWORK_PRIVACY_NOTE : null, local: null }
-      : privacyNotes(caps, researchMode, privacyContext);
+  const privacy = engine && route === null
+    ? { message: null, network: modeUsesNetwork(researchMode) ? NETWORK_PRIVACY_NOTE : null, local: null }
+    : privacyNotes(caps, researchMode, privacyContext);
   const serverVerifying = !providerAnnounced(caps, privacyContext) && capabilities.loading;
   // Moteur encore inconnu, ou capacités de Magistra locale pas encore lues : la génération attend (quelques instants).
   const verifying = engine ? route === null || (localRoute ? caps === null : serverVerifying) : serverVerifying;

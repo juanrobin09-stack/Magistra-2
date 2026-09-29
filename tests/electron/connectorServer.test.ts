@@ -15,8 +15,8 @@ import type { AIProvider } from '../../shared/ai/provider.js';
 import { MagistraError } from '../../shared/errors.js';
 import { DEFAULT_PREFERENCES } from '../../shared/ipc.js';
 import {
-  buildPairingUrl, canonicalProof, canonicalRequest, CONNECTOR_ALLOWED_REQUEST_HEADERS, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, CONNECTOR_HEADERS,
-  CONNECTOR_LIMITS, parseAppUrl, type ConnectorStatus,
+  buildPairingUrl, canonicalPairAck, canonicalProof, canonicalRequest, CONNECTOR_ALLOWED_REQUEST_HEADERS, CONNECTOR_CRYPTO, CONNECTOR_FORMATS,
+  CONNECTOR_HEADERS, CONNECTOR_LIMITS, parseAppUrl, type ConnectorStatus,
 } from '../../shared/localConnector.js';
 import type { GenerationEvent, PrivacyInfo } from '../../shared/types.js';
 import type { SecretCipher } from '../../electron/aiConfig.js';
@@ -199,6 +199,17 @@ class Browser {
     return { pairingId: randomToken(16), verifier, challenge, clientPublicKey: toBase64Url(raw) };
   }
 
+  /** Premier temps de POST /v1/pair : preuve de réception (identifiant seulement, aucun secret). */
+  ackRequest(p: { pairingId: string }, headers: Record<string, string | undefined> = {}): Promise<Reply> {
+    return send({
+      method: 'POST',
+      path: '/v1/pair',
+      headers: { origin: this.origin, 'content-type': 'application/json', 'user-agent': this.userAgent, ...headers },
+      body: JSON.stringify({ pairingId: p.pairingId }),
+    });
+  }
+
+  /** Second temps de POST /v1/pair : vérificateur et clé publique. */
   pairRequest(p: { pairingId: string; verifier: string; clientPublicKey: string }, headers: Record<string, string | undefined> = {}): Promise<Reply> {
     return send({
       method: 'POST',
@@ -206,6 +217,11 @@ class Browser {
       headers: { origin: this.origin, 'content-type': 'application/json', 'user-agent': this.userAgent, ...headers },
       body: JSON.stringify({ pairingId: p.pairingId, verifier: p.verifier, clientPublicKey: p.clientPublicKey }),
     });
+  }
+
+  /** Accusé de réception attendu, calculé avec le défi de l'URL (WebCrypto, comme le site). */
+  async expectedAck(p: { pairingId: string; challenge: string }): Promise<string> {
+    return toBase64Url(new Uint8Array(await subtle.digest('SHA-256', utf8(canonicalPairAck(p.pairingId, p.challenge)))));
   }
 
   async finish(reply: Reply, pairingId: string): Promise<void> {
@@ -338,11 +354,14 @@ function openPairing(p: { pairingId: string; challenge: string }, origin = ORIGI
   return opened.ticket;
 }
 
-/** Appairage complet d'un navigateur (accord donné). */
+/** Appairage complet d'un navigateur (accord donné) : preuve de réception, puis fin d'appairage. */
 async function paired(origin = ORIGIN): Promise<Browser> {
   const browser = new Browser(origin);
   const p = await browser.begin();
   pairing.answer(openPairing(p, origin), true);
+  const ack = await browser.ackRequest(p);
+  expect(ack.status).toBe(200);
+  expect(ack.json).toEqual({ status: 'consented', ack: await browser.expectedAck(p) });
   const reply = await browser.pairRequest(p);
   expect(reply.status).toBe(200);
   await browser.finish(reply, p.pairingId);
@@ -597,19 +616,30 @@ describe('présence et contrôles d’accès (avant toute authentification)', ()
 });
 
 describe('appairage', () => {
-  it('complet : en attente (202) → accord dans l’application → 200 avec la clé du connecteur ; requêtes signées ensuite', async () => {
+  it('complet : preuve de réception en attente (202) → accord → « consented » → fin d’appairage (200, clé du connecteur) ; requêtes signées ensuite', async () => {
     const browser = new Browser();
     const p = await browser.begin();
     const ticket = openPairing(p);
-    const pending = await browser.pairRequest(p);
+    const ack = await browser.expectedAck(p);
+    expect(ack).toMatch(CONNECTOR_FORMATS.ack);
+    const pending = await browser.ackRequest(p);
     expect(pending.status).toBe(202);
-    expect(pending.json).toEqual({ status: 'pending' });
+    expect(pending.json).toEqual({ status: 'pending', ack });
     expectCors(pending);
+    // L'accusé ne révèle ni le défi ni le vérificateur.
+    expect(pending.text).not.toContain(p.challenge);
 
     pairing.answer(ticket, true);
+    const consented = await browser.ackRequest(p);
+    expect(consented.status).toBe(200);
+    expect(consented.json).toEqual({ status: 'consented', ack });
+    // Premier temps sans effet sur la demande : autant d'essais que voulu, rien d'enregistré.
+    expect((await browser.ackRequest(p)).json).toEqual({ status: 'consented', ack });
+    expect(clients.list()).toEqual([]);
+
     const approved = await browser.pairRequest(p);
     expect(approved.status).toBe(200);
-    expect(approved.json).toEqual({ status: 'approved', clientId: expect.any(String), connectorPublicKey: expect.any(String), version: VERSION });
+    expect(approved.json).toEqual({ status: 'approved', clientId: expect.any(String), connectorPublicKey: expect.any(String), version: VERSION, ack });
     expect(CONNECTOR_FORMATS.clientId.test(approved.json.clientId)).toBe(true);
     expect(CONNECTOR_FORMATS.publicKey.test(approved.json.connectorPublicKey)).toBe(true);
     // La réponse ne contient ni clé HMAC, ni vérificateur, ni défi.
@@ -625,21 +655,51 @@ describe('appairage', () => {
     expectCors(reply);
   });
 
-  it('refus dans l’application : 403 CONNECTOR_PAIRING_REFUSED', async () => {
+  it('second temps avant l’accord (bon vérificateur) : 202 en attente, avec l’accusé', async () => {
+    const browser = new Browser();
+    const p = await browser.begin();
+    const ticket = openPairing(p);
+    const early = await browser.pairRequest(p);
+    expect(early.status).toBe(202);
+    expect(early.json).toEqual({ status: 'pending', ack: await browser.expectedAck(p) });
+    pairing.answer(ticket, true);
+    expect((await browser.pairRequest(p)).status).toBe(200);
+  });
+
+  it('refus dans l’application : 403 CONNECTOR_PAIRING_REFUSED au premier comme au second temps', async () => {
     const browser = new Browser();
     const p = await browser.begin();
     pairing.answer(openPairing(p), false);
+    expectError(await browser.ackRequest(p), 403, 'CONNECTOR_PAIRING_REFUSED');
+    expectError(await browser.ackRequest(p), 403, 'CONNECTOR_PAIRING_REFUSED');
     expectError(await browser.pairRequest(p), 403, 'CONNECTOR_PAIRING_REFUSED');
+    expectError(await browser.ackRequest(p), 404, 'NOT_FOUND');
     expect(clients.list()).toEqual([]);
   });
 
-  it('demande expirée : 410 CONNECTOR_PAIRING_EXPIRED', async () => {
+  it('demande expirée : 410 CONNECTOR_PAIRING_EXPIRED (premier et second temps)', async () => {
     const browser = new Browser();
     const p = await browser.begin();
     pairing.answer(openPairing(p), true);
     clock += CONNECTOR_LIMITS.pairingTtlMs;
-    expectError(await browser.pairRequest(p), 410, 'CONNECTOR_PAIRING_EXPIRED');
+    expectError(await browser.ackRequest(p), 410, 'CONNECTOR_PAIRING_EXPIRED');
+    const q = await browser.begin();
+    pairing.answer(openPairing(q), true);
+    clock += CONNECTOR_LIMITS.pairingTtlMs;
+    expectError(await browser.pairRequest(q), 410, 'CONNECTOR_PAIRING_EXPIRED');
     expect(clients.list()).toEqual([]);
+  });
+
+  it('premier temps : demande inconnue (404), autre origine (403 FORBIDDEN), jamais d’accusé pour une autre demande', async () => {
+    const browser = new Browser();
+    const p = await browser.begin();
+    openPairing(p);
+    const other = await browser.begin();
+    expectError(await browser.ackRequest(other), 404, 'NOT_FOUND');
+    const forbidden = await browser.ackRequest(p, { origin: DEV_ORIGIN });
+    expectError(forbidden, 403, 'FORBIDDEN');
+    expect(forbidden.text).not.toContain(await browser.expectedAck(p));
+    expect((await browser.ackRequest(p)).status).toBe(202);
   });
 
   it('vérificateur faux : 401 (×5), puis la demande n’existe plus (404)', async () => {
@@ -674,12 +734,16 @@ describe('appairage', () => {
     expectError(await browser.pairRequest(other), 404, 'NOT_FOUND');
   });
 
-  it('corps invalide (clé en trop, format, clé publique hors de la courbe) : 400 sans perdre la demande', async () => {
+  it('corps invalide (clé en trop ou manquante, format, clé publique hors de la courbe) : 400 sans perdre la demande', async () => {
     const browser = new Browser();
     const p = await browser.begin();
     const ticket = openPairing(p);
     const bodies = [
       JSON.stringify({ pairingId: p.pairingId, verifier: p.verifier }),
+      JSON.stringify({ pairingId: 'court' }),
+      JSON.stringify({ pairingId: 42 }),
+      JSON.stringify({ verifier: p.verifier }),
+      JSON.stringify({}),
       JSON.stringify({ pairingId: p.pairingId, verifier: p.verifier, clientPublicKey: p.clientPublicKey, extra: 1 }),
       JSON.stringify({ pairingId: 'court', verifier: p.verifier, clientPublicKey: p.clientPublicKey }),
       JSON.stringify({ pairingId: p.pairingId, verifier: 42, clientPublicKey: p.clientPublicKey }),

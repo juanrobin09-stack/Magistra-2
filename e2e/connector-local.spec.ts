@@ -16,14 +16,15 @@
 //  - l'autorisation « accès au réseau local » du navigateur est accordée ou refusée par le test, jamais par le site.
 //
 // Prérequis : `npx vite build` (dist/) puis `node scripts/build-electron.mjs` (dist-electron/). Le harnais est construit
-// par ce fichier (test-results/connector-harness-dist : Playwright vide test-results au début de chaque lancement).
+// par ce fichier (test-results/connector/harness-dist, avec les captures dans test-results/connector/captures : dossier
+// du projet « connector », que Playwright vide au début de chacun de ses lancements, voir e2e/outputDirs.ts).
 // Lancement (Linux sans écran) : `xvfb-run -a npx playwright test --project=connector`.
 // Variables facultatives : MAGISTRA_E2E_REAL_OLLAMA_URL (vrai Ollama : ministral-3:8b installé ou en alias),
 // MAGISTRA_E2E_LOGS=1 (journaux du processus principal).
 
 import { _electron as electron, expect, test, type BrowserContext, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createECDH, createHash, randomBytes } from 'node:crypto';
 import { accessSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http, { type IncomingHttpHeaders, type Server } from 'node:http';
 import net from 'node:net';
@@ -35,10 +36,11 @@ import type { MagistraBridge } from '../shared/ipc';
 import { buildPairingUrl, parseAppUrl, type ConnectorAppStatus, type ConnectorStatus } from '../shared/localConnector';
 import type { GenerationRecordDraft } from '../shared/types';
 import { OTHER_SITE_ORIGIN, OTHER_SITE_PORT, SITE_ORIGIN, SITE_PORT } from './connector-harness/sites';
+import { CONNECTOR_HARNESS_DIR, E2E_SCREENSHOT_DIRS, fromRoot } from './outputDirs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const HARNESS_DIR = path.join(root, 'test-results', 'connector-harness-dist');
-const SHOTS = path.join(root, 'test-results', 'connector-screens');
+const HARNESS_DIR = fromRoot(CONNECTOR_HARNESS_DIR);
+const SHOTS = fromRoot(E2E_SCREENSHOT_DIRS.connector);
 const REAL_OLLAMA_URL = process.env.MAGISTRA_E2E_REAL_OLLAMA_URL?.trim() || null;
 /** Les trois niveaux Magistra : le modèle recommandé est installé quelle que soit la machine de test. */
 const ALL_TIER_MODELS = ['ministral-3:8b', 'ministral-3:14b', 'mistral-small3.2:24b'];
@@ -191,6 +193,69 @@ async function waitForConnector(ports: readonly number[], timeoutMs = 45_000): P
     if (Date.now() > deadline) throw new Error('Le connecteur local de l’application ne répond pas.');
     await new Promise(resolve => setTimeout(resolve, 200));
   }
+}
+
+interface Impostor {
+  /** Requêtes reçues (pré-vérifications CORS comprises), dans l'ordre. */
+  received: { method: string; path: string; body: string }[];
+  close(): Promise<void>;
+}
+
+/**
+ * Programme qui occupe un port dédié AVANT l'application (autre session Windows d'un PC partagé ou d'un serveur de
+ * bureaux à distance : les ports de la boucle locale sont communs à toutes les sessions). Il se présente comme Magistra,
+ * répond à toutes les pré-vérifications CORS et accepte tout : accord immédiat, accusé de réception inventé (il n'a
+ * jamais reçu l'URL magistra://, donc jamais le défi), appairage « réussi » avec sa propre clé. Il note tout.
+ */
+async function startImpostor(port: number): Promise<Impostor> {
+  const received: Impostor['received'] = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      received.push({ method: req.method ?? '', path: req.url ?? '', body });
+      const cors: Record<string, string> = {
+        'Access-Control-Allow-Origin': req.headers.origin ?? '*',
+        'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': req.headers['access-control-request-headers'] ?? 'Content-Type',
+        'Access-Control-Allow-Private-Network': 'true',
+        'Access-Control-Expose-Headers': 'X-Magistra-Proof, X-Magistra-Job',
+      };
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, cors);
+        res.end();
+        return;
+      }
+      let reply: unknown = { ok: true };
+      if (req.url === '/v1/hello') reply = { app: 'magistra', protocol: 1, version: '9.9.9' };
+      if (req.url === '/v1/pair' && req.method === 'POST') {
+        let input: Record<string, unknown> = {};
+        try {
+          input = JSON.parse(body) as Record<string, unknown>;
+        } catch {
+          // corps illisible : accepté quand même
+        }
+        const ack = randomBytes(32).toString('base64url');
+        reply = 'verifier' in input
+          ? { status: 'approved', clientId: randomBytes(16).toString('base64url'), connectorPublicKey: createECDH('prime256v1').generateKeys().toString('base64url'), version: '9.9.9', ack }
+          : { status: 'consented', ack };
+      }
+      res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(reply));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve());
+  });
+  return {
+    received,
+    close: () => new Promise<void>(resolve => {
+      server.closeAllConnections();
+      server.close(() => resolve());
+    }),
+  };
 }
 
 async function waitForConnectorClosed(ports: readonly number[], timeoutMs = 15_000): Promise<void> {
@@ -1023,6 +1088,51 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     expect(forged?.headers['access-control-allow-origin']).toBeUndefined();
     expect((await d.connectorStatus()).clients).toEqual([]);
     await expectNoTechnicalText(page, d.options.ports);
+  });
+
+  test('programme qui occupe le premier port dédié et accepte tout : jamais de vérificateur pour lui, appairage avec l’application réelle sur le port suivant', async ({ page, context }) => {
+    mock = await startMock({ models: ALL_TIER_MODELS });
+    const d = await newDesktop(mock.url);
+    const [first, second] = d.options.ports;
+    const impostor = await startImpostor(first);
+    try {
+      d.consentAuto = true;
+      await d.launch();
+      // Le premier port est pris : l'application écoute sur le suivant (l'imposteur répond « 9.9.9 » sur le premier).
+      await expect.poll(async () => {
+        const reply = await connectorRequest(second);
+        return reply?.status === 200 ? (JSON.parse(reply.body) as { version?: string }).version : null;
+      }).not.toBe('9.9.9');
+      expect((await connectorRequest(second))?.status).toBe(200);
+      await grant(context);
+      await openHarness(page, d);
+      await expect(card(page).getByText(T.found)).toBeVisible();
+      await card(page).getByRole('button', { name: T.connect }).click();
+      await expect(card(page).getByText(T.justConnected)).toBeVisible();
+      await expectNoTechnicalText(page, d.options.ports);
+      await shot(page, '50-appairage-malgre-un-imposteur');
+
+      // L'application a bien autorisé CE navigateur, avec l'accord de l'enseignant.
+      expect((await d.connectorStatus()).clients).toHaveLength(1);
+      expect(await d.consentCalls()).toHaveLength(1);
+      const request = parseAppUrl(d.urls.at(-1));
+      if (!request || request.kind !== 'pair') throw new Error('URL magistra://pair attendue');
+
+      // L'imposteur n'a reçu que des requêtes sans secret : présence et premier temps de l'appairage (identifiant
+      // seul). Jamais le vérificateur, la clé publique ni le défi ; aucune requête signée, aucun contenu.
+      const pairs = impostor.received.filter(r => r.method === 'POST' && r.path === '/v1/pair');
+      expect(pairs.length).toBeGreaterThan(0);
+      for (const r of pairs) expect(JSON.parse(r.body)).toEqual({ pairingId: request.pairingId });
+      for (const r of impostor.received) {
+        expect(['/v1/hello', '/v1/pair']).toContain(r.path);
+        expect(r.body).not.toContain(request.challenge);
+        expect(r.body).not.toMatch(/verifier|clientPublicKey/);
+      }
+      // Le site dialogue désormais avec l'application réelle (preuve de la clé à chaque réponse).
+      expect((await siteStatus(page)).version).not.toBe('9.9.9');
+    } finally {
+      await impostor.close();
+    }
   });
 
   test('Local Network Access (protection réelle de Chromium) : explication avant la demande, refus expliqué, accord → connexion', async ({ page, context }) => {

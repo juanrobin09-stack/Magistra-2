@@ -3,12 +3,13 @@
 // le vrai connecteur (electron/connector) est vérifiée par les tests d'intégration.
 //
 // Chaque port simule : rien (connexion refusée), l'application Magistra de l'enseignant, une AUTRE application
-// Magistra (autre session Windows : ne connaît pas ce navigateur), un imposteur (répond comme Magistra, sans clé),
-// ou un port qui ne répond jamais.
+// Magistra (autre session Windows : ne connaît pas ce navigateur), un imposteur (répond comme Magistra et accepte
+// tout, sans clé ni URL magistra:// reçue : jamais d'accusé de réception ni de preuve valides), ou un port qui ne
+// répond jamais.
 
 import { createECDH, createHash, createHmac, hkdfSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
-  canonicalProof, canonicalRequest, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS,
+  canonicalPairAck, canonicalProof, canonicalRequest, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS,
   CONNECTOR_PROTOCOL_VERSION, CONNECTOR_ROUTES, parseAppUrl, type ConnectorStatus,
 } from '@shared/localConnector';
 import type { ErrorCode } from '@shared/errors';
@@ -128,6 +129,8 @@ export class FakeConnector {
   streamsClosedByBrowser = 0;
   /** Preuve : 'valid', absente, ou fausse (autre clé). */
   proofMode: 'valid' | 'none' | 'wrong' = 'valid';
+  /** Accusé de réception des réponses de POST /v1/pair : 'valid', absent, ou faux. */
+  ackMode: 'valid' | 'none' | 'wrong' = 'valid';
   /** Appairage : clé dérivée avec un autre sel (protocole incompatible). */
   deriveWrongKey = false;
   /** Réponse d'appairage acceptée mais clé publique invalide. */
@@ -195,6 +198,14 @@ export class FakeConnector {
       // Se fait passer pour Magistra, sans connaître aucune clé : jamais de preuve valide.
       if (path === CONNECTOR_ROUTES.status) return json(200, this.status, this.proofMode === 'wrong' ? { [CONNECTOR_HEADERS.proof]: b64(randomBytes(32)) } : {});
       if (path === CONNECTOR_ROUTES.generate) return new Response('{"type":"done"}\n', { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
+      if (path === CONNECTOR_ROUTES.pair && method === 'POST') {
+        // Accepte tout, avec un accusé de réception inventé : il n'a jamais reçu l'URL magistra:// (ni le défi).
+        const input = JSON.parse(body) as Record<string, unknown>;
+        const ack = b64(randomBytes(32));
+        if (!('verifier' in input)) return json(200, { status: 'consented', ack });
+        const ecdh = createECDH('prime256v1');
+        return json(200, { status: 'approved', clientId: b64(randomBytes(16)), connectorPublicKey: b64(ecdh.generateKeys()), version: '9.9.9', ack });
+      }
       return json(200, { ok: true });
     }
     if (path === CONNECTOR_ROUTES.pair && method === 'POST') return mode === 'other-magistra' ? apiError(404, 'NOT_FOUND') : this.completePairing(body, origin);
@@ -241,32 +252,46 @@ export class FakeConnector {
     return apiError(404, 'NOT_FOUND', proof);
   };
 
+  /**
+   * POST /v1/pair en deux temps : { pairingId } (preuve de réception : accusé calculé avec le défi de l'URL reçue),
+   * puis { pairingId, verifier, clientPublicKey } après l'accord. La réponse de l'enseignant arrive après
+   * `answerAfterPolls` essais du premier temps.
+   */
   private completePairing(body: string, origin: string): Response {
-    const input = JSON.parse(body) as { pairingId: string; verifier: string; clientPublicKey: string };
+    const input = JSON.parse(body) as { pairingId: string; verifier?: string; clientPublicKey?: string };
     const d = this.demand;
     if (!d || d.pairingId !== input.pairingId) return apiError(404, 'NOT_FOUND');
     if (this.expired) return apiError(410, 'CONNECTOR_PAIRING_EXPIRED');
     if (origin !== d.origin) return apiError(403, 'FORBIDDEN');
+    const ack = this.ackMode === 'wrong'
+      ? b64(randomBytes(32))
+      : createHash('sha256').update(canonicalPairAck(d.pairingId, d.challenge), 'utf8').digest('base64url');
+    const withAck = (reply: Record<string, unknown>) => (this.ackMode === 'none' ? reply : { ...reply, ack });
+    if (input.verifier === undefined) {
+      d.polls++;
+      if (d.state === 'awaiting' && this.answerAfterPolls !== null && d.polls > this.answerAfterPolls) d.state = this.approve ? 'approved' : 'refused';
+      if (d.state === 'awaiting') return json(202, withAck({ status: 'pending' }));
+      if (d.state === 'refused') return apiError(403, 'CONNECTOR_PAIRING_REFUSED');
+      return json(200, withAck({ status: 'consented' }));
+    }
     const challenge = createHash('sha256').update(Buffer.from(input.verifier, 'base64url')).digest('base64url');
     if (challenge !== d.challenge) return apiError(401, 'UNAUTHENTICATED');
-    d.polls++;
-    if (d.state === 'awaiting' && this.answerAfterPolls !== null && d.polls > this.answerAfterPolls) d.state = this.approve ? 'approved' : 'refused';
-    if (d.state === 'awaiting') return json(202, { status: 'pending' });
+    if (d.state === 'awaiting') return json(202, withAck({ status: 'pending' }));
     this.demand = null;
     if (d.state === 'refused') return apiError(403, 'CONNECTOR_PAIRING_REFUSED');
     const ecdh = createECDH('prime256v1');
     const connectorPublicKey = ecdh.generateKeys();
-    const secret = ecdh.computeSecret(Buffer.from(input.clientPublicKey, 'base64url'));
+    const secret = ecdh.computeSecret(Buffer.from(input.clientPublicKey ?? '', 'base64url'));
     const salt = this.deriveWrongKey ? `${input.pairingId}x` : input.pairingId;
     const key = Buffer.from(hkdfSync('sha256', secret, Buffer.from(salt, 'utf8'), Buffer.from(CONNECTOR_CRYPTO.hkdfInfo, 'utf8'), 32));
     const clientId = b64(randomBytes(16));
     this.clients.set(clientId, { clientId, key, origin });
-    return json(200, {
+    return json(200, withAck({
       status: 'approved',
       clientId,
       connectorPublicKey: this.badConnectorKey ? b64(Buffer.alloc(65, 7)) : b64(connectorPublicKey),
       version: this.version,
-    });
+    }));
   }
 
   private stream(signal: AbortSignal | null | undefined, proof: Record<string, string>): Response {

@@ -83,11 +83,21 @@ jobs:
       - run: node scripts/build-electron.mjs
       - name: Test de démarrage (fenêtre, preload, rendu)
         run: xvfb-run -a node scripts/electron-smoke.mjs
+      # Chaque projet Playwright a son dossier de sortie (e2e/outputDirs.ts) : Playwright ne vide que ceux des projets
+      # lancés, et les captures de l'application sont de plus envoyées AVANT le lancement du projet « connector ».
       - name: E2E application Windows (IPC + Ollama simulé)
         run: xvfb-run -a npm run test:e2e -- --project=electron
+      - name: Captures de l'application Windows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-application-windows
+          path: test-results/electron/captures
+          if-no-files-found: ignore
+          retention-days: 14
       # Site web ⇄ connecteur local ⇄ application réelle, protection « Local Network Access » de Chromium active.
       # Le harnais du site (e2e/connector-harness, jamais dans dist/) est construit par le test lui-même, dans
-      # test-results/ que Playwright vide au début du lancement.
+      # test-results/connector/ que Playwright vide au début du lancement de ce projet (et de lui seul).
       - name: E2E connecteur local (harnais du site ⇄ application réelle)
         run: xvfb-run -a npm run test:e2e -- --project=connector
       - name: Captures du connecteur local
@@ -95,7 +105,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: captures-connecteur-local
-          path: test-results/connector-screens
+          path: test-results/connector/captures
           if-no-files-found: ignore
           retention-days: 14
 

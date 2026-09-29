@@ -6,12 +6,13 @@
 //   - secret ECDH : coordonnée X du point partagé (32 octets), celle de deriveBits({ name: 'ECDH' }, …, 256) ;
 //   - clé HMAC : HKDF-SHA-256(secret, sel = UTF-8(pairingId), info = UTF-8(CONNECTOR_CRYPTO.hkdfInfo), 32 octets),
 //     celle de deriveKey({ name: 'HKDF', … }, …, { name: 'HMAC', hash: 'SHA-256', length: 256 }) ;
-//   - signature et preuve : HMAC-SHA-256 de la chaîne canonique (UTF-8), 32 octets en base64url.
+//   - signature et preuve : HMAC-SHA-256 de la chaîne canonique (UTF-8), 32 octets en base64url ;
+//   - accusé de réception d'appairage : SHA-256 de canonicalPairAck(pairingId, challenge) (UTF-8), en base64url.
 //
 // Aucune fonction de ce module ne journalise de clé, de secret, de vérificateur ni de signature.
 
 import { createECDH, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
-import { CONNECTOR_CRYPTO } from '../../shared/localConnector.js';
+import { canonicalPairAck, CONNECTOR_CRYPTO } from '../../shared/localConnector.js';
 
 /** Longueur d'une clé publique P-256 brute non compressée. */
 export const PUBLIC_KEY_BYTES = 65;
@@ -52,6 +53,14 @@ export function sha256(data: string | Uint8Array): Buffer {
 /** SHA-256 en base64url (empreinte du corps d'une requête signée, défi d'appairage). */
 export function sha256Base64Url(data: string | Uint8Array): string {
   return toBase64Url(sha256(data));
+}
+
+/**
+ * Accusé de réception d'une demande d'appairage (réponses de POST /v1/pair) : prouve au site que CETTE application a
+ * reçu l'URL magistra://pair, seule à porter le défi (texte exact du paramètre « challenge »).
+ */
+export function pairAck(pairingId: string, challenge: string): string {
+  return sha256Base64Url(canonicalPairAck(pairingId, challenge));
 }
 
 /** HMAC-SHA-256 d'un message texte (UTF-8). */

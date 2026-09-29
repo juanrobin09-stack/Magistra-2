@@ -4,13 +4,16 @@
 //   - secret ECDH : coordonnée X du point partagé (32 octets), deriveBits({ name: 'ECDH' }, …, 256) ;
 //   - clé HMAC : HKDF-SHA-256(secret, sel = UTF-8(pairingId), info = UTF-8(CONNECTOR_CRYPTO.hkdfInfo), 32 octets) ;
 //   - signature et preuve : HMAC-SHA-256 de la chaîne canonique (UTF-8), 32 octets en base64url ;
-//   - défi d'appairage : SHA-256 des 32 OCTETS du vérificateur (et non de son texte base64url), en base64url.
+//   - défi d'appairage : SHA-256 des 32 OCTETS du vérificateur (et non de son texte base64url), en base64url ;
+//   - accusé de réception d'appairage : SHA-256 de canonicalPairAck(pairingId, défi) (UTF-8), en base64url.
 //
 // Aucune clé ne sort jamais du navigateur : la clé privée ECDH et la clé HMAC sont NON EXTRACTIBLES (le script de la
 // page lui-même ne peut pas en lire les octets) ; seule la clé HMAC est conservée (IndexedDB, clone d'un CryptoKey).
 // Aucune fonction de ce module ne journalise de clé, de vérificateur, de signature ni de preuve.
 
-import { canonicalProof, canonicalRequest, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, type CanonicalRequestParts } from '@shared/localConnector';
+import {
+  canonicalPairAck, canonicalProof, canonicalRequest, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, type CanonicalRequestParts,
+} from '@shared/localConnector';
 
 /** Clé publique P-256 brute non compressée. */
 export const PUBLIC_KEY_BYTES = 65;
@@ -112,6 +115,30 @@ export async function createPairingSecrets(): Promise<PairingSecrets> {
   const verifierBytes = randomBytes(VERIFIER_BYTES);
   const challenge = toBase64Url(await sha256(verifierBytes));
   return { pairingId: randomToken(PAIRING_ID_BYTES), verifier: toBase64Url(verifierBytes), challenge };
+}
+
+/**
+ * Accusé de réception attendu dans les réponses de POST /v1/pair : seule l'application qui a reçu l'URL
+ * magistra://pair (le défi n'est dans aucune requête HTTP) peut le produire.
+ */
+export function expectedPairAck(pairingId: string, challenge: string): Promise<string> {
+  return sha256Base64Url(canonicalPairAck(pairingId, challenge));
+}
+
+/** Égalité de deux textes sans sortie anticipée sur le premier écart (longueurs différentes : faux). */
+export function constantTimeEqualText(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * Accusé de réception reçu d'un port : format exact (SHA-256 en base64url) PUIS égalité sans sortie anticipée avec
+ * l'accusé attendu. Absent, mal formé ou faux → faux : ce port n'a pas reçu l'URL magistra://pair de ce navigateur.
+ */
+export function verifyPairAck(expected: string, received: unknown): boolean {
+  return typeof received === 'string' && CONNECTOR_FORMATS.ack.test(received) && constantTimeEqualText(expected, received);
 }
 
 export interface ClientKeyPair {

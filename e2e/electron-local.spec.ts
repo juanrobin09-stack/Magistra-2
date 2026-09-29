@@ -6,7 +6,8 @@
 // Prérequis : `npx vite build` (dist/) puis `node scripts/build-electron.mjs` (dist-electron/).
 // Lancement (Linux sans écran) : `xvfb-run -a npx playwright test --project=electron`.
 // Variables facultatives :
-//   MAGISTRA_E2E_SCREENSHOTS  dossier des captures (par défaut test-results/electron-screens) ;
+//   MAGISTRA_E2E_SCREENSHOTS  dossier des captures (par défaut test-results/electron/captures, dossier du projet
+//                             « electron » : voir e2e/outputDirs.ts) ;
 //   MAGISTRA_DIST_DIR         dossier dist/ figé, à l'abri d'une reconstruction en parallèle ;
 //   MAGISTRA_E2E_LOGS=1       affiche les journaux du processus principal et les erreurs console de la fenêtre.
 // Chaque test utilise un dossier de données neuf (MAGISTRA_USER_DATA_DIR) et son propre faux Ollama.
@@ -20,9 +21,10 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { E2E_SCREENSHOT_DIRS, fromRoot } from './outputDirs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SHOTS = path.resolve(process.env.MAGISTRA_E2E_SCREENSHOTS ?? path.join(root, 'test-results', 'electron-screens'));
+const SHOTS = path.resolve(process.env.MAGISTRA_E2E_SCREENSHOTS ?? fromRoot(E2E_SCREENSHOT_DIRS.electron));
 /** Les trois niveaux Magistra : le modèle recommandé est installé quelle que soit la machine de test. */
 const ALL_TIER_MODELS = ['ministral-3:8b', 'ministral-3:14b', 'mistral-small3.2:24b'];
 /** Détails techniques qui ne doivent jamais apparaître à l'écran. */

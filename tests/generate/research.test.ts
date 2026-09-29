@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Capabilities } from '@shared/types';
 import {
-  ACADEMIC_ONLY_NOTE, describeResearchOptions, DEMO_RESEARCH_NOTE, effectiveResearchMode, LOCAL_PRIVACY_NOTE, NETWORK_PRIVACY_NOTE,
-  NO_INTERNET_LOCAL_NOTE, NO_INTERNET_SERVER_NOTE, privacyNotes, researchHints, WEB_LIMITED_ACADEMIC_NOTE, WEB_LIMITED_NOTE,
-  WEB_LIMITED_SCOLAIRE_LOCAL_NOTE, WEB_LIMITED_SCOLAIRE_SERVER_NOTE,
+  ACADEMIC_ONLY_NOTE, describeResearchOptions, DEMO_RESEARCH_NOTE, effectiveResearchMode, LOCAL_CONNECTOR_NETWORK_NOTE,
+  LOCAL_CONNECTOR_PRIVACY_MESSAGE, LOCAL_PRIVACY_NOTE, NETWORK_PRIVACY_NOTE, NO_INTERNET_LOCAL_NOTE, NO_INTERNET_SERVER_NOTE,
+  privacyNotes, researchHints, WEB_LIMITED_ACADEMIC_NOTE, WEB_LIMITED_NOTE, WEB_LIMITED_SCOLAIRE_LOCAL_NOTE,
+  WEB_LIMITED_SCOLAIRE_SERVER_NOTE,
 } from '@/lib/generation/research';
+import { UNVERIFIED_PROVIDER_TEXT } from '@/lib/ai-ui/server';
+import { LOCAL_PRIVACY_MESSAGE } from '@/lib/runtime/hybrid';
 
 function caps(partial: Omit<Partial<Capabilities>, 'research'> & { research?: Partial<Capabilities['research']> } = {}): Capabilities {
   return {
@@ -107,6 +110,51 @@ describe('confidentialité', () => {
     expect(NETWORK_PRIVACY_NOTE).toBe(
       'La recherche en ligne transmet uniquement votre sujet et vos mots-clés (jamais vos documents) aux services de recherche.',
     );
+  });
+});
+
+describe('confidentialité : Magistra locale depuis le site web (route « local-connector »)', () => {
+  const local = (partial: Parameters<typeof caps>[0] = {}) =>
+    caps({ route: 'local-connector', privacy: { level: 'local', message: LOCAL_PRIVACY_MESSAGE }, engineLabel: 'Magistra locale — Magistra Standard', ...partial });
+
+  it('notes exactes : générée sur cet ordinateur par l’application, demande et extraits jamais envoyés au serveur en ligne, résultat dans l’historique en ligne', () => {
+    const notes = privacyNotes(local(), 'documents', { runtimeMode: 'web' });
+    expect(notes).toEqual({ message: LOCAL_CONNECTOR_PRIVACY_MESSAGE, network: null, local: null });
+    expect(LOCAL_CONNECTOR_PRIVACY_MESSAGE).toBe(
+      "IA locale : vos contenus sont générés sur cet ordinateur par l'application Magistra. Votre demande et les extraits de vos documents ne sont pas transmis au serveur Magistra en ligne ; seul le résultat est enregistré dans l'historique de votre compte en ligne.",
+    );
+    // Même texte que les capacités du client hybride (une seule source).
+    expect(LOCAL_PRIVACY_MESSAGE).toBe(LOCAL_CONNECTOR_PRIVACY_MESSAGE);
+    // Le résultat part dans l'historique en ligne : jamais « restent sur cet ordinateur », aucun prestataire tiers.
+    expect(JSON.stringify(notes)).not.toContain('restent sur cet ordinateur');
+    expect(notes.thirdParty).toBeUndefined();
+  });
+
+  it('recherche en ligne : faite depuis cet ordinateur par l’application (sujet et mots-clés seulement)', () => {
+    for (const mode of ['academic', 'internet', 'documents_internet'] as const) {
+      expect(privacyNotes(local(), mode, { runtimeMode: 'web' }).network).toBe(LOCAL_CONNECTOR_NETWORK_NOTE);
+    }
+    expect(LOCAL_CONNECTOR_NETWORK_NOTE).toBe(
+      "Les recherches Internet ou académiques sont faites depuis cet ordinateur par l'application Magistra : elles transmettent uniquement votre sujet et vos mots-clés (jamais vos documents) aux services de recherche.",
+    );
+  });
+
+  it('indépendant du message des capacités et de leur disponibilité : Magistra locale non prête, ou capacités pas encore lues', () => {
+    const notReady = local({ ready: false, privacy: { level: 'local', message: 'Tout reste sur cet ordinateur.' } });
+    expect(privacyNotes(notReady, 'documents', { runtimeMode: 'web' }).message).toBe(LOCAL_CONNECTOR_PRIVACY_MESSAGE);
+    // Capacités pas encore lues, moteur choisi connu : annonce de Magistra locale (jamais « prestataire non vérifié »).
+    const pending = privacyNotes(null, 'internet', { runtimeMode: 'web', route: 'local-connector' });
+    expect(pending).toEqual({ message: LOCAL_CONNECTOR_PRIVACY_MESSAGE, network: LOCAL_CONNECTOR_NETWORK_NOTE, local: null });
+  });
+
+  it('serveur en ligne choisi sur le site : comportement du serveur (jamais les notes de Magistra locale)', () => {
+    const server = caps({ route: 'server', privacy: { level: 'server', message: 'Transmis au serveur.' } });
+    expect(privacyNotes(server, 'internet', { runtimeMode: 'web', route: 'server' })).toEqual({
+      message: 'Transmis au serveur.', network: NETWORK_PRIVACY_NOTE, local: null,
+    });
+    const unknown = privacyNotes(null, 'documents', { runtimeMode: 'web', route: 'server' });
+    expect(unknown.message).toBe(UNVERIFIED_PROVIDER_TEXT);
+    expect(unknown.thirdParty).toBe(true);
   });
 });
 

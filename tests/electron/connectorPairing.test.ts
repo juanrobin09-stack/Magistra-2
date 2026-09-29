@@ -1,9 +1,10 @@
 // Demandes d'appairage du connecteur local : une seule à la fois, 3 boîtes de consentement par minute au plus,
-// durée de vie, vérificateur (5 essais), origine, usage unique. Horloge simulée.
+// durée de vie, preuve de réception (accusé, sans effet sur la demande), vérificateur (5 essais), origine, usage
+// unique. Horloge simulée.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CONNECTOR_LIMITS, type PairingUrlParams } from '../../shared/localConnector.js';
-import { randomToken, sha256Base64Url, fromBase64Url } from '../../electron/connector/crypto.js';
+import { canonicalPairAck, CONNECTOR_FORMATS, CONNECTOR_LIMITS, type PairingUrlParams } from '../../shared/localConnector.js';
+import { pairAck, randomToken, sha256Base64Url, fromBase64Url } from '../../electron/connector/crypto.js';
 import { MAX_PROMPTS_PER_MINUTE, PairingRegistry, type PairingTicket } from '../../electron/connector/pairing.js';
 
 const ORIGIN = 'https://magistra-2.vercel.app';
@@ -28,6 +29,10 @@ function prompt(registry: PairingRegistry, p: PairingUrlParams): PairingTicket {
 
 const complete = (registry: PairingRegistry, p: { pairingId: string; verifier: string }, origin = ORIGIN) =>
   registry.complete({ pairingId: p.pairingId, verifier: p.verifier, origin });
+const acknowledge = (registry: PairingRegistry, p: { pairingId: string }, origin = ORIGIN) =>
+  registry.acknowledge({ pairingId: p.pairingId, origin });
+/** Accusé attendu par le site : SHA-256 de la chaîne canonique (défi de l'URL). */
+const ackOf = (p: { pairingId: string; challenge: string }) => sha256Base64Url(canonicalPairAck(p.pairingId, p.challenge));
 
 afterEach(() => vi.useRealTimers());
 
@@ -37,15 +42,63 @@ describe('demande d’appairage', () => {
     const p = sitePairing();
     const ticket = prompt(registry, p);
     expect(ticket.origin).toBe(ORIGIN);
-    expect(complete(registry, p)).toEqual({ status: 'pending' });
-    expect(complete(registry, p)).toEqual({ status: 'pending' });
+    const ack = ackOf(p);
+    expect(complete(registry, p)).toEqual({ status: 'pending', ack });
+    expect(complete(registry, p)).toEqual({ status: 'pending', ack });
     expect(registry.answer(ticket, true)).toBe(true);
     // Une réponse ne s'applique qu'une fois.
     expect(registry.answer(ticket, false)).toBe(false);
-    expect(complete(registry, p)).toEqual({ status: 'approved', pairingId: p.pairingId, origin: ORIGIN });
+    expect(complete(registry, p)).toEqual({ status: 'approved', pairingId: p.pairingId, origin: ORIGIN, ack });
     expect(ticket.signal.aborted).toBe(true);
     expect(() => complete(registry, p)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
     expect(registry.pending).toBeNull();
+  });
+
+  it('preuve de réception (premier temps, sans secret) : accusé du défi de l’URL, « pending » puis « consented »', () => {
+    const { registry } = setup();
+    const p = sitePairing();
+    const ticket = prompt(registry, p);
+    const ack = acknowledge(registry, p);
+    expect(ack).toEqual({ status: 'pending', ack: ackOf(p) });
+    expect(ack.ack).toMatch(CONNECTOR_FORMATS.ack);
+    expect(pairAck(p.pairingId, p.challenge)).toBe(ack.ack);
+    // L'accusé ne révèle ni le défi ni le vérificateur.
+    expect(ack.ack).not.toBe(p.challenge);
+    registry.answer(ticket, true);
+    // Autant d'essais que voulu : la demande n'est jamais modifiée (ni consommée, ni décomptée).
+    for (let i = 0; i < CONNECTOR_LIMITS.maxVerifierAttempts + 3; i++) expect(acknowledge(registry, p)).toEqual({ status: 'consented', ack: ackOf(p) });
+    expect(registry.pending).toMatchObject({ pairingId: p.pairingId, state: 'approved' });
+    expect(complete(registry, p)).toMatchObject({ status: 'approved', ack: ackOf(p) });
+    expect(() => acknowledge(registry, p)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+  });
+
+  it('accusé : vecteur fixe (identique côté site, tests/localConnector/webCrypto.test.ts)', () => {
+    expect(canonicalPairAck('AAECAwQFBgcICQoLDA0ODw', 'ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ'))
+      .toBe('MAGISTRA-CONNECTOR-1-PAIR-ACK\nAAECAwQFBgcICQoLDA0ODw\nctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ');
+    expect(pairAck('AAECAwQFBgcICQoLDA0ODw', 'ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ')).toBe('cDJlSHwvceFZ4grVp4db14g8zHt3v9DhOrD6rUUV85k');
+    // Le défi du vecteur est bien le SHA-256 des 32 octets du vérificateur.
+    expect(sha256Base64Url(fromBase64Url('ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8', 32)!)).toBe('ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ');
+  });
+
+  it('premier temps : demande inconnue (404), expirée (410), autre origine (403) ; refus lisible mais jamais consommé', () => {
+    const { registry, advance } = setup();
+    const p = sitePairing();
+    expect(() => acknowledge(registry, p)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+    const ticket = prompt(registry, p);
+    expect(() => acknowledge(registry, p, 'https://evil.example')).toThrow(expect.objectContaining({ code: 'FORBIDDEN', status: 403 }));
+    expect(() => acknowledge(registry, { pairingId: randomToken(16) })).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+    registry.answer(ticket, false);
+    // Un tiers qui interroge avec l'identifiant ne fait pas disparaître le refus : le site le lit à son tour.
+    for (let i = 0; i < 3; i++) expect(() => acknowledge(registry, p)).toThrow(expect.objectContaining({ code: 'CONNECTOR_PAIRING_REFUSED', status: 403 }));
+    expect(() => complete(registry, p)).toThrow(expect.objectContaining({ code: 'CONNECTOR_PAIRING_REFUSED' }));
+    expect(() => acknowledge(registry, p)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+
+    const q = sitePairing();
+    advance(60_001);
+    prompt(registry, q);
+    advance(CONNECTOR_LIMITS.pairingTtlMs);
+    expect(() => acknowledge(registry, q)).toThrow(expect.objectContaining({ code: 'CONNECTOR_PAIRING_EXPIRED', status: 410 }));
+    expect(() => acknowledge(registry, q)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
   });
 
   it('refus de l’enseignant : CONNECTOR_PAIRING_REFUSED, puis demande oubliée', () => {

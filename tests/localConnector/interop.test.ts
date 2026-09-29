@@ -9,10 +9,12 @@
 // (réponse de l'enseignant simulée) et le chiffrement du système (réversible, comme DPAPI).
 //
 // Parcours : détection, appairage (accepté, refusé), état prouvé, génération en flux avec le résultat à enregistrer,
-// annulation, « redémarrage » de l'application (autre port, autre programme sur l'ancien), autorisation retirée dans
+// annulation, « redémarrage » de l'application (autre port, autre programme sur l'ancien), programme qui occupe un
+// port dédié et accepte tout pendant l'appairage (jamais de vérificateur pour lui), autorisation retirée dans
 // l'application, mauvais secret, autre origine, application réglée sur un serveur distant, application occupée,
 // contrôleur et client hybride du site (enregistrement du résultat, jamais de repli vers le serveur en ligne).
 
+import { createECDH, randomBytes } from 'node:crypto';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
@@ -100,6 +102,42 @@ async function impostor(port: number): Promise<HttpServer> {
   });
   await new Promise<void>(resolve => server.listen(port, '127.0.0.1', resolve));
   return server;
+}
+
+/**
+ * Programme qui occupe un port dédié AVANT l'application (autre session Windows d'un PC partagé ou d'un serveur de
+ * bureaux à distance : les ports de la boucle locale sont communs à toutes les sessions). Il se présente comme
+ * Magistra et accepte tout : accord immédiat, accusé de réception inventé (il n'a jamais reçu l'URL magistra://),
+ * appairage « réussi » avec sa propre clé. Il note tout ce qu'il reçoit.
+ */
+async function greedyImpostor(port: number): Promise<{ server: HttpServer; received: { method: string; path: string; body: string }[] }> {
+  const received: { method: string; path: string; body: string }[] = [];
+  const server = createHttpServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      received.push({ method: req.method ?? '', path: req.url ?? '', body });
+      let reply: unknown = { ok: true };
+      if (req.url === '/v1/hello') reply = { app: 'magistra', protocol: 1, version: '9.9.9' };
+      if (req.url === '/v1/pair' && req.method === 'POST') {
+        const input = JSON.parse(body || '{}') as Record<string, unknown>;
+        const ack = randomBytes(32).toString('base64url');
+        reply = 'verifier' in input
+          ? { status: 'approved', clientId: randomBytes(16).toString('base64url'), connectorPublicKey: createECDH('prime256v1').generateKeys().toString('base64url'), version: '9.9.9', ack }
+          : { status: 'consented', ack };
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': req.headers.origin ?? '*',
+        'Access-Control-Allow-Headers': '*',
+        'Access-Control-Allow-Methods': '*',
+      });
+      res.end(JSON.stringify(reply));
+    });
+  });
+  await new Promise<void>(resolve => server.listen(port, '127.0.0.1', resolve));
+  return { server, received };
 }
 
 // ─── Application simulée autour du VRAI connecteur ─────────────────────────
@@ -361,6 +399,40 @@ describe('site web ⇄ application : protocole réel', () => {
     expect((await store.load())?.port).toBe(p2);
     expect(second.consents).toHaveLength(0);
     expect((await collect(reloaded)).at(-1)?.type).toBe('done');
+  });
+
+  it('programme qui occupe le premier port dédié et accepte tout : le vérificateur ne lui est JAMAIS envoyé ; appairage avec la vraie application sur le port suivant', async () => {
+    const [p1, p2] = [await freePort(), await freePort()];
+    const fake = await greedyImpostor(p1);
+    servers.push(fake.server);
+    const app = await startApp([p1, p2]);
+    expect(app.connector.port).toBe(p2);
+
+    const { client, store } = await pairedClient([p1, p2]);
+    const stored = (await store.load())!;
+    expect(stored.port).toBe(p2);
+    expect(app.connector.status().clients.map(c => c.clientId)).toEqual([stored.clientId]);
+    expect(app.consents).toHaveLength(1);
+
+    // Le faux connecteur n'a reçu que des requêtes sans secret : présence, puis premier temps de l'appairage (le défi,
+    // seul moyen de produire l'accusé, n'est dans aucune requête HTTP).
+    const request = parseAppUrl(opened[0]);
+    if (!request || request.kind !== 'pair') throw new Error('URL d’appairage attendue');
+    const pairs = fake.received.filter(r => r.path === '/v1/pair' && r.method === 'POST');
+    expect(pairs.length).toBeGreaterThan(0);
+    for (const r of fake.received) {
+      expect(['/v1/hello', '/v1/pair']).toContain(r.path);
+      expect(r.body).not.toContain(request.challenge);
+      expect(r.body).not.toMatch(/verifier|clientPublicKey/);
+    }
+    for (const r of pairs) expect(JSON.parse(r.body)).toEqual({ pairingId: request.pairingId });
+
+    // La suite ne va qu'à l'application qui a prouvé détenir la clé : ni demande ni extrait de document pour le faux.
+    expect((await collect(client)).at(-1)?.type).toBe('done');
+    expect(JSON.stringify(app.provider.calls[0].messages)).toContain('PASSAGE-CONFIDENTIEL-4412');
+    expect(fake.received.every(r => !r.body.includes('PASSAGE-CONFIDENTIEL-4412'))).toBe(true);
+    expect(fake.received.filter(r => r.path !== '/v1/hello' && r.path !== '/v1/pair')).toEqual([]);
+    await until(() => !app.manager.busy);
   });
 
   it('autorisation retirée dans l’application : CONNECTOR_UNPAIRED côté site, appairage oublié, génération refusée', async () => {

@@ -11,8 +11,13 @@
 //  - requêtes : mode CORS, sans cookie ni identifiant (credentials 'omit'), sans cache, sans Referer, sans suivre de
 //    redirection, targetAddressSpace 'loopback' (Local Network Access de Chrome ; ignoré ailleurs) ;
 //  - appairage : l'URL magistra://pair ne porte que l'identifiant de la demande, le défi (SHA-256 du vérificateur) et
-//    l'origine du site ; le vérificateur n'est envoyé que dans le CORPS de POST /v1/pair ; la clé HMAC, dérivée par
-//    ECDH des deux côtés, n'a jamais circulé et reste non extractible dans ce navigateur ;
+//    l'origine du site. Premier temps, sans secret : POST /v1/pair { pairingId } ; seul un port qui renvoie l'accusé
+//    de réception attendu (SHA-256 de canonicalPairAck(pairingId, défi) : le défi n'est dans aucune requête HTTP) a
+//    reçu l'URL, donc est l'application Magistra de CETTE session. Un port sans accusé valide (autre programme, autre
+//    session Windows d'un PC partagé ou d'un serveur de bureaux à distance) est ignoré et ne reçoit JAMAIS le
+//    vérificateur ni la clé publique : ils ne partent, dans le CORPS du second temps, qu'au port dont l'accusé est
+//    valide et seulement après l'accord de l'enseignant ('consented'). La clé HMAC, dérivée par ECDH des deux côtés,
+//    n'a jamais circulé et reste non extractible dans ce navigateur ;
 //  - chaque réponse à une requête signée doit porter la PREUVE (X-Magistra-Proof) que l'application détient la clé de
 //    ce navigateur pour CE nonce. Sans preuve valide (autre programme sur le port, autre session Windows), la réponse
 //    est ignorée — son texte n'est jamais affiché — et vaut CONNECTOR_UNREACHABLE ;
@@ -26,15 +31,15 @@ import { defaultMessage, isAbortError, isErrorCode, MagistraError, toMagistraErr
 import {
   buildPairingUrl, CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_HOST, CONNECTOR_LIMITS, CONNECTOR_PORTS,
   CONNECTOR_PROTOCOL_VERSION, CONNECTOR_ROUTES, CONNECTOR_URL_SCHEME, type ConnectorCancelRequest, type ConnectorHello,
-  type ConnectorRoute, type ConnectorStatus, type PairCompleteRequest,
+  type ConnectorRoute, type ConnectorStatus, type PairAckRequest, type PairFinishRequest,
 } from '@shared/localConnector';
 import type { AINotice, GenerationEvent, GenerationRequest } from '@shared/types';
 import { readEventStream } from '@/lib/runtime/http';
 import { defaultPairingStore, isStoredPairing, type PairingStore, type StoredPairing } from './pairingStore';
 import { queryLoopbackPermission, type LoopbackPermission } from './permission';
 import {
-  createPairingSecrets, deriveHmacKey, generateClientKeyPair, isWebCryptoAvailable, NONCE_BYTES, randomToken,
-  sha256Base64Url, signRequest, utf8, verifyProof, type ClientKeyPair, type PairingSecrets,
+  createPairingSecrets, deriveHmacKey, expectedPairAck, generateClientKeyPair, isWebCryptoAvailable, NONCE_BYTES, randomToken,
+  sha256Base64Url, signRequest, utf8, verifyPairAck, verifyProof, type ClientKeyPair, type PairingSecrets,
 } from './webCrypto';
 
 export type { LoopbackPermission } from './permission';
@@ -66,13 +71,13 @@ export const CONNECTOR_CLIENT_TIMEOUTS = {
   permissionPrompt: 60_000,
   /** État du moteur (GET /v1/status). */
   status: 10_000,
-  /** Un essai de fin d'appairage (POST /v1/pair). */
+  /** Un essai de POST /v1/pair (preuve de réception ou fin d'appairage). */
   pairRequest: 5_000,
   /** Appairage complet, de l'ouverture de magistra://pair à l'accord de l'enseignant. */
   pairing: 120_000,
   /** Intervalle de recherche de l'application pendant l'appairage. */
   helloPoll: 1_000,
-  /** Intervalle des essais de fin d'appairage tant que l'enseignant n'a pas répondu (202). */
+  /** Intervalle des essais d'appairage tant que l'enseignant n'a pas répondu (202). */
   pairPoll: 1_500,
   /** Début de la réponse de POST /v1/generate (le flux lui-même n'a pas de délai ici : la pipeline a les siens). */
   generateHeaders: 30_000,
@@ -317,10 +322,21 @@ type Outcome<T> =
   /** Aucune réponse : port fermé, délai dépassé, requête bloquée par le navigateur. */
   | { kind: 'unreachable' };
 
+/** Temps de POST /v1/pair : preuve de réception (aucun secret), puis fin d'appairage (vérificateur et clé). */
+type PairStep = 'ack' | 'finish';
+
 type PairOutcome =
+  /** Second temps réussi (accusé valide). */
   | ({ kind: 'approved' } & PairApproved)
-  /** 202 : demande reconnue, l'enseignant n'a pas encore répondu. */
+  /** Premier temps, accusé valide : l'enseignant a accepté ; le second temps peut partir vers CE port. */
+  | { kind: 'consented' }
+  /** 202, accusé valide : demande reconnue, l'enseignant n'a pas encore répondu. */
   | { kind: 'pending' }
+  /**
+   * Réponse sans accusé de réception valide (ou d'une forme inattendue) : ce port n'a pas reçu l'URL magistra:// de
+   * ce navigateur (autre programme, autre session Windows) ; il est ignoré.
+   */
+  | { kind: 'unproven' }
   /** Demande inconnue de ce programme (404 ; 401/403 : ce n'est pas la demande de ce navigateur). */
   | { kind: 'unknown' }
   /** 429 : réessayer plus tard. */
@@ -388,8 +404,12 @@ export class LocalConnectorClient {
 
   /**
    * Appairage demandé par l'enseignant : ouvre magistra://pair, attend l'application (hello toutes les secondes), puis
-   * l'accord de l'enseignant (POST /v1/pair toutes les 1,5 s tant que 202), 2 minutes au plus. Termine par une
-   * preuve (GET /v1/status) : la clé est la même des deux côtés.
+   * l'accord de l'enseignant, 2 minutes au plus, en deux temps :
+   *  1. preuve de réception, sans secret : POST /v1/pair { pairingId } aux ports où Magistra répond (toutes les 1,5 s
+   *     tant que 202) ; un port dont l'accusé de réception est absent ou faux est ignoré ;
+   *  2. après { status: 'consented' } (accusé valide), et à CE port seulement : POST /v1/pair { pairingId, verifier,
+   *     clientPublicKey }.
+   * Termine par une preuve (GET /v1/status) : la clé est la même des deux côtés.
    * Lève CONNECTOR_PAIRING_REFUSED, CONNECTOR_PAIRING_EXPIRED, CONNECTOR_UNREACHABLE, LOCAL_NETWORK_PERMISSION_DENIED,
    * ou une AbortError si `signal` est interrompu.
    */
@@ -401,15 +421,21 @@ export class LocalConnectorClient {
     const previous = await this.loadPairing();
     const secrets = await createPairingSecrets();
     const keys = await generateClientKeyPair();
-    const request: PairCompleteRequest = { pairingId: secrets.pairingId, verifier: secrets.verifier, clientPublicKey: keys.publicKey };
-    const body = utf8(JSON.stringify(request));
+    const ack = await expectedPairAck(secrets.pairingId, secrets.challenge);
+    const probe: PairAckRequest = { pairingId: secrets.pairingId };
+    const finish: PairFinishRequest = { pairingId: secrets.pairingId, verifier: secrets.verifier, clientPublicKey: keys.publicKey };
+    const probeBody = utf8(JSON.stringify(probe));
+    const finishBody = utf8(JSON.stringify(finish));
     const deadline = this.now() + T.pairing;
     throwIfAborted(signal);
     // Seuls l'identifiant de la demande, le défi et l'origine voyagent dans l'URL : jamais le vérificateur.
     this.openUrl(buildPairingUrl({ pairingId: secrets.pairingId, challenge: secrets.challenge, origin: this.origin }));
 
     const helloWait = permission === 'prompt' ? T.permissionPrompt : T.hello;
-    /** Port où l'application a reconnu la demande (202) : les essais suivants y vont directement. */
+    /**
+     * Port qui a prouvé avoir reçu la demande (accusé valide) : les essais suivants y vont directement, et lui seul
+     * peut recevoir le second temps.
+     */
     let acknowledged: number | null = null;
     let everAcknowledged = false;
     let appSeen = false;
@@ -426,10 +452,16 @@ export class LocalConnectorClient {
       if (candidates.length) appSeen = true;
       else if (permission === 'prompt' && (await this.permissionState()) === 'denied') throw permissionDenied();
       for (const port of candidates) {
-        const outcome = await this.postPair(port, body, signal);
-        if (outcome.kind === 'approved') {
-          await this.completePairing(outcome, port, keys, secrets, previous, signal);
-          return;
+        let outcome = await this.postPair(port, probeBody, ack, 'ack', signal);
+        if (outcome.kind === 'consented') {
+          acknowledged = port;
+          everAcknowledged = true;
+          // Second temps : le vérificateur et la clé publique ne partent qu'à ce port, qui a prouvé avoir reçu l'URL.
+          outcome = await this.postPair(port, finishBody, ack, 'finish', signal);
+          if (outcome.kind === 'approved') {
+            await this.completePairing(outcome, port, keys, secrets, previous, signal);
+            return;
+          }
         }
         if (outcome.kind === 'error') throw outcome.error;
         if (outcome.kind === 'pending') {
@@ -438,11 +470,14 @@ export class LocalConnectorClient {
           break;
         }
         if (port === acknowledged) {
-          // Demande reconnue puis perdue : remplacée par une autre (autre onglet, double clic) ou retirée.
-          if (outcome.kind === 'unknown') throw new MagistraError('CONNECTOR_PAIRING_EXPIRED');
+          // Demande reconnue puis perdue : remplacée par une autre (autre onglet, double clic) ou retirée ; ou
+          // application fermée et port repris par un autre programme (accusé absent).
+          if (outcome.kind === 'unknown' || outcome.kind === 'unproven') throw new MagistraError('CONNECTOR_PAIRING_EXPIRED');
           // Application fermée pendant l'attente : nouvelle recherche.
           if (outcome.kind === 'unreachable') acknowledged = null;
+          break;
         }
+        // Accusé absent ou faux (autre programme, autre session Windows), demande inconnue, 429 : port suivant.
       }
       await this.sleep(acknowledged !== null ? T.pairPoll : T.helloPoll, signal);
     }
@@ -729,22 +764,33 @@ export class LocalConnectorClient {
 
   // ─── Appairage ────────────────────────────────────────────────────────────
 
-  /** Un essai de fin d'appairage. Réponse NON prouvable (aucune clé encore) : seuls le statut et le code comptent. */
-  private async postPair(port: number, body: RequestBody, signal: AbortSignal): Promise<PairOutcome> {
+  /**
+   * Un essai de POST /v1/pair (`step` : preuve de réception ou fin d'appairage). Aucune clé encore : une réponse
+   * réussie ne compte que si elle porte l'accusé de réception attendu (sinon 'unproven', port ignoré) ; pour une
+   * erreur, seuls le statut et le code comptent (jamais le message). Refus et expiration arrêtent l'appairage d'où
+   * qu'ils viennent : ils ne font rien envoyer (un programme qui occupe les ports dédiés peut de toute façon
+   * l'empêcher) et l'enseignant qui refuse avant le premier essai l'apprend aussitôt. Premier temps : toute autre
+   * erreur vient d'un port qui n'a rien prouvé, elle est ignorée comme lui.
+   */
+  private async postPair(port: number, body: RequestBody, ack: string, step: PairStep, signal: AbortSignal): Promise<PairOutcome> {
     try {
       return await this.withTimeout(signal, T.pairRequest, async (s): Promise<PairOutcome> => {
         const res = await this.send(port, CONNECTOR_ROUTES.pair, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, s);
         const payload = await readJson(res, MAX_SMALL_RESPONSE_BYTES);
-        if (res.status === 200) {
+        if (res.status === 200 || res.status === 202) {
+          if (!isRecord(payload) || !verifyPairAck(ack, payload.ack)) return { kind: 'unproven' };
+          if (res.status === 202) return payload.status === 'pending' ? { kind: 'pending' } : { kind: 'unproven' };
+          if (step === 'ack') return payload.status === 'consented' ? { kind: 'consented' } : { kind: 'unproven' };
+          // Accusé valide : c'est l'application qui a reçu la demande ; une réponse mal formée est une incompatibilité.
           const approved = parseApproved(payload);
           return approved ? { kind: 'approved', ...approved } : { kind: 'error', error: unexpectedReply() };
         }
-        if (res.status === 202) return { kind: 'pending' };
         const code = errorCodeOf(payload);
         if (code === 'CONNECTOR_PAIRING_REFUSED') return { kind: 'error', error: new MagistraError('CONNECTOR_PAIRING_REFUSED') };
         if (code === 'CONNECTOR_PAIRING_EXPIRED' || res.status === 410) return { kind: 'error', error: new MagistraError('CONNECTOR_PAIRING_EXPIRED') };
         if (res.status === 404 || res.status === 401 || res.status === 403) return { kind: 'unknown' };
         if (res.status === 429) return { kind: 'retry' };
+        if (step === 'ack') return { kind: 'unproven' };
         return { kind: 'error', error: code ? new MagistraError(code) : unexpectedReply() };
       });
     } catch {

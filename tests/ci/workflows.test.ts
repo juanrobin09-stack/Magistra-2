@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import playwrightConfig from '../../playwright.config';
 import { LOCAL_NETWORK_ACCESS_ARGS, OTHER_SITE_PORT, SITE_PORT } from '../../e2e/connector-harness/sites';
+import { CONNECTOR_HARNESS_DIR, E2E_OUTPUT_DIRS, E2E_SCREENSHOT_DIRS, type E2EProject } from '../../e2e/outputDirs';
 import { PROVIDER_PRESETS } from '../../shared/ai/presets';
 import { MIN_OLLAMA_VERSION } from '../../shared/ai/models';
 
@@ -29,6 +30,14 @@ function code(text: string): string {
 /** Lignes « uses: » d'un workflow (actions externes). */
 function usesLines(text: string): string[] {
   return text.split('\n').filter(l => /^\s*-?\s*uses:\s/.test(l));
+}
+
+/** Étape d'un job (de sa ligne « - » à l'étape suivante) contenant `marker`. */
+function stepWith(jobText: string, marker: string): string {
+  const steps = jobText.split(/\n(?= {6}- )/);
+  const found = steps.filter(step => step.includes(marker));
+  if (found.length !== 1) throw new Error(`étape « ${marker} » : ${found.length} trouvée(s)`);
+  return found[0];
 }
 
 /** Texte d'un job : de « <nom>: » (2 espaces) au job suivant. */
@@ -170,16 +179,19 @@ describe('documentation', () => {
 });
 
 describe('ci.yml et Playwright : E2E du connecteur local', () => {
-  it('job « electron » : trousseau de clés, construction du site et de l’application, puis projets « electron » et « connector »', () => {
+  it('job « electron » : trousseau de clés, construction du site et de l’application, puis projets « electron » et « connector », captures de chacun', () => {
     const electron = job(ci, 'electron');
-    // Dans cet ordre : chaque étape a besoin des précédentes.
+    // Dans cet ordre : chaque étape a besoin des précédentes ; les captures de l'application partent AVANT le
+    // lancement du projet « connector ».
     const steps = [
       'run: npx playwright install --with-deps chromium',
       'apt-get install -y --no-install-recommends gnome-keyring dbus',
       'run: npx vite build',
       'run: node scripts/build-electron.mjs',
       'run: xvfb-run -a npm run test:e2e -- --project=electron',
+      `path: ${E2E_SCREENSHOT_DIRS.electron}`,
       'run: xvfb-run -a npm run test:e2e -- --project=connector',
+      `path: ${E2E_SCREENSHOT_DIRS.connector}`,
     ];
     let previous = -1;
     for (const step of steps) {
@@ -187,9 +199,42 @@ describe('ci.yml et Playwright : E2E du connecteur local', () => {
       expect(at, step).toBeGreaterThan(previous);
       previous = at;
     }
-    expect(electron).toContain('path: test-results/connector-screens');
+    // Captures envoyées même après un échec (c'est alors qu'elles servent), sous deux noms distincts.
+    const names = new Set<string>();
+    for (const dir of Object.values(E2E_SCREENSHOT_DIRS)) {
+      const upload = stepWith(electron, `path: ${dir}`);
+      expect(upload, dir).toMatch(/^\s+if: always\(\)$/m);
+      expect(upload, dir).toMatch(/uses: actions\/upload-artifact@/);
+      names.add(/^\s+name: (\S+)$/m.exec(upload.split('with:')[1] ?? '')?.[1] ?? '');
+    }
+    expect([...names].filter(Boolean)).toHaveLength(2);
     // Le projet « web » reste lancé seul dans son job.
     expect(job(ci, 'e2e-web')).toContain('run: npm run test:e2e -- --project=web');
+  });
+
+  it('chaque projet a son propre dossier de sortie : lancer l’un ne vide jamais ce que l’autre a produit (captures, traces)', () => {
+    const projects = playwrightConfig.projects ?? [];
+    // Aucun dossier commun : Playwright vide, au début d'un lancement, le dossier de chaque projet lancé.
+    expect(playwrightConfig.outputDir).toBeUndefined();
+    const dirs = projects.map(p => p.outputDir ?? '');
+    expect(dirs).toEqual(projects.map(p => E2E_OUTPUT_DIRS[p.name as E2EProject]));
+    for (const [i, a] of dirs.entries()) {
+      expect(a).toMatch(/^test-results\/[a-z]+$/);
+      for (const [j, b] of dirs.entries()) if (i !== j) expect(`${b}/`.startsWith(`${a}/`), `${a} ⊃ ${b}`).toBe(false);
+    }
+    // Ce que produit un projet est rangé dans SON dossier.
+    expect(E2E_SCREENSHOT_DIRS.electron.startsWith(`${E2E_OUTPUT_DIRS.electron}/`)).toBe(true);
+    expect(E2E_SCREENSHOT_DIRS.connector.startsWith(`${E2E_OUTPUT_DIRS.connector}/`)).toBe(true);
+    expect(CONNECTOR_HARNESS_DIR.startsWith(`${E2E_OUTPUT_DIRS.connector}/`)).toBe(true);
+    const electronSpec = read('e2e/electron-local.spec.ts');
+    const connectorSpec = read('e2e/connector-local.spec.ts');
+    expect(electronSpec).toContain('fromRoot(E2E_SCREENSHOT_DIRS.electron)');
+    expect(connectorSpec).toContain('fromRoot(E2E_SCREENSHOT_DIRS.connector)');
+    expect(connectorSpec).toContain('fromRoot(CONNECTOR_HARNESS_DIR)');
+    // Aucun autre chemin de test-results/ codé en dur (il échapperait à cette règle).
+    for (const [file, text] of [['electron', electronSpec], ['connector', connectorSpec], ['harness', read('e2e/connector-harness/vite.config.ts')]]) {
+      expect(code(text), file).not.toMatch(/['"`]test-results/);
+    }
   });
 
   it('chaque fichier E2E appartient à exactement un projet ; « connector » active la protection Local Network Access', () => {
@@ -214,7 +259,9 @@ describe('ci.yml et Playwright : E2E du connecteur local', () => {
     const app = JSON.parse(read('tsconfig.app.json')) as { include: string[] };
     expect(app.include).not.toContain('e2e');
     const harness = read('e2e/connector-harness/vite.config.ts');
-    expect(harness).toContain("path.join(root, 'test-results', 'connector-harness-dist')");
+    expect(harness).toContain("export const HARNESS_OUT_DIR = path.join(root, ...CONNECTOR_HARNESS_DIR.split('/'));");
+    expect(harness).toMatch(/outDir: HARNESS_OUT_DIR,/);
+    expect(CONNECTOR_HARNESS_DIR.split('/')[0]).toBe('test-results');
     expect(read('.gitignore').split('\n')).toContain('test-results');
     expect(read('index.html')).not.toContain('connector-harness');
   });

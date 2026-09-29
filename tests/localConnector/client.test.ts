@@ -151,7 +151,7 @@ describe('hello : recherche sans adresse', () => {
 });
 
 describe('pair : appairage', () => {
-  it('URL magistra://pair sans secret, vérificateur dans le corps seulement, attente de l’accord, preuve finale', async () => {
+  it('URL magistra://pair sans secret ; preuve de réception, puis vérificateur dans le corps seulement après l’accord ; preuve finale', async () => {
     const ctx = setup({ [P1]: 'magistra' });
     await pairClient(ctx);
 
@@ -159,16 +159,24 @@ describe('pair : appairage', () => {
     const url = ctx.connector.openedUrls[0];
     const parsed = parseAppUrl(url);
     expect(parsed).toMatchObject({ kind: 'pair', origin: SITE_ORIGIN });
+    if (!parsed || parsed.kind !== 'pair') throw new Error('URL d’appairage attendue');
     const posts = ctx.connector.calls(CONNECTOR_ROUTES.pair, 'POST');
-    expect(posts).toHaveLength(3); // 202, 202, puis accord
-    const body = JSON.parse(posts[0].body) as { pairingId: string; verifier: string; clientPublicKey: string };
+    // Premier temps (sans secret) : 202, 202, puis accord (« consented ») ; second temps : fin d'appairage.
+    expect(posts).toHaveLength(4);
+    for (const probe of posts.slice(0, 3)) expect(JSON.parse(probe.body)).toEqual({ pairingId: parsed.pairingId });
+    const body = JSON.parse(posts[3].body) as { pairingId: string; verifier: string; clientPublicKey: string };
     expect(Object.keys(body).sort()).toEqual(['clientPublicKey', 'pairingId', 'verifier']);
-    expect(body.pairingId).toBe(parsed && parsed.kind === 'pair' ? parsed.pairingId : '');
+    expect(body.pairingId).toBe(parsed.pairingId);
     expect(body.verifier).toMatch(CONNECTOR_FORMATS.verifier);
     expect(body.clientPublicKey).toMatch(CONNECTOR_FORMATS.publicKey);
     expect(url).not.toContain(body.verifier);
-    for (const r of ctx.connector.requests) expect(`${r.path}${JSON.stringify(r.headers)}`).not.toContain(body.verifier);
-    expect(posts[0].headers['content-type']).toBe('application/json');
+    // Le défi n'existe que dans l'URL : aucune requête HTTP ne le porte (c'est lui qui prouve la réception de l'URL).
+    for (const r of ctx.connector.requests) {
+      expect(`${r.path}${JSON.stringify(r.headers)}`).not.toContain(body.verifier);
+      expect(`${r.path}${JSON.stringify(r.headers)}${r.body}`).not.toContain(parsed.challenge);
+    }
+    expect(posts.filter(r => r.body.includes(body.verifier))).toEqual([posts[3]]);
+    for (const post of posts) expect(post.headers['content-type']).toBe('application/json');
     // Essais toutes les 1,5 s tant que l'enseignant n'a pas répondu.
     expect(ctx.clock.sleeps).toEqual([1_500, 1_500]);
 
@@ -257,6 +265,67 @@ describe('pair : appairage', () => {
     const ctx = setup({ [P1]: 'other-magistra', [P2]: 'magistra' });
     await pairClient(ctx);
     expect((await ctx.store.load())?.port).toBe(P2);
+  });
+
+  it('programme qui accepte tout sur le premier port (accusé inventé) : ignoré, ne reçoit JAMAIS le vérificateur ni la clé', async () => {
+    const ctx = setup({ [P1]: 'impostor', [P2]: 'magistra' });
+    await pairClient(ctx);
+    const stored = await ctx.store.load();
+    expect(stored?.port).toBe(P2);
+    expect(ctx.connector.clients.has(stored!.clientId)).toBe(true);
+    const toImpostor = ctx.connector.requests.filter(r => r.port === P1);
+    expect(toImpostor.filter(r => r.path === CONNECTOR_ROUTES.pair).length).toBeGreaterThan(0);
+    for (const r of toImpostor) {
+      expect(r.path === CONNECTOR_ROUTES.hello || r.path === CONNECTOR_ROUTES.pair).toBe(true);
+      if (r.path === CONNECTOR_ROUTES.pair) expect(Object.keys(JSON.parse(r.body))).toEqual(['pairingId']);
+    }
+    const finish = ctx.connector.calls(CONNECTOR_ROUTES.pair, 'POST').filter(r => r.body.includes('verifier'));
+    expect(finish.map(r => r.port)).toEqual([P2]);
+  });
+
+  it('seul le programme de ce port : accusé inventé → rien n’est envoyé au-delà du premier temps, abandon après 2 minutes', async () => {
+    const ctx = setup({ [P1]: 'impostor' });
+    const err = await rejection(pairClient(ctx));
+    expect(err).toMatchObject({ code: 'CONNECTOR_PAIRING_EXPIRED', message: PAIRING_NOT_RECEIVED_MESSAGE });
+    const pairs = ctx.connector.calls(CONNECTOR_ROUTES.pair, 'POST');
+    expect(pairs.length).toBeGreaterThan(50);
+    for (const r of pairs) expect(Object.keys(JSON.parse(r.body))).toEqual(['pairingId']);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.status)).toEqual([]);
+    expect(await ctx.client.hasPairing()).toBe(false);
+  });
+
+  it.each(['none', 'wrong'] as const)('accusé de réception %s (même avec l’accord) : port ignoré, vérificateur jamais envoyé', async (ackMode) => {
+    const ctx = setup();
+    ctx.connector.ackMode = ackMode;
+    ctx.connector.answerAfterPolls = 0;
+    expect(await rejection(pairClient(ctx))).toMatchObject({ code: 'CONNECTOR_PAIRING_EXPIRED', message: PAIRING_NOT_RECEIVED_MESSAGE });
+    for (const r of ctx.connector.calls(CONNECTOR_ROUTES.pair, 'POST')) expect(Object.keys(JSON.parse(r.body))).toEqual(['pairingId']);
+    expect(ctx.connector.clients.size).toBe(0);
+  });
+
+  it('le vérificateur ne part qu’après l’accord : tant que 202, uniquement le premier temps', async () => {
+    const ctx = setup();
+    ctx.connector.answerAfterPolls = null;
+    const abort = new AbortController();
+    ctx.clock.onSleep = count => {
+      if (count === 5) abort.abort();
+    };
+    expect(isAbortError(await rejection(ctx.client.pair(abort.signal)))).toBe(true);
+    const pairs = ctx.connector.calls(CONNECTOR_ROUTES.pair, 'POST');
+    expect(pairs.length).toBe(5);
+    for (const r of pairs) expect(Object.keys(JSON.parse(r.body))).toEqual(['pairingId']);
+  });
+
+  it('demande perdue entre l’accord et la fin d’appairage (autre onglet) : CONNECTOR_PAIRING_EXPIRED', async () => {
+    const ctx = setup();
+    ctx.connector.answerAfterPolls = 0;
+    ctx.connector.intercept = (_port, path, method) => {
+      if (path !== CONNECTOR_ROUTES.pair || method !== 'POST') return undefined;
+      const last = ctx.connector.requests.at(-1)!;
+      return last.body.includes('verifier') ? new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'x', retryable: false } }), { status: 404, headers: { 'Content-Type': 'application/json' } }) : undefined;
+    };
+    expect(await rejection(pairClient(ctx))).toMatchObject({ code: 'CONNECTOR_PAIRING_EXPIRED' });
+    expect(await ctx.client.hasPairing()).toBe(false);
   });
 
   it('clé différente de chaque côté (protocole incompatible) : preuve fausse → appairage oublié aussitôt', async () => {

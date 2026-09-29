@@ -13,10 +13,18 @@
 //   1. le site tire `pairingId` (16 octets) et `verifier` (32 octets), calcule `challenge` = SHA-256(verifier) et ouvre
 //      magistra://pair?v=1&id=<pairingId>&challenge=<challenge>&origin=<origine du site> ;
 //   2. l'application vérifie que l'origine fait partie des origines officielles, puis demande l'accord de l'enseignant ;
-//   3. le site envoie POST /v1/pair { pairingId, verifier, clientPublicKey } (clé publique ECDH P-256 d'une paire
-//      générée NON EXTRACTIBLE dans le navigateur) ; le connecteur vérifie SHA-256(verifier) = challenge, l'en-tête
-//      Origin (= origine de la demande), l'accord donné et le délai, puis répond { clientId, connectorPublicKey } ;
-//   4. chaque côté calcule le secret ECDH puis la clé HMAC-SHA-256 par HKDF (sel = pairingId, info = HKDF_INFO) :
+//   3. PREUVE DE RÉCEPTION, avant tout secret : le site envoie POST /v1/pair { pairingId } (ni vérificateur ni clé) aux
+//      ports où Magistra répond. Le défi n'existe que dans l'URL magistra:// (jamais dans une requête HTTP) : seule
+//      l'application qui l'a reçue peut répondre ack = SHA-256(canonicalPairAck(pairingId, challenge)), avec 202
+//      { status: 'pending', ack } tant que l'enseignant n'a pas répondu, puis 200 { status: 'consented', ack } après son
+//      accord. Un port dont l'ack est absent ou faux est ignoré : un programme qui occupe un port dédié et se présente
+//      comme Magistra (y compris depuis une AUTRE session Windows d'un PC partagé ou d'un serveur de bureaux à distance :
+//      les ports de la boucle locale sont communs à toutes les sessions) ne reçoit jamais le vérificateur ;
+//   4. seulement après 'consented', et seulement au port dont l'ack est valide, le site envoie POST /v1/pair
+//      { pairingId, verifier, clientPublicKey } (clé publique ECDH P-256 d'une paire générée NON EXTRACTIBLE dans le
+//      navigateur) ; le connecteur vérifie SHA-256(verifier) = challenge, l'en-tête Origin (= origine de la demande),
+//      l'accord donné et le délai, puis répond { clientId, connectorPublicKey, version, ack } (ack vérifié à nouveau) ;
+//   5. chaque côté calcule le secret ECDH puis la clé HMAC-SHA-256 par HKDF (sel = pairingId, info = HKDF_INFO) :
 //      la clé n'a jamais circulé ; dans le navigateur elle est NON EXTRACTIBLE (IndexedDB), dans l'application elle
 //      est chiffrée par le système (DPAPI sous Windows).
 //
@@ -55,7 +63,10 @@ export const OPEN_APP_URL = 'magistra://open';
 export const CONNECTOR_ROUTES = {
   /** GET, sans authentification (origine officielle exigée) : présence de Magistra. */
   hello: '/v1/hello',
-  /** POST : fin d'appairage (vérificateur) ; DELETE (signé) : ce navigateur retire sa propre autorisation. */
+  /**
+   * POST : appairage en deux temps (preuve de réception de l'URL magistra://, puis vérificateur et clé) ;
+   * DELETE (signé) : ce navigateur retire sa propre autorisation.
+   */
   pair: '/v1/pair',
   /** GET, signé : état du moteur et capacités. */
   status: '/v1/status',
@@ -140,6 +151,8 @@ export const CONNECTOR_FORMATS = {
   nonce: b64urlPattern(16),
   /** HMAC-SHA-256 (signature, preuve) : 32 octets. */
   mac: b64urlPattern(32),
+  /** Accusé de réception d'une demande d'appairage (SHA-256 de canonicalPairAck) : 32 octets. */
+  ack: b64urlPattern(32),
   /** Clé publique ECDH P-256 au format brut non compressé (0x04 ‖ X ‖ Y) : 65 octets. */
   publicKey: b64urlPattern(65),
   /** Horodatage en millisecondes (entier décimal). */
@@ -179,6 +192,15 @@ export function canonicalRequest(p: CanonicalRequestParts): string {
 /** Chaîne signée par le connecteur dans X-Magistra-Proof (réponse à la requête portant ce nonce). */
 export function canonicalProof(clientId: string, nonce: string): string {
   return [`${CANONICAL_PREFIX}-PROOF`, clientId, nonce].join('\n');
+}
+
+/**
+ * Chaîne dont le SHA-256 (UTF-8, en base64url) est l'accusé de réception `ack` des réponses de POST /v1/pair.
+ * `challenge` est le texte exact du paramètre de l'URL magistra://pair : il n'est JAMAIS envoyé dans une requête
+ * HTTP, donc seule l'application qui a reçu cette URL peut produire l'accusé (preuve de réception).
+ */
+export function canonicalPairAck(pairingId: string, challenge: string): string {
+  return [`${CANONICAL_PREFIX}-PAIR-ACK`, pairingId, challenge].join('\n');
 }
 
 // ─── URL magistra:// ────────────────────────────────────────────────────────
@@ -262,24 +284,41 @@ export interface ConnectorHello {
   version: string;
 }
 
-/** POST /v1/pair */
-export interface PairCompleteRequest {
+/**
+ * POST /v1/pair, premier temps : preuve de réception de l'URL magistra://pair. Aucun secret : envoyé à chaque port où
+ * Magistra répond, tant qu'aucun n'a renvoyé d'accusé valide. Ne modifie jamais la demande (requérant non authentifié).
+ */
+export interface PairAckRequest {
+  pairingId: string;
+}
+
+/**
+ * POST /v1/pair, second temps : envoyé UNIQUEMENT au port dont l'accusé est valide, et seulement après
+ * { status: 'consented' }.
+ */
+export interface PairFinishRequest {
   pairingId: string;
   verifier: string;
   /** Clé publique ECDH P-256 du navigateur (brute, non compressée, base64url). */
   clientPublicKey: string;
 }
 
+/** Corps de POST /v1/pair : exactement l'une de ces deux formes (toute autre : 400). */
+export type PairCompleteRequest = PairAckRequest | PairFinishRequest;
+
 /**
- * Réponse de POST /v1/pair :
- *  - 202 { status: 'pending' } : l'enseignant n'a pas encore répondu dans l'application (le site réessaie) ;
- *  - 200 { status: 'approved', … } : appairage terminé ;
+ * Réponse de POST /v1/pair ; `ack` = base64url(SHA-256(canonicalPairAck(pairingId, challenge))) dans chaque réponse
+ * réussie (le navigateur ignore un port dont l'accusé est absent ou faux) :
+ *  - 202 { status: 'pending', ack } : l'enseignant n'a pas encore répondu dans l'application (le site réessaie) ;
+ *  - 200 { status: 'consented', ack } : premier temps, accord donné ; le site passe au second temps sur CE port ;
+ *  - 200 { status: 'approved', …, ack } : second temps, appairage terminé ;
  *  - 403 CONNECTOR_PAIRING_REFUSED, 410 CONNECTOR_PAIRING_EXPIRED, 404 NOT_FOUND (demande inconnue ou épuisée),
- *    401 UNAUTHENTICATED (vérificateur faux), 403 FORBIDDEN (origine différente de celle de la demande).
+ *    401 UNAUTHENTICATED (second temps : vérificateur faux), 403 FORBIDDEN (origine différente de celle de la demande).
  */
 export type PairCompleteResponse =
-  | { status: 'pending' }
-  | { status: 'approved'; clientId: string; connectorPublicKey: string; version: string };
+  | { status: 'pending'; ack: string }
+  | { status: 'consented'; ack: string }
+  | { status: 'approved'; clientId: string; connectorPublicKey: string; version: string; ack: string };
 
 /** GET /v1/status (signé). Jamais d'adresse, de port, de chemin ni de réglage du moteur. */
 export interface ConnectorStatus {

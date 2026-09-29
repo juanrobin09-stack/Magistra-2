@@ -10,13 +10,16 @@
 
 import { defaultMessage, MagistraError, toMagistraError, type ErrorCode } from '@shared/errors';
 import type { AINotice, Capabilities, GenerationEvent, GenerationRecordDraft, GenerationRequest } from '@shared/types';
+import { LOCAL_CONNECTOR_PRIVACY_MESSAGE } from '@/lib/generation/research';
 import { getEngineChoice } from '@/lib/localConnector/engineChoice';
 import type { LocalEngineController, LocalEngineState } from '@/lib/localConnector/controller';
 import type { GenerationClient } from './types';
 
-/** Confidentialité affichée quand Magistra locale traite les générations. */
-export const LOCAL_PRIVACY_MESSAGE =
-  "IA locale : vos contenus sont générés sur cet ordinateur par l'application Magistra. Vos demandes et vos documents ne passent pas par le serveur Magistra en ligne ; seul le résultat est enregistré dans votre historique.";
+/**
+ * Confidentialité affichée quand Magistra locale traite les générations : même texte que les notes de la page Générer
+ * (src/lib/generation/research.ts, seule source).
+ */
+export const LOCAL_PRIVACY_MESSAGE = LOCAL_CONNECTOR_PRIVACY_MESSAGE;
 /** Nom du moteur local (suivi du libellé du modèle quand il est connu). */
 export const LOCAL_ENGINE_LABEL = 'Magistra locale';
 /** Extraits de documents par défaut tant que l'application n'a pas donné sa limite. */

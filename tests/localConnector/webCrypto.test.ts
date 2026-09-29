@@ -3,10 +3,12 @@
 
 import { createECDH, createHash, createHmac, hkdfSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { buildPairingUrl, canonicalProof, canonicalRequest, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, parseAppUrl } from '@shared/localConnector';
 import {
-  createPairingSecrets, deriveHmacKey, fromBase64Url, generateClientKeyPair, hmacSign, hmacVerify, isNonExtractableHmacKey,
-  sha256Base64Url, signRequest, toBase64Url, verifyProof,
+  buildPairingUrl, canonicalPairAck, canonicalProof, canonicalRequest, CONNECTOR_CRYPTO, CONNECTOR_FORMATS, parseAppUrl,
+} from '@shared/localConnector';
+import {
+  constantTimeEqualText, createPairingSecrets, deriveHmacKey, expectedPairAck, fromBase64Url, generateClientKeyPair, hmacSign,
+  hmacVerify, isNonExtractableHmacKey, sha256Base64Url, signRequest, toBase64Url, verifyPairAck, verifyProof,
 } from '@/lib/localConnector/webCrypto';
 
 // Vecteur fixe (calculé avec node:crypto) : clés privées déterministes des deux côtés.
@@ -97,6 +99,28 @@ describe('appairage', () => {
     const other = await createPairingSecrets();
     expect(other.verifier).not.toBe(secrets.verifier);
     expect(other.pairingId).not.toBe(secrets.pairingId);
+  });
+
+  it('accusé de réception : vecteur fixe (identique côté application), comparaison stricte et sans sortie anticipée', async () => {
+    // Même vecteur que tests/electron/connectorPairing.test.ts (node:crypto).
+    const challenge = 'ctu3M2x2eAAj-D2kw1Xy7uqFczsT00d2l5F3kMEikIQ';
+    expect(await sha256Base64Url(fromBase64Url('ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8', 32)!)).toBe(challenge);
+    const ack = await expectedPairAck(PAIRING_ID, challenge);
+    expect(ack).toBe('cDJlSHwvceFZ4grVp4db14g8zHt3v9DhOrD6rUUV85k');
+    expect(ack).toBe(createHash('sha256').update(canonicalPairAck(PAIRING_ID, challenge), 'utf8').digest('base64url'));
+    expect(ack).toMatch(CONNECTOR_FORMATS.ack);
+
+    expect(verifyPairAck(ack, ack)).toBe(true);
+    expect(verifyPairAck(ack, `${ack.slice(0, -1)}A`)).toBe(false);
+    expect(verifyPairAck(ack, await expectedPairAck(PAIRING_ID, b64(Buffer.alloc(32, 9))))).toBe(false); // autre défi
+    expect(verifyPairAck(ack, await expectedPairAck('EBESExQVFhcYGRobHB0eHw', challenge))).toBe(false); // autre demande
+    for (const wrong of [undefined, null, 42, '', ack.slice(1), `${ack}=`, ` ${ack.slice(1)}`, ack.replace(/./, '+')]) {
+      expect(verifyPairAck(ack, wrong)).toBe(false);
+    }
+    expect(constantTimeEqualText('abc', 'abc')).toBe(true);
+    expect(constantTimeEqualText('abc', 'abd')).toBe(false);
+    expect(constantTimeEqualText('abc', 'abcd')).toBe(false);
+    expect(constantTimeEqualText('', '')).toBe(true);
   });
 
   it('paire ECDH : clé publique brute non compressée (65 octets, 0x04) ; clé privée NON extractible', async () => {

@@ -1,4 +1,4 @@
-// Demandes d'appairage du connecteur local (URL magistra://pair → accord de l'enseignant → POST /v1/pair).
+// Demandes d'appairage du connecteur local (URL magistra://pair → accord de l'enseignant → POST /v1/pair en deux temps).
 // Module PUR Node (aucun import d'Electron) : la boîte de consentement est affichée par electron/main.ts.
 //
 // Règles :
@@ -6,16 +6,20 @@
 //   essais de fin d'appairage reçoivent 404) ;
 // - au plus MAX_PROMPTS_PER_MINUTE boîtes de consentement par minute (un site ne peut pas harceler l'enseignant) ;
 // - durée de vie : CONNECTOR_LIMITS.pairingTtlMs depuis l'ouverture de l'URL (accord compris) ; ensuite 410 ;
-// - vérificateur : SHA-256(octets du vérificateur) doit égaler le défi de l'URL (comparaison à temps constant) ;
-//   CONNECTOR_LIMITS.maxVerifierAttempts essais faux au plus, puis la demande est supprimée ;
-// - en-tête Origin de la fin d'appairage = origine de la demande, sinon 403 FORBIDDEN ;
+// - premier temps (acknowledge, sans secret) : accusé de réception `ack` = SHA-256(canonicalPairAck(pairingId,
+//   challenge)), calculé à la réception de l'URL — seule cette application connaît le défi, qui ne circule jamais
+//   dans une requête HTTP — avec l'état de la demande ('pending' ou 'consented'). Le requérant n'étant pas
+//   authentifié, ce premier temps ne MODIFIE jamais la demande (ni essai compté, ni refus consommé) ;
+// - second temps (complete) : SHA-256(octets du vérificateur) doit égaler le défi de l'URL (comparaison à temps
+//   constant) ; CONNECTOR_LIMITS.maxVerifierAttempts essais faux au plus, puis la demande est supprimée ;
+// - en-tête Origin des deux temps = origine de la demande, sinon 403 FORBIDDEN ;
 // - usage unique : la demande acceptée est retirée dès sa première fin d'appairage réussie.
 //
 // Le défi (challenge) est le SHA-256 des 32 OCTETS du vérificateur (décodés du base64url), encodé en base64url.
 
 import { MagistraError } from '../../shared/errors.js';
 import { CONNECTOR_LIMITS, type PairingUrlParams } from '../../shared/localConnector.js';
-import { constantTimeEqual, fromBase64Url, sha256 } from './crypto.js';
+import { constantTimeEqual, fromBase64Url, pairAck, sha256 } from './crypto.js';
 
 /** Boîtes de consentement affichées au plus par minute. */
 export const MAX_PROMPTS_PER_MINUTE = 3;
@@ -40,10 +44,17 @@ export type PairingOpenResult =
   /** Trop de boîtes de consentement dans la dernière minute : demande ignorée. */
   | { kind: 'rate-limited' };
 
+/** Premier temps de POST /v1/pair : état de la demande et accusé de réception. */
+export interface PairingAck {
+  /** 'pending' : l'enseignant n'a pas encore répondu ; 'consented' : accord donné, second temps attendu. */
+  status: 'pending' | 'consented';
+  ack: string;
+}
+
 export type PairingCompletion =
-  | { status: 'pending' }
+  | { status: 'pending'; ack: string }
   /** Accord donné : la demande est consommée (usage unique). */
-  | { status: 'approved'; pairingId: string; origin: string };
+  | { status: 'approved'; pairingId: string; origin: string; ack: string };
 
 export interface PairingRegistryOptions {
   now?: () => number;
@@ -55,6 +66,8 @@ export interface PairingRegistryOptions {
 interface PairingEntry {
   pairingId: string;
   challenge: Buffer;
+  /** Accusé de réception (calculé une fois, à la réception de l'URL). */
+  ack: string;
   origin: string;
   createdAt: number;
   state: PairingState;
@@ -114,6 +127,7 @@ export class PairingRegistry {
     const entry: PairingEntry = {
       pairingId: params.pairingId,
       challenge,
+      ack: pairAck(params.pairingId, params.challenge),
       origin: params.origin,
       createdAt: now,
       state: 'awaiting',
@@ -138,29 +152,47 @@ export class PairingRegistry {
     return true;
   }
 
-  /**
-   * Fin d'appairage (POST /v1/pair), arguments déjà au bon format. Ordre des contrôles : demande connue (404) →
-   * délai (410) → origine de la requête (403 FORBIDDEN) → vérificateur (401, demande supprimée au dernier essai)
-   * → réponse de l'enseignant (202 en attente, 403 refus, accord : demande consommée).
-   */
-  complete(input: { pairingId: string; verifier: string; origin: string }): PairingCompletion {
+  /** Demande en cours visée par une requête : connue (404), non expirée (410), même origine (403 FORBIDDEN). */
+  private target(pairingId: string, origin: string): PairingEntry {
     const c = this.current;
-    if (!c || c.pairingId !== input.pairingId) throw new MagistraError('NOT_FOUND', 'Demande de connexion inconnue : recommencez depuis le site.');
+    if (!c || c.pairingId !== pairingId) throw new MagistraError('NOT_FOUND', 'Demande de connexion inconnue : recommencez depuis le site.');
     if (this.isExpired(c)) {
       this.drop(c);
       throw new MagistraError('CONNECTOR_PAIRING_EXPIRED');
     }
-    if (input.origin !== c.origin) throw new MagistraError('FORBIDDEN');
+    if (origin !== c.origin) throw new MagistraError('FORBIDDEN');
+    return c;
+  }
+
+  /**
+   * Premier temps de POST /v1/pair (preuve de réception, sans secret), arguments déjà au bon format. Ordre des
+   * contrôles : demande connue (404) → délai (410) → origine (403 FORBIDDEN) → réponse de l'enseignant : en attente
+   * ('pending'), accord ('consented' : la demande attend le second temps), refus (403 CONNECTOR_PAIRING_REFUSED).
+   * Ne modifie jamais la demande : un refus reste lisible jusqu'à l'expiration ou au remplacement de la demande.
+   */
+  acknowledge(input: { pairingId: string; origin: string }): PairingAck {
+    const c = this.target(input.pairingId, input.origin);
+    if (c.state === 'refused') throw new MagistraError('CONNECTOR_PAIRING_REFUSED');
+    return { status: c.state === 'approved' ? 'consented' : 'pending', ack: c.ack };
+  }
+
+  /**
+   * Second temps de POST /v1/pair (fin d'appairage), arguments déjà au bon format. Ordre des contrôles : demande
+   * connue (404) → délai (410) → origine de la requête (403 FORBIDDEN) → vérificateur (401, demande supprimée au
+   * dernier essai) → réponse de l'enseignant (202 en attente, 403 refus, accord : demande consommée).
+   */
+  complete(input: { pairingId: string; verifier: string; origin: string }): PairingCompletion {
+    const c = this.target(input.pairingId, input.origin);
     const verifier = fromBase64Url(input.verifier, SECRET_BYTES);
     if (!verifier || !constantTimeEqual(sha256(verifier), c.challenge)) {
       c.attempts++;
       if (c.attempts >= this.maxAttempts) this.drop(c);
       throw new MagistraError('UNAUTHENTICATED', 'Demande de connexion invalide.');
     }
-    if (c.state === 'awaiting') return { status: 'pending' };
+    if (c.state === 'awaiting') return { status: 'pending', ack: c.ack };
     this.drop(c);
     if (c.state === 'refused') throw new MagistraError('CONNECTOR_PAIRING_REFUSED');
-    return { status: 'approved', pairingId: c.pairingId, origin: c.origin };
+    return { status: 'approved', pairingId: c.pairingId, origin: c.origin, ack: c.ack };
   }
 
   /**

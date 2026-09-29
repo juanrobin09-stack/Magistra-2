@@ -19,6 +19,8 @@
 //      CONNECTOR_UNPAIRED) → horodatage (±clockSkewMs) → nonce jamais vu (401 UNAUTHENTICATED), puis lecture du corps
 //      (bornée, avec délai : 413 / 408) → signature HMAC sur les octets exacts du corps (401 UNAUTHENTICATED) ;
 //      les contrôles sans corps sont faits AVANT la lecture : une requête non authentifiable ne fait rien lire ;
+//      appairage (POST /v1/pair, non signé) : deux temps (pairing.ts) — l'accusé de réception `ack` prouve d'abord au
+//      site que CETTE application a reçu l'URL magistra://pair ; le vérificateur ne vient qu'ensuite ;
 //   8. toutes les réponses : Cache-Control: no-store, X-Content-Type-Options: nosniff, Vary: Origin, et, pour une
 //      origine autorisée, Access-Control-Allow-Origin exact + Access-Control-Expose-Headers ; après une
 //      authentification réussie (erreurs comprises) : X-Magistra-Proof = HMAC(clé, canonicalProof(client, nonce)).
@@ -37,7 +39,7 @@ import type { GenerationEvent } from '../../shared/types.js';
 import type { ExternalGenerationHandle, ExternalGenerationOptions } from '../generation.js';
 import type { ConnectorClientKey } from './clients.js';
 import { deriveClientKey, hmacBase64Url, parsePublicKey, sha256Base64Url, verifyHmac } from './crypto.js';
-import type { PairingCompletion } from './pairing.js';
+import type { PairingAck, PairingCompletion } from './pairing.js';
 import { publicEvent, publicMessage } from './status.js';
 import { browserFromUserAgent } from './userAgent.js';
 
@@ -53,6 +55,7 @@ export interface ConnectorClientDirectory {
 
 /** Demandes d'appairage (PairingRegistry). */
 export interface ConnectorPairing {
+  acknowledge(input: { pairingId: string; origin: string }): PairingAck;
   complete(input: { pairingId: string; verifier: string; origin: string }): PairingCompletion;
 }
 
@@ -630,9 +633,23 @@ export class ConnectorServer {
     throw new HttpError(404, new MagistraError('NOT_FOUND', 'Service introuvable.'));
   }
 
+  /**
+   * POST /v1/pair. Premier temps { pairingId } : preuve de réception de l'URL magistra://pair (accusé `ack`), sans
+   * secret et sans effet sur la demande. Second temps { pairingId, verifier, clientPublicKey } : fin d'appairage.
+   * Toute autre forme de corps : 400.
+   */
   private async completePairing(req: IncomingMessage, res: ServerResponse, ctx: RequestContext, body: Buffer): Promise<void> {
     const origin = ctx.origin!;
-    const input = exactStrings(parseJsonObject(body), ['pairingId', 'verifier', 'clientPublicKey'] as const);
+    const raw = parseJsonObject(body);
+    if (Object.keys(raw).length === 1) {
+      const { pairingId } = exactStrings(raw, ['pairingId'] as const);
+      if (!CONNECTOR_FORMATS.pairingId.test(pairingId)) throw invalid();
+      const acknowledged = this.options.pairing.acknowledge({ pairingId, origin });
+      const reply: PairCompleteResponse = { status: acknowledged.status, ack: acknowledged.ack };
+      this.sendJson(res, ctx, acknowledged.status === 'pending' ? 202 : 200, reply);
+      return;
+    }
+    const input = exactStrings(raw, ['pairingId', 'verifier', 'clientPublicKey'] as const);
     if (!CONNECTOR_FORMATS.pairingId.test(input.pairingId) || !CONNECTOR_FORMATS.verifier.test(input.verifier)) throw invalid();
     const clientPublicKey = parsePublicKey(input.clientPublicKey);
     if (!clientPublicKey) throw invalid('Clé publique invalide.');
@@ -655,7 +672,7 @@ export class ConnectorServer {
     }
     if (completion.status === 'pending') {
       derived.key.fill(0);
-      const pending: PairCompleteResponse = { status: 'pending' };
+      const pending: PairCompleteResponse = { status: 'pending', ack: completion.ack };
       this.sendJson(res, ctx, 202, pending);
       return;
     }
@@ -668,6 +685,7 @@ export class ConnectorServer {
         clientId: client.clientId,
         connectorPublicKey: derived.connectorPublicKey,
         version: this.options.version,
+        ack: completion.ack,
       };
       this.sendJson(res, ctx, 200, approved);
     } finally {

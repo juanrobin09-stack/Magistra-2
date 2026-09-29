@@ -33,6 +33,16 @@ export const DOCUMENTS_IGNORED_NOTE = 'Vos documents ne seront pas utilisés dan
 export const NETWORK_PRIVACY_NOTE =
   'La recherche en ligne transmet uniquement votre sujet et vos mots-clés (jamais vos documents) aux services de recherche.';
 export const LOCAL_PRIVACY_NOTE = 'Vos documents et générations restent sur cet ordinateur.';
+/**
+ * Site web, Magistra locale (route 'local-connector') : génération par l'application Magistra de cet ordinateur ; la
+ * demande et les extraits de documents ne vont qu'à elle (jamais au serveur Magistra en ligne) ; le résultat, lui, est
+ * enregistré dans l'historique du compte en ligne. Jamais « restent sur cet ordinateur ».
+ */
+export const LOCAL_CONNECTOR_PRIVACY_MESSAGE =
+  "IA locale : vos contenus sont générés sur cet ordinateur par l'application Magistra. Votre demande et les extraits de vos documents ne sont pas transmis au serveur Magistra en ligne ; seul le résultat est enregistré dans l'historique de votre compte en ligne.";
+/** Magistra locale et recherche en ligne : faite par l'application, depuis cet ordinateur (réglages de l'application). */
+export const LOCAL_CONNECTOR_NETWORK_NOTE =
+  "Les recherches Internet ou académiques sont faites depuis cet ordinateur par l'application Magistra : elles transmettent uniquement votre sujet et vos mots-clés (jamais vos documents) aux services de recherche.";
 
 /**
  * Décrit les 4 modes de recherche selon les capacités du moteur.
@@ -129,6 +139,11 @@ export interface PrivacyContext {
   runtimeMode?: RuntimeMode;
   /** Prestataire annoncé au démarrage par le serveur (GET /api/mode), avant la réponse de /api/status. */
   fallbackProvider?: ProviderInfo;
+  /**
+   * Site web : moteur qui traitera la génération, connu avant ses capacités (choix de l'enseignant). Les capacités,
+   * quand elles sont là, font foi (`caps.route`).
+   */
+  route?: Capabilities['route'] | null;
 }
 
 /**
@@ -140,7 +155,22 @@ export function providerAnnounced(caps: Capabilities | null, context: PrivacyCon
   return context.fallbackProvider?.thirdParty === true;
 }
 
+/**
+ * Magistra locale depuis le site web : génération sur cet ordinateur par l'application Magistra, demande et extraits
+ * de documents jamais transmis au serveur Magistra en ligne, résultat enregistré dans l'historique du compte en ligne,
+ * recherches en ligne éventuelles faites depuis cet ordinateur. Aucun prestataire tiers ; jamais « restent sur cet
+ * ordinateur » (le résultat part dans l'historique en ligne).
+ */
+function localConnectorPrivacy(mode: ResearchMode): PrivacyNotes {
+  return {
+    message: LOCAL_CONNECTOR_PRIVACY_MESSAGE,
+    network: modeUsesNetwork(mode) ? LOCAL_CONNECTOR_NETWORK_NOTE : null,
+    local: null,
+  };
+}
+
 export function privacyNotes(caps: Capabilities | null, mode: ResearchMode, context: PrivacyContext = {}): PrivacyNotes {
+  if ((caps ? caps.route : context.route) === 'local-connector') return localConnectorPrivacy(mode);
   if (!caps && context.runtimeMode && usesServerApi(context.runtimeMode)) {
     // Vérification en cours ou en échec : jamais de silence sur le destinataire des textes. Prestataire tiers annoncé
     // par /api/mode : il est nommé ; sinon (inconnu, ou une IA locale qu'un relais pourrait contredire) : annonce prudente.

@@ -10,6 +10,7 @@ import type { GenerationEvent } from '@shared/types';
 import AIStatusBadge from '@/components/ai/AIStatusBadge';
 import { resetWindowsReleaseCache } from '@/components/localEngine/windowsRelease';
 import { ENGINE_CHOICE_STORAGE_KEY, setEngineChoice } from '@/lib/localConnector/engineChoice';
+import { LOCAL_CONNECTOR_NETWORK_NOTE, NETWORK_PRIVACY_NOTE } from '@/lib/generation/research';
 import { LOCAL_PRIVACY_MESSAGE } from '@/lib/runtime/hybrid';
 import { setRuntimeConfig } from '@/lib/runtime/mode';
 import GeneratePage, { ENGINE_CHANGED_NOTICE, LOCAL_PERMISSION_NOTICE } from '@/pages/GeneratePage';
@@ -84,6 +85,19 @@ describe('Page Générer — Magistra locale', () => {
     expect(view.server.generate).not.toHaveBeenCalled();
     expect(view.server.capabilities).not.toHaveBeenCalled();
     expect(view.container.textContent).toContain("Enregistré dans l'historique");
+  });
+
+  it('recherche en ligne avec Magistra locale : faite depuis cet ordinateur par l’application (note exacte), jamais « restent sur cet ordinateur »', async () => {
+    const engine = new FakeEngine(engineState('connected'));
+    const view = await mountGenerate(engine);
+    const privacy = () => view.container.querySelector<HTMLElement>('[aria-label="Confidentialité"]')!;
+    expect(privacy().textContent).not.toContain(LOCAL_CONNECTOR_NETWORK_NOTE);
+    await click(button(view.container.querySelector<HTMLElement>('[aria-labelledby="gen-research-title"]')!, /Sources académiques/));
+    expect(privacy().textContent).toContain(LOCAL_PRIVACY_MESSAGE);
+    expect(privacy().textContent).toContain(LOCAL_CONNECTOR_NETWORK_NOTE);
+    expect(privacy().textContent).not.toContain(NETWORK_PRIVACY_NOTE);
+    expect(privacy().textContent).not.toContain('restent sur cet ordinateur');
+    expect(view.server.capabilities).not.toHaveBeenCalled();
   });
 
   it('jamais appairé : bandeau du serveur en ligne qui nomme le prestataire, génération par le serveur', async () => {
