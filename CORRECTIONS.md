@@ -300,6 +300,8 @@ Anthropic est supprimé. Les erreurs du serveur d'IA sont distinguées : 401/403
 
 *Remarque :* L'en-tête Retry-After du serveur d'IA n'est pas lu : les attentes sont fixes (2 s, 5 s).
 
+*Mise à jour (lot « branchement réel de l'IA ») :* cette remarque est dépassée. Retry-After, `x-ratelimit-reset*` et les en-têtes transmis dans le corps de l'erreur sont maintenant lus. Un 429 avec une attente de 15 s au plus reste AI_BUSY : le pipeline attend la durée indiquée au lieu de 2 s puis 5 s. Un quota (journalier, crédits épuisés, 402, 413 « tokens par minute », attente de plus de 15 s) donne AI_QUOTA_EXCEEDED avec l'heure de reprise, et une adresse injoignable donne AI_SERVER_UNREACHABLE : dans ces deux cas, aucun nouvel essai automatique, seulement « Réessayer ». Voir [ARCHITECTURE_IA.md](ARCHITECTURE_IA.md) § 8 et § 15 ; shared/ai/errorMapping.ts (mapHttpError, mapNetworkError) ; tests/shared/ai.errors.test.ts ; tests/shared/pipeline.test.ts.
+
 <a id="20"></a>
 ### #20 — stop_reason ignoré : une réponse tronquée à max_tokens est sauvegardée et affichée comme complète
 
