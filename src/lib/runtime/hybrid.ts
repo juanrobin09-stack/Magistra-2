@@ -8,8 +8,13 @@
 //  - route locale : la demande complète et les extraits de documents vont UNIQUEMENT au connecteur local ; la génération
 //    à enregistrer (done.record : résultat, sources citées et paramètres de la demande — sujet, consignes, contenu à
 //    adapter, noms des documents… ; jamais le texte des extraits ni le travail d'élève) est envoyée au serveur Magistra
-//    pour l'historique du compte (POST /api/generation). Le texte affiché le dit exactement (LOCAL_PRIVACY_MESSAGE).
+//    pour l'historique du compte (POST /api/generation). Le texte affiché le dit exactement (LOCAL_PRIVACY_MESSAGE) ;
+//  - options des outils (format, version élève seule, nombres, notation, ton, besoins) : une application d'avant
+//    TOOL_OPTIONS_MIN_APP_VERSION les ignore sans erreur (même protocole) → demande refusée avant l'envoi quand sa
+//    version, relue à l'instant, est plus ancienne ; version inconnue → envoyée, et le résultat est signalé si
+//    l'application ne les a pas appliquées (paramètres de done.record).
 
+import { compareVersions, parseVersion } from '@shared/ai/models';
 import { defaultMessage, MagistraError, toMagistraError, type ErrorCode } from '@shared/errors';
 import type { AINotice, Capabilities, GenerationEvent, GenerationRecordDraft, GenerationRequest } from '@shared/types';
 import { LOCAL_CONNECTOR_PRIVACY_MESSAGE } from '@/lib/generation/research';
@@ -41,6 +46,69 @@ export const LOCAL_BUSY_MESSAGE =
 /** Même texte que la pipeline quand l'enregistrement échoue (shared/pipeline.ts). */
 export const LOCAL_SAVE_FAILED_MESSAGE =
   "Le contenu est affiché mais n'a pas pu être enregistré dans l'historique. Copiez-le ou exportez-le.";
+
+/**
+ * Première version de l'application Windows qui applique les options des outils. Le protocole du connecteur n'a pas
+ * changé (une application plus ancienne reste utilisable sans ces options) : c'est le site qui vérifie.
+ */
+export const TOOL_OPTIONS_MIN_APP_VERSION = '2.0.3';
+/** Demande avec des options des outils, application d'une version plus ancienne : rien n'est envoyé. */
+export const LOCAL_APP_TOO_OLD_FOR_OPTIONS_MESSAGE =
+  "L'application Magistra de cet ordinateur doit être mise à jour pour appliquer ces choix (format, version élève seule, nombre d'exercices, notation…) : installez la dernière version de Magistra pour Windows (Réglages → « Magistra pour Windows »), puis réessayez. Vous pouvez aussi générer sans ces choix.";
+
+/** Options des outils (champs de la demande) et leur nom pour l'enseignant, dans l'ordre du formulaire. */
+const TOOL_OPTIONS = [
+  ['modalite', 'format'],
+  ['sansCorrige', 'version élève seule'],
+  ['nombreExercices', 'nombre demandé'],
+  ['nombreSeances', 'nombre de séances'],
+  ['typeEvaluation', "objectif de l'évaluation"],
+  ['bareme', 'notation'],
+  ['ton', 'ton'],
+  ['besoins', 'besoins particuliers'],
+] as const satisfies readonly (readonly [keyof GenerationRequest, string])[];
+
+export type ToolOption = (typeof TOOL_OPTIONS)[number][0];
+
+/** Valeur renseignée (comme les paramètres enregistrés : ni vide, ni faux, ni liste vide). */
+function isSet(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  return value !== undefined && value !== null && value !== '' && value !== false;
+}
+
+/** Options des outils renseignées dans la demande. */
+export function requestedToolOptions(request: GenerationRequest): ToolOption[] {
+  return TOOL_OPTIONS.filter(([key]) => isSet(request[key])).map(([key]) => key);
+}
+
+/**
+ * L'application de cette version applique-t-elle les options des outils ? null : version absente ou illisible
+ * (inconnue). Seule la partie x.y.z compte : une pré-version de 2.0.3 (« 2.0.3-beta.1 ») les applique déjà.
+ */
+export function appSupportsToolOptions(version: string | undefined): boolean | null {
+  const parsed = parseVersion(version);
+  if (!parsed) return null;
+  return compareVersions(parsed.core.join('.'), TOOL_OPTIONS_MIN_APP_VERSION) >= 0;
+}
+
+/**
+ * Options demandées que l'application n'a pas appliquées : absentes des paramètres de la génération à enregistrer
+ * (l'application y note la demande qu'elle a traitée ; une application d'avant 2.0.3 n'en note aucune). Paramètres
+ * absents ou illisibles : rien n'est affirmé.
+ */
+export function ignoredToolOptions(request: GenerationRequest, params: unknown): ToolOption[] {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return [];
+  const applied = params as Record<string, unknown>;
+  return requestedToolOptions(request).filter(key => !isSet(applied[key]));
+}
+
+/** Avertissement joint au résultat quand l'application n'a pas appliqué des options demandées. */
+export function ignoredToolOptionsMessage(ignored: readonly ToolOption[]): string {
+  const names = TOOL_OPTIONS.filter(([key]) => ignored.includes(key)).map(([, name]) => name).join(', ');
+  const choices = ignored.length > 1 ? `Vos choix (${names}) n'ont pas été appliqués` : `Votre choix (${names}) n'a pas été appliqué`;
+  const answerKey = ignored.includes('sansCorrige') ? ' Le document peut contenir un corrigé : relisez-le avant de le distribuer.' : '';
+  return `${choices} : l'application Magistra de cet ordinateur est trop ancienne.${answerKey} Installez la dernière version de Magistra pour Windows (Réglages → « Magistra pour Windows »), puis relancez la génération.`;
+}
 
 /** Erreurs de génération locale après lesquelles l'état de Magistra locale est relu (carte, bandeau). */
 const STATE_CHANGING_ERRORS = new Set<ErrorCode>([
@@ -156,6 +224,13 @@ export class HybridGenerationClient implements GenerationClient {
       await this.server.generate(request, onEvent, signal);
       return;
     }
+    // Application trop ancienne pour les options demandées : refus AVANT l'envoi (ni temps de génération perdu, ni
+    // corrigé rédigé pour une « version élève seule »). Même code que les autres mises à jour de l'application.
+    if ((await this.localAppTooOld(request)) && !signal.aborted) {
+      const e = new MagistraError('CONNECTOR_UNREACHABLE', LOCAL_APP_TOO_OLD_FOR_OPTIONS_MESSAGE);
+      onEvent({ type: 'error', code: e.code, message: e.message, retryable: e.retryable });
+      return;
+    }
     let final: Extract<GenerationEvent, { type: 'done' | 'error' }> | null = null;
     await this.local.client.generate(request, received => {
       if (final) return; // rien n'est transmis après l'évènement final
@@ -182,12 +257,33 @@ export class HybridGenerationClient implements GenerationClient {
     // Génération réussie : l'application a répondu (prouvé). L'état affiché (« application fermée », moteur pas encore
     // démarré, occupée…) est relu, sans attendre — refresh ne publie que s'il change.
     void this.local.refresh();
-    await this.finish(last, onEvent);
+    await this.finish(last, request, onEvent);
   }
 
-  /** Enregistre le résultat d'une génération locale dans l'historique du compte, puis transmet « done ». */
-  private async finish(event: Extract<GenerationEvent, { type: 'done' }>, onEvent: (event: GenerationEvent) => void): Promise<void> {
+  /**
+   * Application appairée d'une version qui ignorerait les options demandées ? Une version ancienne ou inconnue est
+   * d'abord relue (application mise à jour ou ouverte depuis la dernière lecture ; la preuve obtenue sert aussi à
+   * l'envoi) : seule une version lue à l'instant, et plus ancienne, fait refuser. Inconnue après relecture : envoyée.
+   */
+  private async localAppTooOld(request: GenerationRequest): Promise<boolean> {
+    if (requestedToolOptions(request).length === 0) return false;
+    if (appSupportsToolOptions(this.local.getSnapshot().appVersion) === true) return false;
+    await this.local.refresh().catch(() => undefined);
+    const state = this.local.getSnapshot();
+    return state.kind === 'connected' && appSupportsToolOptions(state.appVersion) === false;
+  }
+
+  /**
+   * Enregistre le résultat d'une génération locale dans l'historique du compte, puis transmet « done » — précédé d'un
+   * avertissement si l'application n'a pas appliqué des options demandées (version inconnue avant l'envoi, ou état
+   * pas encore relu : le constat se fait sur ce qu'elle a traité, quelle que soit la version annoncée).
+   */
+  private async finish(
+    event: Extract<GenerationEvent, { type: 'done' }>, request: GenerationRequest, onEvent: (event: GenerationEvent) => void,
+  ): Promise<void> {
     const { record, ...done } = event;
+    const ignored = record && typeof record === 'object' ? ignoredToolOptions(request, record.params) : [];
+    if (ignored.length > 0) onEvent({ type: 'warning', code: 'CONNECTOR_UNREACHABLE', message: ignoredToolOptionsMessage(ignored) });
     if (done.saved && done.id) {
       onEvent(done);
       return;

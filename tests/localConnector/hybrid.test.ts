@@ -12,8 +12,9 @@ import { resetEngineChoiceMemory, setEngineChoice } from '@/lib/localConnector/e
 import { MemoryPairingStore } from '@/lib/localConnector/pairingStore';
 import type { LoopbackPermission } from '@/lib/localConnector/permission';
 import {
-  HybridGenerationClient, LOCAL_NEEDS_PERMISSION_MESSAGE, LOCAL_NOT_CONNECTED_MESSAGE, LOCAL_PRIVACY_MESSAGE, LOCAL_SAVE_FAILED_MESSAGE,
-  localCapabilities,
+  appSupportsToolOptions, HybridGenerationClient, ignoredToolOptions, ignoredToolOptionsMessage, LOCAL_APP_TOO_OLD_FOR_OPTIONS_MESSAGE,
+  LOCAL_NEEDS_PERMISSION_MESSAGE, LOCAL_NOT_CONNECTED_MESSAGE, LOCAL_PRIVACY_MESSAGE, LOCAL_SAVE_FAILED_MESSAGE, localCapabilities,
+  requestedToolOptions,
 } from '@/lib/runtime/hybrid';
 import type { GenerationClient } from '@/lib/runtime/types';
 import { ApiDataStore } from '@/lib/runtime/web';
@@ -328,6 +329,174 @@ describe('génération locale', () => {
       { type: 'error', code: 'GENERATION_BUSY', message: 'Une génération est déjà en cours dans Magistra.', retryable: true },
     ]);
     expect(ctx.serverCalls).toEqual([]);
+  });
+});
+
+describe('options des outils et version de l’application Windows (protocole inchangé)', () => {
+  /** Texte à trous de 10 mots, version élève seule : ignorés sans erreur par une application d'avant 2.0.3. */
+  const OPTIONS_REQUEST: GenerationRequest = {
+    type: 'exercices', niveau: '6eme', matiere: 'francais', sujet: 'Les accords', researchMode: 'documents',
+    modalite: 'texte_trous', nombreExercices: 10, sansCorrige: true,
+  };
+  const APPLIED = { researchMode: 'documents', modalite: 'texte_trous', nombreExercices: 10, sansCorrige: true };
+
+  /** Version annoncée par l'application (hello et état signé). */
+  function setAppVersion(connector: FakeConnector, version: string) {
+    connector.version = version;
+    connector.status = { ...structuredClone(READY_STATUS), version };
+  }
+
+  /** Paramètres de la génération à enregistrer, tels que l'application les renvoie. */
+  function recordParams(connector: FakeConnector, params: Record<string, unknown>) {
+    connector.events = DEFAULT_EVENTS.map(e => (e.type === 'done' ? { ...e, record: { ...RECORD, sources: [], params } } : e));
+  }
+
+  async function run(client: GenerationClient, request: GenerationRequest = OPTIONS_REQUEST): Promise<GenerationEvent[]> {
+    const events: GenerationEvent[] = [];
+    await client.generate(request, e => events.push(e), new AbortController().signal);
+    return events;
+  }
+
+  it('application 2.0.2 : demande refusée AVANT l’envoi (aucune génération, aucun corrigé), message de mise à jour', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', appVersion: '2.0.2' });
+    const events = await run(ctx.client);
+    expect(events).toEqual([{ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: LOCAL_APP_TOO_OLD_FOR_OPTIONS_MESSAGE, retryable: true }]);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(0);
+    expect(ctx.saveDraft).not.toHaveBeenCalled();
+    expect(ctx.serverCalls).toEqual([]);
+    expect(LOCAL_APP_TOO_OLD_FOR_OPTIONS_MESSAGE).not.toMatch(/localhost|127\.0\.0\.1|ollama|47831/i);
+    // L'état affiché reste « connectée » : l'application sert toujours les demandes sans ces options.
+    expect(ctx.controller.getSnapshot().kind).toBe('connected');
+  });
+
+  it('application 2.0.2, demande sans ces options : envoyée comme avant (les anciennes applications restent utilisables)', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    const events = await collect(ctx.client);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: 'done', saved: true, id: 'gen-42' });
+    expect(events.filter(e => e.type === 'warning')).toEqual([]);
+  });
+
+  it('application 2.0.3 (et pré-version de 2.0.3) : envoyée, options appliquées, aucun avertissement', async () => {
+    for (const version of ['2.0.3', '2.0.3-beta.1', '2.1.0']) {
+      const ctx = setup();
+      setAppVersion(ctx.connector, version);
+      recordParams(ctx.connector, APPLIED);
+      await ctx.controller.connect();
+      const statusCalls = ctx.connector.calls(CONNECTOR_ROUTES.status).length;
+      const events = await run(ctx.client);
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+      expect(JSON.parse(ctx.connector.calls(CONNECTOR_ROUTES.generate)[0].body)).toMatchObject({ modalite: 'texte_trous', sansCorrige: true, nombreExercices: 10 });
+      // Version connue et suffisante : aucune relecture de l'état avant l'envoi.
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.status)).toHaveLength(statusCalls);
+      expect(events.filter(e => e.type === 'warning' || e.type === 'error')).toEqual([]);
+      expect(events.at(-1)).toMatchObject({ type: 'done', saved: true, id: 'gen-42' });
+    }
+  });
+
+  it('version affichée périmée (application mise à jour depuis) : relue avant de refuser, puis envoyée', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    // L'enseignant installe la mise à jour, puis clique sur « Réessayer » : l'état affiché dit encore 2.0.2.
+    setAppVersion(ctx.connector, '2.0.3');
+    recordParams(ctx.connector, APPLIED);
+    expect(ctx.controller.getSnapshot().appVersion).toBe('2.0.2');
+    const events = await run(ctx.client);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: 'done', saved: true });
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', appVersion: '2.0.3' });
+  });
+
+  it('version pas encore lue (nouvelle page) : lue avant l’envoi ; 2.0.2 → refusée', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    const page = ctx.reload();
+    expect(page.local.getSnapshot().appVersion).toBeUndefined();
+    const events = await run(page.client);
+    expect(events).toEqual([{ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: LOCAL_APP_TOO_OLD_FOR_OPTIONS_MESSAGE, retryable: true }]);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(0);
+  });
+
+  it('application fermée au moment de la relecture : jamais « mettez à jour » à tort, l’erreur de connexion est transmise', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    ctx.connector.setPort(P1, 'closed');
+    ctx.clock.advance(60_000);
+    const events = await run(ctx.client);
+    expect(events).toEqual([expect.objectContaining({ type: 'error', code: 'CONNECTOR_UNREACHABLE' })]);
+    expect(events[0]).not.toMatchObject({ message: LOCAL_APP_TOO_OLD_FOR_OPTIONS_MESSAGE });
+  });
+
+  it('version illisible : envoyée ; options absentes des paramètres renvoyés → avertissement AVANT « done », contenu gardé', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, 'dev');
+    await ctx.controller.connect();
+    const events = await run(ctx.client);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+    const message = ignoredToolOptionsMessage(['modalite', 'sansCorrige', 'nombreExercices']);
+    expect(events.slice(-2)).toEqual([
+      { type: 'warning', code: 'CONNECTOR_UNREACHABLE', message },
+      expect.objectContaining({ type: 'done', saved: true, id: 'gen-42', content: '# La fable\n\nTexte.' }),
+    ]);
+    expect(message).toContain('format, version élève seule, nombre demandé');
+    expect(message).toContain('peut contenir un corrigé');
+  });
+
+  it('options appliquées d’après les paramètres renvoyés, ou paramètres absents : aucun avertissement', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, 'dev');
+    await ctx.controller.connect();
+    recordParams(ctx.connector, APPLIED);
+    expect((await run(ctx.client)).filter(e => e.type === 'warning')).toEqual([]);
+    // Pas de génération à enregistrer : seul l'avertissement d'enregistrement (rien n'est affirmé sur les options).
+    ctx.connector.events = DEFAULT_EVENTS.map(e => (e.type === 'done' ? { ...e, record: undefined } : e));
+    expect((await run(ctx.client)).filter(e => e.type === 'warning')).toEqual([{ type: 'warning', code: 'STORAGE_ERROR', message: LOCAL_SAVE_FAILED_MESSAGE }]);
+  });
+
+  it('serveur en ligne choisi : options envoyées au serveur, aucune vérification de l’application', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    setEngineChoice('server');
+    ctx.connector.requests.length = 0;
+    expect(await run(ctx.client)).toEqual([expect.objectContaining({ type: 'done', id: 'srv-1' })]);
+    expect(ctx.connector.requests).toHaveLength(0);
+  });
+
+  it('options renseignées, versions et options non appliquées (fonctions pures)', () => {
+    expect(requestedToolOptions(REQUEST)).toEqual([]);
+    expect(requestedToolOptions({ ...REQUEST, sansCorrige: false, besoins: [], ton: undefined })).toEqual([]);
+    expect(requestedToolOptions({ ...REQUEST, bareme: 'sur20', besoins: ['dys'], typeEvaluation: 'sommative', ton: 'encourageant', nombreSeances: 5 }))
+      .toEqual(['nombreSeances', 'typeEvaluation', 'bareme', 'ton', 'besoins']);
+    expect(requestedToolOptions(OPTIONS_REQUEST)).toEqual(['modalite', 'sansCorrige', 'nombreExercices']);
+
+    expect(appSupportsToolOptions('2.0.2')).toBe(false);
+    expect(appSupportsToolOptions('1.9.9')).toBe(false);
+    expect(appSupportsToolOptions('2.0.2-rc.1')).toBe(false);
+    expect(appSupportsToolOptions('2.0.3')).toBe(true);
+    expect(appSupportsToolOptions('2.0.3-beta.1')).toBe(true);
+    expect(appSupportsToolOptions('10.0.0')).toBe(true);
+    expect(appSupportsToolOptions(undefined)).toBeNull();
+    expect(appSupportsToolOptions('dev')).toBeNull();
+
+    expect(ignoredToolOptions(OPTIONS_REQUEST, { researchMode: 'documents' })).toEqual(['modalite', 'sansCorrige', 'nombreExercices']);
+    expect(ignoredToolOptions(OPTIONS_REQUEST, APPLIED)).toEqual([]);
+    expect(ignoredToolOptions(OPTIONS_REQUEST, { ...APPLIED, sansCorrige: undefined })).toEqual(['sansCorrige']);
+    expect(ignoredToolOptions(OPTIONS_REQUEST, undefined)).toEqual([]);
+    expect(ignoredToolOptions(OPTIONS_REQUEST, ['modalite'])).toEqual([]);
+    expect(ignoredToolOptions(REQUEST, { researchMode: 'documents' })).toEqual([]);
+
+    expect(ignoredToolOptionsMessage(['bareme'])).toMatch(/^Votre choix \(notation\) n'a pas été appliqué : /);
+    expect(ignoredToolOptionsMessage(['bareme'])).not.toContain('corrigé');
+    expect(ignoredToolOptionsMessage(['besoins', 'modalite'])).toMatch(/^Vos choix \(format, besoins particuliers\) n'ont pas été appliqués : /);
   });
 });
 
