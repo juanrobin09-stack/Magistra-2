@@ -2,9 +2,12 @@
 // numérotés, la banque de mots et le corrigé, alignés, au fil de la rédaction comme dans le document final.
 
 import katex from 'katex';
+import type { Nodes } from 'mdast';
 import { describe, expect, it } from 'vitest';
+import { parseMarkdown } from '@/lib/export/markdown';
 import { MockProvider } from '../../shared/ai/mock';
 import { buildCloze, buildClozeDocument, CLOZE_BLANK, ClozeStream, clozeWarning, isClozeRequest } from '../../shared/cloze';
+import { unwrapDocumentFence } from '../../shared/markdownFence';
 import { runGeneration, type NewGenerationRecord } from '../../shared/pipeline';
 import { buildSystemPrompt, buildUserPrompt } from '../../shared/prompts/index';
 import type { GenerationEvent, GenerationRequest } from '../../shared/types';
@@ -458,5 +461,348 @@ describe('pipeline : texte à trous', () => {
     const events = await collect(runGeneration({ ...REQ, modalite: 'application' }, { provider: new MockProvider({ reply: 'Écris [[x]].' }) }));
     const done = events.at(-1) as Extract<GenerationEvent, { type: 'done' }>;
     expect(done.content).toBe('Écris [[x]].');
+  });
+});
+
+// ─── Correctifs de la revue : corrigé du modèle, formules, crochets, pointillés, titres étrangers ─────────────────
+
+/** Tout ce qui suit la ligne de la banque de mots de Magistra (là où aucune réponse ne doit rester, version élève). */
+const afterBank = (doc: string) => doc.split('### Banque de mots\n\n')[1]?.split('\n').slice(1).join('\n') ?? '';
+
+function nodesOf(tree: Nodes, type: string): Nodes[] {
+  const found: Nodes[] = tree.type === type ? [tree] : [];
+  const children = 'children' in tree ? (tree.children as Nodes[]) : [];
+  return found.concat(...children.map(child => nodesOf(child, type)));
+}
+
+/** Formules du document tel qu'affiché (MarkdownView, export PDF) : chacune doit passer KaTeX sans erreur. */
+function renderedFormulas(doc: string): string[] {
+  const tree = parseMarkdown(doc);
+  return [...nodesOf(tree, 'inlineMath'), ...nodesOf(tree, 'math')].map(node => (node as { value: string }).value);
+}
+
+const MATH_BLANK = '\\_'.repeat(8);
+
+/** Découpages du flux : un seul morceau, chaque coupure possible, un caractère à la fois (même résultat). */
+function everyCut(text: string, max?: number): { out: string; words: string[] } {
+  const whole = streamed(text, [], max);
+  for (let i = 1; i < text.length; i++) expect(streamed(text, [i], max).out, `coupure à ${i}`).toBe(whole.out);
+  expect(streamed(text, Array.from({ length: text.length - 1 }, (_, i) => i + 1), max).out).toBe(whole.out);
+  return whole;
+}
+
+describe('corrigé du modèle « Corrigé et barème », points, version élève seule', () => {
+  const P = 'Les plantes vertes réalisent la [[photosynthèse]] grâce à la [[lumière]] captée par les feuilles ; '
+    + 'l’eau est puisée par les [[racines]].';
+  const ANSWERS = /photosynth|lumière|racines/i;
+
+  const cases: [string, string][] = [
+    ['liste avec points', '## Corrigé et barème\n\n1. photosynthèse (1 pt)\n2. lumière (1 pt)\n3. racines (1 pt)'],
+    ['tableau avec colonne de points', '## Corrigé et barème\n\n| N° | Réponse | Points |\n|---|---|---|\n| 1 | photosynthèse | 1 |\n| 2 | lumière | 1 |\n| 3 | racines | 1 |'],
+    ['« (1) … → 1 point »', '## Corrigé et barème\n\n- (1) photosynthèse → 1 point\n- (2) lumière → 1 point\n- (3) racines → 1 point'],
+    ['barème annoncé en étiquette avant les réponses', '## Corrigé et barème\n\n**Barème :** 1 point par mot juste.\n\n1. photosynthèse\n2. lumière\n3. racines'],
+    ['critères de réussite', '### Corrigé et critères de réussite\n\n- photosynthèse – 1 pt\n- lumière – 1 pt\n- racines – 1 pt'],
+    ['« mot : 1 point »', '## Corrigé\n\n- photosynthèse : 1 point\n- lumière : 1 point\n- racines : 1 point'],
+  ];
+
+  it.each(cases)('version élève seule (%s) : aucune réponse après la banque', (_, key) => {
+    const doc = buildClozeDocument(`${P}\n\n${key}`, { max: 3, withKey: false });
+    expect(bankOf(doc)).toBe('lumière · photosynthèse · racines');
+    expect(afterBank(doc)).not.toMatch(ANSWERS);
+    expect(doc).not.toMatch(/Corrigé|- \(1\)/);
+  });
+
+  it.each(cases)('version avec corrigé (%s) : réponses du modèle retirées, corrigé de Magistra une seule fois', (_, key) => {
+    const doc = buildClozeDocument(`${P}\n\n${key}`, { max: 3, withKey: true });
+    expect(doc).not.toMatch(/\(1 pt\)|→ 1 point|\| photosynthèse \||^\d\. photosynthèse|– 1 pt/m);
+    expect(keyOf(doc)).toEqual(['- (1) photosynthèse', '- (2) lumière', '- (3) racines']);
+  });
+
+  it('le barème en étiquette reste (sans réponse), dans les deux versions', () => {
+    const key = '## Corrigé et barème\n\n**Barème :** 1 point par mot juste.\n\n1. photosynthèse\n2. chlorophylle\n3. racines';
+    expect(buildClozeDocument(`${P}\n\n${key}`, { withKey: false })).toContain('**Barème :** 1 point par mot juste.');
+    const doc = buildClozeDocument(`${P}\n\n${key}`, { withKey: true });
+    expect(doc).toContain('## Corrigé et barème\n\n**Barème :** 1 point par mot juste.\n\n- (1) photosynthèse');
+    // Réponse fausse du modèle retirée avec les bonnes.
+    expect(doc).not.toMatch(/chlorophylle/);
+  });
+
+  it('« Correction et remédiation » : texte complété retiré de la version élève, la remédiation reste', () => {
+    const mixed = `${P}\n\n## Correction et remédiation\n\nLes plantes vertes réalisent la **photosynthèse** grâce à la **lumière**.\n`
+      + 'L’eau est puisée par les **racines**.\n\n1. photosynthèse : fabrication de matière organique.\n\n'
+      + 'Remédiation : revoir le schéma des échanges de la feuille.';
+    const student = buildClozeDocument(mixed, { withKey: false });
+    expect(afterBank(student)).not.toMatch(ANSWERS);
+    expect(student).toContain('## Correction et remédiation');
+    expect(student).toContain('Remédiation : revoir le schéma des échanges de la feuille.');
+    const teacher = buildClozeDocument(mixed, { withKey: true });
+    expect(teacher).toContain('Remédiation : revoir le schéma des échanges de la feuille.');
+    expect(keyOf(teacher)).toEqual(['- (1) photosynthèse', '- (2) lumière', '- (3) racines']);
+  });
+
+  it('pipeline, sans corrigé : la partie « Corrigé et barème » du modèle ne passe pas dans le document final', async () => {
+    const req = validateGenerationRequest({
+      type: 'evaluation', niveau: '5eme', matiere: 'svt', sujet: 'La nutrition des plantes', researchMode: 'documents',
+      modalite: 'texte_trous', nombreExercices: 3, sansCorrige: true,
+    }) as GenerationRequest;
+    const reply = `${P}\n\n## Corrigé et barème\n1. photosynthèse (1 pt)\n2. lumière (1 pt)\n3. racines (1 pt)`;
+    const events = await collect(runGeneration(req, { provider: new MockProvider({ reply, chunkSize: 7 }) }));
+    const done = events.at(-1) as Extract<GenerationEvent, { type: 'done' }>;
+    expect(done.type).toBe('done');
+    expect(afterBank(done.content)).not.toMatch(ANSWERS);
+  });
+
+  it('points annoncés : un corrigé par partie (« (2 pts) ») est remplacé une seule fois, sans ligne du modèle', () => {
+    const text = 'La [[photosynthèse]] a lieu dans les [[chloroplastes]] grâce à la [[chlorophylle]] et au [[dioxyde de carbone]].';
+    const doc = buildClozeDocument(`${text}\n\n## Corrigé\n**Partie 1**\n1. photosynthèse (2 pts)\n2. chloroplastes (2 pts)\n\n`
+      + '**Partie 2**\n3. chlorophylle\n4. dioxyde de carbone (4 pts)', { withKey: true });
+    expect(doc).not.toMatch(/pts\)|\*\*Partie 1\*\*/);
+    expect(keyOf(doc)).toEqual(['- (1) photosynthèse', '- (2) chloroplastes', '- (3) chlorophylle', '- (4) dioxyde de carbone']);
+  });
+
+  it('étiquette de corrigé avec une réponse fausse : retirée, la suite du corrigé reste', () => {
+    const T = 'La plante produit de l’[[énergie]] grâce à la [[lumière]]. Le poisson respire par des [[branchies]].';
+    const doc = buildClozeDocument(`${T}\n\n**Corrigé :** énergie, feuilles, branchies\nQuestion 2 : les branchies captent le dioxygène.`, { withKey: true });
+    expect(doc).not.toMatch(/feuilles/);
+    expect(doc).toContain('Question 2 : les branchies captent le dioxygène.');
+    expect(keyOf(doc)).toEqual(['- (1) énergie', '- (2) lumière', '- (3) branchies']);
+    // Partie mêlée d'une version avec corrigé : une ligne qui ne donne pas que des réponses reste.
+    const mixed = buildClozeDocument(`${T}\n\n## Correction et remédiation\n\n- énergie, confusion fréquente avec le dioxygène chez les élèves`, { withKey: true });
+    expect(mixed).toContain('- énergie, confusion fréquente avec le dioxygène chez les élèves');
+  });
+});
+
+describe('titres du cours jamais pris pour un corrigé (« Réponse de… », « Solution de… »)', () => {
+  const SVT = '## L’effort physique\n\nPendant un effort, les muscles consomment plus de [[dioxygène]] et de [[glucose]].\n\n'
+    + '## Réponse de l’organisme à l’effort\n\nLe cœur bat plus [[vite]] et la respiration [[s’accélère]] pour apporter plus de dioxygène.\n\n'
+    + '## Compétences travaillées\n\n- Mettre en relation des données.';
+
+  it('SVT : la partie reste un texte à trous, dans les deux versions', () => {
+    const student = buildCloze(SVT, { withKey: false });
+    expect(student.words).toEqual(['dioxygène', 'glucose', 'vite', 's’accélère']);
+    expect(student.content).toContain('## Réponse de l’organisme à l’effort');
+    const teacher = buildCloze(SVT, { withKey: true });
+    expect(teacher.words).toHaveLength(4);
+    expect(teacher.content).toContain(`## Réponse de l’organisme à l’effort\n\nLe cœur bat plus ${blank(3)} et la respiration ${blank(4)} pour`);
+    expect(teacher.content.split('### Banque de mots')[0]).not.toMatch(/vite|s’accélère/);
+    expect(teacher.content.trimEnd().endsWith('### Corrigé\n\n- (1) dioxygène\n- (2) glucose\n- (3) vite\n- (4) s’accélère')).toBe(true);
+    // Sous « Réponses », le texte complété du modèle (mêmes mots marqués que plus haut) reste son corrigé.
+    const completed = buildCloze(`${SVT}\n\n## Réponses\n\nPendant un effort, les muscles consomment plus de [[dioxygène]] et de [[glucose]].`, { withKey: false });
+    expect(completed.words).toHaveLength(4);
+    expect(completed.content).not.toContain('## Réponses');
+  });
+
+  it('chimie : « Solution de sulfate de cuivre », « Correction de la vision » restent du cours ; un vrai corrigé sous un titre qui nomme l’exercice reste reconnu', () => {
+    const doc = buildCloze('Le [[soluté]] est dissous.\n\n## Solution de sulfate de cuivre\n\nElle est [[bleue]] et contient des ions [[cuivre]].\n\n'
+      + '## Correction de la vision\n\nUne lentille [[convergente]] corrige l’hypermétropie de l’œil.', { withKey: false });
+    expect(doc.words).toEqual(['soluté', 'bleue', 'cuivre', 'convergente']);
+    expect(doc.content).toContain('## Solution de sulfate de cuivre');
+    expect(doc.content).toContain('## Correction de la vision');
+
+    const T = 'La plante produit de l’[[énergie]] grâce à la [[lumière]].';
+    for (const title of ['## Réponses de l’exercice', '## Solutions du texte à trous', '## Correction de l’exercice 1', '## Réponses aux questions']) {
+      const key = buildClozeDocument(`${T}\n\n${title}\n\n1. énergie\n2. lumière`, { withKey: true });
+      expect(key, title).not.toMatch(/^1\. énergie/m);
+      expect(key, title).not.toContain(title);
+      expect(keyOf(key), title).toEqual(['- (1) énergie', '- (2) lumière']);
+    }
+  });
+});
+
+describe('titres en anglais, espagnol, allemand, avec émoji', () => {
+  const T = 'Every day, Tom [[wakes up]] at seven. He [[brushes]] his teeth and [[takes]] the bus.';
+
+  it.each([
+    ['**Answers:** + liste', `${T}\n\n**Answers:**\n1. wakes up\n2. brushes\n3. takes`],
+    ['### Answer Key', `${T}\n\n### Answer Key\n\n1. wakes up\n2. brushes\n3. takes`],
+    ['### Respuestas', `${T}\n\n### Respuestas\n\n1. wakes up\n2. brushes\n3. takes`],
+    ['### Lösungen', `${T}\n\n### Lösungen\n\n- wakes up\n- brushes\n- takes`],
+    ['### ✅ Corrigé', `${T}\n\n### ✅ Corrigé\n\n- wakes up\n- brushes\n- takes`],
+    ['**Answers:** 1. [[…]]', `${T}\n\n**Answers:** 1. [[wakes up]] 2. [[brushes]] 3. [[takes]]`],
+    ['**Word bank:** avant le texte', `**Word bank:** [[wakes up]] – [[brushes]] – [[takes]]\n\n${T}`],
+    ['### Word bank', `### Word bank\n\nwakes up · brushes · takes\n\n${T}`],
+  ])('version élève seule : sa partie « %s » est retirée', (_, output) => {
+    const doc = buildCloze(output, { max: 3, withKey: false });
+    expect(doc.words).toEqual(['wakes up', 'brushes', 'takes']);
+    expect(doc.content.startsWith(`Every day, Tom ${blank(1)} at seven.`)).toBe(true);
+    expect(bankOf(doc.content)).toBe('brushes · takes · wakes up');
+    expect(afterBank(doc.content)).not.toMatch(/wakes|brushes|takes|Answer|Respuestas|Lösungen|Corrigé|Word bank/);
+  });
+
+  it('« Key vocabulary », « **Key:** the key opens the door. » gardés ; « **Key:** » suivi des réponses retiré', () => {
+    const doc = buildClozeDocument(`### Key vocabulary\n\n- a key, a lock\n\n**Key:** the key opens the door.\n\n${T}\n\n**Key:** wakes up, brushes, takes`, { withKey: false });
+    expect(doc).toContain('### Key vocabulary\n\n- a key, a lock');
+    expect(doc).toContain('**Key:** the key opens the door.');
+    expect(afterBank(doc)).not.toMatch(/Key|wakes/);
+  });
+});
+
+describe('mots en gras : numéros jamais pris pour des mots à trouver', () => {
+  const VERBS = '**Consigne :** Conjugue les verbes au présent.\n\n**1.** Nous [[mangeons]] une pomme.\n**2.** Vous [[finissez]] vos devoirs.\n**3.** Ils [[prennent]] le bus.';
+
+  it('« **1.** » en tête de ligne gardé ; numéros du direct et du document final identiques', () => {
+    const doc = buildCloze(VERBS, { max: 10, withKey: true });
+    expect(doc.words).toEqual(['mangeons', 'finissez', 'prennent']);
+    expect(doc.content).toContain(`**1.** Nous ${blank(1)} une pomme.`);
+    expect(doc.content).toContain(`**3.** Ils ${blank(3)} le bus.`);
+    expect(streamed(VERBS, [], 10).words).toEqual(doc.words);
+  });
+
+  it('« **a)** », « **(2)** », « **Exemple 1** », « **Phrase 2 –** » : jamais des blancs', () => {
+    const text = '**a)** Le [[chat]] dort.\n**(2)** Le [[chien]] joue.\n**Exemple 1** Le lapin **mange**.\n**Phrase 2 –** La [[souris]] court.';
+    expect(buildCloze(text, { withKey: true }).words).toEqual(['chat', 'chien', 'mange', 'souris']);
+    // Aucun mot marqué : seuls les mots en gras du texte deviennent des blancs.
+    expect(buildCloze('**1.** Le **chat** dort sur le canapé.\n**2.** Le chien joue.', { withKey: true }).words).toEqual(['chat']);
+  });
+});
+
+describe('blancs écrits en pointillés par le modèle', () => {
+  const DOTTED = '**Banque de mots :** lumière – chlorophylle – dioxygène\n\n'
+    + 'Les plantes vertes utilisent l’énergie de la ……………… pour fabriquer leur matière. Ce processus s’appelle la **photosynthèse**. '
+    + 'Il a lieu grâce à la ……………… et libère du ………………\n\n**Corrigé :** 1. lumière 2. chlorophylle 3. dioxygène';
+
+  it('pointillés « ……… » ou « (1) .......... » : document gardé tel quel, sans avertissement ; points de suspension, lignes de réponse et champs « Nom : ……… » n’en sont pas', () => {
+    const doc = buildCloze(DOTTED, { max: 3, withKey: false });
+    expect(doc).toEqual({ content: DOTTED, words: [] });
+    expect(clozeWarning(doc, 3)).toBeNull();
+    const numbered = DOTTED.replace('de la ………………', 'de la (1) ..............');
+    expect(buildCloze(numbered, { withKey: true })).toEqual({ content: numbered, words: [] });
+
+    for (const intro of ['Il réfléchit… puis répond...', 'Nom : ……………… Prénom : ………………', 'Réponse : ………………', '1. ……………………']) {
+      const bold = buildCloze(`${intro}\n\nLes plantes réalisent la **photosynthèse** grâce à la **lumière**.`, { withKey: true });
+      expect(bold.words, intro).toEqual(['photosynthèse', 'lumière']);
+    }
+  });
+});
+
+describe('formules « \\( … \\) », « \\[ … \\] », « $ \\frac… $ » et montants', () => {
+  const FORMULAS = [
+    'Pour tout réel \\(x\\), on a \\( (x+1)^2 = x^2 + [[2x]] + 1 \\).',
+    '\\[\n\\frac{[[3]]}{4} + \\frac{1}{4} = 1\n\\]',
+    'On calcule $ \\frac{[[3]]}{4} + \\frac{1}{4} = 1 $.',
+    'On a \\(x = [[5]]\\) et \\[ 3 \\times 4 = [[12]] \\] puis $$\\sqrt{[[9]]}$$.',
+    'Le périmètre vaut $ 2 \\pi r = [[2\\pi r]] $.',
+  ];
+
+  it.each(FORMULAS)('blanc lisible par KaTeX, à l’écran comme à l’export : %s', text => {
+    const doc = buildClozeDocument(text, { withKey: true });
+    expect(doc).toContain(`(1) ${MATH_BLANK}`);
+    expect(doc).not.toContain(`(1) ${CLOZE_BLANK}`);
+    for (const tex of renderedFormulas(doc)) {
+      expect(() => katex.renderToString(tex, { throwOnError: true }), tex).not.toThrow();
+    }
+    everyCut(text);
+  });
+
+  it('mot d’une formule : écrit en formule dans la banque et le corrigé', () => {
+    const doc = buildClozeDocument(FORMULAS[4], { withKey: true });
+    expect(bankOf(doc)).toBe('$2\\pi r$');
+    expect(keyOf(doc)).toEqual(['- (1) $2\\pi r$']);
+  });
+
+  it('montants (« $2 … $3 », « $5, …, $10 », « 5 $ et 10 $ ») : blanc du texte, sans barre oblique affichée', () => {
+    for (const text of [
+      'It costs $2 and the [[ride]] costs $3 more than the [[bus]].',
+      'Prices: $5, [[cheap]], $10.',
+      'Prix : 5 $ pour le [[cahier]] et 10 $ pour le livre.',
+    ]) {
+      const doc = buildClozeDocument(text, { withKey: false });
+      expect(doc, text).toContain(`(1) ${CLOZE_BLANK}`);
+      expect(doc, text).not.toContain('\\_');
+      expect(renderedFormulas(doc), text).toEqual([]);
+      everyCut(text);
+    }
+    // Une vraie formule reste une formule.
+    expect(buildClozeDocument('$x = [[5]]$ et $[[y]]$2', { withKey: false })).toContain(`$x = (1) ${MATH_BLANK}$`);
+  });
+});
+
+describe('crochets en trop, marque vide', () => {
+  it.each(['[[[dort]]]', '[[[dort]]', '[[dort]]]'])('« %s » : un blanc, aucun crochet restant, à toute coupure', mark => {
+    const text = `Le chat ${mark} sur le canapé et le [[chien]] joue.`;
+    const doc = buildCloze(text, { withKey: false });
+    expect(doc.words).toEqual(['dort', 'chien']);
+    expect(doc.content).toContain(`Le chat ${blank(1)} sur le canapé et le ${blank(2)} joue.`);
+    expect(doc.content).not.toMatch(/[[\]]/);
+    expect(everyCut(text).words).toEqual(['dort', 'chien']);
+  });
+
+  it('« [[]] » retiré ; « [[[0]]] » dans du code et « [voir [[mot]]] » gardés', () => {
+    expect(buildClozeDocument('Le chat [[]] dort et le [[chien]] joue.', { withKey: false })).not.toContain(']]');
+    const code = buildClozeDocument('Le [[tableau]] :\n\n```python\nm = [[[0]]]\n```', { withKey: false });
+    expect(code).toContain('m = [[[0]]]');
+    expect(buildClozeDocument('Le chat dort [voir le [[panier]]] ici.', { withKey: false })).toContain(`[voir le ${blank(1)}] ici.`);
+  });
+});
+
+describe('corrigé en gras après chaque exercice', () => {
+  const TWO = '**Exercice 1**\nLe [[chat]] dort sur le [[canapé]] du salon depuis ce matin.\n\n**Corrigé**\n1. chat\n2. canapé\n\n'
+    + '**Exercice 2**\nLe [[chien]] joue avec la [[balle]] rouge dans le jardin.\n\n**Corrigé**\n1. chien\n2. balle';
+
+  it.each([
+    ['**Exercice 2**', '\n', TWO],
+    ['**Exercice 2 : les animaux**', '\n', TWO.replace('**Exercice 2**', '**Exercice 2 : les animaux**')],
+    ['**Exercice 2**', '\n\n', TWO.replace('**Exercice 2**\n', '**Exercice 2**\n\n')],
+  ])('%s n’est pas avalé par le corrigé qui le précède', (title, gap, text) => {
+    const student = buildCloze(text, { withKey: false });
+    expect(student.words).toEqual(['chat', 'canapé', 'chien', 'balle']);
+    expect(bankOf(student.content)).toBe('balle · canapé · chat · chien');
+    expect(student.content).toContain(`${title}${gap}Le ${blank(3)} joue avec la ${blank(4)}`);
+    expect(afterBank(student.content)).not.toMatch(/chat|chien/);
+    const teacher = buildClozeDocument(text, { withKey: true });
+    expect(teacher).not.toContain('Le chien joue avec la balle');
+    expect(keyOf(teacher)).toEqual(['- (1) chat', '- (2) canapé', '- (3) chien', '- (4) balle']);
+    // Texte complété du modèle sur plusieurs lignes, sans titre entre elles : tout reste dans son corrigé.
+    const completed = buildCloze(`${text}\n\n**Corrigé**\nLe [[chat]] dort sur le [[canapé]] du salon depuis ce matin.\n`
+      + 'Le [[chien]] joue avec la [[balle]] rouge dans le jardin.', { withKey: false });
+    expect(completed.words).toHaveLength(4);
+    expect(afterBank(completed.content)).not.toMatch(/chat|chien/);
+  });
+});
+
+describe('banque de mots : réponses actives en Markdown écrites en code', () => {
+  it('opérateurs Python (« * », « ** », « - ») et expressions (« n*2 », « x**2 ») : une seule ligne, sans liste ni gras', () => {
+    const doc = buildClozeDocument('En Python, `a [[*]] b` multiplie, `a [[**]] b` élève à la puissance, `a [[-]] b` soustrait, '
+      + '`a [[//]] b` divise et `a [[%]] b` donne le reste.\n\n```python\nn = [[n*2]]\ni = [[i*i]]\nx = [[x**2]]\n```', { withKey: true });
+    const line = bankOf(doc)!;
+    const tree = parseMarkdown(line);
+    expect(tree.children.map(child => child.type)).toEqual(['paragraph']);
+    for (const type of ['emphasis', 'strong', 'list']) expect(nodesOf(tree, type), type).toHaveLength(0);
+    const code = nodesOf(tree, 'inlineCode').map(node => (node as { value: string }).value);
+    for (const word of ['*', '**', '-', 'n*2', 'i*i', 'x**2']) expect(code, word).toContain(word);
+  });
+});
+
+describe('bloc de code dans un document entouré de « ```markdown »', () => {
+  it('le direct garde le code intact et numérote comme le document final', () => {
+    const text = '```markdown\nUne [[liste]] se parcourt.\n```python\nm = [[0, 1], [2, 3]]\nfor i in [[range]](3):\n```\n'
+      + 'La fonction [[len]] donne la taille.\n```';
+    const final = buildCloze(unwrapDocumentFence(text, { complete: true }), { withKey: true });
+    for (const cuts of [[], Array.from({ length: Math.ceil(text.length / 3) }, (_, i) => (i + 1) * 3).filter(n => n < text.length)]) {
+      const live = streamed(text, cuts);
+      expect(live.out).toContain('m = [[0, 1], [2, 3]]');
+      expect(live.words).toEqual(['liste', 'range', 'len']);
+      expect(live.words).toEqual(final.words);
+    }
+  });
+});
+
+describe('temps de construction', () => {
+  it('modèle qui boucle sur une étiquette (« Réponse : … », « Corrigé : … », « Solution : … ») : temps linéaire', () => {
+    const inputs = [
+      `Le [[chat]] dort.\n\n${'Réponse : le chat dort\n'.repeat(5000)}`,
+      `${'Corrigé : le chat dort\n'.repeat(5000)}\nLe [[chat]] dort.`,
+      'Solution : un mélange homogène\n'.repeat(3000),
+      `Le [[chat]] dort.\n\n${'Le prix est de 5 $ ou \\( et \\[ ; '.repeat(1500)}`,
+      `${'Le [[chat]] dort. **Corrigé** 1. chat\n---\n'.repeat(1500)}`,
+      '[[[x '.repeat(8000),
+    ];
+    for (const input of inputs) {
+      expect(input.length).toBeGreaterThan(30_000);
+      const t0 = performance.now();
+      buildCloze(input, { max: 20, withKey: true });
+      buildCloze(input, { withKey: false });
+      expect(performance.now() - t0, input.slice(0, 40)).toBeLessThan(1500);
+    }
   });
 });
