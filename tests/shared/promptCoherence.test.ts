@@ -363,7 +363,7 @@ describe('matières de langue : le français là où le travail l’exige (copie
   });
 
   it('sujet type bac de LLCER : la partie 2 (traduction ou transposition) en français, le reste en espagnol', () => {
-    const r = { type: 'evaluation' as const, niveau: 'terminale_gen' as const, matiere: 'espagnol' as const, modalite: 'sujet_bac' };
+    const r = { type: 'evaluation' as const, niveau: 'terminale_gen' as const, matiere: 'espagnol' as const, modalite: 'sujet_bac_llcer' };
     const text = sys(r);
     expect(text).toMatch(/Partie 2 \(4 points\) : traduction en français/);
     for (const t of [text, user(r)]) {
@@ -372,6 +372,16 @@ describe('matières de langue : le français là où le travail l’exige (copie
     }
     expect(rule(text)).toMatch(/sauf la partie 2 : passage source en espagnol, traduction ou transposition attendue en français/);
     expect(reminder(r)).toBe('Langue : documents, questions et synthèse en espagnol ; partie 2 (traduction ou transposition) en français.');
+  });
+
+  it('cycle 2 (CP-CE2) : fiche et consignes en français, seuls des mots en langue cible ; jamais « jamais en français »', () => {
+    const r = { niveau: 'ce1' as const, matiere: 'anglais' as const, modalite: 'qcm' };
+    const text = sys(r);
+    expect(rule(text)).toMatch(/cycle 2 .*fiche, consignes et questions en français/);
+    expect(text).not.toMatch(/jamais en français/);
+    expect(reminder(r)).toBe('Langue : fiche et consignes en français ; seuls des mots ou de très courtes expressions en anglais.');
+    // Cycle 3 (CM1) : règle habituelle.
+    expect(sys({ ...r, niveau: 'cm1' as const })).toMatch(/jamais en français/);
   });
 
   it('témoins : les autres formats de langue vivante gardent la règle stricte (langue cible, jamais en français)', () => {

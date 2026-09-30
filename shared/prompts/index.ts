@@ -8,7 +8,7 @@ import {
 import { formatLocator } from '../citations.js';
 import { isClozeRequest } from '../cloze.js';
 import { targetLanguage } from '../languages.js';
-import { getLevelGroup, getNiveauLabel, isSuperieur, LEVEL_GROUP_LABELS } from '../levels.js';
+import { getCycle, getLevelGroup, getNiveauLabel, isSuperieur, LEVEL_GROUP_LABELS } from '../levels.js';
 import type { GenerationRequest, SourceRef } from '../types.js';
 import { LETTER_AUDIENCE, LEVEL_GUIDANCE, REFERENTIEL_SUPERIEUR_RULES, SCOLAIRE_RULES, SUPERIEUR_RULES } from './levels.js';
 import { toolInstructions } from './tools.js';
@@ -67,7 +67,7 @@ type Translation = 'traduction' | 'llcer' | null;
 
 function translationWork(req: GenerationRequest, kind: 'vivante' | 'ancienne'): Translation {
   if (req.modalite === 'traduction') return 'traduction';
-  return kind === 'vivante' && req.type === 'evaluation' && req.modalite === 'sujet_bac' ? 'llcer' : null;
+  return kind === 'vivante' && req.type === 'evaluation' && req.modalite === 'sujet_bac_llcer' ? 'llcer' : null;
 }
 
 /** Sens d'une traduction : la langue d'arrivée n'est le français que pour une version. */
@@ -108,6 +108,10 @@ function languageRule(req: GenerationRequest): string | null {
   if (translation === 'llcer') {
     return `- Langue : documents, questions et synthèse en ${name} correct et naturel, au niveau du CECRL adapté à la classe, sauf la partie 2 : passage source en ${name}, traduction ou transposition attendue en français. Explications destinées à l'enseignant et commentaires du corrigé en français soigné. ${examples}`;
   }
+  // Cycle 2 (CP-CE2) : les élèves apprennent à lire en français ; la langue vivante se travaille surtout à l'oral.
+  if (vivante && getCycle(req.niveau) === 'cycle2') {
+    return `- Langue : cycle 2 (élèves qui apprennent à lire en français) : fiche, consignes et questions en français, lues par l'enseignant ; seuls des mots ou de très courtes expressions en ${name}, déjà travaillés à l'oral, sont à lire, choisir ou compléter, en ${name} correct ; corrigé en français. ${examples}`;
+  }
   return vivante
     ? `- Langue : tout le contenu destiné aux élèves (textes, phrases, questions, choix du QCM, affirmations, mots à trouver, trace écrite) est en ${name}, la langue cible, jamais en français : ${name} correct et naturel, au niveau du CECRL adapté à la classe. Consignes en ${name} simple ou en français selon l'âge des élèves ; explications destinées à l'enseignant et commentaires du corrigé en français soigné (les réponses elles-mêmes restent en ${name}). ${examples}`
     // Langue ancienne : le latin pour la langue, le français pour la civilisation (comme le format « texte à trous »).
@@ -125,6 +129,9 @@ function languageReminder(req: GenerationRequest): string | null {
     case 'llcer':
       return `Langue : documents, questions et synthèse en ${name} ; partie 2 (traduction ou transposition) en français.`;
     default:
+      if (lang.kind === 'vivante' && getCycle(req.niveau) === 'cycle2') {
+        return `Langue : fiche et consignes en français ; seuls des mots ou de très courtes expressions en ${name}.`;
+      }
       return lang.kind === 'vivante'
         ? `Langue : tout ce qui est destiné aux élèves est en ${name}.`
         : `Langue : formes, textes et mots étudiés en ${name} ; consignes, explications et civilisation en français.`;

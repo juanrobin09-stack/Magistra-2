@@ -83,7 +83,8 @@ const PRACTICE_FORMATS: ReadonlySet<string> = new Set(['situation_eps', 'pratiqu
  * barème. Tout format d'évaluation dont la consigne prévoit un barème figure ici (vérifié par les tests).
  */
 const EPREUVES_AVEC_BAREME: ReadonlySet<string> = new Set([
-  'interro', 'partiel', 'devoir_surveille', 'sujet_bts', 'sujet_brevet', 'sujet_bac', 'sujet_bac_pro', 'epreuve_composee',
+  'interro', 'partiel', 'devoir_surveille', 'sujet_bts', 'sujet_brevet', 'sujet_bac', 'sujet_bac_llcer', 'sujet_bac_pro',
+  'epreuve_composee',
 ]);
 
 export function isPracticeFormat(modalite: string | undefined): boolean {

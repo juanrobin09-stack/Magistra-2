@@ -3,6 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_ROUTES } from '@shared/apiContract';
+import { getMatiereLabel } from '@shared/catalog';
 import { MagistraError } from '@shared/errors';
 import { CONNECTOR_PORTS, CONNECTOR_ROUTES, LOCAL_ENGINE_SITE_MESSAGES } from '@shared/localConnector';
 import type { Capabilities, GenerationEvent, GenerationRecordDraft, GenerationRequest } from '@shared/types';
@@ -570,7 +571,7 @@ describe('options des outils et version de l’application Windows (protocole in
       expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
       const message = substitutedRequestMessage(TEMPS_ESPACE, { ...RECORD, type: 'cours', niveau: 'maternelle_ms', matiere: 'langage_oral' });
       expect(message).toBe(
-        "La matière « Se repérer dans le temps et l'espace » n'est pas connue de l'application Magistra de cet ordinateur, trop ancienne : le contenu a été rédigé pour « Mobiliser le langage — Oral ». Il n'a pas été enregistré dans l'historique. Installez Magistra pour Windows 2.0.3 ou plus récente (Réglages → « Magistra pour Windows »), puis relancez la génération.",
+        `La matière « ${getMatiereLabel('temps_espace')} » n'est pas connue de l'application Magistra de cet ordinateur, trop ancienne : le contenu a été rédigé pour « ${getMatiereLabel('langage_oral')} ». Il n'a pas été enregistré dans l'historique. Installez Magistra pour Windows 2.0.3 ou plus récente (Réglages → « Magistra pour Windows »), puis relancez la génération.`,
       );
       expect(events.slice(-2)).toEqual([
         { type: 'warning', code: 'CONNECTOR_UNREACHABLE', message },

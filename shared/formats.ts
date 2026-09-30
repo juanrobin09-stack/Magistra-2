@@ -279,7 +279,7 @@ function langueTexteATrous(matiere: Matiere): string {
  * Sans cette précision, le modèle ajoutait une ligne « Maîtrise de la langue (2 points) » à un barème officiel déjà
  * complet (6 + 14, 16 + 4, 10 + 10…) ou retranchait 2 points à une partie.
  */
-const MAITRISE_LANGUE = 'Maîtrise de la langue (épreuves écrites, à compter de la session 2027) : elle compte pour au moins 2 points, compris dans le total et dans les parties ci-dessus, jamais ajoutés en plus (sans note chiffrée : un critère de la grille). Elle s’apprécie sur l’ensemble de la copie (orthographe, syntaxe, vocabulaire, organisation du raisonnement) : ne crée ni partie ni ligne de barème séparée, ne change ni la répartition des parties ni le total ; rappelle ce critère dans les éléments de correction.';
+const MAITRISE_LANGUE = 'Maîtrise de la langue (épreuves écrites, à compter de la session 2027) : elle compte pour au moins 2 points, compris dans le total et dans les parties ci-dessus, jamais ajoutés en plus (en notation par compétences : un critère de la grille). Elle s’apprécie sur l’ensemble de la copie (orthographe, syntaxe, vocabulaire, organisation du raisonnement) : ne crée ni partie ni ligne de barème séparée, ne change ni la répartition des parties ni le total ; rappelle ce critère dans les éléments de correction.';
 
 /** Épreuve notée sur plus de 20 points : le barème officiel est gardé, ou ramené à la notation demandée. */
 const BAREME_OFFICIEL = 'Ce barème officiel prime sur une note totale sur 20 ; si une notation sur 20 ou sur 10 est demandée, garde cette structure et ramène les points proportionnellement.';
