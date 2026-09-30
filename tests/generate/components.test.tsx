@@ -118,6 +118,47 @@ describe('GenerateFormFields — formats normés et réglages', () => {
     expect(html).toContain("Nombre d&#x27;activités");
   });
 
+  it('notation par défaut : sur 20 au collège, sans note pour une évaluation diagnostique ; notation choisie : aucun rappel', () => {
+    const base = { ...createInitialForm(PROFILE, { type: 'evaluation' }), niveau: '4eme' as const, matiere: 'mathematiques' as const };
+    const sommative = fields({ ...base, typeEvaluation: 'sommative' });
+    expect(sommative).toContain('Par défaut : note sur 20.');
+    expect(sommative).toMatch(/title="Note sur 20"[^>]*>Selon le niveau</);
+    const diagnostique = fields({ ...base, typeEvaluation: 'diagnostique' });
+    expect(diagnostique).toContain('Par défaut : sans note (évaluation diagnostique).');
+    expect(diagnostique).not.toContain('note sur 20');
+    expect(diagnostique).toMatch(/aria-pressed="true" title="Sans note"[^>]*>Selon l’objectif</);
+    // Supérieur : même règle.
+    const sup = fields({ ...base, niveau: 'master_1', matiere: 'informatique', typeEvaluation: 'diagnostique' });
+    expect(sup).toContain('Par défaut : sans note (évaluation diagnostique).');
+    // Notation choisie explicitement : elle prime, plus de rappel du défaut.
+    const chosen = fields({ ...base, typeEvaluation: 'diagnostique', bareme: 'sur20' });
+    expect(chosen).not.toContain('Par défaut :');
+    expect(chosen).toMatch(/aria-pressed="true"[^>]*>Sur 20</);
+    // Primaire : positionnement sans note.
+    expect(fields({ ...base, niveau: 'cm2', matiere: 'mathematiques' })).toContain('Par défaut : positionnement sans note.');
+  });
+
+  it('exercices : pas d’objectif, la notation par défaut reste « sur 20 » même si un objectif diagnostique traîne dans le formulaire', () => {
+    const html = fields({ ...createInitialForm(PROFILE, { type: 'exercices' }), typeEvaluation: 'diagnostique' });
+    expect(html).not.toContain('Diagnostique');
+    expect(html).toContain('Par défaut : note sur 20.');
+  });
+
+  it('légende « Formats généraux » : seulement pour les formats de travail (exercices, évaluation, corrigé)', () => {
+    const exercices = fields({ ...createInitialForm(PROFILE, { type: 'exercices' }), niveau: '3eme', matiere: 'francais' });
+    expect(exercices).toMatch(/>Formats généraux<\/span><button[^>]*>Application</);
+    const appreciations = fields({ ...createInitialForm(PROFILE, { type: 'appreciations' }), niveau: 'terminale_gen', matiere: 'mathematiques' });
+    expect(appreciations).not.toContain('Formats généraux');
+    expect(appreciations).toContain('>Conseil de classe</button>');
+    expect(appreciations).toContain('>Livret scolaire (bac)</button>');
+    const sequence = fields({ ...createInitialForm(PROFILE, { type: 'sequence' }), niveau: '3eme', matiere: 'physique_chimie' });
+    expect(sequence).toContain('>Démarche d’investigation</button>');
+    expect(sequence).not.toContain('Formats généraux');
+    const progression = fields({ ...createInitialForm(PROFILE, { type: 'progression' }), niveau: '3eme', matiere: 'mathematiques' });
+    expect(progression).toContain('>Spiralée</button>');
+    expect(progression).not.toContain('Formats généraux');
+  });
+
   it('différenciation : besoins particuliers (choix multiple) ; appréciations : ton et destination', () => {
     const diff = fields({ ...createInitialForm(PROFILE, { type: 'differenciation' }), besoins: ['dys'] });
     expect(diff).toContain('Besoins particuliers');
@@ -146,6 +187,37 @@ describe('GenerateFormFields', () => {
     expect(html).toContain('Trimestre');
     expect(html).toContain('Magistra rédigera 12 appréciations');
     expect(html).toContain('id="gen-nombre"');
+  });
+
+  it('trimestre : boutons T1/T2/T3 centrés, avec une marge intérieure (un seul alignement par bouton)', () => {
+    const html = fields(createInitialForm(PROFILE, { type: 'appreciations' }));
+    const buttons = html.match(/<button[^>]*aria-label="Trimestre \d"[^>]*>/g) ?? [];
+    expect(buttons).toHaveLength(3);
+    for (const button of buttons) {
+      expect(button).toContain('text-center');
+      expect(button).not.toContain('text-left');
+      expect(button).toMatch(/\bpx-2\b/);
+    }
+    // Les autres choix gardent l'alignement à gauche.
+    expect(html).toMatch(/<button[^>]*class="[^"]*text-left[^"]*"[^>]*>Bulletin</);
+  });
+
+  it('livret scolaire (bac) : appréciation annuelle, le trimestre disparaît (et on dit pourquoi) ; bulletin : il revient', () => {
+    const base = { ...createInitialForm(PROFILE, { type: 'appreciations' }), niveau: 'terminale_gen' as const, matiere: 'mathematiques' as const };
+    const livret = fields({ ...base, modalite: 'livret_bac' });
+    expect(livret).not.toContain('gen-trimestre-label');
+    expect(livret).not.toContain('aria-label="Trimestre 1"');
+    expect(livret).toContain('Appréciation annuelle pour le jury · pas de trimestre');
+    expect(livret).toContain('sm:grid-cols-2');
+    // La matière reste proposée.
+    expect(livret).toContain('id="gen-matiere"');
+    const bulletin = fields(base);
+    expect(bulletin).toContain('gen-trimestre-label');
+    expect(bulletin).toContain('sm:grid-cols-3');
+    // Conseil de classe : le trimestre reste.
+    const conseil = fields({ ...base, modalite: 'conseil_classe' });
+    expect(conseil).toContain('gen-trimestre-label');
+    expect(conseil).not.toContain('pas de trimestre');
   });
 
   it('différenciation : profils cochables + zone multiligne « Exercice ou contenu à adapter »', () => {

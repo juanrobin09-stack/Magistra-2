@@ -50,10 +50,12 @@ interface ChoiceButtonProps {
   disabled?: boolean;
   ariaLabel?: string;
   title?: string;
+  /** Alignement du texte (à gauche par défaut) : jamais dans `className`, où deux alignements se contrediraient. */
+  align?: 'left' | 'center';
 }
 
 /** Bouton de choix (bascule) : état annoncé par aria-pressed. */
-export function ChoiceButton({ pressed, onClick, children, className = '', disabled, ariaLabel, title }: ChoiceButtonProps) {
+export function ChoiceButton({ pressed, onClick, children, className = '', disabled, ariaLabel, title, align = 'left' }: ChoiceButtonProps) {
   return (
     <button
       type="button"
@@ -62,7 +64,7 @@ export function ChoiceButton({ pressed, onClick, children, className = '', disab
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={`rounded-lg text-sm border transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed ${FOCUS_RING} ${
+      className={`rounded-lg text-sm border transition-all ${align === 'center' ? 'text-center' : 'text-left'} disabled:opacity-50 disabled:cursor-not-allowed ${FOCUS_RING} ${
         pressed
           ? 'bg-accent/10 text-white border-accent/40'
           : 'bg-mg-700 text-mg-200 border-white/5 hover:border-white/15 hover:text-mg-100'

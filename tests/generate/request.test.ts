@@ -151,6 +151,35 @@ describe('appréciations', () => {
     expect(req.profilEleve).toBe('fragile');
   });
 
+  it('livret scolaire (bac) : appréciation annuelle, ni trimestre affiché ni transmis ; la matière reste', () => {
+    expect(visibleFields('appreciations', 'terminale_gen', 'mathematiques', 'livret_bac').has('trimestre')).toBe(false);
+    expect(visibleFields('appreciations', 'terminale_gen', 'mathematiques', 'livret_bac').has('modalite')).toBe(true);
+    const form: GenerateForm = { ...fullForm('appreciations', 'terminale_gen'), matiere: 'mathematiques', modalite: 'livret_bac', trimestre: '1' };
+    const req = buildGenerationRequest(form, 'appreciations', PROFILE, [], 'documents');
+    expect(req.modalite).toBe('livret_bac');
+    expect(req).not.toHaveProperty('trimestre');
+    expect(req.matiere).toBe('mathematiques');
+    expect(req.profilEleve).toBe('fragile');
+    expect(validateGenerationRequest(JSON.parse(JSON.stringify(req))).trimestre).toBeUndefined();
+    // Retour au bulletin : le trimestre saisi réapparaît et repart.
+    expect(buildGenerationRequest({ ...form, modalite: '' }, 'appreciations', PROFILE, [], 'documents').trimestre).toBe('1');
+  });
+
+  it('conseil de classe : trimestre et matière gardés ; livret gardé d’un autre niveau : le trimestre reste', () => {
+    const conseil: GenerateForm = { ...fullForm('appreciations', '4eme'), matiere: 'mathematiques', modalite: 'conseil_classe' };
+    const req = buildGenerationRequest(conseil, 'appreciations', PROFILE, [], 'documents');
+    expect(req.modalite).toBe('conseil_classe');
+    expect(req.trimestre).toBe('2');
+    expect(req.matiere).toBe('mathematiques');
+    // Le livret scolaire n'existe pas en 4e : format ignoré, rien n'est masqué.
+    expect(visibleFields('appreciations', '4eme', 'mathematiques', 'livret_bac').has('trimestre')).toBe(true);
+    const stale = buildGenerationRequest({ ...conseil, modalite: 'livret_bac' }, 'appreciations', PROFILE, [], 'documents');
+    expect(stale).not.toHaveProperty('modalite');
+    expect(stale.trimestre).toBe('2');
+    // Sans matière connue, le format n'est pas vérifiable : rien n'est masqué.
+    expect(visibleFields('appreciations', 'terminale_gen', undefined, 'livret_bac').has('trimestre')).toBe(true);
+  });
+
   it('le champ peut être vidé sans revenir à 10', () => {
     expect(appreciationCount('')).toBeNull();
     expect(normalizeAppreciationInput('')).toBe('');

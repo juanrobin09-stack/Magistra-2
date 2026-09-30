@@ -34,6 +34,13 @@ interface GenerateFormFieldsProps {
 
 const CONTENT_TOOLS: TypeContenu[] = ['cours', 'exercices', 'evaluation', 'sequence', 'fiche_prep', 'differenciation'];
 
+/**
+ * Outils dont les choix sont des formats de travail (QCM, application… après ceux de la discipline ou de l'épreuve) :
+ * seuls à recevoir la légende « Formats généraux ». Ailleurs (destination, démarche, forme de la progression, type de
+ * séance), les choix ne sont pas des formats et la légende induirait en erreur.
+ */
+const CAPTIONED_TOOLS: TypeContenu[] = ['exercices', 'evaluation', 'corrige'];
+
 const FORMAT_SHORT: Record<FormatSeance, string> = { cm: 'CM', td: 'TD', tp: 'TP', seminaire: 'Séminaire' };
 
 function sujetText(tool: TypeContenu, sup: boolean): { label: string; placeholder: string; hint?: string } {
@@ -132,10 +139,16 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
     { value: '', label: defaultModaliteLabel(tool), title: 'Magistra choisit la forme la plus adaptée au sujet et au niveau' },
     ...modalites.map(m => ({ value: m.value, label: m.label, title: m.description })),
   ];
-  const generalCaption = specific.length > 0 && general.length > 0 ? { value: general[0].value, text: 'Formats généraux' } : undefined;
+  const generalCaption = CAPTIONED_TOOLS.includes(tool) && specific.length > 0 && general.length > 0
+    ? { value: general[0].value, text: 'Formats généraux' }
+    : undefined;
   // Travail d'un seul tenant (dissertation, dictée…) : le nombre d'exercices disparaît ; on dit pourquoi.
   const singleTask = !!modalite && TOOL_FIELDS[tool].includes('nombreExercices') && !has('nombreExercices');
-  const modaliteHint = modalite ? `${modalite.description}${singleTask ? ' · un seul sujet complet' : ''}` : undefined;
+  // Appréciation annuelle (livret scolaire) : le trimestre disparaît ; on dit pourquoi aussi.
+  const noTrimestre = !!modalite && !sup && TOOL_FIELDS[tool].includes('trimestre') && !has('trimestre');
+  const modaliteHint = modalite
+    ? `${modalite.description}${singleTask ? ' · un seul sujet complet' : ''}${noTrimestre ? ' · pas de trimestre' : ''}`
+    : undefined;
 
   const settings: ReactElement[] = [];
   if (has('difficulte')) {
@@ -201,6 +214,13 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
     );
   }
   if (has('bareme')) {
+    // Notation par défaut, telle que Magistra la demandera : sans note pour une évaluation diagnostique (repérer les
+    // acquis et les besoins) comme à l'école primaire, sur 20 ailleurs. Une notation choisie prime toujours.
+    const diagnostic = has('typeEvaluation') && form.typeEvaluation === 'diagnostique';
+    const defaultTitle = diagnostic ? 'Sans note' : primary ? 'Positionnement sans note' : 'Note sur 20';
+    const defaultHint = diagnostic
+      ? 'Par défaut : sans note (évaluation diagnostique).'
+      : primary ? 'Par défaut : positionnement sans note.' : 'Par défaut : note sur 20.';
     settings.push(
       <ChipGroup<Bareme | ''>
         key="bareme"
@@ -209,10 +229,10 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
         value={form.bareme}
         onChange={v => onChange({ bareme: v })}
         options={[
-          { value: '', label: 'Selon le niveau', title: primary ? 'Positionnement sans note' : 'Note sur 20' },
+          { value: '', label: diagnostic ? 'Selon l’objectif' : 'Selon le niveau', title: defaultTitle },
           ...BAREMES.map(b => ({ value: b.value, label: b.label, title: b.description })),
         ]}
-        hint={form.bareme ? undefined : primary ? 'Par défaut : positionnement sans note.' : 'Par défaut : note sur 20.'}
+        hint={form.bareme ? undefined : defaultHint}
       />,
     );
   }
@@ -413,7 +433,8 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
                       pressed={form.trimestre === t}
                       onClick={() => onChange({ trimestre: t })}
                       ariaLabel={`Trimestre ${t}`}
-                      className="flex-1 py-2 text-center"
+                      align="center"
+                      className="flex-1 px-2 py-2"
                     >
                       T{t}
                     </ChoiceButton>

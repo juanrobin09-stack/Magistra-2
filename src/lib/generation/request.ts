@@ -149,17 +149,29 @@ export function withNiveau(form: GenerateForm, niveau: NiveauScolaire, profile?:
 const NOT_IN_MATERNELLE: ReadonlySet<string> = new Set(['bareme', 'typeEvaluation', 'sansCorrige']);
 
 /**
+ * Champs sans objet avec un format donné : masqués, donc jamais transmis.
+ * Livret scolaire (bac) : appréciation annuelle pour le jury, aucun trimestre ne s'y rapporte.
+ */
+const HIDDEN_BY_MODALITE: ReadonlyMap<string, readonly FormField[]> = new Map([
+  ['livret_bac', ['trimestre']],
+]);
+
+/**
  * Champs affichés (et donc transmis) pour un outil à un niveau donné.
  * - « Discipline / intitulé de l'UE » et « Format » (CM/TD/TP/séminaire) : supérieur uniquement ;
- * - « Trimestre » : pas de sens dans le supérieur ;
+ * - « Trimestre » : pas de sens dans le supérieur, ni pour une appréciation annuelle (livret scolaire) choisie comme
+ *   format (`modalite`) ;
  * - notation, objectif de l'évaluation, corrigé : pas en maternelle ;
  * - format normé : seulement s'il en existe pour cet outil, ce niveau et cette matière (`matiere` fournie) ;
  * - nombre d'exercices : pas pour un travail d'un seul tenant (dissertation, dictée…) choisi comme format (`modalite`).
+ * Un format gardé d'un autre outil, niveau ou matière ne masque rien (il n'est pas transmis).
  */
 export function visibleFields(tool: TypeContenu, niveau: NiveauScolaire, matiere?: Matiere, modalite?: string): Set<FormField> {
   const sup = isSuperieur(niveau);
   const maternelle = getLevelGroup(niveau) === 'maternelle';
-  const single = !!matiere && isModaliteAvailable(modalite, tool, niveau, matiere) && countUnit(modalite) === null;
+  const chosen = matiere && isModaliteAvailable(modalite, tool, niveau, matiere) ? modalite : undefined;
+  const single = !!chosen && countUnit(chosen) === null;
+  const hiddenByFormat = (chosen && HIDDEN_BY_MODALITE.get(chosen)) || [];
   const fields = new Set<FormField>();
   for (const f of TOOL_FIELDS[tool] as readonly string[]) {
     if (f === 'format' && !sup) continue;
@@ -167,6 +179,7 @@ export function visibleFields(tool: TypeContenu, niveau: NiveauScolaire, matiere
     if (maternelle && NOT_IN_MATERNELLE.has(f)) continue;
     if (f === 'modalite' && matiere && modalitesFor(tool, niveau, matiere).length === 0) continue;
     if (f === 'nombreExercices' && single) continue;
+    if (hiddenByFormat.includes(f as FormField)) continue;
     fields.add(f as FormField);
   }
   if (sup) fields.add('discipline');
