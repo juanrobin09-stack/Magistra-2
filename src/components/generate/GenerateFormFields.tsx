@@ -18,7 +18,7 @@ import {
 import { getLevelGroup, isNiveau, isSuperieur, NIVEAUX, type NiveauScolaire } from '@shared/levels';
 import SelectField from '@/components/ui/SelectField';
 import {
-  appreciationSummary, chosenCount, fieldLimit, MAX_APPRECIATIONS, MIN_APPRECIATIONS, normalizeAppreciationInput, visibleFields,
+  appreciationSummary, chosenCount, fieldLimit, formDefaultNotation, MAX_APPRECIATIONS, MIN_APPRECIATIONS, normalizeAppreciationInput, visibleFields,
   type FormField, type FormProblem, type GenerateForm, type Trimestre,
 } from '@/lib/generation/request';
 import { ChipGroup, ChoiceButton, Field, type ChipOption } from './fields';
@@ -110,7 +110,6 @@ function CharCount({ value, field }: { value: string; field: FormField }) {
 export default function GenerateFormFields({ form, onChange, onNiveauChange, problems, showErrors }: GenerateFormFieldsProps) {
   const tool = form.type;
   const sup = isSuperieur(form.niveau);
-  const primary = ['maternelle', 'elementaire'].includes(getLevelGroup(form.niveau));
   const fields = visibleFields(tool, form.niveau, form.matiere, form.modalite);
   const has = (f: FormField) => fields.has(f);
   const errorOf = (f: FormField) => (showErrors ? problems.find(p => p.field === f)?.message ?? null : null);
@@ -214,13 +213,9 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
     );
   }
   if (has('bareme')) {
-    // Notation par défaut, telle que Magistra la demandera : sans note pour une évaluation diagnostique (repérer les
-    // acquis et les besoins) comme à l'école primaire, sur 20 ailleurs. Une notation choisie prime toujours.
-    const diagnostic = has('typeEvaluation') && form.typeEvaluation === 'diagnostique';
-    const defaultTitle = diagnostic ? 'Sans note' : primary ? 'Positionnement sans note' : 'Note sur 20';
-    const defaultHint = diagnostic
-      ? 'Par défaut : sans note (évaluation diagnostique).'
-      : primary ? 'Par défaut : positionnement sans note.' : 'Par défaut : note sur 20.';
+    // Notation par défaut, telle que Magistra la demandera pour cet outil, ce niveau, ce format et cet objectif
+    // (formDefaultNotation). Une notation choisie prime toujours : le rappel disparaît.
+    const byDefault = formDefaultNotation(form);
     settings.push(
       <ChipGroup<Bareme | ''>
         key="bareme"
@@ -229,10 +224,10 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
         value={form.bareme}
         onChange={v => onChange({ bareme: v })}
         options={[
-          { value: '', label: diagnostic ? 'Selon l’objectif' : 'Selon le niveau', title: defaultTitle },
+          { value: '', label: byDefault.label, title: byDefault.title },
           ...BAREMES.map(b => ({ value: b.value, label: b.label, title: b.description })),
         ]}
-        hint={form.bareme ? undefined : defaultHint}
+        hint={form.bareme ? undefined : byDefault.hint}
       />,
     );
   }

@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
+import { getMatieresForNiveau } from '@shared/catalog';
 import { defaultMessage, type ErrorCode } from '@shared/errors';
 import type { Capabilities, TeacherProfile } from '@shared/types';
 import AiNotReadyCard from '@/components/generate/AiNotReadyCard';
@@ -17,6 +18,11 @@ const PROFILE: TeacherProfile = {
 };
 
 const noop = () => {};
+
+/** Rappel de la notation par défaut, tel qu'affiché sous « Notation » ('' : aucun rappel). */
+function notationHint(html: string): string {
+  return html.match(/<p id="gen-bareme-hint"[^>]*>([^<]*)<\/p>/)?.[1] ?? '';
+}
 
 function fields(form: GenerateForm, showErrors = false): string {
   return renderToStaticMarkup(
@@ -74,7 +80,9 @@ describe('GenerateFormFields — formats normés et réglages', () => {
     for (const label of ["Nombre d&#x27;exercices", 'Notation', 'Corrigé', 'Avec corrigé', 'Version élève seule', 'Sur 20', 'Par compétences']) {
       expect(html).toContain(label);
     }
-    expect(html).toContain('Par défaut : note sur 20.');
+    // Exercices : jamais de note sur 20 imposée par défaut (barème indicatif dans le corrigé au collège).
+    expect(html).toContain('Par défaut : barème indicatif dans le corrigé.');
+    expect(html).not.toContain('note sur 20');
   });
 
   it('évaluation en 3e : sujet type brevet et objectif (diagnostique, formative, sommative)', () => {
@@ -138,10 +146,42 @@ describe('GenerateFormFields — formats normés et réglages', () => {
     expect(fields({ ...base, niveau: 'cm2', matiere: 'mathematiques' })).toContain('Par défaut : positionnement sans note.');
   });
 
-  it('exercices : pas d’objectif, la notation par défaut reste « sur 20 » même si un objectif diagnostique traîne dans le formulaire', () => {
+  it('exercices : pas d’objectif, un objectif diagnostique gardé dans le formulaire ne change pas la notation par défaut', () => {
     const html = fields({ ...createInitialForm(PROFILE, { type: 'exercices' }), typeEvaluation: 'diagnostique' });
     expect(html).not.toContain('Diagnostique');
-    expect(html).toContain('Par défaut : note sur 20.');
+    expect(notationHint(html)).toBe('Par défaut : barème indicatif dans le corrigé.');
+  });
+
+  it('exercices : la notation par défaut suit la consigne (jamais « sur 20 ») selon le niveau et le corrigé', () => {
+    const base = createInitialForm(PROFILE, { type: 'exercices' });
+    // Supérieur : éléments de correction, sans barème.
+    const l1 = fields({ ...base, niveau: 'licence_1', matiere: getMatieresForNiveau('licence_1')[0].value });
+    expect(l1).toContain('Par défaut : sans barème imposé.');
+    expect(l1).toMatch(/title="Sans barème imposé"[^>]*>Selon le niveau</);
+    // Version élève seule : ni corrigé, ni barème imposé.
+    const eleve = fields({ ...base, sansCorrige: true });
+    expect(eleve).toContain('Par défaut : sans barème imposé.');
+    // École primaire : critères de réussite, sans note.
+    expect(fields({ ...base, niveau: 'cm1', matiere: 'mathematiques' })).toContain('Par défaut : sans note (critères de réussite dans le corrigé).');
+    for (const html of [l1, eleve]) expect(html).not.toContain('note sur 20');
+  });
+
+  it('sujet type brevet d’histoire-géographie : le barème officiel (40 + 20) est annoncé, y compris pour un diagnostic', () => {
+    const base = { ...createInitialForm(PROFILE, { type: 'evaluation' }), niveau: '3eme' as const, matiere: 'histoire_geo' as const, modalite: 'sujet_brevet' };
+    const brevet = fields(base);
+    expect(brevet).toContain('Par défaut : barème officiel de l’épreuve (histoire-géographie sur 40, EMC sur 20).');
+    expect(brevet).not.toContain('Par défaut : note sur 20.');
+    expect(brevet).toMatch(/title="Barème officiel de l’épreuve"[^>]*>Selon l’épreuve</);
+    // Objectif diagnostique : le format de l'épreuve prime, jamais « sans note » annoncé.
+    const diagnostique = fields({ ...base, typeEvaluation: 'diagnostique' });
+    expect(notationHint(diagnostique)).toBe('Par défaut : barème officiel de l’épreuve (histoire-géographie sur 40, EMC sur 20). Le format de l’épreuve prime sur l’objectif diagnostique.');
+    // Autre sujet type examen (bac de philosophie) : note sur 20 sur le modèle de l'épreuve, même en diagnostique.
+    const bac = fields({ ...base, niveau: 'terminale_gen', matiere: 'philosophie', modalite: 'sujet_bac', typeEvaluation: 'diagnostique' });
+    expect(notationHint(bac)).toBe('Par défaut : note sur 20, sur le modèle de l’épreuve. Le format de l’épreuve prime sur l’objectif diagnostique.');
+    // Brevet d'une autre matière : note sur 20 sur le modèle de l'épreuve.
+    expect(notationHint(fields({ ...base, matiere: 'mathematiques' }))).toBe('Par défaut : note sur 20, sur le modèle de l’épreuve.');
+    // Sujet type brevet gardé dans le formulaire mais sans objet en 4e (non transmis) : défaut de l'objectif.
+    expect(notationHint(fields({ ...base, niveau: '4eme', typeEvaluation: 'diagnostique' }))).toBe('Par défaut : sans note (évaluation diagnostique).');
   });
 
   it('légende « Formats généraux » : seulement pour les formats de travail (exercices, évaluation, corrigé)', () => {

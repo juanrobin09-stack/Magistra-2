@@ -8,6 +8,7 @@ import {
   type DifficulteExercice, type FormatSeance, type Matiere, type ProfilDifferenciation, type ProfilEleve, type TypeContenu,
   type TypeLettre,
 } from '@shared/catalog';
+import { isClozeRequest } from '@shared/cloze';
 import { rankChunks } from '@shared/documents/retrieve';
 import {
   BESOINS_PARTICULIERS, countUnit, isModaliteAvailable, modalitesFor,
@@ -349,6 +350,81 @@ export function buildGenerationRequest(
   }
   req.profile = profile ?? null;
   return req;
+}
+
+// ─── Notation par défaut ────────────────────────────────────────────────────
+
+/**
+ * Sujets type examen national (brevet, baccalauréat, bac professionnel) : Magistra en reprend la structure et le
+ * barème (points des parties, maîtrise de la langue). Sans notation choisie, c'est ce barème qui s'applique, même pour
+ * une évaluation diagnostique : le format de l'épreuve prime sur l'objectif.
+ */
+export const FORMATS_BAREME_OFFICIEL: readonly string[] = ['sujet_brevet', 'sujet_bac', 'sujet_bac_pro'];
+
+/** Barèmes officiels qui ne tiennent pas en une note sur 20 (consigne du format : shared/formats.ts). */
+const BAREME_OFFICIEL_DETAIL: Readonly<Record<string, Partial<Record<Matiere, string>>>> = {
+  sujet_brevet: { histoire_geo: 'histoire-géographie sur 40, EMC sur 20' },
+};
+
+/** Notation que Magistra demandera si l'enseignant n'en choisit aucune. */
+export interface DefaultNotation {
+  /** Libellé du choix par défaut. */
+  label: string;
+  /** Cette notation en quelques mots (infobulle du choix par défaut). */
+  title: string;
+  /** Rappel affiché sous les choix : « Par défaut : … ». */
+  hint: string;
+}
+
+type NotationRequest = Pick<GenerationRequest, 'type' | 'niveau' | 'matiere' | 'modalite' | 'typeEvaluation' | 'sansCorrige'>;
+
+/**
+ * Notation par défaut d'une demande, telle que la consigne de l'outil la demande (shared/prompts/tools.ts) :
+ * - correction d'une copie : positionnement sans note à l'école primaire, note indicative sur 20 ailleurs ;
+ * - exercices : jamais de note sur 20 imposée. Barème indicatif dans le corrigé au collège et au lycée, critères de
+ *   réussite sans note à l'école primaire ; aucun barème imposé dans le supérieur (éléments de correction), pour une
+ *   version élève seule ou pour un texte à trous (corrigé établi par Magistra) ;
+ * - évaluation : positionnement sans note à l'école primaire ; barème de l'épreuve pour un sujet type examen
+ *   (FORMATS_BAREME_OFFICIEL), qui prime sur l'objectif ; sans note pour une évaluation diagnostique ; sur 20 sinon.
+ */
+export function defaultNotation(req: NotationRequest): DefaultNotation {
+  const group = getLevelGroup(req.niveau);
+  const primary = group === 'maternelle' || group === 'elementaire';
+  const byLevel = (title: string, hint: string): DefaultNotation => ({ label: 'Selon le niveau', title, hint: `Par défaut : ${hint}.` });
+  const positionnement = byLevel('Positionnement sans note', 'positionnement sans note');
+
+  if (req.type === 'corrige') return primary ? positionnement : byLevel('Note indicative sur 20', 'note indicative sur 20');
+
+  if (req.type === 'exercices') {
+    const withKey = !req.sansCorrige && !isClozeRequest(req);
+    if (withKey && primary) return byLevel('Sans note', 'sans note (critères de réussite dans le corrigé)');
+    if (withKey && !isSuperieur(req.niveau)) return byLevel('Barème indicatif', 'barème indicatif dans le corrigé');
+    return byLevel('Sans barème imposé', 'sans barème imposé');
+  }
+
+  if (primary) return positionnement;
+  if (req.modalite && FORMATS_BAREME_OFFICIEL.includes(req.modalite)) {
+    const detail = BAREME_OFFICIEL_DETAIL[req.modalite]?.[req.matiere];
+    const notation = detail ? `barème officiel de l’épreuve (${detail})` : 'note sur 20, sur le modèle de l’épreuve';
+    const objective = req.typeEvaluation === 'diagnostique' ? ' Le format de l’épreuve prime sur l’objectif diagnostique.' : '';
+    return {
+      label: 'Selon l’épreuve',
+      title: detail ? 'Barème officiel de l’épreuve' : 'Note sur 20 (modèle de l’épreuve)',
+      hint: `Par défaut : ${notation}.${objective}`,
+    };
+  }
+  if (req.typeEvaluation === 'diagnostique') {
+    return { label: 'Selon l’objectif', title: 'Sans note', hint: 'Par défaut : sans note (évaluation diagnostique).' };
+  }
+  return byLevel('Note sur 20', 'note sur 20');
+}
+
+/**
+ * Notation par défaut de la demande que le formulaire enverrait : seuls les champs transmis comptent (un objectif ou
+ * un format gardé d'un autre outil, niveau ou matière est ignoré). Documents et mode de recherche n'y changent rien.
+ */
+export function formDefaultNotation(form: GenerateForm): DefaultNotation {
+  return defaultNotation(buildGenerationRequest(form, form.type, null, null, 'internet'));
 }
 
 /**
