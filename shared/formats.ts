@@ -128,6 +128,11 @@ export interface ModaliteInfo {
   niveaux?: readonly NiveauScolaire[];
   /** Matières concernées (absent : toutes). */
   matieres?: readonly Matiere[];
+  /**
+   * Combinaisons classe × matière exclues : l'épreuve ou l'exercice n'existe pas à ce niveau dans cette matière
+   * (bac de français en terminale, dissertation de français en voie technologique…).
+   */
+  exclusions?: readonly { niveaux: readonly NiveauScolaire[]; matieres: readonly Matiere[] }[];
   /** Consigne de structure transmise au modèle. */
   prompt: string | ((ctx: ModaliteContext) => string);
   /**
@@ -160,9 +165,21 @@ const SECONDAIRE: LevelGroup[] = ['college', 'lycee', 'lycee_pro'];
 const SECONDAIRE_SUP: LevelGroup[] = [...SECONDAIRE, ...SUP];
 const TOUS: LevelGroup[] = [...SCOLAIRE, ...SUP];
 
+// Classes du cycle terminal (épreuves du baccalauréat général et technologique).
+const PREMIERES: NiveauScolaire[] = ['1ere_gen', '1ere_techno'];
+const TERMINALES: NiveauScolaire[] = ['terminale_gen', 'terminale_techno'];
+const VOIE_GENERALE: NiveauScolaire[] = ['1ere_gen', 'terminale_gen'];
+const VOIE_TECHNO: NiveauScolaire[] = ['1ere_techno', 'terminale_techno'];
+const UNIVERSITE: NiveauScolaire[] = ['but', 'licence_1', 'licence_2', 'licence_3', 'master_1', 'master_2', 'doctorat'];
+
 const FRANCAIS: Matiere[] = ['francais', 'lettres'];
 const LANGUES: Matiere[] = ['anglais', 'espagnol', 'allemand', 'italien', 'portugais', 'chinois', 'arabe'];
 const LANGUES_ANCIENNES: Matiere[] = ['latin', 'grec'];
+/** Nom de la langue étudiée, tel qu'il s'écrit dans une consigne (« en anglais », « en grec ancien »). */
+const NOM_LANGUE: Partial<Record<Matiere, string>> = {
+  anglais: 'anglais', espagnol: 'espagnol', allemand: 'allemand', italien: 'italien', portugais: 'portugais',
+  chinois: 'chinois', arabe: 'arabe', latin: 'latin', grec: 'grec ancien',
+};
 const HISTOIRE_GEO: Matiere[] = ['histoire_geo', 'histoire', 'geographie', 'hggsp'];
 const MATHS: Matiere[] = ['mathematiques', 'statistiques'];
 const SCIENCES: Matiere[] = [
@@ -203,49 +220,171 @@ function longueurDictee(niveau: NiveauScolaire): string {
   }
 }
 
+/**
+ * Niveau du CECRL visé selon la classe : programmes de langues vivantes de 2025 (6e et 2de à la rentrée 2025 ; 5e, 1re
+ * et terminale en 2026 ; 4e en 2027 ; 3e en 2028) ; voie professionnelle : niveaux attendus aux examens (programme de
+ * 2019). Sans LVA ni LVB dans le formulaire, les deux cibles sont données. Dans le supérieur : aucune cible (null).
+ */
+function cibleCecrl(niveau: NiveauScolaire): string | null {
+  switch (niveau) {
+    case 'cp': case 'ce1': case 'ce2': return 'A1 (premiers acquis, surtout à l’oral)';
+    case 'cm1': case 'cm2': return 'A1';
+    case '6eme': return 'A1+ en LVA, A1 en LVB (classes bilangues)';
+    case '5eme': return 'A2 en LVA, A1+ en LVB';
+    case '4eme': return 'A2+ en LVA, A1+ en LVB (programme de 2025, en 4e à la rentrée 2027 ; auparavant A2 en LVA)';
+    case '3eme': return 'B1 en LVA, A2 en LVB (programme de 2025, en 3e à la rentrée 2028 ; auparavant A2 à B1 en LVA)';
+    case '2nde_gt': return 'B1+ en LVA, A2+ en LVB';
+    case '1ere_gen': case '1ere_techno': return 'B1+ en LVA, B1 en LVB';
+    case 'terminale_gen': case 'terminale_techno': return 'B2 en LVA, B1 à B1+ en LVB';
+    case '2nde_pro': case '1ere_pro': case 'terminale_pro':
+      return 'vers B1+ en LVA et A2+ en LVB, niveaux attendus à l’examen du baccalauréat professionnel';
+    case 'cap_1': case 'cap_2': return 'A2, niveau attendu à l’examen du CAP';
+    default: return null;
+  }
+}
+
+/** Niveau du CECRL à viser, dans une consigne de langue : la cible de la classe, sinon un niveau à choisir et indiquer. */
+function consigneCecrl(niveau: NiveauScolaire): string {
+  const cible = cibleCecrl(niveau);
+  return cible
+    ? `niveau du CECRL visé pour cette classe : ${cible} (indique-le en tête et calibre le lexique, la syntaxe et la longueur en conséquence)`
+    : 'niveau du CECRL visé (indique-le, de A1 à C1)';
+}
+
+/** Langue vivante étudiée : les textes, questions et réponses à trouver sont dans cette langue (vide sinon). */
+function consigneLangueCible(matiere: Matiere, contenu: string): string {
+  return LANGUES.includes(matiere) ? ` Matière de langue vivante : ${contenu} entièrement en ${NOM_LANGUE[matiere]} (langue cible), au niveau du CECRL de la classe ; explications du corrigé en français seulement si cela aide les élèves.` : '';
+}
+
+/** Exemple de texte à trous (en français) : ce que le modèle doit écrire à la place, selon la matière. */
+function langueTexteATrous(matiere: Matiere): string {
+  if (LANGUES.includes(matiere)) return `exemple en français ; ton texte et les mots à trouver sont en ${NOM_LANGUE[matiere]}, la langue étudiée`;
+  if (LANGUES_ANCIENNES.includes(matiere)) {
+    return `exemple en français ; texte en ${NOM_LANGUE[matiere]} si le sujet porte sur la langue (formes à retrouver), en français s’il porte sur la civilisation`;
+  }
+  return 'exemple à adapter au sujet';
+}
+
+/** À compter de la session 2027 (BO spécial n° 4 du 17 septembre 2026) : la langue compte dans chaque épreuve écrite. */
+const MAITRISE_LANGUE = 'Maîtrise de la langue : au moins 2 points du total lui sont réservés (orthographe, syntaxe, vocabulaire, organisation du raisonnement), comme dans chaque épreuve écrite des examens à compter de la session 2027.';
+
+/** Épreuve notée sur plus de 20 points : le barème officiel est gardé, ou ramené à la notation demandée. */
+const BAREME_OFFICIEL = 'Ce barème officiel prime sur une note totale sur 20 ; si une notation sur 20 ou sur 10 est demandée, garde cette structure et ramène les points proportionnellement.';
+
 function sujetBrevet({ matiere }: ModaliteContext): string {
+  return `${structureBrevet(matiere)} ${MAITRISE_LANGUE}`;
+}
+
+function structureBrevet(matiere: Matiere): string {
   switch (matiere) {
     case 'francais':
       return 'FORMAT : sujet de type brevet (français). Travail sur un texte littéraire (et éventuellement une image) : questions de compréhension et d’interprétation, questions de grammaire et de compétences linguistiques, une réécriture ; une dictée ; puis une rédaction au choix entre un sujet d’imagination et un sujet de réflexion. ' + TEXTE_SUPPORT;
     case 'mathematiques':
       return 'FORMAT : sujet de type brevet (mathématiques). Une partie d’automatismes à traiter sans calculatrice (questions flash), puis des exercices indépendants couvrant plusieurs domaines (nombres et calculs, géométrie, fonctions, statistiques et probabilités, algorithmique), dont un problème avec prise d’initiative.';
     case 'histoire_geo':
-      return 'FORMAT : sujet de type brevet (histoire-géographie). Un exercice d’analyse et de compréhension de document(s), un développement construit répondant à une question, et un exercice mobilisant un croquis, un schéma ou des repères chronologiques et spatiaux.';
+      // Session 2026 et suivantes : histoire-géographie sur 40 points et EMC sur 20 points, notés séparément.
+      return 'FORMAT : sujet de type brevet d’histoire-géographie et d’enseignement moral et civique (format en vigueur depuis la session 2026, 2 heures), en deux parties notées séparément. '
+        + 'Histoire-géographie, notée sur 40 points : exercice 1 (15 points), analyser et comprendre un ou deux documents, en histoire ou en géographie, à l’aide de questions ; '
+        + 'exercice 2 (25 points), dans l’autre discipline : un développement construit d’au moins trente lignes répondant à une question (18 points), puis un exercice sur les repères chronologiques et spatiaux ou un croquis, un schéma ou une frise (7 points). '
+        + 'Enseignement moral et civique, noté sur 20 points : une situation pratique appuyée sur un ou deux documents, avec des questions à réponse courte puis une réponse développée. '
+        + 'La qualité de la rédaction compte dans chaque exercice. ' + BAREME_OFFICIEL;
     case 'emc':
-      return 'FORMAT : sujet de type brevet (EMC). Une situation pratique de la vie collective, avec des documents : questions guidant l’identification du problème, des valeurs et des règles en jeu, puis une réponse argumentée.';
+      return 'FORMAT : sujet de type brevet d’enseignement moral et civique (partie notée sur 20 points depuis la session 2026). Une situation pratique de la vie collective, appuyée sur un ou deux documents : questions à réponse courte (question simple, QCM, tableau à compléter) guidant l’identification du problème, des valeurs et des règles en jeu, puis une réponse développée et argumentée.';
     default:
       return 'FORMAT : sujet de type brevet (sciences). Exercices à partir de documents mobilisant le raisonnement scientifique (physique-chimie, SVT ou technologie) : extraire, interpréter, argumenter.';
   }
 }
 
 function sujetBac({ matiere, niveau }: ModaliteContext): string {
-  const techno = niveau === '1ere_techno' || niveau === 'terminale_techno';
+  return `${structureBac(matiere, niveau)} ${MAITRISE_LANGUE}`;
+}
+
+/** Structure de l'épreuve écrite du baccalauréat général ou technologique (épreuves de la session 2027). */
+function structureBac(matiere: Matiere, niveau: NiveauScolaire): string {
+  const techno = VOIE_TECHNO.includes(niveau);
   switch (matiere) {
     case 'francais':
       return techno
-        ? 'FORMAT : sujet de type baccalauréat de français (voie technologique). Au choix : un commentaire de texte, OU une contraction de texte suivie d’un essai. ' + TEXTE_SUPPORT
-        : 'FORMAT : sujet de type baccalauréat de français (voie générale). Au choix : un commentaire de texte, OU une dissertation sur une œuvre et son parcours au programme. ' + TEXTE_SUPPORT;
+        ? 'FORMAT : sujet de type épreuve anticipée de français du baccalauréat (voie technologique, 4 heures). Au choix : un commentaire de texte, OU une contraction de texte suivie d’un essai. ' + TEXTE_SUPPORT
+        : 'FORMAT : sujet de type épreuve anticipée de français du baccalauréat (voie générale, 4 heures). Au choix : un commentaire de texte, OU une dissertation sur une œuvre et son parcours au programme. ' + TEXTE_SUPPORT;
     case 'philosophie':
-      return 'FORMAT : sujet de type baccalauréat de philosophie. Au choix : deux sujets de dissertation OU une explication de texte. ' + TEXTE_SUPPORT;
+      return techno
+        ? 'FORMAT : sujet de type baccalauréat de philosophie (voie technologique, 4 heures). Au choix : deux sujets de dissertation OU une explication de texte accompagnée de questions qui la guident : A. éléments d’analyse (expliquer des termes et des phrases précises du texte) ; B. éléments de synthèse (question à laquelle le texte répond, thèse, organisation de l’argumentation) ; C. commentaire (discussion personnelle de la thèse). Le candidat peut aussi rédiger son explication librement. ' + TEXTE_SUPPORT
+        : 'FORMAT : sujet de type baccalauréat de philosophie (voie générale, 4 heures). Au choix : deux sujets de dissertation OU une explication de texte. ' + TEXTE_SUPPORT;
     case 'mathematiques':
-      return niveau === '1ere_gen' || niveau === '1ere_techno'
-        ? 'FORMAT : sujet de type épreuve anticipée de mathématiques (première). Une partie d’automatismes sous forme de QCM sans justification, puis des exercices de raisonnement.'
-        : 'FORMAT : sujet de type baccalauréat de mathématiques. Exercices indépendants et contextualisés couvrant le programme, du plus guidé au plus ouvert.';
+      if (PREMIERES.includes(niveau)) {
+        // Épreuve anticipée (première) : calculatrice interdite pendant toute l'épreuve, pas seulement pour les automatismes.
+        const sujet = techno
+          ? 'sujet de la voie technologique'
+          : 'sujet « avec spécialité mathématiques » ou « sans spécialité mathématiques », à indiquer en tête selon les élèves';
+        return `FORMAT : sujet de type épreuve anticipée de mathématiques (première, ${sujet}) : 2 heures, calculatrice interdite pendant toute l’épreuve. Partie 1 (6 points) : automatismes, une série de questions courtes sous forme de QCM sans justification. Partie 2 (14 points) : deux ou trois exercices indépendants de raisonnement et de résolution de problèmes, conformes au programme suivi. Tous les calculs se font à la main : aucune question ne nécessite de calculatrice.`;
+      }
+      return techno
+        ? 'FORMAT : sujet de niveau terminale technologique. Les mathématiques du tronc commun n’ont pas d’épreuve terminale écrite (contrôle continu), sauf en STI2D et STL où elles entrent dans l’épreuve de physique-chimie et mathématiques : exercices indépendants et contextualisés, dont des automatismes, du plus guidé au plus ouvert.'
+        : 'FORMAT : sujet de type baccalauréat de mathématiques (spécialité, 4 heures). Exercices indépendants et contextualisés couvrant le programme, du plus guidé au plus ouvert.';
     case 'ses':
-      return 'FORMAT : sujet de type baccalauréat de SES. Au choix : une dissertation appuyée sur un dossier documentaire, OU une épreuve composée (mobilisation des connaissances, étude d’un document, raisonnement appuyé sur un dossier).';
+      return 'FORMAT : sujet de type baccalauréat de SES (4 heures). Au choix : une dissertation appuyée sur un dossier documentaire, OU une épreuve composée (mobilisation des connaissances, étude d’un document, raisonnement appuyé sur un dossier).';
     case 'hggsp':
-      return 'FORMAT : sujet de type baccalauréat d’HGGSP. Une dissertation (choix entre deux sujets), puis une étude critique d’un ou deux documents.';
+      return 'FORMAT : sujet de type baccalauréat d’HGGSP (4 heures). Une dissertation (choix entre deux sujets), puis une étude critique d’un ou deux documents.';
     case 'svt':
-      return 'FORMAT : sujet de type baccalauréat de SVT. Un exercice de mobilisation des connaissances (réponse argumentée et structurée), puis un exercice de raisonnement scientifique à partir de documents.';
+      return 'FORMAT : sujet de type baccalauréat de SVT (3 heures 30). Un exercice de mobilisation des connaissances (réponse argumentée et structurée), puis un exercice de raisonnement scientifique à partir de documents.';
     case 'physique_chimie':
-      return 'FORMAT : sujet de type baccalauréat de physique-chimie. Exercices indépendants et contextualisés : modélisation, calculs, exploitation de données expérimentales, esprit critique sur les résultats.';
+      return techno
+        ? 'FORMAT : sujet de type épreuve de physique-chimie et mathématiques (STI2D, STL). Exercices indépendants et contextualisés, de physique-chimie, de mathématiques ou mêlant les deux : modélisation, calculs, exploitation de données expérimentales.'
+        : 'FORMAT : sujet de type baccalauréat de physique-chimie (3 heures 30). Exercices indépendants et contextualisés : modélisation, calculs, exploitation de données expérimentales, esprit critique sur les résultats.';
     case 'nsi':
-      return 'FORMAT : sujet de type baccalauréat de NSI. Exercices indépendants : structures de données, algorithmique, bases de données, réseaux et programmation en Python.';
+      return 'FORMAT : sujet de type baccalauréat de NSI (épreuve écrite, 3 heures 30). Exercices indépendants : structures de données, algorithmique, bases de données, réseaux et programmation en Python.';
     case 'histoire_geo':
-      return 'FORMAT : sujet d’histoire-géographie de niveau baccalauréat. Une composition, puis une étude critique de document(s) ou une production graphique.';
+      // Évaluations d'histoire-géographie du tronc commun : plus de composition ni d'étude critique depuis la session 2021.
+      return techno
+        ? 'FORMAT : sujet de type évaluation d’histoire-géographie du baccalauréat (voie technologique, 2 heures). Première partie : une série de questions à réponse courte (justifier une affirmation, localiser et identifier sur une carte, choisir ou proposer des dates et des repères, définir une notion). Seconde partie : une analyse de document(s) guidée par des questions, qui mobilise les connaissances.'
+        : 'FORMAT : sujet de type évaluation d’histoire-géographie du baccalauréat (voie générale, 2 heures). Première partie : une question problématisée (réponse rédigée et construite). Seconde partie : une analyse de document(s) accompagnée d’une consigne, OU une production graphique (croquis ou schéma à partir d’un texte).';
+    case 'droit_economie':
+      return 'FORMAT : sujet de type baccalauréat de droit et économie (STMG, 4 heures). Partie droit (10 points) : une situation juridique à analyser à partir de documents (qualification des faits, problème de droit, règle applicable, solution argumentée) et des questions de connaissances. Partie économie (10 points) : des questions sur un dossier documentaire consacré à une question économique actuelle, puis une argumentation structurée.';
+    case 'management':
+      return 'FORMAT : sujet de type baccalauréat de management, sciences de gestion et numérique (STMG, 4 heures). Étude d’une organisation (celle des sources, ou une organisation fictive présentée comme telle) : une présentation, puis trois ou quatre dossiers de documents en annexe, chacun avec des questions de management et de gestion (analyser la situation, mobiliser les méthodes et outils de gestion, proposer et justifier une solution).';
+    case 'sciences_ingenieur':
+      return 'FORMAT : sujet de type baccalauréat de sciences de l’ingénieur (épreuve écrite, 3 heures 30). Partie sciences de l’ingénieur (environ 2 heures 30) : étude d’un produit ou d’un système à partir d’un dossier technique (besoin, architecture, modélisation, performances attendues, mesurées et simulées, écarts). Partie sciences physiques (environ 1 heure) : exercices indépendants.';
     default:
+      if (LANGUES.includes(matiere)) {
+        return `FORMAT : sujet de type épreuve écrite de la spécialité LLCER (voie générale, 3 heures 30). Partie 1 (16 points) : un dossier de trois ou quatre documents en ${NOM_LANGUE[matiere]} (textes et, si utile, un document iconographique décrit) sur une thématique du programme, et une synthèse d’environ 500 mots à rédiger en ${NOM_LANGUE[matiere]}, guidée par deux ou trois questions. Partie 2 (4 points) : traduction en français d’un passage de l’un des textes (environ 500 signes), OU transposition en français des idées principales d’un texte. ` + TEXTE_SUPPORT;
+      }
       return 'FORMAT : sujet de niveau baccalauréat, construit sur les attendus de l’épreuve de la discipline (structure, durée, barème indicatif).';
   }
+}
+
+/** Épreuves écrites du baccalauréat professionnel (français ; histoire-géographie et EMC). */
+function sujetBacPro({ matiere }: ModaliteContext): string {
+  const structure = matiere === 'francais'
+    ? 'FORMAT : sujet de type baccalauréat professionnel de français (3 heures). Un corpus de textes (et éventuellement une image) en lien avec l’objet d’étude de terminale. Première partie, compétences de lecture (10 points) : questions de compréhension et d’analyse sur le corpus. Seconde partie, compétences d’écriture (10 points) : un développement argumenté d’une quarantaine de lignes au moins, appuyé sur le corpus, les connaissances et les lectures de l’année. ' + TEXTE_SUPPORT
+    : 'FORMAT : sujet de type baccalauréat professionnel d’histoire-géographie et d’enseignement moral et civique (EMC, 2 heures 30). Trois parties obligatoires : histoire, géographie, puis EMC, chacune à partir d’un ou de plusieurs documents, avec des questions guidées et une réponse rédigée ; barème indiqué pour chaque partie, total sur 20.';
+  return `${structure} ${MAITRISE_LANGUE}`;
+}
+
+/** Situation motrice en EPS : l'évaluation se fait en pratiquant, selon le référentiel du niveau. */
+function situationEps({ niveau, group }: ModaliteContext): string {
+  const commun = 'FORMAT : situation motrice en EPS, d’apprentissage ou d’évaluation, pratiquée sur le terrain : aucun devoir écrit, seulement des fiches d’observation. Champ d’apprentissage et activité physique (APSA) ; situation ou épreuve de référence (but, espace, matériel, durée, organisation des groupes) ; consignes de sécurité ; rôles sociaux (arbitre, juge, observateur, coach) ; observables et critères de réussite ; variantes plus simple et plus difficile.';
+  switch (group) {
+    case 'lycee':
+      return `${commun} Grille d’évaluation sur 20 conforme au référentiel du baccalauréat (contrôle en cours de formation) : AFL1 sur 12 points, évalué sur l’épreuve de référence ; AFL2 et AFL3 sur 8 points, répartis au choix de l’élève (4/4, 6/2 ou 2/6) ; chaque AFL décrit en quatre degrés d’acquisition.`;
+    case 'lycee_pro':
+      return `${commun} Grille d’évaluation par attendu de fin de lycée (AFL), chacun décrit en quatre degrés d’acquisition ; répartition des points à vérifier dans le référentiel du contrôle en cours de formation de la voie professionnelle.`;
+    case 'college':
+      return `${commun} Grille de positionnement sur les attendus de fin de cycle ${niveau === '6eme' ? '3' : '4'} du champ d’apprentissage, en quatre niveaux de maîtrise (insuffisante, fragile, satisfaisante, très bonne).`;
+    default:
+      return `${commun} Grille de positionnement sur les attendus de fin de cycle ${['cm1', 'cm2'].includes(niveau) ? '3' : '2'} (non atteint, partiellement atteint, atteint, dépassé), sans note.`;
+  }
+}
+
+/** Pratique artistique : on évalue une production et sa verbalisation, par compétences du programme. */
+function pratiqueArtistique({ matiere, group }: ModaliteContext): string {
+  if (matiere === 'musique') {
+    const competences = group === 'elementaire'
+      ? 'chanter et interpréter ; écouter, comparer et commenter ; explorer, imaginer et créer ; échanger, partager et argumenter'
+      : 'réaliser des projets musicaux d’interprétation ou de création ; écouter, comparer, construire une culture musicale commune ; explorer, imaginer, créer et produire ; échanger, partager, argumenter et débattre';
+    return `FORMAT : activité d’éducation musicale. Un projet musical (interpréter ou créer : chant, rythme, arrangement simple) et un temps d’écoute (œuvre nommée seulement si tu es certain de son compositeur et de son titre, sinon [Œuvre à choisir]), avec les repères et le vocabulaire à mobiliser ; déroulé ; grille d’évaluation par compétences : ${competences}.`;
+  }
+  return 'FORMAT : pratique plastique. Une incitation (phrase ouverte, question ou situation) et ses contraintes (matériaux, outils, format, durée) ; une ou deux références artistiques en lien (œuvre nommée seulement si tu es certain de son auteur et de son titre, sinon [Référence à choisir]) ; déroulé (recherche, réalisation, présentation) ; un temps de verbalisation avec des questions pour analyser les productions ; grille d’évaluation par compétences : expérimenter, produire, créer ; mettre en œuvre un projet ; s’exprimer, analyser sa pratique et celle de ses pairs, établir une relation avec celle des artistes ; se repérer dans les domaines liés aux arts plastiques.';
 }
 
 /**
@@ -261,13 +400,40 @@ export const MODALITES: ModaliteInfo[] = [
   },
   {
     value: 'sujet_bac', label: 'Sujet type bac', description: 'Structure de l’épreuve du baccalauréat', tools: ['evaluation'],
-    niveaux: ['1ere_gen', '1ere_techno', 'terminale_gen', 'terminale_techno'],
-    matieres: ['francais', 'philosophie', 'mathematiques', 'ses', 'hggsp', 'svt', 'physique_chimie', 'nsi', 'histoire_geo'],
+    niveaux: [...PREMIERES, ...TERMINALES],
+    matieres: [
+      'francais', 'philosophie', 'mathematiques', 'ses', 'hggsp', 'svt', 'physique_chimie', 'nsi', 'histoire_geo',
+      'sciences_ingenieur', 'droit_economie', 'management', ...LANGUES,
+    ],
+    // Épreuve anticipée de français en première, philosophie en terminale ; spécialités propres à une voie (LLCER, SI
+    // et SES, HGGSP, SVT, NSI en voie générale ; droit et économie, management en STMG).
+    exclusions: [
+      { niveaux: TERMINALES, matieres: ['francais'] },
+      { niveaux: PREMIERES, matieres: ['philosophie'] },
+      { niveaux: VOIE_TECHNO, matieres: ['ses', 'hggsp', 'svt', 'nsi', 'sciences_ingenieur', ...LANGUES] },
+      { niveaux: VOIE_GENERALE, matieres: ['droit_economie', 'management'] },
+    ],
     prompt: sujetBac,
   },
   {
-    value: 'partiel', label: 'Partiel', description: 'Sujet d’examen universitaire', tools: ['evaluation'], groups: SUP,
+    value: 'sujet_bac_pro', label: 'Sujet type bac pro', description: 'Structure de l’épreuve écrite du bac professionnel', tools: ['evaluation'],
+    count: 'single', niveaux: ['1ere_pro', 'terminale_pro'], matieres: ['francais', 'histoire_geo', 'emc'],
+    prompt: sujetBacPro,
+  },
+  {
+    // Les unités d'enseignement (UE) et les partiels sont propres à l'université et au BUT (ni en CPGE, ni en BTS).
+    value: 'partiel', label: 'Partiel', description: 'Sujet d’examen universitaire', tools: ['evaluation'], niveaux: UNIVERSITE,
     prompt: 'FORMAT : sujet de partiel. En-tête (UE, durée, documents autorisés), questions de cours, exercices ou cas, barème par question.',
+  },
+  {
+    value: 'devoir_surveille', label: 'Devoir surveillé', description: 'DS sur le modèle des concours', tools: ['evaluation'], count: 'single',
+    groups: ['cpge'],
+    prompt: 'FORMAT : devoir surveillé de CPGE, sur le modèle des épreuves écrites des concours (2 à 4 heures). En-tête (durée, calculatrice et documents autorisés ou non), puis un problème ou des exercices longs et progressifs aux questions enchaînées, chaque partie pouvant se traiter en admettant les résultats précédents ; barème par partie.',
+  },
+  {
+    value: 'sujet_bts', label: 'Sujet type BTS', description: 'Épreuve ponctuelle, BTS blanc', tools: ['evaluation'], count: 'single',
+    niveaux: ['bts'],
+    prompt: 'FORMAT : sujet d’épreuve ponctuelle écrite de BTS (BTS blanc). En-tête : épreuve ou unité du référentiel du diplôme (intitulé à vérifier dans le référentiel officiel), durée, documents et calculatrice autorisés ou non ; un dossier ou un cas professionnel (organisation ou situation fictive présentée comme telle, annexes cohérentes entre elles), des questions ou missions progressives, barème par dossier.',
   },
   {
     value: 'interro', label: 'Interrogation courte', description: '10 à 20 minutes, l’essentiel', tools: ['evaluation'], groups: SECONDAIRE_SUP,
@@ -278,6 +444,8 @@ export const MODALITES: ModaliteInfo[] = [
   {
     value: 'dissertation', label: 'Dissertation', description: 'Sujet, problématique, plan, rédaction', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['lycee', ...SUP], matieres: ['francais', 'philosophie', 'ses', 'hggsp', ...SCIENCES_HUMAINES_SUP, 'autre'],
+    // Français en voie technologique : commentaire ou contraction suivie d'un essai, jamais de dissertation.
+    exclusions: [{ niveaux: VOIE_TECHNO, matieres: ['francais'] }],
     prompt: ({ group }) => `FORMAT : dissertation. Un sujet (question ou citation à discuter) conforme aux attendus de la discipline${SUP.includes(group) ? ' et du niveau universitaire' : ''}. Corrigé méthodologique : analyse des termes du sujet, problématique, plan détaillé en deux ou trois parties avec arguments et exemples précis, introduction rédigée (accroche, définition des termes, problématique, annonce du plan) et conclusion rédigée (réponse, ouverture).`,
   },
   {
@@ -332,11 +500,17 @@ export const MODALITES: ModaliteInfo[] = [
   {
     value: 'developpement_construit', label: 'Développement construit', description: 'Réponse organisée et argumentée', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['college', 'lycee_pro'], matieres: ['histoire_geo'],
-    prompt: 'FORMAT : développement construit. Une question précise et sa consigne (texte structuré de deux ou trois paragraphes) ; corrigé : réponse organisée (courte introduction, paragraphes argumentés, notions clés définies, exemples précis, repères datés), conclusion.',
+    // En 3e, la longueur attendue au brevet (au moins trente lignes depuis la session 2026).
+    prompt: ({ niveau }) => `FORMAT : développement construit${niveau === '3eme' ? ', comme au brevet' : ''}. Une question précise et sa consigne (${niveau === '3eme' ? 'texte structuré d’au moins trente lignes : introduction, paragraphes thématiques, exemples précis, conclusion' : 'texte structuré de deux ou trois paragraphes'}) ; corrigé : réponse organisée (courte introduction, paragraphes argumentés, notions clés définies, exemples précis, repères datés), conclusion.`,
+  },
+  {
+    value: 'question_problematisee', label: 'Question problématisée', description: 'Réponse construite (bac, voie générale)', tools: TRAVAIL_CORRIGE,
+    count: 'single', niveaux: VOIE_GENERALE, matieres: ['histoire_geo'],
+    prompt: 'FORMAT : réponse à une question problématisée (histoire-géographie, voie générale). Une question problématisée, avec si utile une aide à la construction de la réponse ; corrigé : analyse des termes et des bornes de la question, courte introduction qui pose la problématique, développement organisé en deux ou trois parties avec connaissances, exemples et repères précis, conclusion.',
   },
   {
     value: 'composition', label: 'Composition', description: 'Problématique et plan détaillé', tools: TRAVAIL_CORRIGE, count: 'single',
-    groups: ['lycee', ...SUP], matieres: ['histoire_geo', 'hggsp', 'histoire', 'geographie'],
+    groups: ['lycee', ...SUP], matieres: ['histoire_geo', 'histoire', 'geographie'],
     prompt: 'FORMAT : composition. Un sujet problématisé ; corrigé : analyse du sujet (termes, bornes chronologiques et spatiales), problématique, plan détaillé en deux ou trois parties avec arguments, exemples et repères précis, introduction et conclusion rédigées.',
   },
   {
@@ -403,22 +577,22 @@ export const MODALITES: ModaliteInfo[] = [
   {
     value: 'comprehension_ecrite', label: 'Compréhension écrite', description: 'Texte en langue cible', tools: TRAVAIL, count: QUESTIONS,
     groups: TOUS, matieres: LANGUES,
-    prompt: 'FORMAT : compréhension de l’écrit. Un texte original rédigé dans la langue cible au niveau du CECRL visé (indique-le, de A1 à C1), questions de compréhension globale puis détaillée, relevés, une question d’expression personnelle ; corrigé.',
+    prompt: ({ niveau }) => `FORMAT : compréhension de l’écrit. Un texte original rédigé dans la langue cible, ${consigneCecrl(niveau)} ; questions de compréhension globale puis détaillée, relevés, une question d’expression personnelle ; corrigé.`,
   },
   {
     value: 'comprehension_orale', label: 'Compréhension de l’oral', description: 'Script à lire ou enregistrer', tools: TRAVAIL, count: QUESTIONS,
     groups: TOUS, matieres: LANGUES,
-    prompt: 'FORMAT : compréhension de l’oral. Script complet d’un document audio à lire ou à enregistrer (dialogue ou monologue, durée indiquée), niveau du CECRL, questions avant, pendant et après l’écoute ; corrigé.',
+    prompt: ({ niveau }) => `FORMAT : compréhension de l’oral. Script complet d’un document audio à lire ou à enregistrer (dialogue ou monologue, durée indiquée), ${consigneCecrl(niveau)} ; questions avant, pendant et après l’écoute ; corrigé.`,
   },
   {
     value: 'expression_ecrite', label: 'Expression écrite', description: 'Sujet, nombre de mots, grille', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: TOUS, matieres: LANGUES,
-    prompt: 'FORMAT : expression écrite en langue cible. Sujet rédigé dans la langue cible, nombre de mots attendu, niveau du CECRL visé, aides lexicales ; grille d’évaluation (réalisation de la tâche, cohérence, richesse et correction de la langue).',
+    prompt: ({ niveau }) => `FORMAT : expression écrite en langue cible. Sujet rédigé dans la langue cible, nombre de mots attendu, ${consigneCecrl(niveau)}, aides lexicales ; grille d’évaluation (réalisation de la tâche, cohérence, richesse et correction de la langue).`,
   },
   {
     value: 'expression_orale', label: 'Expression orale', description: 'En continu ou en interaction', tools: TRAVAIL, count: 'single',
     groups: TOUS, matieres: LANGUES,
-    prompt: 'FORMAT : expression orale en continu ou en interaction. Consigne, temps de préparation et de parole, pistes lexicales, grille d’évaluation de l’oral selon le CECRL.',
+    prompt: ({ niveau }) => `FORMAT : expression orale en continu ou en interaction. Consigne, temps de préparation et de parole, pistes lexicales, ${consigneCecrl(niveau)} ; grille d’évaluation de l’oral selon ce niveau du CECRL.`,
   },
   {
     value: 'traduction', label: 'Traduction', description: 'Version ou thème', tools: TRAVAIL_CORRIGE, count: 'single',
@@ -447,6 +621,18 @@ export const MODALITES: ModaliteInfo[] = [
     groups: SUP, prompt: 'FORMAT : note de synthèse. Dossier documentaire (les sources fournies ; sinon, la liste des documents à réunir), consigne (longueur, destinataire) ; corrigé : plan en deux parties, reformulation neutre, renvoi aux documents.',
   },
 
+  // ── EPS et enseignements artistiques (évalués en pratiquant, pas sur copie) ──
+  {
+    value: 'situation_eps', label: 'Situation motrice', description: 'Épreuve pratique, observables, grille', tools: ['exercices', 'evaluation', 'fiche_prep'],
+    count: 'single', groups: SCOLAIRE, matieres: ['eps'],
+    prompt: situationEps,
+  },
+  {
+    value: 'pratique_artistique', label: 'Pratique artistique', description: 'Incitation, production, verbalisation', tools: ['exercices', 'evaluation', 'fiche_prep'],
+    count: 'single', groups: ['elementaire', 'college', 'lycee'], matieres: ['arts_plastiques', 'musique'],
+    prompt: pratiqueArtistique,
+  },
+
   // ── Formats généraux ──
   {
     value: 'application', label: 'Application', description: 'Entraînement progressif', tools: TRAVAIL, groups: TOUS,
@@ -454,15 +640,18 @@ export const MODALITES: ModaliteInfo[] = [
   },
   {
     value: 'qcm', label: 'QCM', description: 'Une bonne réponse sur quatre', tools: TRAVAIL, count: QUESTIONS, groups: TOUS,
-    prompt: 'FORMAT : QCM. Chaque question porte sur un seul point et propose 4 réponses (A, B, C, D) dont une seule exacte. Pour chaque question : détermine d’abord la réponse exacte (refais le calcul ou le raisonnement), écris-la telle quelle comme l’un des 4 choix, puis trois distracteurs faux, plausibles et fondés sur les erreurs fréquentes ; ni « toutes les réponses », ni piège de formulation. Présentation (forme seulement, contenu à adapter au sujet) : « **Question 1.** Combien font 3 × 4 ? », puis un choix par ligne : « A) 7 », « B) 12 », « C) 34 », « D) 1 ». Le corrigé donne pour chaque question la lettre exacte et une explication d’une ligne (« Question 1 : B — 3 × 4 = 12 »).',
+    // Mise en page en Markdown valide : les choix en liste à puces (sinon ils s'affichent sur une seule ligne).
+    prompt: ({ matiere }) => 'FORMAT : QCM. Chaque question porte sur un seul point et propose 4 réponses (A, B, C, D) dont une seule exacte. Pour chaque question : détermine d’abord la réponse exacte (refais le calcul ou le raisonnement), écris-la telle quelle comme l’un des 4 choix, puis trois distracteurs faux, plausibles et fondés sur les erreurs fréquentes ; ni « toutes les réponses », ni piège de formulation. Présentation (forme seulement, contenu à adapter au sujet) : « **Question 1.** Combien font 3 × 4 ? », puis les 4 choix en liste à puces, un par ligne : « - A) 7 », « - B) 12 », « - C) 34 », « - D) 1 » ; une ligne vide entre deux questions. Le corrigé est une liste à puces, une ligne par question avec la lettre exacte et une explication d’une ligne : « - Question 1 : B — 3 × 4 = 12 ».'
+      + consigneLangueCible(matiere, 'questions et choix de réponse'),
   },
   {
     value: 'vrai_faux', label: 'Vrai / faux justifié', description: 'Affirmations à justifier', tools: TRAVAIL, count: AFFIRMATIONS, groups: TOUS,
-    prompt: 'FORMAT : vrai ou faux, avec justification. Affirmations nettes, chacune vraie ou fausse sans ambiguïté (ni piège, ni double négation), autant de vraies que de fausses, dans un ordre mélangé ; l’élève coche puis justifie en une phrase. Présentation (forme seulement) : « **1.** [affirmation] ☐ Vrai ☐ Faux — Justification : … ». Le corrigé donne pour chaque affirmation « Vrai » ou « Faux » et la justification attendue (pour une affirmation fausse, l’énoncé correct).',
+    prompt: ({ matiere }) => 'FORMAT : vrai ou faux, avec justification. Affirmations nettes, chacune vraie ou fausse sans ambiguïté (ni piège, ni double négation), autant de vraies que de fausses, dans un ordre mélangé ; l’élève coche puis justifie en une phrase. Présentation (forme seulement) : une affirmation par paragraphe, séparée de la suivante par une ligne vide : « **1.** [affirmation] ☐ Vrai ☐ Faux — Justification : … ». Le corrigé est une liste à puces, une ligne par affirmation : « Vrai » ou « Faux » et la justification attendue (pour une affirmation fausse, l’énoncé correct), par exemple « - Affirmation 1 : Faux — … ».'
+      + consigneLangueCible(matiere, 'affirmations et justifications attendues'),
   },
   {
     value: 'texte_trous', label: 'Texte à trous', description: 'Mots-clés à compléter', tools: TRAVAIL, count: MOTS_A_COMPLETER, groups: SCOLAIRE,
-    prompt: 'FORMAT : texte à trous. Écris le texte COMPLET, suivi, cohérent et exact sur la notion, au niveau de la classe, et entoure de doubles crochets chaque mot-clé à faire trouver, et seulement eux (aucun gras ni italique dans le texte) : un mot ou un groupe très court par paire de crochets, au plus deux par phrase. Forme seulement : « Le chat [[dort]] sur le canapé pendant que le [[chien]] joue. » Magistra remplace ensuite chaque mot entre doubles crochets par un blanc numéroté, puis ajoute la banque de mots et le corrigé : ne les écris pas, et n’écris aucun blanc toi-même.',
+    prompt: ({ matiere }) => `FORMAT : texte à trous. Écris le texte COMPLET, suivi, cohérent et exact sur la notion, au niveau de la classe, et entoure de doubles crochets chaque mot-clé à faire trouver, et seulement eux (aucun gras ni italique dans le texte) : un mot ou un groupe très court par paire de crochets, au plus deux par phrase. Forme seulement (${langueTexteATrous(matiere)}) : « Le chat [[dort]] sur le canapé pendant que le [[chien]] joue. » Magistra remplace ensuite chaque mot entre doubles crochets par un blanc numéroté, puis ajoute la banque de mots et le corrigé : ne les écris pas, et n’écris aucun blanc toi-même.`,
   },
   {
     value: 'questions_cours', label: 'Questions de cours', description: 'Restitution des connaissances', tools: TRAVAIL, count: QUESTIONS, groups: SECONDAIRE_SUP,
@@ -596,7 +785,8 @@ function applies(format: ModaliteInfo, type: TypeContenu, niveau: NiveauScolaire
   if (format.groups && !format.groups.includes(group)) return false;
   // Sans précision de niveau : tous les niveaux sauf la maternelle (ni copie, ni note, ni exercice écrit).
   if (!format.niveaux && !format.groups && group === 'maternelle') return false;
-  return !format.matieres || format.matieres.includes(matiere);
+  if (format.matieres && !format.matieres.includes(matiere)) return false;
+  return !format.exclusions?.some(x => x.niveaux.includes(niveau) && x.matieres.includes(matiere));
 }
 
 /** Formats proposés pour cet outil, à ce niveau, dans cette matière (dans l'ordre d'affichage). */

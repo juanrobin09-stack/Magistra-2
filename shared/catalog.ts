@@ -23,7 +23,7 @@ export type Matiere =
   // Technologie & pro
   | 'technologie' | 'sciences_numeriques' | 'management' | 'gestion'
   // Maternelle
-  | 'langage_oral' | 'graphisme_ecriture' | 'nombres_formes' | 'explorer_monde' | 'activites_artistiques' | 'activites_physiques'
+  | 'langage_oral' | 'graphisme_ecriture' | 'nombres_formes' | 'temps_espace' | 'explorer_monde' | 'activites_artistiques' | 'activites_physiques'
   // Enseignement supérieur
   | 'informatique' | 'systemes_information' | 'statistiques' | 'economie' | 'droit' | 'science_politique'
   | 'sociologie' | 'psychologie' | 'sciences_education' | 'lettres' | 'linguistique' | 'histoire' | 'geographie'
@@ -41,11 +41,12 @@ export interface MatiereInfo {
 const ALL: Cycle[] = ['maternelle', 'cycle2', 'cycle3', 'college', 'lycee', 'lycee_pro', 'superieur'];
 
 export const ALL_MATIERES: MatiereInfo[] = [
-  // === MATERNELLE (domaines du programme) ===
+  // === MATERNELLE (domaines du programme en vigueur depuis la rentrée 2026 ; clés inchangées pour l'historique) ===
   { value: 'langage_oral', label: 'Mobiliser le langage — Oral', emoji: '🗣️', cycles: ['maternelle'] },
   { value: 'graphisme_ecriture', label: 'Mobiliser le langage — Écrit / Graphisme', emoji: '✏️', cycles: ['maternelle'] },
-  { value: 'nombres_formes', label: 'Nombres, formes et grandeurs', emoji: '🔷', cycles: ['maternelle'] },
-  { value: 'explorer_monde', label: 'Explorer le monde', emoji: '🌱', cycles: ['maternelle'] },
+  { value: 'nombres_formes', label: 'Acquérir les premiers outils mathématiques', emoji: '🔷', cycles: ['maternelle'] },
+  { value: 'temps_espace', label: "Se repérer dans le temps et l'espace", emoji: '🧭', cycles: ['maternelle'] },
+  { value: 'explorer_monde', label: 'Découvrir le monde du vivant, de la matière et des objets', emoji: '🌱', cycles: ['maternelle'] },
   { value: 'activites_artistiques', label: 'Activités artistiques', emoji: '🎨', cycles: ['maternelle'] },
   { value: 'activites_physiques', label: "Agir, s'exprimer avec son corps", emoji: '🤸', cycles: ['maternelle'] },
 
@@ -160,6 +161,9 @@ const LEGACY_MATIERE_LABELS: Record<string, Matiere> = {
   'arts plastiques': 'arts_plastiques',
   'management / stmg': 'management',
   'gestion-finance / compta': 'gestion',
+  // Domaines de maternelle d'avant la rentrée 2026 (« Explorer le monde » a été scindé en deux domaines).
+  'nombres, formes et grandeurs': 'nombres_formes',
+  'explorer le monde': 'explorer_monde',
 };
 
 const normalizeLabel = (label: string) => label.trim().toLowerCase().replaceAll('’', "'");
@@ -279,7 +283,8 @@ const SUGGESTIONS: Partial<Record<LevelGroup, SuggestionMap>> = {
   maternelle: {
     langage_oral: ['Les comptines et jeux de doigts', 'Raconter une histoire', 'Le vocabulaire des émotions', 'Décrire une image'],
     nombres_formes: ["Compter jusqu'à 10", 'Les formes géométriques', 'Petit / moyen / grand', 'Algorithmes et suites logiques'],
-    explorer_monde: ['Les 5 sens', 'Les saisons', 'Les animaux de la ferme', "Se repérer dans l'espace"],
+    temps_espace: ['Les saisons', "Se repérer dans l'espace", 'Les jours de la semaine'],
+    explorer_monde: ['Les 5 sens', 'Les animaux de la ferme', 'Flotte ou coule ?'],
     graphisme_ecriture: ['Les lignes droites et courbes', 'Écrire son prénom', 'Les boucles'],
   },
   elementaire: {
