@@ -41,7 +41,7 @@ const WITHOUT_SOURCES = `SOURCES :
 const FORMAT_RULES = `FORMAT :
 - Réponds en français (sauf si la matière est une langue étrangère et que le contenu doit être dans cette langue).
 - Markdown propre : titres (#, ##, ###), listes, tableaux au format Markdown, citations (>).
-- Formules : notation simple en Unicode (x², H₂O, ≤, √, π) ; pour une formule complexe, LaTeX entre $…$.
+- Formules : notation simple en Unicode (x², H₂O, ≤, √, π) ; pour une formule complexe, LaTeX entre $…$ (jamais \\( … \\) ni \\[ … \\]).
 - Pas d'émojis. Contenu complet, structuré et directement utilisable par l'enseignant.`;
 
 /** Exigences de qualité communes : structure respectée, nombres exacts, langue soignée (y compris avec un petit modèle). */

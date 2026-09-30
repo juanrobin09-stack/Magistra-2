@@ -212,6 +212,8 @@ export function validateGenerationRequest(input: unknown): GenerationRequest {
   // Options des outils : une valeur inconnue ou hors de propos (format d'une autre matière, nombre hors bornes) est
   // ignorée, comme les autres choix facultatifs ; la génération se fait alors sans cette précision.
   if (allowed('modalite') && isModaliteAvailable(raw.modalite, type, niveau, matiere)) req.modalite = raw.modalite;
+  // Livret scolaire : appréciations annuelles, sans trimestre (un site ou un historique plus ancien peut l'envoyer).
+  if (req.modalite === 'livret_bac') delete req.trimestre;
   if (allowed('typeEvaluation')) setIfDefined(req, 'typeEvaluation', oneOf(raw.typeEvaluation, EVALUATIONS));
   if (allowed('bareme')) setIfDefined(req, 'bareme', oneOf(raw.bareme, BAREME_VALUES));
   if (allowed('sansCorrige') && raw.sansCorrige === true) req.sansCorrige = true;

@@ -23,8 +23,8 @@ import type { GenerationRequest } from './types.js';
 const ADVICE = 'vérifiez-le avant de l’utiliser, ou relancez la génération.';
 
 const FENCE_RE = /^\s*(```+|~~~+)/;
-/** Blanc numéroté posé par Magistra dans un texte à trous (shared/cloze.ts). */
-const CLOZE_BLANK_RE = new RegExp(`\\((\\d{1,3})\\) ${CLOZE_BLANK}`, 'g');
+/** Blanc numéroté posé par Magistra dans un texte à trous (shared/cloze.ts), y compris dans une formule (« \_ »). */
+const CLOZE_BLANK_RE = new RegExp(`\\((\\d{1,3})\\) (?:${CLOZE_BLANK}|(?:\\\\_){8})`, 'g');
 /** Case « Vrai » à cocher d'une affirmation (☐ Vrai, - [ ] Vrai…). */
 const TRUE_CHECKBOX_RE = /(?:☐|□|▢|◻|\[\s?\])\s*(?:\*\*|__)?\s*Vrai(?!\p{L})/iu;
 /** Consigne générale (« Coche ☐ Vrai ou ☐ Faux », « Réponds par… ») : ce n'est pas une affirmation. */

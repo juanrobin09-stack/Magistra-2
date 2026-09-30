@@ -149,6 +149,10 @@ describe('checkOutputStructure — séquence, appréciations, texte à trous', (
     ]);
     // Blancs posés par le modèle lui-même : non comptables, aucun avertissement.
     expect(checkOutputStructure(cloze, 'Le chat _____ sur le tapis.')).toEqual([]);
+    // Blancs posés dans une formule (soulignés échappés pour KaTeX) : comptés comme les autres.
+    const maths = buildClozeDocument('Si $x = [[3]]$ alors $2x = [[6]]$.', { max: 2, withKey: true });
+    expect(maths).toContain('(1) \\_\\_\\_\\_\\_\\_\\_\\_');
+    expect(checkOutputStructure({ ...cloze, matiere: 'mathematiques', nombreExercices: 2 }, maths)).toEqual([]);
   });
 
   it('autres outils ou document vide : aucun contrôle', () => {

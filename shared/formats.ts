@@ -7,6 +7,7 @@
 
 import type { Matiere, TypeContenu } from './catalog.js';
 import { getLevelGroup, type LevelGroup, type NiveauScolaire } from './levels.js';
+import { LANGUES_ANCIENNES, LANGUES_VIVANTES, targetLanguage } from './languages.js';
 
 // ─── Options simples ────────────────────────────────────────────────────────
 
@@ -173,13 +174,9 @@ const VOIE_TECHNO: NiveauScolaire[] = ['1ere_techno', 'terminale_techno'];
 const UNIVERSITE: NiveauScolaire[] = ['but', 'licence_1', 'licence_2', 'licence_3', 'master_1', 'master_2', 'doctorat'];
 
 const FRANCAIS: Matiere[] = ['francais', 'lettres'];
-const LANGUES: Matiere[] = ['anglais', 'espagnol', 'allemand', 'italien', 'portugais', 'chinois', 'arabe'];
-const LANGUES_ANCIENNES: Matiere[] = ['latin', 'grec'];
+const LANGUES: Matiere[] = [...LANGUES_VIVANTES];
 /** Nom de la langue étudiée, tel qu'il s'écrit dans une consigne (« en anglais », « en grec ancien »). */
-const NOM_LANGUE: Partial<Record<Matiere, string>> = {
-  anglais: 'anglais', espagnol: 'espagnol', allemand: 'allemand', italien: 'italien', portugais: 'portugais',
-  chinois: 'chinois', arabe: 'arabe', latin: 'latin', grec: 'grec ancien',
-};
+const nomLangue = (matiere: Matiere): string => targetLanguage(matiere)?.name ?? matiere;
 const HISTOIRE_GEO: Matiere[] = ['histoire_geo', 'histoire', 'geographie', 'hggsp'];
 const MATHS: Matiere[] = ['mathematiques', 'statistiques'];
 const SCIENCES: Matiere[] = [
@@ -253,14 +250,14 @@ function consigneCecrl(niveau: NiveauScolaire): string {
 
 /** Langue vivante étudiée : les textes, questions et réponses à trouver sont dans cette langue (vide sinon). */
 function consigneLangueCible(matiere: Matiere, contenu: string): string {
-  return LANGUES.includes(matiere) ? ` Matière de langue vivante : ${contenu} entièrement en ${NOM_LANGUE[matiere]} (langue cible), au niveau du CECRL de la classe ; explications du corrigé en français seulement si cela aide les élèves.` : '';
+  return LANGUES.includes(matiere) ? ` Matière de langue vivante : ${contenu} entièrement en ${nomLangue(matiere)} (langue cible), au niveau du CECRL de la classe ; explications du corrigé en français seulement si cela aide les élèves.` : '';
 }
 
 /** Exemple de texte à trous (en français) : ce que le modèle doit écrire à la place, selon la matière. */
 function langueTexteATrous(matiere: Matiere): string {
-  if (LANGUES.includes(matiere)) return `exemple en français ; ton texte et les mots à trouver sont en ${NOM_LANGUE[matiere]}, la langue étudiée`;
+  if (LANGUES.includes(matiere)) return `exemple en français ; ton texte et les mots à trouver sont en ${nomLangue(matiere)}, la langue étudiée`;
   if (LANGUES_ANCIENNES.includes(matiere)) {
-    return `exemple en français ; texte en ${NOM_LANGUE[matiere]} si le sujet porte sur la langue (formes à retrouver), en français s’il porte sur la civilisation`;
+    return `exemple en français ; texte en ${nomLangue(matiere)} si le sujet porte sur la langue (formes à retrouver), en français s’il porte sur la civilisation`;
   }
   return 'exemple à adapter au sujet';
 }
@@ -347,7 +344,7 @@ function structureBac(matiere: Matiere, niveau: NiveauScolaire): string {
       return 'FORMAT : sujet de type baccalauréat de sciences de l’ingénieur (épreuve écrite, 3 heures 30). Partie sciences de l’ingénieur (environ 2 heures 30) : étude d’un produit ou d’un système à partir d’un dossier technique (besoin, architecture, modélisation, performances attendues, mesurées et simulées, écarts). Partie sciences physiques (environ 1 heure) : exercices indépendants.';
     default:
       if (LANGUES.includes(matiere)) {
-        return `FORMAT : sujet de type épreuve écrite de la spécialité LLCER (voie générale, 3 heures 30). Partie 1 (16 points) : un dossier de trois ou quatre documents en ${NOM_LANGUE[matiere]} (textes et, si utile, un document iconographique décrit) sur une thématique du programme, et une synthèse d’environ 500 mots à rédiger en ${NOM_LANGUE[matiere]}, guidée par deux ou trois questions. Partie 2 (4 points) : traduction en français d’un passage de l’un des textes (environ 500 signes), OU transposition en français des idées principales d’un texte. ` + TEXTE_SUPPORT;
+        return `FORMAT : sujet de type épreuve écrite de la spécialité LLCER (voie générale, 3 heures 30). Partie 1 (16 points) : un dossier de trois ou quatre documents en ${nomLangue(matiere)} (textes et, si utile, un document iconographique décrit) sur une thématique du programme, et une synthèse d’environ 500 mots à rédiger en ${nomLangue(matiere)}, guidée par deux ou trois questions. Partie 2 (4 points) : traduction en français d’un passage de l’un des textes (environ 500 signes), OU transposition en français des idées principales d’un texte. ` + TEXTE_SUPPORT;
       }
       return 'FORMAT : sujet de niveau baccalauréat, construit sur les attendus de l’épreuve de la discipline (structure, durée, barème indicatif).';
   }
