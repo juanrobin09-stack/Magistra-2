@@ -3,9 +3,10 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import { UserButton } from '@clerk/react';
 import { GraduationCap, Heart, History, LayoutDashboard, Menu, Settings, Sparkles, X } from 'lucide-react';
 import { isTypeContenu, type TypeContenu } from '@shared/catalog';
+import { isNiveau, type NiveauScolaire } from '@shared/levels';
 import AIStatusBadge from '@/components/ai/AIStatusBadge';
 import SidebarTools from '@/components/layout/SidebarTools';
-import type { AppShell } from '@/components/layout/shell';
+import { isDrawerLayout, WIDE_LAYOUT_QUERY, type AppShell } from '@/components/layout/shell';
 import { appPageTitle, useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useRuntime } from '@/lib/runtime/context';
 
@@ -51,7 +52,12 @@ export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(readToolsOpen);
   const toolsToggleRef = useRef<HTMLButtonElement>(null);
-  const focusToolOnOpen = useRef(false);
+  /** Demandes « Changer d'outil » : chacune est servie une fois (focus sur l'outil en cours), liste déjà ouverte ou non. */
+  const [toolFocusRequest, setToolFocusRequest] = useState(0);
+  /** Élément qui a ouvert le tiroir par « Changer d'outil »… : il retrouve le focus si le tiroir est refermé sans choix. */
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  /** Niveau du formulaire de la page Générer (libellés des outils), null ailleurs. */
+  const [toolNiveau, setToolNiveau] = useState<NiveauScolaire | null>(null);
   const activeTool = generateTool(location.pathname, location.search);
   const sidebarRef = useRef<HTMLElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -72,11 +78,28 @@ export default function AppLayout() {
   const isActive = (path: string, exact?: boolean) =>
     exact ? location.pathname === path || location.pathname === `${path}/` : location.pathname.startsWith(path);
 
-  /** Ferme le tiroir mobile ; `restoreFocus` rend le focus au bouton « Menu ». */
+  /**
+   * Ferme le tiroir mobile ; `restoreFocus` rend le focus à ce qui l'a ouvert : le bouton de la page (« Changer
+   * d'outil », « Voir les 11 outils »), sinon le bouton « Menu ».
+   */
   const closeSidebar = useCallback((restoreFocus: boolean) => {
     setSidebarOpen(false);
-    if (restoreFocus) menuButtonRef.current?.focus();
+    const opener = returnFocusRef.current;
+    returnFocusRef.current = null;
+    if (!restoreFocus) return;
+    if (opener?.isConnected) opener.focus();
+    if (document.activeElement !== opener) menuButtonRef.current?.focus();
   }, []);
+
+  /**
+   * Lien de la barre latérale (menu, outils). Tiroir ouvert (mobile) : il se ferme et le focus passe au contenu
+   * principal, jamais laissé sur un lien masqué avec le tiroir, même quand seule l'adresse ?type= change (la page
+   * Générer le donne ensuite à son titre, qui annonce le nouvel outil).
+   */
+  const leaveSidebar = useCallback(() => {
+    if (sidebarOpen) mainRef.current?.focus({ preventScroll: true });
+    closeSidebar(false);
+  }, [sidebarOpen, closeSidebar]);
 
   // Tiroir ouvert (mobile) : focus sur « Fermer », Échap pour fermer, focus piégé dans le tiroir.
   useEffect(() => {
@@ -106,6 +129,18 @@ export default function AppLayout() {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [sidebarOpen, closeSidebar]);
 
+  // Tiroir ouvert puis fenêtre élargie (tablette tournée…) : la barre latérale redevient fixe, le tiroir se ferme
+  // (sinon le focus resterait piégé dans la barre latérale).
+  useEffect(() => {
+    if (!sidebarOpen || typeof window.matchMedia !== 'function') return;
+    const wide = window.matchMedia(WIDE_LAYOUT_QUERY);
+    const onChange = () => {
+      if (wide.matches) closeSidebar(false);
+    };
+    wide.addEventListener?.('change', onChange);
+    return () => wide.removeEventListener?.('change', onChange);
+  }, [sidebarOpen, closeSidebar]);
+
   const toggleTools = useCallback(() => {
     setToolsOpen(open => {
       saveToolsOpen(!open);
@@ -113,28 +148,34 @@ export default function AppLayout() {
     });
   }, []);
 
-  // « Changer d'outil » (page Générer) : la liste des outils s'ouvre (et le tiroir, sur mobile), focus sur l'outil en cours.
+  // « Changer d'outil » (page Générer), « Voir les 11 outils » (tableau de bord) : la liste des outils s'ouvre (et le
+  // tiroir, en mise en page étroite), focus sur l'outil en cours. Liste déjà ouverte (état retenu) : le focus y va quand
+  // même (compteur de demandes, jamais une demande laissée en attente qui déplacerait le focus plus tard).
   const openTools = useCallback(() => {
     setToolsOpen(true);
     saveToolsOpen(true);
-    const drawer = typeof window.matchMedia === 'function' && !window.matchMedia('(min-width: 1024px)').matches;
-    if (drawer) setSidebarOpen(true);
-    focusToolOnOpen.current = true;
+    if (isDrawerLayout()) {
+      const active = document.activeElement;
+      returnFocusRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+      setSidebarOpen(true);
+    }
+    setToolFocusRequest(n => n + 1);
   }, []);
 
   useEffect(() => {
-    if (!toolsOpen || !focusToolOnOpen.current) return;
-    focusToolOnOpen.current = false;
-    // Après le focus donné à « Fermer » par l'ouverture du tiroir (effet ci-dessus).
+    if (toolFocusRequest === 0) return;
+    // Après le focus donné à « Fermer » par l'ouverture du tiroir (effet ci-dessus) et l'affichage de la liste.
     const id = requestAnimationFrame(() => {
-      const current = sidebarRef.current?.querySelector<HTMLElement>('[data-tool][aria-current]');
-      (current ?? toolsToggleRef.current)?.focus();
-      current?.scrollIntoView?.({ block: 'nearest' });
+      const target = sidebarRef.current?.querySelector<HTMLElement>('[data-tool][aria-current]') ?? toolsToggleRef.current;
+      target?.focus();
+      target?.scrollIntoView?.({ block: 'nearest' });
     });
     return () => cancelAnimationFrame(id);
-  }, [toolsOpen, sidebarOpen]);
+  }, [toolFocusRequest]);
 
-  const shell = useMemo<AppShell>(() => ({ openTools }), [openTools]);
+  const shell = useMemo<AppShell>(() => ({ openTools, setToolNiveau }), [openTools]);
+  // Libellés des outils : niveau du formulaire sur la page Générer (comme son titre), sinon premier niveau du profil.
+  const toolsNiveau = (activeTool && toolNiveau) || profile?.niveaux?.find(isNiveau);
 
   const showUserButton = mode === 'web';
 
@@ -169,7 +210,7 @@ export default function AppLayout() {
       >
         {/* Logo */}
         <div className="px-6 py-5 flex items-center justify-between">
-          <Link to="/app" className="flex items-center gap-2.5 group" onClick={() => closeSidebar(false)}>
+          <Link to="/app" className="flex items-center gap-2.5 group" onClick={leaveSidebar}>
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-dim to-accent flex items-center justify-center">
               <GraduationCap size={18} className="text-mg-900" aria-hidden="true" />
             </div>
@@ -195,11 +236,15 @@ export default function AppLayout() {
         <nav aria-label="Navigation principale" className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {NAV_ITEMS.map(item => {
             const active = isActive(item.path, item.exact);
+            // « Générer » sur la page Générer : l'outil en cours est gardé, sans nouvelle entrée d'historique (la page
+            // réinscrirait l'outil dans l'adresse, et « Précédent » semblerait alors ne rien faire).
+            const stay = item.path === '/app/generate' && activeTool !== null;
             return (
               <Link
                 key={item.path}
-                to={item.path}
-                onClick={() => closeSidebar(false)}
+                to={stay ? `/app/generate?type=${activeTool}` : item.path}
+                replace={stay}
+                onClick={leaveSidebar}
                 aria-current={active ? 'page' : undefined}
                 className={`
                   flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
@@ -221,8 +266,8 @@ export default function AppLayout() {
             open={toolsOpen}
             onToggle={toggleTools}
             activeType={activeTool}
-            niveau={profile?.niveaux?.[0]}
-            onNavigate={() => closeSidebar(false)}
+            niveau={toolsNiveau}
+            onNavigate={leaveSidebar}
           />
         </nav>
 
@@ -250,7 +295,7 @@ export default function AppLayout() {
                 {mode === 'local' && (
                   <>
                     {' · '}
-                    <Link to="/presentation" onClick={() => closeSidebar(false)} className="text-mg-200 hover:text-accent hover:underline">
+                    <Link to="/presentation" onClick={leaveSidebar} className="text-mg-200 hover:text-accent hover:underline">
                       Présentation
                     </Link>
                   </>
@@ -269,7 +314,10 @@ export default function AppLayout() {
             ref={menuButtonRef}
             type="button"
             className="btn-ghost p-2"
-            onClick={() => setSidebarOpen(true)}
+            onClick={() => {
+              returnFocusRef.current = null;
+              setSidebarOpen(true);
+            }}
             aria-label="Ouvrir le menu"
             aria-expanded={sidebarOpen}
             aria-controls={SIDEBAR_ID}

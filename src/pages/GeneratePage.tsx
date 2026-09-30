@@ -140,6 +140,29 @@ export default function GeneratePage() {
     }, { replace: true });
   }, [urlType, form.type, setSearchParams]);
 
+  // Autre outil choisi (barre latérale, tiroir mobile, retour arrière) : la page revient en haut, sur le nouvel outil,
+  // et son titre reçoit le focus (annoncé par les lecteurs d'écran ; jamais laissé sur un lien du tiroir refermé).
+  // Sinon la vue restait sur le résultat de l'outil précédent, comme si le clic n'avait rien fait. Pas au premier
+  // affichage.
+  const pageRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const shownType = useRef(form.type);
+  useEffect(() => {
+    if (shownType.current === form.type) return;
+    shownType.current = form.type;
+    pageRef.current?.scrollIntoView?.({ block: 'start' });
+    headingRef.current?.focus({ preventScroll: true });
+  }, [form.type]);
+
+  // Libellés des outils de la barre latérale au niveau du formulaire (« TD / Exercices » en Licence…), comme cette
+  // page ; rendus au niveau du profil quand la page est quittée.
+  const setToolNiveau = shell?.setToolNiveau;
+  useEffect(() => {
+    if (!setToolNiveau) return;
+    setToolNiveau(form.niveau);
+    return () => setToolNiveau(null);
+  }, [setToolNiveau, form.niveau]);
+
   // Site web : Magistra locale ou serveur en ligne (client hybride + contrôleur de Magistra locale) ; sinon null.
   const localEngine = useLocalEngine();
   const hybrid = localEngine && client instanceof HybridGenerationClient ? client : null;
@@ -364,7 +387,7 @@ export default function GeneratePage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8 py-5 lg:py-7">
+    <div ref={pageRef} className="mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8 py-5 lg:py-7">
       <div className="min-w-0">
         {/* En-tête : l'outil choisi, en grand */}
         <header className="mb-5 flex items-start gap-3.5 sm:gap-4">
@@ -379,7 +402,12 @@ export default function GeneratePage() {
               <Sparkles size={11} aria-hidden="true" />
               {toolGroup ? toolGroup.label : 'Génération IA'}
             </p>
-            <h1 className="mt-0.5 text-2xl sm:text-[1.75rem] leading-tight text-white" style={{ fontFamily: 'var(--font-display)' }}>
+            <h1
+              ref={headingRef}
+              tabIndex={-1}
+              className="mt-0.5 text-2xl sm:text-[1.75rem] leading-tight text-white focus:outline-none"
+              style={{ fontFamily: 'var(--font-display)' }}
+            >
               {tool.label}
             </h1>
             <p className="mt-1 text-sm text-mg-200 leading-relaxed">{tool.description}</p>
@@ -397,7 +425,9 @@ export default function GeneratePage() {
           )}
         </header>
 
-        {reused && (
+        {/* Reprise depuis l'historique : rappel tant que l'outil repris est affiché (ses remarques, comme « collez à
+            nouveau le travail corrigé », ne valent pas pour un autre outil). */}
+        {reused && form.type === reused.form.type && (
           <div role="note" className="mb-5 p-4 rounded-xl bg-white/[0.03] border border-white/10 text-sm text-mg-100">
             <p className="text-white font-medium">Demande reprise depuis l’historique : vérifiez les paramètres avant de générer.</p>
             {reused.notes.length > 0 && (

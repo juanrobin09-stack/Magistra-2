@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, FileText, GraduationCap, Heart, Sparkles, Star, TrendingUp, Zap } from 'lucide-react';
 import { ALL_TYPES, getMatiereEmoji, getMatiereLabel, getSujetSuggestions, getToolInfo, type TypeContenu } from '@shared/catalog';
-import { getNiveauLabel, isSuperieur } from '@shared/levels';
+import { getNiveauLabel, isNiveau, isSuperieur } from '@shared/levels';
 import type { GenerationSummary, UsageStats } from '@shared/types';
 import { useLocalEngine } from '@/lib/localConnector/controller';
 import { useRuntime } from '@/lib/runtime/context';
@@ -99,7 +99,8 @@ export default function DashboardPage() {
     setRecentKey(k => k + 1);
   };
 
-  const niveau = profile?.niveaux?.[0];
+  // Premier niveau valide du profil : mêmes libellés d'outils que la barre latérale (et que le formulaire par défaut).
+  const niveau = profile?.niveaux?.find(isNiveau);
   const superieur = niveau ? isSuperieur(niveau) : false;
   const quickTools = superieur ? QUICK_TOOLS_SUPERIEUR : QUICK_TOOLS_SCOLAIRE;
   const matiere = profile?.matierePrincipale;

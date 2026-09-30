@@ -1,7 +1,8 @@
 // « Outils pédagogiques » dans la barre latérale, sous « Réglages » : une entrée repliable (fermée par défaut, pour ne
 // pas surcharger le menu) qui déroule les 11 outils classés en trois familles. Chaque outil ouvre la page Générer sur
 // cet outil (/app/generate?type=…) ; l'outil de la page Générer est signalé (aria-current). L'état ouvert ou fermé
-// est retenu sur cet appareil. Libellés adaptés au niveau de l'enseignant (supérieur : « TD / Exercices »…).
+// est retenu sur cet appareil. Libellés adaptés au niveau (supérieur : « TD / Exercices »…) : celui du formulaire sur
+// la page Générer, pour nommer les outils comme elle ; ailleurs, celui du profil de l'enseignant.
 
 import { forwardRef, useId } from 'react';
 import { Link } from 'react-router-dom';
