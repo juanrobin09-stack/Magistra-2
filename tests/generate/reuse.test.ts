@@ -72,9 +72,13 @@ describe('historique : options des outils (formats normés, notation, corrigé, 
 
   it('affichées en clair, sous le libellé propre à l’outil', () => {
     const rows = Object.fromEntries(describeRecordParams(EXERCICES).map(r => [r.label, r.value]));
-    expect(rows).toMatchObject({
-      'Type d’exercice': 'Dissertation', Notation: 'Sur 10', Corrigé: 'non (version élève seule)', "Nombre d'exercices": '3',
-    });
+    expect(rows).toMatchObject({ 'Type d’exercice': 'Dissertation', Notation: 'Sur 10', Corrigé: 'non (version élève seule)' });
+    // Une dissertation est un seul sujet : pas de nombre d'exercices ; un QCM compte des questions.
+    expect(rows).not.toHaveProperty("Nombre d'exercices");
+    const qcm = describeRecordParams({ ...EXERCICES, params: { modalite: 'qcm', nombreExercices: 10 } });
+    expect(Object.fromEntries(qcm.map(r => [r.label, r.value]))).toMatchObject({ 'Type d’exercice': 'QCM', 'Nombre de questions': '10' });
+    const plain = describeRecordParams({ ...EXERCICES, params: { nombreExercices: 5 } });
+    expect(Object.fromEntries(plain.map(r => [r.label, r.value]))).toMatchObject({ "Nombre d'exercices": '5' });
     const seq = describeRecordParams({ type: 'sequence', niveau: '4eme', matiere: 'svt', sujet: 'Cellule', params: { nombreSeances: 6, modalite: 'investigation' } });
     expect(Object.fromEntries(seq.map(r => [r.label, r.value]))).toMatchObject({ 'Nombre de séances': '6', 'Démarche de la séquence': 'Démarche d’investigation' });
   });

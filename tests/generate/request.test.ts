@@ -4,7 +4,7 @@ import type { NiveauScolaire } from '@shared/levels';
 import type { DocumentPassage, GenerationRequest, ResearchMode, TeacherProfile } from '@shared/types';
 import { REQUEST_LIMITS, validateGenerationRequest } from '@shared/validation';
 import {
-  appreciationCount, appreciationSummary, buildGenerationRequest, buildPassageQuery, createInitialForm, defaultTrimestre,
+  appreciationCount, appreciationSummary, buildGenerationRequest, buildPassageQuery, chosenCount, createInitialForm, defaultTrimestre,
   fitPassagesToLimits, normalizeAppreciationInput, resolveInitialSujet, resolveInitialType, validateForm, visibleFields,
   withNiveau, type GenerateForm,
 } from '@/lib/generation/request';
@@ -107,6 +107,30 @@ describe('buildGenerationRequest — aucun paramètre fantôme', () => {
     const form: GenerateForm = { ...fullForm('cours', '4eme'), duree: '   ', objectifs: '', consignes: '\n' };
     const req = buildGenerationRequest(form, 'cours', PROFILE, [], 'documents');
     expect(extraKeys(req)).toEqual([]);
+  });
+
+  it('travail d’un seul tenant (dictée, dissertation) : aucun nombre d’exercices transmis ; QCM : nombre gardé', () => {
+    const form: GenerateForm = { ...fullForm('exercices', '6eme'), matiere: 'francais', modalite: 'dictee', nombreExercices: 5 };
+    const dictee = buildGenerationRequest(form, 'exercices', PROFILE, [], 'documents');
+    expect(dictee.modalite).toBe('dictee');
+    expect(dictee).not.toHaveProperty('nombreExercices');
+    expect(visibleFields('exercices', '6eme', 'francais', 'dictee').has('nombreExercices')).toBe(false);
+    expect(buildGenerationRequest({ ...form, modalite: 'qcm' }, 'exercices', PROFILE, [], 'documents').nombreExercices).toBe(5);
+    // Format gardé d'un autre contexte (dissertation en 6e) : ni transmis, ni pris en compte pour le nombre.
+    const stale = buildGenerationRequest({ ...form, modalite: 'dissertation' }, 'exercices', PROFILE, [], 'documents');
+    expect(stale).not.toHaveProperty('modalite');
+    expect(stale.nombreExercices).toBe(5);
+    // Même règle que la validation partagée (serveur et application Windows).
+    expect(validateGenerationRequest(dictee)).not.toHaveProperty('nombreExercices');
+  });
+
+  it('nombre gardé d’un autre format et non proposé pour celui-ci (12 questions → problèmes) : « Auto », rien transmis', () => {
+    const form: GenerateForm = { ...fullForm('exercices', '4eme'), matiere: 'mathematiques', modalite: 'probleme', nombreExercices: 12 };
+    expect(buildGenerationRequest(form, 'exercices', PROFILE, [], 'documents')).not.toHaveProperty('nombreExercices');
+    expect(buildGenerationRequest({ ...form, nombreExercices: 3 }, 'exercices', PROFILE, [], 'documents').nombreExercices).toBe(3);
+    expect(chosenCount(12, { one: 'problème', many: 'problèmes', options: [1, 2, 3, 4] })).toBe('');
+    expect(chosenCount(2, { one: 'problème', many: 'problèmes', options: [1, 2, 3, 4] })).toBe(2);
+    expect(chosenCount('', { one: 'problème', many: 'problèmes', options: [1, 2, 3, 4] })).toBe('');
   });
 
   it('matière absente au niveau : remplacée par une matière valide', () => {

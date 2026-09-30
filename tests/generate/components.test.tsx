@@ -92,6 +92,24 @@ describe('GenerateFormFields — formats normés et réglages', () => {
     expect(stale).toMatch(/aria-pressed="true"[^>]*>Variés</);
   });
 
+  it('le nombre suit le format : « Nombre de questions » pour un QCM, aucun nombre pour une dictée (un seul sujet)', () => {
+    const base = { ...createInitialForm(PROFILE, { type: 'exercices' }), niveau: '6eme' as const, matiere: 'francais' as const };
+    const qcm = fields({ ...base, modalite: 'qcm' });
+    expect(qcm).toContain('Nombre de questions');
+    expect(qcm).not.toContain('Nombre d&#x27;exercices');
+    expect(qcm).toContain('>15</button>');
+    // Nombre gardé d'un autre format et non proposé ici : « Auto » est signalé comme choisi.
+    const probleme = fields({ ...base, niveau: '4eme', matiere: 'mathematiques', modalite: 'probleme', nombreExercices: 12 });
+    expect(probleme).toContain('Nombre de problèmes');
+    expect(probleme).not.toContain('>12</button>');
+    expect(probleme).toMatch(/aria-pressed="true"[^>]*>Auto</);
+    const dictee = fields({ ...base, modalite: 'dictee', nombreExercices: 5 });
+    expect(dictee).not.toMatch(/Nombre d/);
+    expect(dictee).toContain('Texte, difficultés ciblées, grille · un seul sujet complet');
+    // Les autres réglages restent (notation, corrigé).
+    expect(dictee).toContain('Notation');
+  });
+
   it('maternelle : ni notation, ni corrigé ; activités en ateliers ou jeux', () => {
     const html = fields({ ...createInitialForm(PROFILE, { type: 'exercices' }), niveau: 'maternelle_gs', matiere: 'nombres_formes' });
     expect(html).not.toContain('Notation');

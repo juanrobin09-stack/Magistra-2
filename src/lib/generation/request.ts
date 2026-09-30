@@ -10,8 +10,8 @@ import {
 } from '@shared/catalog';
 import { rankChunks } from '@shared/documents/retrieve';
 import {
-  BESOINS_PARTICULIERS, isModaliteAvailable, modalitesFor,
-  type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
+  BESOINS_PARTICULIERS, countUnit, isModaliteAvailable, modalitesFor,
+  type Bareme, type BesoinParticulier, type CountUnit, type TonRedaction, type TypeEvaluation,
 } from '@shared/formats';
 import { getLevelGroup, isNiveau, isSuperieur, type NiveauScolaire } from '@shared/levels';
 import { modeUsesDocuments, type DocumentPassage, type GenerationRequest, type ResearchMode, type TeacherProfile } from '@shared/types';
@@ -153,21 +153,32 @@ const NOT_IN_MATERNELLE: ReadonlySet<string> = new Set(['bareme', 'typeEvaluatio
  * - « Discipline / intitulé de l'UE » et « Format » (CM/TD/TP/séminaire) : supérieur uniquement ;
  * - « Trimestre » : pas de sens dans le supérieur ;
  * - notation, objectif de l'évaluation, corrigé : pas en maternelle ;
- * - format normé : seulement s'il en existe pour cet outil, ce niveau et cette matière (`matiere` fournie).
+ * - format normé : seulement s'il en existe pour cet outil, ce niveau et cette matière (`matiere` fournie) ;
+ * - nombre d'exercices : pas pour un travail d'un seul tenant (dissertation, dictée…) choisi comme format (`modalite`).
  */
-export function visibleFields(tool: TypeContenu, niveau: NiveauScolaire, matiere?: Matiere): Set<FormField> {
+export function visibleFields(tool: TypeContenu, niveau: NiveauScolaire, matiere?: Matiere, modalite?: string): Set<FormField> {
   const sup = isSuperieur(niveau);
   const maternelle = getLevelGroup(niveau) === 'maternelle';
+  const single = !!matiere && isModaliteAvailable(modalite, tool, niveau, matiere) && countUnit(modalite) === null;
   const fields = new Set<FormField>();
   for (const f of TOOL_FIELDS[tool] as readonly string[]) {
     if (f === 'format' && !sup) continue;
     if (f === 'trimestre' && sup) continue;
     if (maternelle && NOT_IN_MATERNELLE.has(f)) continue;
     if (f === 'modalite' && matiere && modalitesFor(tool, niveau, matiere).length === 0) continue;
+    if (f === 'nombreExercices' && single) continue;
     fields.add(f as FormField);
   }
   if (sup) fields.add('discipline');
   return fields;
+}
+
+/**
+ * Nombre choisi, s'il fait partie des nombres proposés pour ce qui se compte (un nombre gardé d'un autre format,
+ * « 12 » questions devenues des problèmes par exemple, revient à « Auto ») : ce qui est affiché est ce qui est transmis.
+ */
+export function chosenCount(value: number | '', unit: CountUnit): number | '' {
+  return typeof value === 'number' && unit.options.includes(value) ? value : '';
 }
 
 // ─── Nombre d'appréciations ─────────────────────────────────────────────────
@@ -274,7 +285,7 @@ export function buildGenerationRequest(
 ): GenerationRequest {
   const niveau = form.niveau;
   const matiere = isMatiereAvailableFor(form.matiere, niveau) ? form.matiere : defaultMatiereFor(niveau);
-  const fields = visibleFields(tool, niveau, matiere);
+  const fields = visibleFields(tool, niveau, matiere, form.modalite);
   const has = (f: FormField) => fields.has(f);
   const req: GenerationRequest = {
     type: tool,
@@ -309,7 +320,11 @@ export function buildGenerationRequest(
   if (has('typeEvaluation') && form.typeEvaluation) set('typeEvaluation', form.typeEvaluation);
   if (has('bareme') && form.bareme) set('bareme', form.bareme);
   if (has('sansCorrige') && form.sansCorrige) set('sansCorrige', true);
-  if (has('nombreExercices') && form.nombreExercices) set('nombreExercices', form.nombreExercices);
+  if (has('nombreExercices')) {
+    const unit = countUnit(req.modalite, getLevelGroup(niveau));
+    const count = unit ? chosenCount(form.nombreExercices, unit) : '';
+    if (count) set('nombreExercices', count);
+  }
   if (has('nombreSeances') && form.nombreSeances) set('nombreSeances', form.nombreSeances);
   if (has('ton') && form.ton) set('ton', form.ton);
   // Formulaire d'une version antérieure (sans ce champ) : aucun besoin.

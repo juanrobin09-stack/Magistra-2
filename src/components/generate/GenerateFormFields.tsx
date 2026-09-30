@@ -7,18 +7,18 @@ import type { ReactElement } from 'react';
 import { Clock } from 'lucide-react';
 import {
   DIFFICULTES, FORMATS_SEANCE, getMatieresForNiveau, getSujetSuggestions, PROFILS_DIFFERENCIATION, PROFILS_ELEVE,
-  TOOL_REQUIRES_SUJET, TYPES_LETTRE,
+  TOOL_FIELDS, TOOL_REQUIRES_SUJET, TYPES_LETTRE,
   type DifficulteExercice, type FormatSeance, type Matiere, type ProfilDifferenciation, type ProfilEleve, type TypeContenu,
 } from '@shared/catalog';
 import {
-  BAREMES, BESOINS_PARTICULIERS, defaultModaliteLabel, modaliteFieldLabel, modalitesFor, NOMBRES_EXERCICES, NOMBRES_SEANCES,
+  BAREMES, BESOINS_PARTICULIERS, countLabel, countUnit, defaultModaliteLabel, modaliteFieldLabel, modalitesFor, NOMBRES_SEANCES,
   TONS, TYPES_EVALUATION,
   type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
 } from '@shared/formats';
 import { getLevelGroup, isNiveau, isSuperieur, NIVEAUX, type NiveauScolaire } from '@shared/levels';
 import SelectField from '@/components/ui/SelectField';
 import {
-  appreciationSummary, fieldLimit, MAX_APPRECIATIONS, MIN_APPRECIATIONS, normalizeAppreciationInput, visibleFields,
+  appreciationSummary, chosenCount, fieldLimit, MAX_APPRECIATIONS, MIN_APPRECIATIONS, normalizeAppreciationInput, visibleFields,
   type FormField, type FormProblem, type GenerateForm, type Trimestre,
 } from '@/lib/generation/request';
 import { ChipGroup, ChoiceButton, Field, type ChipOption } from './fields';
@@ -104,7 +104,7 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
   const tool = form.type;
   const sup = isSuperieur(form.niveau);
   const primary = ['maternelle', 'elementaire'].includes(getLevelGroup(form.niveau));
-  const fields = visibleFields(tool, form.niveau, form.matiere);
+  const fields = visibleFields(tool, form.niveau, form.matiere, form.modalite);
   const has = (f: FormField) => fields.has(f);
   const errorOf = (f: FormField) => (showErrors ? problems.find(p => p.field === f)?.message ?? null : null);
 
@@ -133,6 +133,9 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
     ...modalites.map(m => ({ value: m.value, label: m.label, title: m.description })),
   ];
   const generalCaption = specific.length > 0 && general.length > 0 ? { value: general[0].value, text: 'Formats généraux' } : undefined;
+  // Travail d'un seul tenant (dissertation, dictée…) : le nombre d'exercices disparaît ; on dit pourquoi.
+  const singleTask = !!modalite && TOOL_FIELDS[tool].includes('nombreExercices') && !has('nombreExercices');
+  const modaliteHint = modalite ? `${modalite.description}${singleTask ? ' · un seul sujet complet' : ''}` : undefined;
 
   const settings: ReactElement[] = [];
   if (has('difficulte')) {
@@ -159,15 +162,17 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
       </div>,
     );
   }
-  if (has('nombreExercices')) {
+  // Ce qui se compte selon le format (exercices, questions, problèmes…), avec des nombres qui lui conviennent.
+  const unit = countUnit(modalite?.value, getLevelGroup(form.niveau));
+  if (has('nombreExercices') && unit) {
     settings.push(
       <ChipGroup<number | ''>
         key="nombreExercices"
         id="gen-nombre-exercices"
-        label={getLevelGroup(form.niveau) === 'maternelle' ? "Nombre d'activités" : "Nombre d'exercices"}
-        value={form.nombreExercices}
+        label={countLabel(unit)}
+        value={chosenCount(form.nombreExercices, unit)}
         onChange={v => onChange({ nombreExercices: v })}
-        options={[{ value: '', label: 'Auto', title: 'Magistra choisit selon le sujet' }, ...NOMBRES_EXERCICES.map(n => ({ value: n, label: String(n) }))]}
+        options={[{ value: '', label: 'Auto', title: 'Magistra choisit selon le sujet' }, ...unit.options.map(n => ({ value: n, label: String(n) }))]}
       />,
     );
   }
@@ -369,7 +374,7 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
           onChange={v => onChange({ modalite: v })}
           options={modaliteOptions}
           captionBefore={generalCaption}
-          hint={modalite ? modalite.description : undefined}
+          hint={modalite ? modaliteHint : undefined}
           className="p-3.5 rounded-xl bg-accent/[0.04] border border-accent/10"
         />
       )}

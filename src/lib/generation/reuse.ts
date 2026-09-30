@@ -6,10 +6,10 @@ import {
   type DifficulteExercice, type FormatSeance, type ProfilDifferenciation, type ProfilEleve, type TypeLettre,
 } from '@shared/catalog';
 import {
-  BAREMES, BESOINS_PARTICULIERS, getModalite, LIMITES_NOMBRES, modaliteFieldLabel, TONS, TYPES_EVALUATION,
+  BAREMES, BESOINS_PARTICULIERS, countLabel, countUnit, getModalite, LIMITES_NOMBRES, modaliteFieldLabel, TONS, TYPES_EVALUATION,
   type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
 } from '@shared/formats';
-import { isNiveau, isSuperieur } from '@shared/levels';
+import { getLevelGroup, isNiveau, isSuperieur } from '@shared/levels';
 import { REQUEST_LIMITS } from '@shared/validation';
 import { RESEARCH_MODES, type GenerationRecord, type ResearchMode, type TeacherProfile } from '@shared/types';
 import { createInitialForm, pickMatiere, type GenerateForm, type Trimestre } from './request';
@@ -72,7 +72,9 @@ export function describeRecordParams(record: ReusableRecord): { label: string; v
   add('Objectif', labelOf(p.typeEvaluation, TYPES_EVALUATION));
   add('Notation', labelOf(p.bareme, BAREMES));
   add('Corrigé', p.sansCorrige === true ? 'non (version élève seule)' : undefined);
-  add("Nombre d'exercices", countOf(p.nombreExercices, LIMITES_NOMBRES.exercices) ? String(p.nombreExercices) : undefined);
+  // « Nombre de questions » pour un QCM… ; rien pour un travail d'un seul tenant (dissertation, dictée…).
+  const unit = countUnit(typeof p.modalite === 'string' ? p.modalite : undefined, isNiveau(record.niveau) ? getLevelGroup(record.niveau) : undefined);
+  if (unit) add(countLabel(unit), countOf(p.nombreExercices, LIMITES_NOMBRES.exercices) ? String(p.nombreExercices) : undefined);
   add('Nombre de séances', countOf(p.nombreSeances, LIMITES_NOMBRES.seances) ? String(p.nombreSeances) : undefined);
   add('Ton', labelOf(p.ton, TONS));
   if (Array.isArray(p.besoins)) {

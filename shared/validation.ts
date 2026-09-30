@@ -7,7 +7,7 @@ import {
 } from './catalog.js';
 import { MagistraError } from './errors.js';
 import {
-  BAREMES, BESOINS_PARTICULIERS, isModaliteAvailable, LIMITES_NOMBRES, TONS, TYPES_EVALUATION,
+  BAREMES, BESOINS_PARTICULIERS, countUnit, isModaliteAvailable, LIMITES_NOMBRES, TONS, TYPES_EVALUATION,
   type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
 } from './formats.js';
 import { isNiveau } from './levels.js';
@@ -215,7 +215,10 @@ export function validateGenerationRequest(input: unknown): GenerationRequest {
   if (allowed('typeEvaluation')) setIfDefined(req, 'typeEvaluation', oneOf(raw.typeEvaluation, EVALUATIONS));
   if (allowed('bareme')) setIfDefined(req, 'bareme', oneOf(raw.bareme, BAREME_VALUES));
   if (allowed('sansCorrige') && raw.sansCorrige === true) req.sansCorrige = true;
-  if (allowed('nombreExercices')) setIfDefined(req, 'nombreExercices', boundedInteger(raw.nombreExercices, LIMITES_NOMBRES.exercices));
+  // Travail d'un seul tenant (dissertation, dictée…) : un nombre d'exercices n'a pas de sens, il est ignoré.
+  if (allowed('nombreExercices') && countUnit(req.modalite) !== null) {
+    setIfDefined(req, 'nombreExercices', boundedInteger(raw.nombreExercices, LIMITES_NOMBRES.exercices));
+  }
   if (allowed('nombreSeances')) setIfDefined(req, 'nombreSeances', boundedInteger(raw.nombreSeances, LIMITES_NOMBRES.seances));
   if (allowed('ton')) setIfDefined(req, 'ton', oneOf(raw.ton, TON_VALUES));
   if (allowed('besoins') && Array.isArray(raw.besoins)) {

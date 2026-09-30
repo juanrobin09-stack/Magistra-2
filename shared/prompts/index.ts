@@ -2,7 +2,7 @@
 
 import type { ChatMessage } from '../ai/provider.js';
 import { getMatiereLabel, getToolInfo, TOOL_FIELDS, TYPES_LETTRE, type TypeContenu } from '../catalog.js';
-import { BAREMES, BESOINS_PARTICULIERS, getModalite, TONS, TYPES_EVALUATION } from '../formats.js';
+import { BAREMES, BESOINS_PARTICULIERS, countLabel, countUnit, getModalite, TONS, TYPES_EVALUATION } from '../formats.js';
 import { formatLocator } from '../citations.js';
 import { getLevelGroup, getNiveauLabel, isSuperieur, LEVEL_GROUP_LABELS } from '../levels.js';
 import type { GenerationRequest, SourceRef } from '../types.js';
@@ -108,7 +108,9 @@ function optionLines(req: GenerationRequest, allowed: (field: string) => boolean
   if (modalite) lines.push(`- Format demandé : ${modalite.label}`);
   const evaluation = allowed('typeEvaluation') ? TYPES_EVALUATION.find(t => t.value === req.typeEvaluation) : undefined;
   if (evaluation) lines.push(`- Objectif de l'évaluation : ${evaluation.label.toLowerCase()}`);
-  if (req.nombreExercices && allowed('nombreExercices')) lines.push(`- Nombre d'exercices : ${req.nombreExercices}`);
+  // Travail d'un seul tenant (dissertation, dictée…) : aucun nombre ; sinon ce qui se compte (« Nombre de questions »).
+  const unit = countUnit(modalite?.value, getLevelGroup(req.niveau));
+  if (req.nombreExercices && allowed('nombreExercices') && unit) lines.push(`- ${countLabel(unit)} : ${req.nombreExercices}`);
   if (req.nombreSeances && allowed('nombreSeances')) lines.push(`- Nombre de séances : ${req.nombreSeances}`);
   const bareme = allowed('bareme') ? BAREMES.find(b => b.value === req.bareme) : undefined;
   if (bareme) lines.push(`- Notation : ${bareme.label.toLowerCase()}`);

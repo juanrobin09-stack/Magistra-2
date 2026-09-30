@@ -117,7 +117,29 @@ export interface ModaliteInfo {
   matieres?: readonly Matiere[];
   /** Consigne de structure transmise au modèle. */
   prompt: string | ((ctx: ModaliteContext) => string);
+  /**
+   * Ce que compte « Nombre de… » (outil Exercices) avec ce format ; absent : les exercices. 'single' : un travail d'un
+   * seul tenant (dissertation, dictée, étude de cas…), qui ne se multiplie pas : aucun nombre n'est proposé ni transmis.
+   */
+  count?: CountUnit | 'single';
 }
+
+/** Ce qui se compte : « 1 question », « 10 questions » (numérotées), et les nombres proposés (dans LIMITES_NOMBRES). */
+export interface CountUnit {
+  one: string;
+  many: string;
+  feminine?: true;
+  options: readonly number[];
+}
+
+const EXERCICES: CountUnit = { one: 'exercice', many: 'exercices', options: NOMBRES_EXERCICES };
+const ACTIVITES: CountUnit = { one: 'activité', many: 'activités', feminine: true, options: [2, 3, 4, 5, 6] };
+const QUESTIONS: CountUnit = { one: 'question', many: 'questions', feminine: true, options: [5, 8, 10, 12, 15] };
+const AFFIRMATIONS: CountUnit = { one: 'affirmation', many: 'affirmations', feminine: true, options: [4, 6, 8, 10, 12] };
+const MOTS_A_COMPLETER: CountUnit = { one: 'mot à compléter', many: 'mots à compléter', options: [5, 8, 10, 12, 15] };
+const PROBLEMES: CountUnit = { one: 'problème', many: 'problèmes', options: [1, 2, 3, 4] };
+const ATELIERS: CountUnit = { one: 'atelier', many: 'ateliers', options: [2, 3, 4, 5, 6] };
+const JEUX: CountUnit = { one: 'jeu', many: 'jeux', options: [1, 2, 3, 4] };
 
 const SUP: LevelGroup[] = ['bts_but', 'cpge', 'licence', 'master', 'doctorat'];
 const SCOLAIRE: LevelGroup[] = ['elementaire', 'college', 'lycee', 'lycee_pro'];
@@ -151,6 +173,22 @@ const TRAVAIL_CORRIGE: TypeContenu[] = ['exercices', 'evaluation', 'corrige'];
 
 /** Texte support d'un exercice sur texte : jamais un faux extrait attribué à un auteur. */
 const TEXTE_SUPPORT = 'Texte support : l’extrait fourni dans les sources s’il y en a un ; sinon, un emplacement [Texte à coller] avec la nature et la longueur de l’extrait à choisir (œuvre, passage). N’invente jamais un extrait attribué à un auteur réel.';
+
+/** Longueur usuelle d'une dictée selon la classe (le modèle vise cette longueur, sans avoir à compter les mots). */
+function longueurDictee(niveau: NiveauScolaire): string {
+  switch (niveau) {
+    case 'cp': return 'deux ou trois phrases courtes (15 à 30 mots)';
+    case 'ce1': return '30 à 50 mots';
+    case 'ce2': return '40 à 60 mots';
+    case 'cm1': return '60 à 80 mots';
+    case 'cm2': return '70 à 100 mots';
+    case '6eme': return '80 à 110 mots';
+    case '5eme': return '90 à 120 mots';
+    case '4eme': return '100 à 130 mots';
+    case '3eme': return '110 à 150 mots';
+    default: return '100 à 150 mots';
+  }
+}
 
 function sujetBrevet({ matiere }: ModaliteContext): string {
   switch (matiere) {
@@ -225,27 +263,27 @@ export const MODALITES: ModaliteInfo[] = [
 
   // ── Français et lettres ──
   {
-    value: 'dissertation', label: 'Dissertation', description: 'Sujet, problématique, plan, rédaction', tools: TRAVAIL_CORRIGE,
+    value: 'dissertation', label: 'Dissertation', description: 'Sujet, problématique, plan, rédaction', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['lycee', ...SUP], matieres: ['francais', 'philosophie', 'ses', 'hggsp', ...SCIENCES_HUMAINES_SUP, 'autre'],
     prompt: ({ group }) => `FORMAT : dissertation. Un sujet (question ou citation à discuter) conforme aux attendus de la discipline${SUP.includes(group) ? ' et du niveau universitaire' : ''}. Corrigé méthodologique : analyse des termes du sujet, problématique, plan détaillé en deux ou trois parties avec arguments et exemples précis, introduction rédigée (accroche, définition des termes, problématique, annonce du plan) et conclusion rédigée (réponse, ouverture).`,
   },
   {
-    value: 'commentaire', label: 'Commentaire de texte', description: 'Projet de lecture et plan', tools: TRAVAIL_CORRIGE,
+    value: 'commentaire', label: 'Commentaire de texte', description: 'Projet de lecture et plan', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['lycee', ...SUP], matieres: ['francais', 'lettres', ...LANGUES_ANCIENNES],
     prompt: `FORMAT : commentaire littéraire. ${TEXTE_SUPPORT} Consigne, éventuellement un parcours de lecture. Corrigé : introduction (présentation et situation du texte, projet de lecture, annonce du plan), développement en deux ou trois parties argumentées et illustrées par des citations analysées, conclusion (bilan, ouverture).`,
   },
   {
-    value: 'contraction_essai', label: 'Contraction + essai', description: 'Voie technologique', tools: TRAVAIL_CORRIGE,
+    value: 'contraction_essai', label: 'Contraction + essai', description: 'Voie technologique', tools: TRAVAIL_CORRIGE, count: 'single',
     niveaux: ['2nde_gt', '1ere_techno'], matieres: ['francais'],
     prompt: `FORMAT : contraction de texte suivie d’un essai. ${TEXTE_SUPPORT} Consigne de contraction au quart de la longueur du texte (marge admise indiquée), puis un sujet d’essai lié au thème. Corrigé : une contraction modèle et le plan détaillé de l’essai.`,
   },
   {
-    value: 'explication_lineaire', label: 'Explication linéaire', description: 'Préparation à l’oral', tools: TRAVAIL_CORRIGE,
+    value: 'explication_lineaire', label: 'Explication linéaire', description: 'Préparation à l’oral', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['lycee'], matieres: ['francais'],
     prompt: `FORMAT : explication linéaire (oral). ${TEXTE_SUPPORT} Mouvements du texte et projet de lecture ; corrigé qui suit le texte dans l’ordre (citations, procédés, interprétations), avec introduction et conclusion ; une question de grammaire sur une phrase de l’extrait.`,
   },
   {
-    value: 'comprehension', label: 'Compréhension de texte', description: 'Questions sur un texte', tools: TRAVAIL,
+    value: 'comprehension', label: 'Compréhension de texte', description: 'Questions sur un texte', tools: TRAVAIL, count: QUESTIONS,
     groups: ['elementaire', 'college', 'lycee_pro'], matieres: FRANCAIS,
     prompt: `FORMAT : compréhension et interprétation d’un texte. ${TEXTE_SUPPORT} Aux niveaux élémentaire et collège, un texte court écrit pour l’exercice (présenté comme tel) convient. Questions de compréhension littérale, puis d’interprétation (procédés d’écriture, effets sur le lecteur), réponses justifiées par des citations du texte.`,
   },
@@ -255,73 +293,73 @@ export const MODALITES: ModaliteInfo[] = [
     prompt: 'FORMAT : étude de la langue. Exercices de grammaire, de conjugaison, d’orthographe ou de lexique, en contexte (phrases tirées d’un même court texte) ; terminologie grammaticale conforme aux programmes ; corrigé expliqué.',
   },
   {
-    value: 'dictee', label: 'Dictée', description: 'Texte, difficultés ciblées, grille', tools: TRAVAIL,
+    value: 'dictee', label: 'Dictée', description: 'Texte, difficultés ciblées, grille', tools: TRAVAIL, count: 'single',
     groups: ['elementaire', 'college', 'lycee_pro'], matieres: ['francais'],
-    prompt: 'FORMAT : dictée. Un texte suivi et parfaitement correct, à lire tel quel aux élèves : verbes déjà conjugués et accords faits (jamais d’infinitif entre parenthèses dans le texte à dicter), longueur adaptée au niveau. Puis les difficultés ciblées (accords, homophones, terminaisons verbales), les mots à écrire au tableau, une version aménagée (dictée à trous) pour les élèves en difficulté, et une grille de correction.',
+    prompt: ({ niveau }) => `FORMAT : dictée, en quatre parties. 1. « Texte de la dictée » : un texte suivi de ${longueurDictee(niveau)}, écrit en entier et parfaitement correct, que l’enseignant lit tel quel : aucun verbe à conjuguer entre parenthèses, aucun blanc, tous les accords faits ; ce texte n’est pas un corrigé, il figure toujours. 2. « Difficultés ciblées » : trois à cinq points (accords, homophones, terminaisons verbales), chacun avec le mot du texte et la règle en une phrase exacte (par exemple : « elles sont parties » — avec l’auxiliaire être, le participe passé s’accorde avec le sujet). 3. « Mots au tableau » : noms propres et mots rares. 4. « Dictée aménagée » : le même texte avec des blancs sur les difficultés ciblées, pour les élèves en difficulté. Puis une grille de correction.`,
   },
   {
-    value: 'reecriture', label: 'Réécriture', description: 'Transformer un passage', tools: TRAVAIL,
+    value: 'reecriture', label: 'Réécriture', description: 'Transformer un passage', tools: TRAVAIL, count: 'single',
     groups: ['college', 'lycee_pro'], matieres: ['francais'],
     prompt: 'FORMAT : réécriture. Un court passage à réécrire en changeant une contrainte (personne, nombre, temps, genre, discours rapporté), avec la consigne exacte et le nombre de modifications attendues ; corrigé avec les modifications en gras.',
   },
   {
-    value: 'redaction', label: 'Rédaction', description: 'Production écrite guidée', tools: TRAVAIL_CORRIGE,
+    value: 'redaction', label: 'Rédaction', description: 'Production écrite guidée', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['elementaire', 'college', 'lycee_pro'], matieres: FRANCAIS,
     prompt: 'FORMAT : production écrite. Un sujet précis (situation, destinataire, type de texte, longueur attendue), des critères de réussite explicites et une grille d’évaluation (contenu, organisation, langue).',
   },
 
   // ── Philosophie ──
   {
-    value: 'explication_texte', label: 'Explication de texte', description: 'Thèse, enjeu, structure', tools: TRAVAIL_CORRIGE,
+    value: 'explication_texte', label: 'Explication de texte', description: 'Thèse, enjeu, structure', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['lycee', ...SUP], matieres: ['philosophie'],
     prompt: `FORMAT : explication de texte philosophique. ${TEXTE_SUPPORT} Corrigé : thème, thèse, enjeu, structure argumentative, explication suivie, intérêt philosophique.`,
   },
 
   // ── Histoire-géographie, EMC, SES ──
   {
-    value: 'developpement_construit', label: 'Développement construit', description: 'Réponse organisée et argumentée', tools: TRAVAIL_CORRIGE,
+    value: 'developpement_construit', label: 'Développement construit', description: 'Réponse organisée et argumentée', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['college', 'lycee_pro'], matieres: ['histoire_geo'],
     prompt: 'FORMAT : développement construit. Une question précise et sa consigne (texte structuré de deux ou trois paragraphes) ; corrigé : réponse organisée (courte introduction, paragraphes argumentés, notions clés définies, exemples précis, repères datés), conclusion.',
   },
   {
-    value: 'composition', label: 'Composition', description: 'Problématique et plan détaillé', tools: TRAVAIL_CORRIGE,
+    value: 'composition', label: 'Composition', description: 'Problématique et plan détaillé', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['lycee', ...SUP], matieres: ['histoire_geo', 'hggsp', 'histoire', 'geographie'],
     prompt: 'FORMAT : composition. Un sujet problématisé ; corrigé : analyse du sujet (termes, bornes chronologiques et spatiales), problématique, plan détaillé en deux ou trois parties avec arguments, exemples et repères précis, introduction et conclusion rédigées.',
   },
   {
-    value: 'etude_critique', label: 'Étude critique de documents', description: 'Présenter, analyser, critiquer', tools: TRAVAIL_CORRIGE,
+    value: 'etude_critique', label: 'Étude critique de documents', description: 'Présenter, analyser, critiquer', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['lycee', ...SUP], matieres: ['histoire_geo', 'hggsp', 'histoire', 'geographie', 'science_politique'],
     prompt: 'FORMAT : étude critique de document(s). Document(s) décrits ou reproduits (issus des sources, ou construits pour l’exercice et présentés comme tels), consigne guidant la présentation (nature, auteur, date, contexte), l’analyse et la critique (portée, limites) ; corrigé organisé.',
   },
   {
-    value: 'croquis', label: 'Croquis / schéma', description: 'Légende organisée, figurés', tools: TRAVAIL_CORRIGE,
+    value: 'croquis', label: 'Croquis / schéma', description: 'Légende organisée, figurés', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: SECONDAIRE_SUP, matieres: ['histoire_geo', 'hggsp', 'geographie'],
     prompt: 'FORMAT : croquis ou schéma cartographique. Sujet, fond de carte à fournir par l’enseignant, informations à représenter ; corrigé : légende organisée en parties titrées, figurés choisis (surfaces, points, lignes, flèches) et leur justification, titre.',
   },
   {
-    value: 'reperes', label: 'Repères', description: 'Frise et carte à compléter', tools: TRAVAIL,
+    value: 'reperes', label: 'Repères', description: 'Frise et carte à compléter', tools: TRAVAIL, count: 'single',
     groups: ['elementaire', 'college', 'lycee_pro'], matieres: ['histoire_geo'],
     prompt: 'FORMAT : repères chronologiques et spatiaux. Frise chronologique à compléter (dates, périodes) et carte à légender (lieux, espaces), décrites précisément ; corrigé complet.',
   },
   {
-    value: 'situation_pratique', label: 'Situation pratique', description: 'Problème de la vie collective', tools: TRAVAIL,
+    value: 'situation_pratique', label: 'Situation pratique', description: 'Problème de la vie collective', tools: TRAVAIL, count: 'single',
     groups: SECONDAIRE, matieres: ['emc'],
     prompt: 'FORMAT : situation pratique (EMC). Une situation concrète de la vie collective (classe, établissement, commune) qui pose un problème ; questions guidant l’identification du problème, des valeurs et des règles en jeu (droits, devoirs, principes de la République), puis la proposition argumentée d’une solution ; corrigé.',
   },
   {
-    value: 'debat', label: 'Débat argumenté', description: 'Rôles, règles, grille de l’oral', tools: TRAVAIL,
+    value: 'debat', label: 'Débat argumenté', description: 'Rôles, règles, grille de l’oral', tools: TRAVAIL, count: 'single',
     groups: SCOLAIRE, matieres: ['emc', 'francais', 'philosophie', 'ses'],
     prompt: 'FORMAT : débat argumenté ou réglé. Question de débat, rôles, règles de prise de parole, documents d’appui, fiche de préparation des arguments, grille d’évaluation de l’oral.',
   },
   {
-    value: 'epreuve_composee', label: 'Épreuve composée', description: 'Connaissances, document, raisonnement', tools: TRAVAIL_CORRIGE,
+    value: 'epreuve_composee', label: 'Épreuve composée', description: 'Connaissances, document, raisonnement', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['lycee'], matieres: ['ses'],
     prompt: 'FORMAT : épreuve composée (SES). Trois parties : mobilisation des connaissances ; étude d’un document statistique (issu des sources, ou construit pour l’exercice et présenté comme tel) ; raisonnement appuyé sur un dossier documentaire ; corrigé et barème indicatif.',
   },
 
   // ── Mathématiques et numérique ──
   {
-    value: 'automatismes', label: 'Automatismes', description: 'Calcul mental, questions flash', tools: TRAVAIL,
+    value: 'automatismes', label: 'Automatismes', description: 'Calcul mental, questions flash', tools: TRAVAIL, count: QUESTIONS,
     groups: ['elementaire', 'college', 'lycee', 'lycee_pro'], matieres: ['mathematiques'],
     prompt: 'FORMAT : automatismes. Série de questions flash courtes, sans calculatrice, en temps limité (durée totale indiquée, 10 à 20 minutes), couvrant selon le niveau calcul, fractions, pourcentages, proportionnalité, lecture graphique, équations ; corrigé avec la réponse et le « bon réflexe ».',
   },
@@ -338,7 +376,7 @@ export const MODALITES: ModaliteInfo[] = [
 
   // ── Sciences ──
   {
-    value: 'demarche_experimentale', label: 'Démarche expérimentale', description: 'Hypothèse, protocole, conclusion', tools: TRAVAIL,
+    value: 'demarche_experimentale', label: 'Démarche expérimentale', description: 'Hypothèse, protocole, conclusion', tools: TRAVAIL, count: 'single',
     groups: TOUS, matieres: SCIENCES,
     prompt: 'FORMAT : démarche expérimentale ou d’investigation. Situation déclenchante, question scientifique, hypothèses à formuler, protocole à proposer (matériel, étapes, témoin, mesures), résultats à interpréter, conclusion ; consignes de sécurité si une manipulation est réelle.',
   },
@@ -350,49 +388,49 @@ export const MODALITES: ModaliteInfo[] = [
 
   // ── Langues vivantes et anciennes ──
   {
-    value: 'comprehension_ecrite', label: 'Compréhension écrite', description: 'Texte en langue cible', tools: TRAVAIL,
+    value: 'comprehension_ecrite', label: 'Compréhension écrite', description: 'Texte en langue cible', tools: TRAVAIL, count: QUESTIONS,
     groups: TOUS, matieres: LANGUES,
     prompt: 'FORMAT : compréhension de l’écrit. Un texte original rédigé dans la langue cible au niveau du CECRL visé (indique-le, de A1 à C1), questions de compréhension globale puis détaillée, relevés, une question d’expression personnelle ; corrigé.',
   },
   {
-    value: 'comprehension_orale', label: 'Compréhension de l’oral', description: 'Script à lire ou enregistrer', tools: TRAVAIL,
+    value: 'comprehension_orale', label: 'Compréhension de l’oral', description: 'Script à lire ou enregistrer', tools: TRAVAIL, count: QUESTIONS,
     groups: TOUS, matieres: LANGUES,
     prompt: 'FORMAT : compréhension de l’oral. Script complet d’un document audio à lire ou à enregistrer (dialogue ou monologue, durée indiquée), niveau du CECRL, questions avant, pendant et après l’écoute ; corrigé.',
   },
   {
-    value: 'expression_ecrite', label: 'Expression écrite', description: 'Sujet, nombre de mots, grille', tools: TRAVAIL_CORRIGE,
+    value: 'expression_ecrite', label: 'Expression écrite', description: 'Sujet, nombre de mots, grille', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: TOUS, matieres: LANGUES,
     prompt: 'FORMAT : expression écrite en langue cible. Sujet rédigé dans la langue cible, nombre de mots attendu, niveau du CECRL visé, aides lexicales ; grille d’évaluation (réalisation de la tâche, cohérence, richesse et correction de la langue).',
   },
   {
-    value: 'expression_orale', label: 'Expression orale', description: 'En continu ou en interaction', tools: TRAVAIL,
+    value: 'expression_orale', label: 'Expression orale', description: 'En continu ou en interaction', tools: TRAVAIL, count: 'single',
     groups: TOUS, matieres: LANGUES,
     prompt: 'FORMAT : expression orale en continu ou en interaction. Consigne, temps de préparation et de parole, pistes lexicales, grille d’évaluation de l’oral selon le CECRL.',
   },
   {
-    value: 'traduction', label: 'Traduction', description: 'Version ou thème', tools: TRAVAIL_CORRIGE,
+    value: 'traduction', label: 'Traduction', description: 'Version ou thème', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['college', 'lycee', ...SUP], matieres: [...LANGUES, ...LANGUES_ANCIENNES],
     prompt: `FORMAT : traduction (version ou thème). ${TEXTE_SUPPORT} Aides lexicales et difficultés ciblées ; corrigé : traduction proposée et commentaire des choix de traduction.`,
   },
 
   // ── Droit, économie, gestion ──
   {
-    value: 'cas_pratique', label: 'Cas pratique', description: 'Faits, problème de droit, solution', tools: TRAVAIL_CORRIGE,
+    value: 'cas_pratique', label: 'Cas pratique', description: 'Faits, problème de droit, solution', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['lycee', 'lycee_pro', ...SUP], matieres: DROIT,
     prompt: 'FORMAT : cas pratique juridique. Faits précis et question(s) de droit ; corrigé selon le syllogisme juridique : qualification des faits, problème de droit, règle applicable, application aux faits, solution. Ne cite un numéro d’article ou une décision que si tu en es certain ou s’il figure dans les sources.',
   },
   {
-    value: 'commentaire_arret', label: 'Commentaire d’arrêt', description: 'Fiche d’arrêt, sens, valeur, portée', tools: TRAVAIL_CORRIGE,
+    value: 'commentaire_arret', label: 'Commentaire d’arrêt', description: 'Fiche d’arrêt, sens, valeur, portée', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: SUP, matieres: ['droit'],
     prompt: 'FORMAT : commentaire d’arrêt. Décision support : celle des sources, sinon un emplacement [Décision à coller] (n’invente jamais de décision). Corrigé : fiche d’arrêt (faits, procédure, prétentions, problème de droit, solution), problématique, plan en deux parties et deux sous-parties (sens, valeur, portée).',
   },
   {
-    value: 'etude_cas', label: 'Étude de cas', description: 'Situation, annexes, questions', tools: TRAVAIL_CORRIGE,
+    value: 'etude_cas', label: 'Étude de cas', description: 'Situation, annexes, questions', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: ['lycee', 'lycee_pro', ...SUP], matieres: [...ECO_GESTION, ...DROIT, ...NUMERIQUE, 'medecine_sante', 'sciences_education', 'psychologie', 'communication', 'autre'],
     prompt: 'FORMAT : étude de cas. Présentation d’une organisation ou d’une situation (fictive et présentée comme telle), annexes avec des données chiffrées cohérentes entre elles, dossier de questions progressives ; éléments de corrigé détaillés.',
   },
   {
-    value: 'note_synthese', label: 'Note de synthèse', description: 'Dossier documentaire, plan', tools: TRAVAIL_CORRIGE,
+    value: 'note_synthese', label: 'Note de synthèse', description: 'Dossier documentaire, plan', tools: TRAVAIL_CORRIGE, count: 'single',
     groups: SUP, prompt: 'FORMAT : note de synthèse. Dossier documentaire (les sources fournies ; sinon, la liste des documents à réunir), consigne (longueur, destinataire) ; corrigé : plan en deux parties, reformulation neutre, renvoi aux documents.',
   },
 
@@ -402,47 +440,48 @@ export const MODALITES: ModaliteInfo[] = [
     prompt: 'FORMAT : exercices d’application. Exercices courts et progressifs qui font appliquer directement la notion (du geste simple à la combinaison de savoir-faire), chacun avec une consigne unique et claire.',
   },
   {
-    value: 'qcm', label: 'QCM', description: 'Une bonne réponse sur quatre', tools: TRAVAIL, groups: TOUS,
-    prompt: 'FORMAT : QCM. Chaque question propose 4 réponses (A, B, C, D) dont une seule exacte. Pour chaque question : détermine d’abord la réponse exacte (refais le calcul ou le raisonnement), écris-la telle quelle comme l’un des 4 choix, puis trois distracteurs faux, plausibles et fondés sur les erreurs fréquentes ; ni « toutes les réponses », ni piège de formulation. Le corrigé donne la lettre du choix exact et une explication d’une ligne.',
+    value: 'qcm', label: 'QCM', description: 'Une bonne réponse sur quatre', tools: TRAVAIL, count: QUESTIONS, groups: TOUS,
+    prompt: 'FORMAT : QCM. Chaque question porte sur un seul point et propose 4 réponses (A, B, C, D) dont une seule exacte. Pour chaque question : détermine d’abord la réponse exacte (refais le calcul ou le raisonnement), écris-la telle quelle comme l’un des 4 choix, puis trois distracteurs faux, plausibles et fondés sur les erreurs fréquentes ; ni « toutes les réponses », ni piège de formulation. Présentation (forme seulement, contenu à adapter au sujet) : « **Question 1.** Combien font 3 × 4 ? », puis un choix par ligne : « A) 7 », « B) 12 », « C) 34 », « D) 1 ». Le corrigé donne pour chaque question la lettre exacte et une explication d’une ligne (« Question 1 : B — 3 × 4 = 12 »).',
   },
   {
-    value: 'vrai_faux', label: 'Vrai / faux justifié', description: 'Affirmations à justifier', tools: TRAVAIL, groups: TOUS,
-    prompt: 'FORMAT : vrai ou faux, avec justification. Affirmations nettes (ni ambiguës ni piégeuses), autant de vraies que de fausses ; l’élève justifie chaque réponse en une phrase ; le corrigé donne la justification attendue.',
+    value: 'vrai_faux', label: 'Vrai / faux justifié', description: 'Affirmations à justifier', tools: TRAVAIL, count: AFFIRMATIONS, groups: TOUS,
+    prompt: 'FORMAT : vrai ou faux, avec justification. Affirmations nettes, chacune vraie ou fausse sans ambiguïté (ni piège, ni double négation), autant de vraies que de fausses, dans un ordre mélangé ; l’élève coche puis justifie en une phrase. Présentation (forme seulement) : « **1.** [affirmation] ☐ Vrai ☐ Faux — Justification : … ». Le corrigé donne pour chaque affirmation « Vrai » ou « Faux » et la justification attendue (pour une affirmation fausse, l’énoncé correct).',
   },
   {
-    value: 'texte_trous', label: 'Texte à trous', description: 'Mots-clés à compléter', tools: TRAVAIL, groups: SCOLAIRE,
-    prompt: 'FORMAT : texte à trous. Un texte cohérent sur la notion, avec des blancs numérotés sur les mots-clés uniquement ; banque de mots si le niveau le justifie ; corrigé avec les réponses numérotées.',
+    value: 'texte_trous', label: 'Texte à trous', description: 'Mots-clés à compléter', tools: TRAVAIL, count: MOTS_A_COMPLETER, groups: SCOLAIRE,
+    prompt: 'FORMAT : texte à trous, en trois parties. 1. « Texte » : un texte suivi, cohérent et exact sur la notion, au niveau de la classe ; chaque mot-clé retenu est REMPLACÉ par un blanc numéroté (le mot n’apparaît plus dans le texte), au plus deux blancs par phrase, numérotés dans l’ordre (1), (2), (3)… Forme seulement : « Le chat (1) ________ sur le canapé. » 2. « Banque de mots » : les mots retirés, dans le désordre (sauf si le niveau justifie de s’en passer). 3. « Corrigé » : un mot par blanc, dans l’ordre (« (1) dort »).',
   },
   {
-    value: 'questions_cours', label: 'Questions de cours', description: 'Restitution des connaissances', tools: TRAVAIL, groups: SECONDAIRE_SUP,
+    value: 'questions_cours', label: 'Questions de cours', description: 'Restitution des connaissances', tools: TRAVAIL, count: QUESTIONS, groups: SECONDAIRE_SUP,
     prompt: 'FORMAT : questions de cours (restitution des connaissances). Questions précises et courtes (définir, citer, expliquer, donner un exemple) ; corrigé rédigé comme une trace écrite.',
   },
   {
-    value: 'probleme', label: 'Problème', description: 'Situation complexe, démarche', tools: TRAVAIL_CORRIGE, groups: TOUS,
+    value: 'probleme', label: 'Problème', description: 'Situation complexe, démarche', tools: TRAVAIL_CORRIGE, count: PROBLEMES, groups: TOUS,
     matieres: [...MATHS, ...SCIENCES, ...NUMERIQUE, ...ECO_GESTION, 'autre'],
     prompt: 'FORMAT : problème. Situation contextualisée et réaliste, données complètes et cohérentes, questions enchaînées du plus guidé au plus autonome, une question finale de synthèse ou de prise d’initiative ; corrigé avec la démarche complète.',
   },
   {
-    value: 'etude_documents', label: 'Étude de documents', description: 'Prélever, analyser, relier', tools: TRAVAIL_CORRIGE, groups: TOUS,
+    value: 'etude_documents', label: 'Étude de documents', description: 'Prélever, analyser, relier', tools: TRAVAIL_CORRIGE, count: 'single', groups: TOUS,
     matieres: DOCUMENTS,
     prompt: 'FORMAT : étude de documents. Un à trois documents reproduits ou décrits précisément (issus des sources, ou construits pour l’exercice et présentés comme tels : jamais une fausse citation ni une fausse statistique attribuée à une source réelle) ; questions de prélèvement, puis d’analyse, puis de mise en relation avec les connaissances ; corrigé.',
   },
   {
-    value: 'oral', label: 'Oral', description: 'Exposé, lecture, interaction', tools: TRAVAIL, groups: TOUS,
+    value: 'oral', label: 'Oral', description: 'Exposé, lecture, interaction', tools: TRAVAIL, count: 'single', groups: TOUS,
     prompt: 'FORMAT : activité orale. Consigne de prise de parole (exposé, lecture expressive, interaction), temps de préparation et de parole, supports autorisés, grille d’évaluation de l’oral (contenu, clarté, posture, langue).',
   },
   {
-    value: 'projet', label: 'Mini-projet', description: 'Cahier des charges, livrables', tools: TRAVAIL,
+    value: 'projet', label: 'Mini-projet', description: 'Cahier des charges, livrables', tools: TRAVAIL, count: 'single',
     groups: SECONDAIRE_SUP, prompt: 'FORMAT : mini-projet. Cahier des charges, livrables, étapes et jalons, répartition des rôles, critères et grille d’évaluation.',
   },
 
   // ── Maternelle (exercices = activités) ──
   {
-    value: 'ateliers', label: 'Ateliers', description: 'Manipulation, en autonomie ou dirigés', tools: ['exercices', 'fiche_prep'], groups: ['maternelle', 'elementaire'],
+    value: 'ateliers', label: 'Ateliers', description: 'Manipulation, en autonomie ou dirigés', tools: ['exercices', 'fiche_prep'], count: ATELIERS,
+    groups: ['maternelle', 'elementaire'],
     prompt: 'FORMAT : ateliers. Pour chaque atelier : matériel, organisation (autonome ou dirigé, nombre d’élèves), consigne orale courte, critères de réussite observables, variantes plus simple et plus difficile ; rotation des groupes décrite.',
   },
   {
-    value: 'jeux', label: 'Jeux', description: 'Règle, matériel, variantes', tools: ['exercices'], groups: ['maternelle', 'elementaire'],
+    value: 'jeux', label: 'Jeux', description: 'Règle, matériel, variantes', tools: ['exercices'], count: JEUX, groups: ['maternelle', 'elementaire'],
     prompt: 'FORMAT : jeux pédagogiques. Pour chaque jeu : but, matériel, règle expliquée simplement, déroulement, ce que l’enseignant observe, variantes.',
   },
 
@@ -559,6 +598,26 @@ export function isModaliteAvailable(value: unknown, type: TypeContenu, niveau: N
 
 export function getModalite(value: string | undefined): ModaliteInfo | undefined {
   return value ? MODALITES.find(f => f.value === value) : undefined;
+}
+
+/**
+ * Ce que compte le « Nombre de… » de l'outil Exercices avec ce format (les exercices par défaut, les activités en
+ * maternelle), ou null pour un travail d'un seul tenant : le nombre n'est alors ni proposé, ni transmis, ni demandé.
+ */
+export function countUnit(modalite: string | undefined, group?: LevelGroup): CountUnit | null {
+  const count = getModalite(modalite)?.count;
+  if (count === 'single') return null;
+  return count ?? (group === 'maternelle' ? ACTIVITES : EXERCICES);
+}
+
+/** « Nombre d'exercices », « Nombre de questions »… */
+export function countLabel(unit: CountUnit): string {
+  return /^[aeéèêiîoôu]/i.test(unit.many) ? `Nombre d'${unit.many}` : `Nombre de ${unit.many}`;
+}
+
+/** « 1 question », « 10 questions ». */
+export function countText(n: number, unit: CountUnit): string {
+  return `${n} ${n > 1 ? unit.many : unit.one}`;
 }
 
 /** Consigne du format pour le modèle (vide si le format est inconnu). */

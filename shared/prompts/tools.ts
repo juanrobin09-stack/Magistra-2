@@ -3,7 +3,9 @@
 // ton, besoins particuliers. Une option choisie prime toujours sur le comportement par défaut de l'outil.
 
 import { PROFILS_DIFFERENCIATION, PROFILS_ELEVE, TYPES_LETTRE, type ProfilDifferenciation, type TypeContenu } from '../catalog.js';
-import { BAREMES, BESOINS_PARTICULIERS, getModalite, modalitePrompt, TONS, TYPES_EVALUATION } from '../formats.js';
+import {
+  BAREMES, BESOINS_PARTICULIERS, countText, countUnit, getModalite, modalitePrompt, TONS, TYPES_EVALUATION,
+} from '../formats.js';
 import type { LevelGroup } from '../levels.js';
 import type { GenerationRequest } from '../types.js';
 
@@ -139,33 +141,51 @@ Structure :
   },
 
   exercices: ({ req, group, sup, primary, fmt, withKey }) => {
-    const count = req.nombreExercices;
+    // Ce que l'on compte (exercices, questions, ateliers…) ; null : un travail d'un seul tenant (dissertation, dictée…).
+    const unit = countUnit(req.modalite, group);
+    const count = unit ? req.nombreExercices : undefined;
+    const exact = unit && count
+      ? `EXACTEMENT ${countText(count, unit)}, numéroté${unit.feminine ? 'e' : ''}s de 1 à ${count}`
+      : '';
     const diff = req.difficulte === 'facile' ? 'Niveau de difficulté : facile (consolidation des bases).'
       : req.difficulte === 'moyen' ? 'Niveau de difficulté : moyen.'
         : req.difficulte === 'difficile' ? 'Niveau de difficulté : difficile (transfert, problèmes complexes).'
           : req.difficulte === 'differencie' ? 'Propose trois niveaux clairement identifiés (★ facile, ★★ intermédiaire, ★★★ avancé) travaillant les mêmes compétences.'
             : 'Progression du plus simple au plus complexe.';
-    if (sup) {
-      return `TÂCHE : rédiger un sujet de ${fmt || 'travaux dirigés'} : ${count ? `EXACTEMENT ${plural(count, 'exercice')} (problèmes ou études de cas compris), numérotés de 1 à ${count}` : '4 à 8 exercices, problèmes ou études de cas'}.
-${diff}
-Chaque énoncé est complet (données, hypothèses, questions numérotées).${withKey ? ' Termine par une partie « Éléments de correction » détaillée (démarche, résultats, erreurs fréquentes).' : ''}`;
-    }
     if (group === 'maternelle') {
-      return `TÂCHE : proposer ${count ? `EXACTEMENT ${plural(count, 'activité')} ou atelier${count > 1 ? 's' : ''}` : '4 à 6 activités ou ateliers'} de maternelle sur le sujet.
+      return `TÂCHE : proposer ${count && unit ? (unit.many === 'activités' ? `EXACTEMENT ${plural(count, 'activité')} ou atelier${count > 1 ? 's' : ''}` : `EXACTEMENT ${countText(count, unit)}`) : '4 à 6 activités ou ateliers'} de maternelle sur le sujet.
 ${diff}
 Les élèves ne lisent pas encore : activités de manipulation, jeux, langage oral, tri, graphisme ou motricité, avec consigne orale courte à dire à l'élève, matériel et organisation (atelier, regroupement).
 Pour chaque activité : ce que l'on observe (critères de réussite observables), aide possible, prolongement. Aucune note ni barème.`;
     }
     const key = !withKey
       ? ''
-      : primary
-        ? 'Termine par une partie « Corrigé » complète (réponses et démarche attendue) et les critères de réussite ; pas de note sur 20.'
-        : 'Termine par une partie « Corrigé » complète (réponses et démarche) et un barème indicatif.';
+      : sup
+        ? 'Termine par une partie « Éléments de correction » détaillée (démarche, résultats, erreurs fréquentes).'
+        : primary
+          ? 'Termine par une partie « Corrigé » complète (réponses et démarche attendue) et les critères de réussite ; pas de note sur 20.'
+          : 'Termine par une partie « Corrigé » complète (réponses et démarche) et un barème indicatif.';
+    if (!unit) {
+      return [
+        `TÂCHE : rédiger ${sup ? `pour une séance de ${fmt || 'travaux dirigés'} ` : ''}UN SEUL travail complet, au format demandé ci-dessous (et non une série d'exercices).`,
+        diff,
+        'Un titre, une consigne claire (verbes d’action) et les compétences travaillées.',
+        key,
+      ].filter(Boolean).join('\n');
+    }
+    const byDefault = unit.many === 'exercices';
+    if (sup) {
+      return `TÂCHE : rédiger un sujet de ${fmt || 'travaux dirigés'} : ${exact ? (byDefault ? `EXACTEMENT ${plural(count!, 'exercice')} (problèmes ou études de cas compris), numérotés de 1 à ${count}` : exact) : byDefault ? '4 à 8 exercices, problèmes ou études de cas' : `des ${unit.many} en nombre adapté au niveau`}.
+${diff}
+Chaque énoncé est complet (données, hypothèses, questions numérotées).${key ? ` ${key}` : ''}`;
+    }
     return [
-      `TÂCHE : rédiger ${count ? `EXACTEMENT ${plural(count, 'exercice')}, numérotés de 1 à ${count}` : 'une série de 6 à 10 exercices'}.`,
+      `TÂCHE : rédiger ${exact || (byDefault ? 'une série de 6 à 10 exercices' : `un travail au format demandé ci-dessous, avec un nombre de ${unit.many} adapté au niveau`)}.`,
       diff,
       req.modalite ? '' : 'Varie les formats (QCM, vrai/faux justifié, texte à trous, calcul, rédaction, analyse de document, tableau à compléter) selon ce qui convient au niveau.',
-      'Chaque exercice a un titre court, une consigne claire (un verbe d’action) et la compétence travaillée. Ajoute un « Coup de pouce » pour les exercices difficiles.',
+      byDefault
+        ? 'Chaque exercice a un titre court, une consigne claire (un verbe d’action) et la compétence travaillée. Ajoute un « Coup de pouce » pour les exercices difficiles.'
+        : 'Consignes claires (un verbe d’action), compétence travaillée indiquée.',
       key,
     ].filter(Boolean).join('\n');
   },

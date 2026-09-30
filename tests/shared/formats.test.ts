@@ -5,8 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import { ALL_MATIERES, ALL_TYPES, getMatieresForNiveau, TOOL_FIELDS, type Matiere, type TypeContenu } from '../../shared/catalog.js';
 import {
-  BAREMES, BESOINS_PARTICULIERS, defaultModaliteLabel, getModalite, isModaliteAvailable, MODALITES, modaliteFieldLabel,
-  modalitePrompt, modalitesFor, TONS, TYPES_EVALUATION,
+  BAREMES, BESOINS_PARTICULIERS, countLabel, countUnit, defaultModaliteLabel, getModalite, isModaliteAvailable, LIMITES_NOMBRES,
+  MODALITES, modaliteFieldLabel, modalitePrompt, modalitesFor, TONS, TYPES_EVALUATION,
 } from '../../shared/formats.js';
 import { ALL_NIVEAUX, type NiveauScolaire } from '../../shared/levels.js';
 import { buildSystemPrompt, buildUserPrompt, generationTemperature } from '../../shared/prompts/index.js';
@@ -162,7 +162,7 @@ describe('validation partagée (serveur et application Windows)', () => {
 describe('consignes transmises au modèle', () => {
   it('format choisi : sa consigne, qui prime ; plus de « Varie les formats »', () => {
     const sys = buildSystemPrompt(req({ modalite: 'qcm' }), false);
-    expect(sys).toMatch(/FORMAT : QCM\. Chaque question propose 4 réponses/);
+    expect(sys).toMatch(/FORMAT : QCM\. Chaque question porte sur un seul point et propose 4 réponses/);
     expect(sys).toMatch(/Ce format prime sur toute autre indication de forme ci-dessus\./);
     expect(sys).not.toMatch(/Varie les formats/);
     expect(buildSystemPrompt(req({}), false)).toMatch(/Varie les formats/);
@@ -235,6 +235,81 @@ describe('consignes transmises au modèle', () => {
     expect(getModalite('inexistant')).toBeUndefined();
     expect(getModalite(undefined)).toBeUndefined();
     expect(modalitePrompt('inexistant', { niveau: '4eme', matiere: 'mathematiques' })).toBe('');
+  });
+});
+
+describe('ce que l’on compte : exercices, questions… ou un seul travail', () => {
+  it('un travail d’un seul tenant n’a pas de nombre ; un QCM compte des questions ; par défaut, des exercices', () => {
+    for (const single of ['dissertation', 'commentaire', 'dictee', 'redaction', 'etude_cas', 'cas_pratique', 'composition', 'traduction']) {
+      expect(countUnit(single), single).toBeNull();
+    }
+    expect(countLabel(countUnit('qcm')!)).toBe('Nombre de questions');
+    expect(countLabel(countUnit('vrai_faux')!)).toBe("Nombre d'affirmations");
+    expect(countLabel(countUnit('texte_trous')!)).toBe('Nombre de mots à compléter');
+    expect(countLabel(countUnit('probleme')!)).toBe('Nombre de problèmes');
+    expect(countLabel(countUnit('jeux', 'maternelle')!)).toBe('Nombre de jeux');
+    expect(countLabel(countUnit('application')!)).toBe("Nombre d'exercices");
+    expect(countLabel(countUnit(undefined)!)).toBe("Nombre d'exercices");
+    expect(countLabel(countUnit(undefined, 'maternelle')!)).toBe("Nombre d'activités");
+    expect(countLabel(countUnit('format_futur')!)).toBe("Nombre d'exercices");
+  });
+
+  it('chaque format de l’outil Exercices dit ce qu’il compte, avec des nombres proposés dans les bornes acceptées', () => {
+    for (const m of [...MODALITES.filter(m => m.tools.includes('exercices')), undefined]) {
+      for (const group of ['college', 'maternelle'] as const) {
+        const unit = countUnit(m?.value, group);
+        if (!unit) continue;
+        expect(countLabel(unit), m?.value).toMatch(/^Nombre d(e |')\S/);
+        expect(unit.options.length, m?.value).toBeGreaterThanOrEqual(3);
+        for (const n of unit.options) {
+          expect(Number.isInteger(n) && n >= LIMITES_NOMBRES.exercices.min && n <= LIMITES_NOMBRES.exercices.max, `${m?.value} ${n}`).toBe(true);
+        }
+      }
+    }
+    // Des nombres qui ont du sens : quelques problèmes, jamais 12 ; au moins 10 questions possibles pour un QCM.
+    expect(Math.max(...countUnit('probleme')!.options)).toBeLessThanOrEqual(5);
+    expect(Math.max(...countUnit(undefined, 'maternelle')!.options)).toBeLessThanOrEqual(6);
+    expect(countUnit('qcm')!.options).toContain(10);
+  });
+
+  it('validation : le nombre d’exercices d’un travail d’un seul tenant est ignoré ; celui d’un QCM est gardé', () => {
+    const base = { type: 'exercices', niveau: '6eme', matiere: 'francais', sujet: 'Le passé composé', nombreExercices: 5 };
+    expect(validateGenerationRequest({ ...base, modalite: 'dictee' })).not.toHaveProperty('nombreExercices');
+    expect(validateGenerationRequest({ ...base, modalite: 'qcm' }).nombreExercices).toBe(5);
+    expect(validateGenerationRequest(base).nombreExercices).toBe(5);
+    // Format hors de propos (dissertation en 6e) : ignoré, donc le nombre reste valable.
+    const odd = validateGenerationRequest({ ...base, modalite: 'dissertation' });
+    expect(odd).not.toHaveProperty('modalite');
+    expect(odd.nombreExercices).toBe(5);
+  });
+
+  it('consignes : un seul travail complet (jamais une série) ; « EXACTEMENT 10 questions » pour un QCM', () => {
+    const dictee = req({ niveau: '6eme', matiere: 'francais', modalite: 'dictee', nombreExercices: 3 });
+    const sys = buildSystemPrompt(dictee, false);
+    expect(sys).toMatch(/TÂCHE : rédiger UN SEUL travail complet, au format demandé ci-dessous \(et non une série d'exercices\)\./);
+    expect(sys).not.toMatch(/EXACTEMENT/);
+    expect(sys).toMatch(/1\. « Texte de la dictée » : un texte suivi de 80 à 110 mots/);
+    expect(sys).toMatch(/aucun verbe à conjuguer entre parenthèses, aucun blanc/);
+    expect(sys).toMatch(/la règle en une phrase exacte/);
+    // Longueur selon la classe, du CP à la 3e.
+    expect(modalitePrompt('dictee', { niveau: 'cp', matiere: 'francais' })).toMatch(/deux ou trois phrases courtes/);
+    expect(modalitePrompt('dictee', { niveau: '3eme', matiere: 'francais' })).toMatch(/110 à 150 mots/);
+    expect(buildUserPrompt(dictee, [])).not.toMatch(/Nombre d/);
+    const qcm = req({ modalite: 'qcm', nombreExercices: 10 });
+    expect(buildSystemPrompt(qcm, false)).toMatch(/EXACTEMENT 10 questions, numérotées de 1 à 10/);
+    expect(buildSystemPrompt(qcm, false)).toMatch(/« \*\*Question 1\.\*\* Combien font 3 × 4 \? »/);
+    expect(buildUserPrompt(qcm, [])).toMatch(/- Nombre de questions : 10/);
+    // Sans nombre : un nombre de questions adapté, pas « 6 à 10 exercices ».
+    const auto = buildSystemPrompt(req({ modalite: 'qcm' }), false);
+    expect(auto).toMatch(/avec un nombre de questions adapté au niveau/);
+    expect(auto).not.toMatch(/6 à 10 exercices/);
+    // Supérieur : le sujet de TD reste un seul travail pour un cas pratique.
+    const cas = buildSystemPrompt(req({ niveau: 'licence_2', matiere: 'droit', modalite: 'cas_pratique', format: 'td' }), true);
+    expect(cas).toMatch(/pour une séance de travaux dirigés \(TD\) UN SEUL travail complet/);
+    expect(cas).toMatch(/« Éléments de correction »/);
+    // Maternelle : des ateliers comptés comme tels.
+    expect(buildSystemPrompt(req({ niveau: 'maternelle_ms', matiere: 'explorer_monde', modalite: 'ateliers', nombreExercices: 3 }), false))
+      .toMatch(/EXACTEMENT 3 ateliers de maternelle/);
   });
 });
 
