@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MockProvider } from '../../shared/ai/mock';
 import { buildClozeDocument } from '../../shared/cloze';
 import { defaultMessage, MagistraError } from '../../shared/errors';
+import { normalizeExerciseLayout } from '../../shared/exerciseLayout';
 import { checkOutputStructure } from '../../shared/outputChecks';
 import { runGeneration } from '../../shared/pipeline';
 import type { GenerationEvent, GenerationRequest } from '../../shared/types';
@@ -170,6 +171,125 @@ describe('checkOutputStructure — séquence, appréciations, texte à trous', (
     for (const message of messages) {
       const event: GenerationEvent = { type: 'warning', code: 'CONTENT_CHECK', message };
       expect(publicEvent(event)).toEqual(event);
+    }
+  });
+});
+
+describe('checkOutputStructure — corrigé intercalé, numéros incertains (jamais de faux avertissement)', () => {
+  const vf = (n: number) => req({ modalite: 'vrai_faux', nombreExercices: n });
+  const statement = (i: number) => `**${i}.** Le nombre ${i} est pair. ☐ Vrai ☐ Faux`;
+  const shortfall = (found: number, unit: string, wanted: number, e = 'e') =>
+    `Le document contient ${found} ${unit} au lieu des ${wanted} demandé${e}s : vérifiez-le avant de l’utiliser, ou relancez la génération.`;
+
+  it('corrigé après chaque élément, qui rappelle son numéro : tous les éléments comptés', () => {
+    // QCM : « **Corrigé :** » puis « - Question i : B — … » (forme de corrigé demandée par le prompt).
+    const qcm = Array.from({ length: 10 }, (_, i) => `**Question ${i + 1}.** Combien font ${i} × 2 ?\nA) 1\nB) 2\nC) 3\nD) 4\n\n**Corrigé :**\n- Question ${i + 1} : B — explication`).join('\n\n');
+    expect(checkOutputStructure(req({ modalite: 'qcm', nombreExercices: 10 }), normalizeExerciseLayout(qcm))).toEqual([]);
+    const exos = Array.from({ length: 5 }, (_, i) => `### Exercice ${i + 1}\n\nCalcule ${i} + 1.\n\n**Corrigé**\n\nExercice ${i + 1} : ${i + 1}.`).join('\n\n');
+    expect(checkOutputStructure(req({ nombreExercices: 5 }), normalizeExerciseLayout(exos))).toEqual([]);
+    expect(checkOutputStructure(req({ nombreExercices: 7 }), normalizeExerciseLayout(exos))).toEqual([shortfall(5, 'exercices', 7, '')]);
+    // Vrai/faux : « **Corrigé** » puis « Vrai, car… », ou rappel de l'affirmation avec ses cases.
+    const tf = Array.from({ length: 8 }, (_, i) => `${statement(i + 1)}\n\n**Corrigé**\n\nVrai, car ${i + 1} est pair.`).join('\n\n');
+    expect(checkOutputStructure(vf(8), normalizeExerciseLayout(tf))).toEqual([]);
+    const tfBoxes = Array.from({ length: 8 }, (_, i) => `${statement(i + 1)}\n\n**Corrigé**\n\n${i + 1}. ☐ Vrai ☒ Faux`).join('\n\n');
+    expect(checkOutputStructure(vf(8), normalizeExerciseLayout(tfBoxes))).toEqual([]);
+    // Corrigé final : le compte s'arrête toujours à sa numérotation, qui reprend en arrière.
+    const final = `${questions(7)}\n\n## Corrigé\n\n${Array.from({ length: 7 }, (_, i) => `- Question ${i + 1} : B`).join('\n')}`;
+    expect(checkOutputStructure(req({ modalite: 'qcm', nombreExercices: 10 }), final)).toEqual([shortfall(7, 'questions', 10)]);
+    const finalTf = `${Array.from({ length: 5 }, (_, i) => statement(i + 1)).join('\n\n')}\n\n## Corrigé\n\n${Array.from({ length: 5 }, (_, i) => `${i + 1}. ☐ Vrai ☒ Faux`).join('\n')}`;
+    expect(checkOutputStructure(vf(8), finalTf)).toEqual([shortfall(5, 'affirmations', 8)]);
+  });
+
+  it('« Réponse : » (place laissée à l’élève) n’est pas un titre de corrigé', () => {
+    const numbered = Array.from({ length: 8 }, (_, i) => `${statement(i + 1)}\n\nRéponse :\n\n………………………………`).join('\n\n');
+    expect(checkOutputStructure(vf(8), normalizeExerciseLayout(numbered))).toEqual([]);
+    const unnumbered = Array.from({ length: 8 }, (_, i) => `- Le nombre ${i} est pair. ☐ Vrai ☐ Faux\n\nRéponse :\n\n………………`).join('\n\n');
+    expect(checkOutputStructure(vf(8), unnumbered)).toEqual([]);
+    expect(checkOutputStructure(vf(10), unnumbered)).toEqual([shortfall(8, 'affirmations', 10)]);
+  });
+
+  it('élément sans numéro, sous-numéro ou numéros recommencés par partie : aucun avertissement', () => {
+    const td = '## Exercice 1\n\nÉnoncé.\n\n## Exercice 2\n\nÉnoncé.\n\n## Étude de cas : l’entreprise Durand\n\nÉnoncé.';
+    expect(checkOutputStructure(req({ niveau: 'licence_2', nombreExercices: 3 }), td)).toEqual([]);
+    expect(checkOutputStructure(req({ nombreExercices: 5 }), `${exercises(4)}\n\n### Problème — Le jardin\n\nÉnoncé.`)).toEqual([]);
+    const sub = ['1', '2', '3a', '3b', '4', '5'].map(n => `**Question ${n}.** Explique.`).join('\n\n');
+    expect(checkOutputStructure(req({ modalite: 'questions_cours', nombreExercices: 5 }), sub)).toEqual([]);
+    const subSpaced = ['1', '2', '3 a)', '3 b)', '4'].map(n => `**Question ${n}** Explique.`).join('\n\n');
+    expect(checkOutputStructure(req({ modalite: 'questions_cours', nombreExercices: 5 }), subSpaced)).toEqual([]);
+    expect(checkOutputStructure(req({ nombreExercices: 4 }), `${exercises(2)}\n\n### Exercice 2 bis\n\nÉnoncé.\n\n### Exercice 3`)).toEqual([]);
+    const parts = `## Partie A\n\n${Array.from({ length: 4 }, (_, i) => statement(i + 1)).join('\n\n')}\n\n## Partie B\n\n${Array.from({ length: 4 }, (_, i) => statement(i + 1)).join('\n\n')}`;
+    expect(checkOutputStructure(vf(8), parts)).toEqual([]);
+  });
+
+  it('séances regroupées « Séance 3-4 », « Séance 3 et 4 » : deux séances ; barème « Exercice 2 – 4 points » : un exercice', () => {
+    const seq = (title: string) => `### Séance 1 : Découverte\n\n### Séance 2 : Recherche\n\n### ${title} : Atelier (2 h)\n\n### Séance 5 : Bilan`;
+    expect(checkOutputStructure(req({ type: 'sequence', nombreSeances: 5 }), seq('Séance 3-4'))).toEqual([]);
+    expect(checkOutputStructure(req({ type: 'sequence', nombreSeances: 5 }), seq('Séance 3 et 4'))).toEqual([]);
+    // « Séance 3 – 4 » (tirets espacés) : intervalle ou titre ? Aucun avertissement.
+    expect(checkOutputStructure(req({ type: 'sequence', nombreSeances: 6 }), seq('Séance 3 – 4'))).toEqual([]);
+    const graded = (n: number) => Array.from({ length: n }, (_, i) => `### Exercice ${i + 1} – ${i + 2} points\n\nÉnoncé.`).join('\n\n');
+    expect(checkOutputStructure(req({ nombreExercices: 5 }), graded(5))).toEqual([]);
+    expect(checkOutputStructure(req({ nombreExercices: 5 }), graded(3))).toEqual([shortfall(3, 'exercices', 5, '')]);
+  });
+
+  it('vrai/faux : affirmations qui commencent par un calcul (« 12 : 4 = 3 ») jamais prises pour des numéros', () => {
+    const calculations = ['12 : 4 = 3', '15 : 3 = 6', 'Le double de 25 est 50.', '12 : 3 = 4', '45 - 12 = 33', '3.5 est un nombre entier.', '7 × 8 = 56', '10 - 4 = 5'];
+    const bulleted = calculations.map(text => `- ${text} ☐ Vrai ☐ Faux`).join('\n');
+    expect(checkOutputStructure(req({ niveau: 'cm1', modalite: 'vrai_faux', nombreExercices: 8 }), bulleted)).toEqual([]);
+    const bare = calculations.map(text => `${text} ☐ Vrai ☐ Faux`).join('\n\n');
+    expect(checkOutputStructure(req({ niveau: 'cm1', modalite: 'vrai_faux', nombreExercices: 8 }), bare)).toEqual([]);
+    // Numérotées comme le demande le prompt : comptées par leur numéro.
+    const numbered = calculations.map((text, i) => `**${i + 1}.** ${text} ☐ Vrai ☐ Faux`).join('\n\n');
+    expect(checkOutputStructure(req({ niveau: 'cm1', modalite: 'vrai_faux', nombreExercices: 8 }), numbered)).toEqual([]);
+    expect(checkOutputStructure(req({ niveau: 'cm1', modalite: 'vrai_faux', nombreExercices: 10 }), numbered)).toEqual([shortfall(8, 'affirmations', 10)]);
+    const labelled = Array.from({ length: 5 }, (_, i) => `Affirmation ${i + 1} : ${calculations[i]} ☐ Vrai ☐ Faux`).join('\n\n');
+    expect(checkOutputStructure(vf(8), labelled)).toEqual([shortfall(5, 'affirmations', 8)]);
+    // Lignes numérotées et non numérotées mêlées : compte incertain.
+    expect(checkOutputStructure(vf(10), `${numbered}\n\n- Le ciel est vert. ☐ Vrai ☐ Faux`)).toEqual([]);
+  });
+
+  it('appréciation courte numérotée dans la série : comptée ; numérotation « 1. » avec un texte court entre deux : aucun avertissement', () => {
+    const text = (i: number) => `Élève sérieux et investi, qui participe volontiers à l’oral (${i}). Il doit maintenant soigner ses écrits.`;
+    const terse = 'Excellent trimestre, élève moteur. Bravo, continuez !';
+    const body = (i: number) => (i === 7 ? terse : text(i));
+    const appreciations = req({ type: 'appreciations', nombreAppreciations: 10 });
+    expect(checkOutputStructure(appreciations, Array.from({ length: 10 }, (_, i) => `${i + 1}. ${body(i + 1)}`).join('\n'))).toEqual([]);
+    expect(checkOutputStructure(appreciations, Array.from({ length: 10 }, (_, i) => `### Appréciation ${i + 1}\n\n${body(i + 1)}`).join('\n\n'))).toEqual([]);
+    expect(checkOutputStructure(appreciations, Array.from({ length: 10 }, (_, i) => `**Élève ${i + 1}** : ${body(i + 1)}`).join('\n\n'))).toEqual([]);
+    expect(checkOutputStructure(appreciations, Array.from({ length: 10 }, (_, i) => `1. ${body(i + 1)}`).join('\n'))).toEqual([]);
+    // Dernière appréciation brève (après la série des textes longs) : aucun avertissement non plus.
+    expect(checkOutputStructure(appreciations, Array.from({ length: 10 }, (_, i) => `${i + 1}. ${i === 9 ? terse : text(i + 1)}`).join('\n'))).toEqual([]);
+    // Toujours un avertissement s'il en manque vraiment une (le texte court ne comble aucun trou).
+    const nine = Array.from({ length: 9 }, (_, i) => `${i + 1}. ${body(i + 1)}`).join('\n');
+    expect(checkOutputStructure(appreciations, nine)).toEqual([
+      'Le document contient 9 appréciations au lieu des 10 demandées : vérifiez-le avant de l’utiliser, ou relancez la génération.',
+    ]);
+  });
+
+  it('texte à trous : blancs en pointillés ou soulignés échappés tracés par le modèle → aucun avertissement', () => {
+    const cloze = req({ matiere: 'francais', modalite: 'texte_trous', nombreExercices: 10 });
+    expect(checkOutputStructure(cloze, '1. Le chat ………… (dormir) sur le tapis.\n2. Nous ........ (finir) nos devoirs.')).toEqual([]);
+    expect(checkOutputStructure(cloze, '1. Le chat . . . . (dormir).')).toEqual([]);
+    expect(checkOutputStructure(cloze, '1. Le chat \\_\\_\\_\\_ (dormir).')).toEqual([]);
+    // Points de suspension ordinaires, filet horizontal, code : pas des blancs.
+    for (const text of ['Le chat dort… puis s’éveille...', 'Texte.\n\n___\n\nSuite.', 'Texte.\n\n```\n_____\n```']) {
+      expect(checkOutputStructure(cloze, text)).toEqual(['Le texte à trous ne contient aucun mot à compléter : relancez la génération.']);
+    }
+  });
+
+  it('temps linéaire : lignes de milliers d’espaces', () => {
+    const time = (r: GenerationRequest, text: string) => {
+      const start = performance.now();
+      checkOutputStructure(r, text);
+      return performance.now() - start;
+    };
+    // Recherche quadratique avant correction : plusieurs dixièmes de seconde dès 5 000 espaces.
+    expect(time(vf(5), `Corrigé${' '.repeat(5000)}x`)).toBeLessThan(100);
+    const n = 100_000;
+    const sp = ' '.repeat(n);
+    const requests = [vf(5), req({ modalite: 'qcm', nombreExercices: 5 }), req({ type: 'sequence', nombreSeances: 5 }), req({ type: 'appreciations' })];
+    for (const text of [`Corrigé${sp}x`, `☐${sp}x`, `**a**${sp}x`, `${sp}x`, `### Exercice${sp}x`, `**1.**${sp}x ☐ Vrai`, '1.\n'.repeat(n / 3)]) {
+      for (const r of requests) expect(time(r, text)).toBeLessThan(250);
     }
   });
 });

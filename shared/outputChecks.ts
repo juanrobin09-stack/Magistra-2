@@ -8,12 +8,18 @@
 // aucun appel supplémentaire au modèle. La pipeline ne l'appelle que pour une réponse terminée normalement (une réponse
 // tronquée a déjà son propre avertissement).
 //
-// Prudence avant tout : au moindre doute, aucun avertissement. Seuls les éléments numérotés sont comptés (« ### Exercice
-// 2 », « **Question 3.** », « Séance 4 », « 5. » pour une appréciation) ; une numérotation absente, recommencée par
-// partie, des exercices différenciés (numérotés par niveau) ou des questions regroupées en exercices ne donnent lieu à
-// aucun avertissement. Le corrigé n'est jamais compté : sous un titre « Corrigé », « Correction », « Réponses »,
-// « Barème »…, une numérotation qui reprend depuis le début marque la fin du sujet ; un corrigé intercalé (suivi de
-// l'exercice suivant, dont le numéro continue la série) n'interrompt pas le compte.
+// Prudence avant tout : au moindre doute, aucun avertissement (un faux « 1 question au lieu des 10 » sur un document
+// complet est pire que pas d'avertissement du tout). Seuls les éléments numérotés sont comptés (« ### Exercice 2 »,
+// « **Question 3.** », « Séance 4 », « 5. » pour une appréciation) ; une numérotation absente, recommencée par partie
+// ou répétée, un élément sans numéro sûr (« ### Problème — Le jardin », « Question 3a », « Exercice 2 bis »), des
+// exercices différenciés (numérotés par niveau) ou des questions regroupées en exercices ne donnent lieu à aucun
+// avertissement. Le corrigé n'est jamais compté : sous un titre « Corrigé », « Correction », « Réponses », « Barème »…,
+// une numérotation qui reprend en arrière marque la fin du sujet ; un corrigé intercalé, qui rappelle l'élément en
+// cours (« **Corrigé :** Question 3 : B ») puis laisse place à l'élément suivant (numéro qui continue la série),
+// n'interrompt pas le compte.
+//
+// Temps linéaire, même sur une sortie dégénérée (lignes de milliers d'espaces) : jamais deux « \s* » à la suite dans
+// une expression régulière.
 
 import { CLOZE_BLANK, isClozeRequest } from './cloze.js';
 import { countText, countUnit } from './formats.js';
@@ -25,42 +31,83 @@ const ADVICE = 'vérifiez-le avant de l’utiliser, ou relancez la génération.
 const FENCE_RE = /^\s*(```+|~~~+)/;
 /** Blanc numéroté posé par Magistra dans un texte à trous (shared/cloze.ts), y compris dans une formule (« \_ »). */
 const CLOZE_BLANK_RE = new RegExp(`\\((\\d{1,3})\\) (?:${CLOZE_BLANK}|(?:\\\\_){8})`, 'g');
+/** Blanc tracé par le modèle lui-même : « ___ », « \_\_\_ », « ……… », « ........ », « . . . . ». */
+const HANDMADE_BLANK_RE = /_{3,}|(?:\\_){3,}|…{2,}|(?:\.[ \u00a0]?){4,}/;
+/** Filet horizontal (« --- », « *** », « ___ ») : pas un blanc. */
+const RULE_RE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
 /** Case « Vrai » à cocher d'une affirmation (☐ Vrai, - [ ] Vrai…). */
-const TRUE_CHECKBOX_RE = /(?:☐|□|▢|◻|\[\s?\])\s*(?:\*\*|__)?\s*Vrai(?!\p{L})/iu;
+const TRUE_CHECKBOX_RE = /(?:☐|□|▢|◻|\[\s?\])\s*(?:(?:\*\*|__)\s*)?Vrai(?!\p{L})/iu;
 /** Consigne générale (« Coche ☐ Vrai ou ☐ Faux », « Réponds par… ») : ce n'est pas une affirmation. */
 const INSTRUCTION_RE = /(?<!\p{L})(?:coch|entour|r[ée]pond|indiqu)/iu;
-/** Numéro en tête de ligne : « 3. », « **3.** », « - 3) », « Affirmation 3 : ». */
-const LEADING_NUMBER_RE = /^\s*(?:[-*+]\s+)?(?:\*\*|__)?\s*(?:affirmation\s+)?(\d{1,2})\s*(?:[.):—–-]|\*\*|__)/iu;
+/**
+ * Numéro en tête de ligne : « 3. », « **3.** », « - 3) », « 3 — », « Affirmation 3 : ». Jamais le début d'un calcul
+ * (« 12 : 4 = 3 », « 45 - 12 = 33 », « 3.5 est un décimal ») : « : » et « - » ne suivent un numéro qu'après le mot
+ * « Affirmation », et « . » ou « ) » jamais un chiffre.
+ */
+const LEADING_NUMBER_RE =
+  /^\s*(?:[-*+]\s+)?(?:(?:\*\*|__)\s*)?(?:affirmation\s+(?:n[°o]\s*)?(\d{1,2})\s*(?:[.):—–-]|\*\*|__)|(\d{1,2})(?:[.)](?!\d)|\s*(?:[—–]|\*\*|__)))/iu;
 /** Appréciation numérotée : « 1. », « **2.** », « ### 3 », « **Appréciation 4** : », « Élève 5 ». */
 const APPRECIATION_RE =
-  /^\s*(?:#{1,6}\s+)?(?:[-*+]\s+)?(?:\*\*|__)?\s*(?:(?:appr[ée]ciation|commentaire|[ée]l[èe]ve)\s+(?:n[°o]\s*)?)?(\d{1,2})\s*(?:[.):—–-]|\*\*|__|$)/iu;
-/** Longueur minimale d'une appréciation (2 à 3 phrases) : une ligne plus courte n'en est pas une. */
+  /^\s*(?:#{1,6}\s+)?(?:[-*+]\s+)?(?:(?:\*\*|__)\s*)?(?:(?:appr[ée]ciation|commentaire|[ée]l[èe]ve)\s+(?:n[°o]\s*)?)?(\d{1,2})\s*(?:[.):—–-]|\*\*|__|$)/iu;
+/** Longueur minimale d'une appréciation (2 à 3 phrases) : une ligne plus courte n'en est pas sûrement une. */
 const MIN_APPRECIATION_CHARS = 60;
 /** Titre d'une partie annexe après les appréciations (conseils, remarques…) : la suite n'est plus comptée. */
 const NOTES_TITLE_RE = /(?<!\p{L})(?:conseils?|remarques?|notes?|astuces?|personnalis\p{L}*|utilisation)(?!\p{L})/iu;
 /** Titre d'un corrigé (début du titre, après une éventuelle numérotation « 3. », « IV – »…). */
 const ANSWER_KEY_RE =
   /^(?:proposition\s+de\s+)?(?:corrig|correction|solutions?(?!\p{L})|r[ée]ponses?(?!\p{L})|[ée]l[ée]ments?\s+de\s+(?:r[ée]ponse|correction)|bar[èe]me)/iu;
+/**
+ * « Corrigé : », « Solutions », « Réponses : » seuls sur leur ligne (sans « # » ni gras). Jamais « Réponse : » au
+ * singulier : c'est le plus souvent la place laissée à la réponse de l'élève sous chaque question.
+ */
+const BARE_ANSWER_KEY_RE = /^\s*((?:corrig|correction|solutions?|r[ée]ponses)[^:.!?]{0,30}?)\s*(?::\s*)?$/iu;
+
+/** Début de ligne avant le mot compté : titre « # », puce, gras ou italique. */
+const LINE_START = String.raw`^\s*(?:#{1,6}\s+)?(?:[-*+]\s+)?(?:(?:\*\*|__|\*|_)\s*)?`;
+/** Numéro après le mot compté : « Exercice 2 », « Exercice n° 2 ». */
+const NUMBER_RE = /^\s+(?:n[°o]\s*)?(\d{1,2})/iu;
+/** Sous-numéro (« 3a », « 3 b) », « 2 bis ») : impossible de savoir s'il désigne un élément de plus. */
+const SUB_NUMBER_RE = /^(?:[\p{L}\d]|\s?\p{L}[).]|\s+(?:bis|ter)(?!\p{L}))/iu;
+/** Second numéro : « 3 et 4 », « 1 à 3 », « 3-4 », « 3 – 4 ». */
+const SECOND_NUMBER_RE = /^(\s*)(à|et|[-–—])(\s*)(\d{1,2})(?![\p{L}\d])/iu;
+/** Barème ou durée après un tiret (« Exercice 2 – 4 points », « Séance 3 – 55 min ») : pas un second numéro. */
+const UNIT_RE = /^\s*(?:pts?|points?|min(?:utes?)?|h|heures?)(?![\p{L}\d])/iu;
+
+/** Numéros désignés par une ligne, 'doute' si elle désigne un élément sans numéro sûr, null si elle n'en désigne pas. */
+type LineNumbers = number[] | 'doute' | null;
 
 /**
- * Ligne qui commence par l'élément numéroté (après un titre « # », une puce ou du gras) : « Exercice 2 », « Exercice
- * n° 2 », ou au pluriel avec plusieurs numéros (« Séances 3 et 4 », « Exercices 1 à 3 »).
+ * Lecture des lignes qui commencent par un mot compté (après un titre « # », une puce ou du gras) :
+ *  - « Exercice 2 », « Exercice n° 2 » → [2] ; « Exercice 2 – 4 points » → [2] (barème) ;
+ *  - « Séances 3 et 4 », « Séance 3-4 » → [3, 4] ; « Exercices 1 à 3 » → [1, 2, 3] ;
+ *  - « ### Problème — Le jardin », « Étude de cas : … » (élément sans numéro), « Question 3a », « Question 3 b) »,
+ *    « Exercice 2 bis » (sous-numéro), « Séance 3 – 4 … » (intervalle ou titre ?), « Exercices 1, 2 et 3 » → 'doute' ;
+ *  - « ## Exercices » (simple titre) ou ligne qui ne commence pas par le mot → null.
  */
-function numberedLineRe(words: string): RegExp {
-  return new RegExp(
-    `^\\s*(?:#{1,6}\\s+)?(?:[-*+]\\s+)?(?:\\*\\*|__|\\*|_)?\\s*(?:${words})`
-      + '(?:\\s+(?:n[°o]\\s*)?(\\d{1,2})|s\\s+(\\d{1,2})\\s*(?:à|-|–|et)\\s*(\\d{1,2}))(?![\\p{L}\\d])',
-    'iu',
-  );
-}
-
-/** Numéros désignés par une ligne numérotée (« Séances 3 et 4 » → 3, 4 ; « Exercices 1 à 3 » → 1, 2, 3). */
-function numbersOf(match: RegExpExecArray): number[] {
-  if (match[1] !== undefined) return [Number(match[1])];
-  const from = Number(match[2]);
-  const to = Number(match[3]);
-  if (to <= from || to - from > 20) return [from, to];
-  return Array.from({ length: to - from + 1 }, (_, k) => from + k);
+function numberedLine(words: string): (line: string) => LineNumbers {
+  const start = new RegExp(`${LINE_START}(?:${words})(s?)(?![\\p{L}\\d])`, 'iu');
+  return line => {
+    const word = start.exec(line);
+    if (!word) return null;
+    const plural = word[1] !== '';
+    const rest = line.slice(word[0].length);
+    const number = NUMBER_RE.exec(rest);
+    if (!number) return plural ? null : 'doute';
+    const from = Number(number[1]);
+    const after = rest.slice(number[0].length);
+    if (from < 1 || SUB_NUMBER_RE.test(after)) return 'doute';
+    const second = SECOND_NUMBER_RE.exec(after);
+    if (!second) return plural ? 'doute' : [from];
+    const joint = second[2].toLowerCase();
+    if (!plural && joint !== 'à' && joint !== 'et') {
+      if (UNIT_RE.test(after.slice(second[0].length))) return [from];
+      if (second[1] || second[3]) return 'doute';
+    }
+    const to = Number(second[4]);
+    if (to <= from || to - from > 20) return 'doute';
+    if (joint === 'et') return [from, to];
+    return Array.from({ length: to - from + 1 }, (_, k) => from + k);
+  };
 }
 
 /** Lignes du document hors blocs de code. */
@@ -82,12 +129,12 @@ function proseLines(document: string): string[] {
 
 /** Texte d'une ligne-titre (titre « # » ou ligne tout en gras), sinon undefined. */
 function titleOf(line: string): string | undefined {
-  return /^\s{0,3}#{1,6}\s+(.*)$/.exec(line)?.[1] ?? /^\s*(?:\*\*|__)(.+?)(?:\*\*|__)\s*:?\s*$/.exec(line)?.[1];
+  return /^\s{0,3}#{1,6}\s+(.*)$/.exec(line)?.[1] ?? /^\s*(?:\*\*|__)(.+?)(?:\*\*|__)\s*(?::\s*)?$/.exec(line)?.[1];
 }
 
 /** Vrai si la ligne est le titre d'un corrigé (titre « # », ligne tout en gras, ou « Corrigé : » seul sur sa ligne). */
 function isAnswerKeyTitle(line: string): boolean {
-  const title = titleOf(line) ?? /^\s*((?:corrig|correction|r[ée]ponses?|solutions?)[^:.!?]{0,30}?)\s*:?\s*$/iu.exec(line)?.[1];
+  const title = titleOf(line) ?? BARE_ANSWER_KEY_RE.exec(line)?.[1];
   if (title === undefined) return false;
   const text = title.replace(/[*_#«»"“”]/g, ' ').replace(/^\s*(?:\d{1,2}|[IVX]{1,4}|[A-Z])\s*[.)–—:-]\s*/, '').trim();
   return ANSWER_KEY_RE.test(text);
@@ -99,25 +146,32 @@ interface CountOptions {
 }
 
 /** Nombre d'éléments numérotés distincts, ou null si le document ne permet pas de compter sans risque d'erreur. */
-function countNumbered(document: string, re: RegExp, options: CountOptions): number | null {
+function countNumbered(document: string, numbersOf: (line: string) => LineNumbers, options: CountOptions): number | null {
   const seen = new Set<number>();
   let max = 0;
   let inKey = false;
   for (const line of proseLines(document)) {
-    const match = re.exec(line);
-    if (!match) {
+    const numbers = numbersOf(line);
+    if (numbers === null) {
       if (options.answerKey && isAnswerKeyTitle(line)) inKey = true;
       continue;
     }
-    const numbers = numbersOf(match).filter(n => n > 0);
-    if (!numbers.length) continue;
+    if (numbers === 'doute') {
+      // Élément sans numéro sûr dans le sujet : impossible de compter sans se tromper (dans le corrigé : ignoré).
+      if (inKey) continue;
+      return null;
+    }
     if (options.answerKey) {
       if (inKey) {
-        // Corrigé qui reprend la numérotation : le sujet est terminé. Sinon, corrigé intercalé : on continue.
-        if (numbers[0] <= max) break;
+        // Corrigé qui reprend la numérotation en arrière : le sujet est terminé.
+        if (numbers[0] < max) break;
+        // Corrigé intercalé qui rappelle l'élément en cours (« Question 3 : B ») : on reste dans le corrigé.
+        if (numbers[0] === max) continue;
+        // Élément suivant : le sujet continue.
         inKey = false;
-      } else if (numbers[0] === 1 && seen.has(1)) {
-        // Numérotation recommencée hors corrigé (par partie, par niveau…) : impossible de compter sans se tromper.
+      } else if (numbers.some(n => seen.has(n))) {
+        // Numérotation recommencée ou répétée hors corrigé (par partie, par niveau…) : impossible de compter sans se
+        // tromper.
         return null;
       }
     }
@@ -135,14 +189,19 @@ function plainText(line: string): string {
 }
 
 /**
- * Appréciations numérotées. Ne comptent que les textes d'au moins MIN_APPRECIATION_CHARS caractères (sur la ligne du
- * numéro, ou sur la suivante après un intitulé seul « ### Appréciation 1 ») : une liste de conseils ou de remarques
- * n'est pas prise pour des appréciations, pas plus que ce qui suit un titre « Conseils », « Remarques »… Des textes
- * non numérotés plus nombreux que les textes numérotés : la numérotation n'est pas celle des appréciations (null).
+ * Appréciations numérotées. Ne comptent sûrement que les textes d'au moins MIN_APPRECIATION_CHARS caractères (sur la
+ * ligne du numéro, ou sur la suivante après un intitulé seul « ### Appréciation 1 ») : une liste de conseils ou de
+ * remarques n'est pas prise pour des appréciations, pas plus que ce qui suit un titre « Conseils », « Remarques »…
+ * Un texte numéroté plus court (« 7. Excellent trimestre, bravo ! ») compte s'il comble un trou de la série (le 7 entre
+ * le 6 et le 8) ; après la série, ou avec une numérotation « 1. » partout, il rend le compte incertain (null). Des
+ * textes non numérotés plus nombreux que les textes numérotés : la numérotation n'est pas celle des appréciations
+ * (null).
  */
 function countAppreciations(document: string): number | null {
   const lines = proseLines(document);
   const seen = new Set<number>();
+  /** Numéros des textes trop courts pour être sûrement des appréciations. */
+  const short: number[] = [];
   let matched = 0;
   let loose = 0;
   let restarted = false;
@@ -161,48 +220,88 @@ function countAppreciations(document: string): number | null {
     let text = plainText(lines[i].slice(match[0].length));
     if (text.length < 3) {
       // Intitulé seul : le texte est sur la ligne suivante (qui n'est alors pas un texte isolé).
-      const next = lines.findIndex((line, k) => k > i && line.trim() !== '');
-      if (next !== -1 && !APPRECIATION_RE.test(lines[next]) && titleOf(lines[next]) === undefined) {
+      let next = i + 1;
+      while (next < lines.length && lines[next].trim() === '') next++;
+      if (next < lines.length && !APPRECIATION_RE.test(lines[next]) && titleOf(lines[next]) === undefined) {
         text = plainText(lines[next]);
         i = next;
       }
     }
-    if (n < 1 || text.length < MIN_APPRECIATION_CHARS) continue;
+    if (n < 1) continue;
+    if (text.length < MIN_APPRECIATION_CHARS) {
+      if (text.length >= 3) short.push(n);
+      continue;
+    }
     if (seen.has(n)) restarted = true;
     seen.add(n);
     matched++;
   }
   if (seen.size === 0 || loose > matched) return null;
-  // Tous numérotés « 1. » (numérotation laissée au Markdown) : on compte les textes.
-  if (seen.size === 1) return matched;
+  // Tous numérotés « 1. » (numérotation laissée au Markdown) : on compte les textes, sauf si un texte court s'y mêle
+  // (appréciation brève ou liste annexe ? impossible de trancher).
+  if (seen.size === 1) return short.length ? null : matched;
   // Numérotation recommencée (deux séries, liste annexe…) : impossible de compter sans se tromper.
-  return restarted ? null : seen.size;
+  if (restarted) return null;
+  const max = Math.max(...seen);
+  // Texte court numéroté après la série (« 10. Bravo ! » après le 9) : appréciation brève ou note ? Aucun avertissement.
+  if (short.some(n => n > max)) return null;
+  // Texte court qui comble un trou de la série (le 7 entre le 6 et le 8) : une appréciation brève. Ceux dont le numéro
+  // est déjà pris (liste annexe qui recommence à 1) ne comptent pas.
+  return seen.size + new Set(short.filter(n => !seen.has(n))).size;
 }
 
 /**
- * Affirmations d'un vrai/faux, avant le corrigé : numéros distincts des lignes qui portent une case « Vrai » à cocher
- * (« **3.** … ☐ Vrai ☐ Faux ») ; sans numéro sur ces lignes (cases sous chaque affirmation, tableau), les lignes à
- * cocher elles-mêmes, hors consigne générale.
+ * Affirmations d'un vrai/faux : numéros distincts des lignes qui portent une case « Vrai » à cocher (« **3.** … ☐ Vrai
+ * ☐ Faux ») ; sans numéro sur ces lignes (cases sous chaque affirmation, tableau), les lignes à cocher elles-mêmes,
+ * hors consigne générale, jusqu'au premier titre de corrigé. Le corrigé se reconnaît comme pour countNumbered (un
+ * corrigé intercalé n'interrompt pas le compte). 0 : aucune affirmation à cocher ; null : compte incertain (lignes
+ * numérotées et non numérotées mêlées, numérotation recommencée, lignes à cocher après un corrigé sans numéros).
  */
 function countTrueFalse(document: string): number | null {
   const numbered = new Set<number>();
+  let max = 0;
   let unnumbered = 0;
+  let inKey = false;
+  let sawKey = false;
+  let unnumberedAfterKey = false;
   for (const line of proseLines(document)) {
-    if (isAnswerKeyTitle(line)) break;
+    if (isAnswerKeyTitle(line)) {
+      inKey = sawKey = true;
+      continue;
+    }
     if (!TRUE_CHECKBOX_RE.test(line)) continue;
-    const number = LEADING_NUMBER_RE.exec(line)?.[1];
-    if (number !== undefined && Number(number) > 0) numbered.add(Number(number));
-    else if (!INSTRUCTION_RE.test(line)) unnumbered++;
+    const match = LEADING_NUMBER_RE.exec(line);
+    const number = match ? Number(match[1] ?? match[2]) : 0;
+    if (number > 0) {
+      if (inKey) {
+        if (number < max) break;
+        if (number === max) continue;
+        inKey = false;
+      } else if (numbered.has(number)) {
+        return null;
+      }
+      numbered.add(number);
+      max = Math.max(max, number);
+    } else if (!INSTRUCTION_RE.test(line)) {
+      if (sawKey) unnumberedAfterKey = true;
+      else unnumbered++;
+    }
   }
-  return numbered.size || unnumbered || null;
+  if (numbered.size) return unnumbered ? null : numbered.size;
+  return unnumberedAfterKey ? null : unnumbered;
+}
+
+/** Le modèle a tracé ses propres blancs (hors code et filets horizontaux). */
+function hasHandmadeBlanks(document: string): boolean {
+  return proseLines(document).some(line => !RULE_RE.test(line) && HANDMADE_BLANK_RE.test(line));
 }
 
 function checkCloze(req: GenerationRequest, document: string): string | null {
   if (!isClozeRequest(req)) return null;
   const blanks = new Set([...document.matchAll(CLOZE_BLANK_RE)].map(m => m[1]));
   if (blanks.size === 0) {
-    // Des blancs posés autrement (« _____ ») ne se comptent pas : aucun avertissement.
-    return /_{3,}/.test(document) ? null : 'Le texte à trous ne contient aucun mot à compléter : relancez la génération.';
+    // Des blancs tracés autrement (« _____ », « ……… », « ........ ») ne se comptent pas : aucun avertissement.
+    return hasHandmadeBlanks(document) ? null : 'Le texte à trous ne contient aucun mot à compléter : relancez la génération.';
   }
   const unit = countUnit(req.modalite);
   const wanted = req.nombreExercices;
@@ -224,22 +323,24 @@ function checkExercices(req: GenerationRequest, document: string): string | null
       const words = SUPERIEUR_GROUPS.includes(group)
         ? 'exercice|probl[èe]me|[ée]tude\\s+de\\s+cas|cas\\s+pratique'
         : 'exercice|probl[èe]me';
-      found = countNumbered(document, numberedLineRe(words), { answerKey: true });
+      found = countNumbered(document, numberedLine(words), { answerKey: true });
       break;
     }
     case 'question': {
       // Questions regroupées en exercices : leur numérotation recommence souvent d'un exercice à l'autre.
-      const exercise = numberedLineRe('exercice');
-      if (proseLines(document).some(line => exercise.test(line))) return null;
-      found = countNumbered(document, numberedLineRe('question'), { answerKey: true });
+      const exercise = numberedLine('exercice');
+      if (proseLines(document).some(line => Array.isArray(exercise(line)))) return null;
+      found = countNumbered(document, numberedLine('question'), { answerKey: true });
       break;
     }
     case 'problème':
-      found = countNumbered(document, numberedLineRe('probl[èe]me'), { answerKey: true });
+      found = countNumbered(document, numberedLine('probl[èe]me'), { answerKey: true });
       break;
-    case 'affirmation':
-      found = countTrueFalse(document) ?? countNumbered(document, numberedLineRe('affirmation'), { answerKey: true });
+    case 'affirmation': {
+      const statements = countTrueFalse(document);
+      found = statements === 0 ? countNumbered(document, numberedLine('affirmation'), { answerKey: true }) : statements;
       break;
+    }
     default:
       // Activités, ateliers, jeux : pas de numérotation imposée.
       return null;
@@ -251,7 +352,7 @@ function checkExercices(req: GenerationRequest, document: string): string | null
 function checkSeances(req: GenerationRequest, document: string): string | null {
   const wanted = req.nombreSeances;
   if (req.type !== 'sequence' || !wanted) return null;
-  const found = countNumbered(document, numberedLineRe('s[ée]ance'), { answerKey: false });
+  const found = countNumbered(document, numberedLine('s[ée]ance'), { answerKey: false });
   if (found === null || found === wanted) return null;
   return `La séquence compte ${found} séance${found > 1 ? 's' : ''} au lieu des ${wanted} demandées : ${ADVICE}`;
 }

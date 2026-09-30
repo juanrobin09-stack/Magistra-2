@@ -66,3 +66,69 @@ describe('normalizeMathDelimiters — formules \\( \\) et \\[ \\]', () => {
     expect(normalizeMathDelimiters('Soit \\( \\frac{1}')).toBe('Soit \\( \\frac{1}');
   });
 });
+
+describe('normalizeMathDelimiters — inégalités, blancs, pourcentages, citations', () => {
+  it('inégalité « \\(a<b\\) » : toujours une formule, jamais du texte lu comme une balise HTML « <b et b> »', () => {
+    expect(normalizeMathDelimiters('Si \\(a<b\\) et \\(b>0\\) alors \\(a<c\\).')).toBe('Si $$a<b$$ et $$b>0$$ alors $$a<c$$.');
+    expect(normalizeMathDelimiters('On a \\( x > 2 \\) donc c > 0.')).toBe('On a $$x > 2$$ donc c > 0.');
+    // Sans inégalité : texte simple, comme avant.
+    expect(normalizeMathDelimiters('On a \\( x ≤ 3,5 \\).')).toBe('On a x ≤ 3,5.');
+  });
+
+  it('blanc d’un texte à trous dans une formule convertie : « \\_ » (jamais un indice refusé par KaTeX)', () => {
+    const blank = '\\_'.repeat(8);
+    expect(normalizeMathDelimiters('\\( 3 \\times 4 = (1) ________ \\)')).toBe(`$$3 \\times 4 = (1) ${blank}$$`);
+    expect(normalizeMathDelimiters('\\(x = (2) ________\\)')).toBe(`$$x = (2) ${blank}$$`);
+    expect(normalizeMathDelimiters('Le périmètre vaut $ 2 \\pi r = (3) ________ $.')).toBe(`Le périmètre vaut $2 \\pi r = (3) ${blank}$.`);
+    expect(normalizeMathDelimiters('\\[ \\frac{(4) ________}{4} = 1 \\]')).toBe(`$$\n\\frac{(4) ${blank}}{4} = 1\n$$`);
+    expect(normalizeMathDelimiters('Soit \\[ 3 + ___ = 5 \\] ici.')).toBe('Soit $$3 + \\_\\_\\_ = 5$$ ici.');
+    // Déjà échappé, ou indice simple : inchangé.
+    expect(normalizeMathDelimiters(`\\( x = (1) ${blank} \\)`)).toBe(`$$x = (1) ${blank}$$`);
+    expect(normalizeMathDelimiters('\\( u_n + x_{1} \\)')).toBe('$$u_n + x_{1}$$');
+  });
+
+  it('« % » dans une formule convertie : « \\% » (jamais le début d’un commentaire qui coupe la formule)', () => {
+    expect(normalizeMathDelimiters('Calcule \\( 20 % \\times 150 \\) puis conclus.')).toBe('Calcule $$20 \\% \\times 150$$ puis conclus.');
+    expect(normalizeMathDelimiters('\\[ 20 % \\times 150 = 30 \\]')).toBe('$$\n20 \\% \\times 150 = 30\n$$');
+    expect(normalizeMathDelimiters('Soit $ 15 % \\text{ de } 80 $.')).toBe('Soit $15 \\% \\text{ de } 80$.');
+    // Déjà échappé : pas de double échappement ; calcul simple : texte, « % » littéral.
+    expect(normalizeMathDelimiters('\\( 20 \\% \\times 150 \\)')).toBe('$$20 \\% \\times 150$$');
+    expect(normalizeMathDelimiters('\\( 20 % de 150 \\)')).toBe('20 % de 150');
+  });
+
+  it('\\[ … \\] sur plusieurs lignes dans une citation : bloc « $$ » dans la citation, sans « > » dans la formule', () => {
+    expect(normalizeMathDelimiters('> **Théorème de Pythagore**\n>\n> \\[\n> BC^2 = AB^2 + AC^2\n> \\]\n>\n> Suite.'))
+      .toBe('> **Théorème de Pythagore**\n>\n> $$\n> BC^2 = AB^2 + AC^2\n> $$\n>\n> Suite.');
+    expect(normalizeMathDelimiters('>> \\[\n>> a^2 = b\n>> \\]')).toBe('>> $$\n>> a^2 = b\n>> $$');
+    // Au milieu d'une ligne de citation : formule en ligne, marqueurs des lignes suivantes retirés.
+    expect(normalizeMathDelimiters('> Soit \\[ x^2\n> + 1 \\] ici.')).toBe('> Soit $$x^2 + 1$$ ici.');
+    // Crochets échappés sans formule dans une citation : inchangés.
+    expect(normalizeMathDelimiters('> \\[\n> Source\n> \\]')).toBe('> \\[\n> Source\n> \\]');
+  });
+
+  it('temps linéaire : « $ » suivi de milliers d’espaces, délimiteurs jamais fermés', () => {
+    const time = (text: string) => {
+      const start = performance.now();
+      normalizeMathDelimiters(text);
+      return performance.now() - start;
+    };
+    // Recherche cubique avant correction : plus d'une seconde dès 2 000 espaces.
+    expect(time(`Prix : 5 $${' '.repeat(2000)}|`)).toBeLessThan(100);
+    // Même résultat qu'avant : espaces de tête ou de fin retirés d'une formule, montants inchangés.
+    expect(normalizeMathDelimiters('Soit $ \\frac{1}{2} $ et 5 $ et 10 $.')).toBe('Soit $\\frac{1}{2}$ et 5 $ et 10 $.');
+    expect(normalizeMathDelimiters('$\\alpha $ et $ \\beta$ et $\\gamma$')).toBe('$\\alpha$ et $\\beta$ et $\\gamma$');
+    expect(normalizeMathDelimiters('Total : 12 $\t\t| 5 $')).toBe('Total : 12 $\t\t| 5 $');
+    const n = 100_000;
+    for (const text of [
+      `Prix : 5 $${' '.repeat(n)}|`,
+      `5 $${'\t'.repeat(n)}|`,
+      '$ '.repeat(n / 2),
+      '\\['.repeat(n / 2),
+      '\\('.repeat(n / 2),
+      `\\[${'a '.repeat(n / 2)}`,
+      `> \\[${'\n>'.repeat(n / 2)}`,
+    ]) {
+      expect(time(text)).toBeLessThan(250);
+    }
+  });
+});

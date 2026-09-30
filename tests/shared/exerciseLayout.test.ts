@@ -64,3 +64,51 @@ describe('normalizeExerciseLayout — QCM, vrai/faux, questions numérotées', (
     expect(normalizeExerciseLayout('')).toBe('');
   });
 });
+
+describe('normalizeExerciseLayout — jamais de bloc de code créé', () => {
+  it('lignes en retrait de 4 colonnes ou plus hors liste : aucune ligne vide insérée, aucune puce ajoutée', () => {
+    const answers = 'Corrigé :\n    **Question 1.** B\n    **Question 2.** A';
+    expect(normalizeExerciseLayout(answers)).toBe(answers);
+    const tabs = 'Corrigé :\n\t**Question 1.** B\n\t**Question 2.** A';
+    expect(normalizeExerciseLayout(tabs)).toBe(tabs);
+    const choices = '**Question 1.** Combien font 3 × 4 ?\n    A) 7\n    B) 12\n    Réponse : B';
+    expect(normalizeExerciseLayout(choices)).toBe(choices);
+    expect(normalizeExerciseLayout(choices.replace(/ {4}/g, '\t'))).toBe(choices.replace(/ {4}/g, '\t'));
+  });
+
+  it('retrait compté depuis le texte de l’élément de liste reconnu ; numéro qui ne peut pas commencer une liste : la marge compte', () => {
+    // « 10. » collé à un paragraphe n'est pas un élément de liste (CommonMark) : une ligne vide ferait du code.
+    const text = 'Voir aussi\n10. Suite\n    **Question 11.** Combien ?';
+    expect(normalizeExerciseLayout(text)).toBe(text);
+    const nested = 'Voir aussi\n10. Combien ?\nA) 7\nB) 12';
+    expect(normalizeExerciseLayout(nested)).toBe(nested);
+    // Élément de liste reconnu : mise en page conservée.
+    expect(normalizeExerciseLayout('10. Combien font 3 × 4 ?\n    A) 7\n    B) 12\n    Réponse : B'))
+      .toBe('10. Combien font 3 × 4 ?\n    - A) 7\n    - B) 12\n\n    Réponse : B');
+    expect(normalizeExerciseLayout('1. Question\n\n    Réponse :\n    **Question 2.** Suite'))
+      .toBe('1. Question\n\n    Réponse :\n\n    **Question 2.** Suite');
+    expect(normalizeExerciseLayout('9. Combien ?\n   Réponse : A\n10. Combien ?\n    A) 7\n    B) 12'))
+      .toBe('9. Combien ?\n   Réponse : A\n10. Combien ?\n    - A) 7\n    - B) 12');
+    expect(normalizeExerciseLayout('1. Question\n   A) 7\n   B) 12')).toBe('1. Question\n   - A) 7\n   - B) 12');
+  });
+
+  it('temps linéaire : ligne de milliers d’espaces', () => {
+    const time = (text: string) => {
+      const start = performance.now();
+      normalizeExerciseLayout(text);
+      return performance.now() - start;
+    };
+    // Recherche quadratique avant correction : plus d'une seconde pour 40 000 espaces.
+    expect(time(`${' '.repeat(40_000)}x\n**Question 1.** Suite`)).toBeLessThan(150);
+    const n = 100_000;
+    for (const text of [
+      `${' '.repeat(n)}x\n**Question 1.** Suite`,
+      `a${' '.repeat(n)}x\n**Question 1.** Suite`,
+      `${' '.repeat(n)}A) 7\n${' '.repeat(n)}B) 8\nSuite`,
+      `-${'\t'.repeat(n)}x\n**Question 1.** Suite`,
+      'A) 1\n'.repeat(n / 5),
+    ]) {
+      expect(time(text)).toBeLessThan(250);
+    }
+  });
+});
