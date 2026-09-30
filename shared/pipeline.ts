@@ -1,7 +1,8 @@
 // Pipeline unique de génération, utilisé par le serveur web ET par l'application Windows.
 //
 // demande validée → recherche (facultative) → sources numérotées → prompt → streaming
-//                → citations vérifiées → sauvegarde → évènement final
+//                → mise en page (texte à trous, QCM) → citations vérifiées → nombre d'éléments contrôlé
+//                → sauvegarde → évènement final
 //
 // Les évènements produits (GenerationEvent) sont transmis tels quels au navigateur
 // (flux NDJSON) ou à la fenêtre Electron (IPC).
@@ -12,8 +13,10 @@ import { documentSourceRef, extractUrls, finalizeCitations } from './citations.j
 import { buildClozeDocument, ClozeStream, isClozeRequest } from './cloze.js';
 import { rankChunks } from './documents/retrieve.js';
 import { MagistraError, toMagistraError, type ErrorCode } from './errors.js';
+import { normalizeExerciseLayout } from './exerciseLayout.js';
 import { getLevelGroup, getNiveauLabel } from './levels.js';
 import { unwrapDocumentFence } from './markdownFence.js';
+import { checkOutputStructure } from './outputChecks.js';
 import { buildMessages, estimateTokens, generationTemperature, type PromptSource } from './prompts/index.js';
 import { planResearch, runResearch, type ResearchConfig, type ResearchDeps, type ResearchOutcome } from './research/index.js';
 import type { ResearchSource } from './research/types.js';
@@ -251,7 +254,9 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
   // Texte à trous : le modèle marque les mots à trouver ([[mot]]) ; Magistra pose les blancs numérotés, la banque de
   // mots et le corrigé (shared/cloze.ts), à l'affichage en direct comme dans le document final.
   const cloze = isClozeRequest(req) ? { max: req.nombreExercices, withKey: !req.sansCorrige } : null;
-  const shape = (body: string) => (cloze ? buildClozeDocument(body, cloze) : body);
+  // Choix de QCM et questions numérotées écrits ligne à ligne : mis en liste et séparés (shared/exerciseLayout.ts),
+  // sinon ils s'afficheraient en un seul paragraphe. Document final comme texte partiel (enregistrés, exportés ainsi).
+  const shape = (body: string) => normalizeExerciseLayout(cloze ? buildClozeDocument(body, cloze) : body);
   try {
     if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
     const budgets = computeBudgets(provider, req, deps.maxOutputTokens);
@@ -405,12 +410,16 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     // ─── Finalisation : citations vérifiées ──────────────────────────────
     yield { type: 'status', stage: 'finalizing', message: 'Vérification des citations…' };
     // Un document entier entouré de « ```markdown » serait vu comme du code : aucune citation vérifiée.
-    const final = finalizeCitations(shape(unwrapDocumentFence(text, { complete: finishReason === 'stop' })), provided, { allowedUrls, flagUncited: true });
+    const shaped = shape(unwrapDocumentFence(text, { complete: finishReason === 'stop' }));
+    const final = finalizeCitations(shaped, provided, { allowedUrls, flagUncited: true });
     const truncated = finishReason !== 'stop';
     if (finishReason === 'length') {
       yield { type: 'warning', code: 'GENERATION_TRUNCATED', message: 'Le contenu a atteint la longueur maximale et peut être incomplet.' };
     } else if (finishReason === 'unknown') {
       yield { type: 'warning', code: 'GENERATION_TRUNCATED', message: "La réponse du modèle s'est arrêtée avant la fin : le contenu peut être incomplet." };
+    } else {
+      // Réponse complète : nombre d'exercices, de questions, de séances… comparé à la demande (jamais bloquant).
+      for (const message of checkOutputStructure(req, shaped)) yield { type: 'warning', code: 'CONTENT_CHECK', message };
     }
 
     // ─── Sauvegarde ──────────────────────────────────────────────────────

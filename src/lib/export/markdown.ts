@@ -1,6 +1,7 @@
 // Analyse Markdown commune à l'affichage (MarkdownView), à l'impression et à l'export PDF.
 // - remarkSafeMarkdown : neutralise le HTML brut sans perdre de sens et évite de prendre
 //   des montants en dollars pour des formules ;
+// - prepareMarkdown : formules « \( \) », « \[ \] » et mise en page des QCM corrigées avant l'analyse ;
 // - parseMarkdown : arbre mdast (GFM + maths) prêt pour le rendu PDF ;
 // - splitMarkdownBlocks : découpage en blocs de premier niveau pour un rendu progressif mémoïsé.
 
@@ -9,6 +10,8 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import type { Nodes, Parent, PhrasingContent, Root, RootContent, Text } from 'mdast';
+import { normalizeExerciseLayout } from '@shared/exerciseLayout';
+import { normalizeMathDelimiters } from '@shared/markdownMath';
 
 type AnyNode = Nodes;
 
@@ -238,10 +241,21 @@ export function remarkSafeMarkdown() {
 
 const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMath).use(remarkSafeMarkdown);
 
+/**
+ * Texte prêt pour l'analyse, à l'écran comme à l'export : formules écrites « \( … \) », « \[ … \] » ou « $ \frac… $ »
+ * converties pour remark-math (shared/markdownMath.ts), choix de QCM et questions numérotées mis en page
+ * (shared/exerciseLayout.ts : déjà fait par la pipeline, utile pendant la rédaction et pour l'historique ancien).
+ * Le texte enregistré n'est pas modifié.
+ */
+export function prepareMarkdown(content: string): string {
+  return normalizeExerciseLayout(normalizeMathDelimiters(content));
+}
+
 /** Arbre mdast complet (GFM + maths + HTML neutralisé). */
 export function parseMarkdown(content: string): Root {
-  const tree = processor.parse(content);
-  return processor.runSync(tree, content) as Root;
+  const source = prepareMarkdown(content);
+  const tree = processor.parse(source);
+  return processor.runSync(tree, source) as Root;
 }
 
 // ─── Découpage progressif ─────────────────────────────────────────────────

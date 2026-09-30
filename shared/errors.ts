@@ -20,6 +20,7 @@ export type ErrorCode =
   | 'GENERATION_ABORTED'
   | 'GENERATION_TRUNCATED'
   | 'GENERATION_BUSY'
+  | 'CONTENT_CHECK'
   | 'DOCUMENT_UNREADABLE'
   | 'DOCUMENT_SCANNED'
   | 'DOCUMENT_UNSUPPORTED'
@@ -63,6 +64,8 @@ const MESSAGES: Record<ErrorCode, string> = {
   GENERATION_ABORTED: 'Génération interrompue.',
   GENERATION_TRUNCATED: 'Le contenu a atteint la longueur maximale et peut être incomplet.',
   GENERATION_BUSY: 'Une génération est déjà en cours. Attendez sa fin ou arrêtez-la.',
+  // Avertissement seulement (shared/outputChecks.ts) : jamais levé comme erreur.
+  CONTENT_CHECK: 'Le document ne compte pas le nombre d’éléments demandé : vérifiez-le avant de l’utiliser, ou relancez la génération.',
   DOCUMENT_UNREADABLE: 'Document impossible à lire.',
   DOCUMENT_SCANNED: 'Ce PDF ne contient pas de texte (document scanné) : il ne peut pas être lu sans reconnaissance de caractères.',
   DOCUMENT_UNSUPPORTED: 'Format non pris en charge. Formats acceptés : PDF, DOCX, PPTX, TXT, MD.',
