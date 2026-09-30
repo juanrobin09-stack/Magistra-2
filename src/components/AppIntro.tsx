@@ -1,7 +1,8 @@
 // Animation d'ouverture « Magistra » (application Windows uniquement, jamais sur le site), une fois par lancement :
-// carré arrondi à l'icône, mot « Magistra. » lettre par lettre, balayage lumineux, ligne lumineuse, sous-titre, puis
-// fondu vers l'application (≈ 2,1 s ; prolongée jusqu'à 4 s au plus si le profil n'est pas encore chargé, pour ne
-// jamais découvrir un écran d'attente). Passable par un clic, Échap ou toute touche. Mouvement réduit
+// carré arrondi à l'icône, mot « Magistra. » lettre par lettre, point accent, ligne lumineuse, sous-titre, balayage
+// lumineux, le tout dans une lente avancée, puis fondu vers l'application (≈ 3,4 s : posée sans être longue ; chaque
+// effet se termine avant le fondu ; prolongée jusqu'à 4 s au plus si le profil n'est pas encore chargé, pour ne jamais
+// découvrir un écran d'attente). Passable par un clic, Échap ou toute touche. Mouvement réduit
 // (prefers-reduced-motion) : image fixe très courte (≈ 0,4 s), sans aucun mouvement.
 // Aucune ressource réseau ni script en ligne (CSP de l'application : 'self') : classes .intro-* de src/index.css.
 // Un rechargement de la fenêtre ne la rejoue pas (stockage de session de la fenêtre).
@@ -11,11 +12,14 @@ import { GraduationCap } from 'lucide-react';
 import { useOptionalRuntime } from '@/lib/runtime/context';
 
 const INTRO_SEEN_KEY = 'magistra_intro_seen';
-const WORD = 'Magistra';
+export const INTRO_WORD = 'Magistra';
 
-/** Affichage complet (ms), puis fondu de sortie : ≈ 2,1 s en tout. */
-export const INTRO_HOLD_MS = 1650;
-export const INTRO_FADE_MS = 450;
+/** Affichage complet (ms), puis fondu de sortie : ≈ 3,4 s en tout (durées des effets : .intro-* de src/index.css). */
+export const INTRO_HOLD_MS = 2800;
+export const INTRO_FADE_MS = 600;
+/** Lettres du mot : la première apparaît à 400 ms, puis une toutes les 75 ms. */
+export const INTRO_LETTER_DELAY_MS = 400;
+export const INTRO_LETTER_STAGGER_MS = 75;
 /** Profil toujours en chargement : l'animation reste affichée au plus jusque-là. */
 export const INTRO_MAX_HOLD_MS = 4000;
 /** Mouvement réduit : image fixe, ≈ 0,4 s en tout. */
@@ -107,13 +111,15 @@ export default function AppIntro() {
         </div>
         <div className="intro-word" style={{ fontFamily: 'var(--font-display)' }}>
           <span className="intro-letters">
-            {Array.from(WORD).map((letter, i) => (
-              <span key={i} className="intro-letter" style={{ animationDelay: `${300 + i * 55}ms` }}>{letter}</span>
+            {Array.from(INTRO_WORD).map((letter, i) => (
+              <span key={i} className="intro-letter" style={{ animationDelay: `${INTRO_LETTER_DELAY_MS + i * INTRO_LETTER_STAGGER_MS}ms` }}>
+                {letter}
+              </span>
             ))}
             <span className="intro-dot">.</span>
           </span>
           {/* Même texte superposé : seul le reflet lumineux y est visible (balayage). */}
-          <span className="intro-shine">{WORD}.</span>
+          <span className="intro-shine">{INTRO_WORD}.</span>
         </div>
         <div className="glow-line intro-line" />
         <p className="intro-subtitle">Votre assistant pédagogique</p>

@@ -288,9 +288,11 @@
   .animate-fade-in { animation: fadeIn 0.5s ease forwards; }
 
   /* ─── Animation d'ouverture (application Windows, src/components/AppIntro.tsx) ─────────────────
-     ≈ 2,1 s : halo et logo (0–0,7 s), lettres du mot (0,3–1,2 s), point accent, ligne lumineuse et
-     balayage (0,7–1,7 s), sous-titre, puis fondu de sortie. Les états de base sont les états FINAUX :
-     sans animation (mouvement réduit), tout est visible immédiatement, sans mouvement. */
+     ≈ 3,4 s, dans une lente avancée (0–2,8 s) : halo et logo (0,1–1,1 s), lettres du mot (0,4–1,7 s),
+     point accent (1,45–2 s), ligne lumineuse (1,2–2,2 s), sous-titre (1,5–2,35 s), balayage lumineux
+     (1,65–2,7 s), puis fondu de sortie (2,8–3,4 s). Chaque effet se termine avant le fondu (INTRO_HOLD_MS,
+     vérifié par tests/ui/localApp.test.tsx). Les états de base sont les états FINAUX : sans animation
+     (mouvement réduit), tout est visible immédiatement, sans mouvement. */
   .intro-overlay {
     position: fixed; inset: 0; z-index: 300;
     display: flex; align-items: center; justify-content: center;
@@ -303,38 +305,41 @@
     background: radial-gradient(closest-side, rgba(200,182,255,0.16), rgba(170,150,230,0.085) 35%, rgba(155,135,212,0.04) 60%,
       rgba(155,135,212,0.012) 82%, rgba(155,135,212,0));
     filter: blur(24px); pointer-events: none;
-    animation: introHalo 1.1s ease-out both;
+    animation: introHalo 1.6s ease-out both;
   }
   /* Pendant l'animation (jusqu'au début du fondu), la barre de défilement de la page chargée en dessous ne traverse
      pas l'écran d'ouverture (Chromium ne restyle pas dynamiquement celle de la fenêtre : on la retire). */
   html.intro-active { overflow: hidden; }
-  .intro-content { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .intro-content {
+    position: relative; display: flex; flex-direction: column; align-items: center; text-align: center;
+    animation: introPushIn 2.8s cubic-bezier(0.2, 0.6, 0.3, 1) both;
+  }
   .intro-logo {
     width: 4.75rem; height: 4.75rem; border-radius: 1.4rem; margin-bottom: 1.6rem;
     display: flex; align-items: center; justify-content: center;
     background: linear-gradient(135deg, var(--color-accent-dim), var(--color-accent));
     box-shadow: 0 0 0 1px rgba(224,212,255,0.25), 0 18px 60px rgba(200,182,255,0.28);
-    animation: introLogo 0.7s cubic-bezier(0.2, 0.8, 0.2, 1.15) 0.05s both;
+    animation: introLogo 1s cubic-bezier(0.2, 0.8, 0.2, 1.15) 0.1s both;
   }
   .intro-word { position: relative; font-size: clamp(3.25rem, 7vw, 5.25rem); line-height: 1; letter-spacing: -0.01em; color: #fff; }
   .intro-letters { display: inline-block; white-space: nowrap; }
-  .intro-letter { display: inline-block; animation: introLetter 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-  .intro-dot { display: inline-block; color: var(--color-accent); animation: introDot 0.45s cubic-bezier(0.3, 1.6, 0.5, 1) 0.8s both; }
+  .intro-letter { display: inline-block; animation: introLetter 0.75s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  .intro-dot { display: inline-block; color: var(--color-accent); animation: introDot 0.55s cubic-bezier(0.3, 1.6, 0.5, 1) 1.45s both; }
   .intro-shine {
     position: absolute; inset: 0; white-space: nowrap; pointer-events: none;
     color: transparent; -webkit-background-clip: text; background-clip: text;
     background-image: linear-gradient(105deg, transparent 38%, rgba(255,255,255,0.95) 50%, transparent 62%);
     background-size: 260% 100%; background-repeat: no-repeat; background-position: 160% 0;
     opacity: 0;
-    animation: introShine 0.85s ease-in-out 0.95s both;
+    animation: introShine 1.05s ease-in-out 1.65s both;
   }
-  .intro-line { width: min(18rem, 70vw); margin-top: 1.5rem; opacity: 0.7; animation: introLine 0.75s cubic-bezier(0.2, 0.7, 0.2, 1) 0.75s both; }
+  .intro-line { width: min(18rem, 70vw); margin-top: 1.5rem; opacity: 0.7; animation: introLine 1s cubic-bezier(0.2, 0.7, 0.2, 1) 1.2s both; }
   .intro-subtitle {
     margin-top: 1.1rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.24em; color: var(--color-mg-200);
-    animation: introSubtitle 0.65s ease-out 1s both;
+    animation: introSubtitle 0.85s ease-out 1.5s both;
   }
-  .intro-leaving { animation: introOut 0.45s ease forwards; pointer-events: none; }
-  .intro-leaving .intro-content { animation: introContentOut 0.45s ease forwards; }
+  .intro-leaving { animation: introOut 0.6s ease forwards; pointer-events: none; }
+  .intro-leaving .intro-content { animation: introContentOut 0.6s ease forwards; }
   .intro-skipped, .intro-skipped .intro-content { animation-duration: 0.22s; }
   /* Mouvement réduit : image fixe (aucune animation), retirée au bout de ≈ 0,4 s. */
   .intro-reduced, .intro-reduced * { animation: none !important; }
@@ -359,6 +364,7 @@
   }
   @keyframes introLine { from { opacity: 0; transform: scaleX(0); } to { opacity: 0.7; transform: scaleX(1); } }
   @keyframes introSubtitle { from { opacity: 0; transform: translateY(6px); letter-spacing: 0.4em; } to { opacity: 1; transform: none; letter-spacing: 0.24em; } }
+  @keyframes introPushIn { from { transform: scale(0.965); } to { transform: none; } }
   @keyframes introOut { from { opacity: 1; } to { opacity: 0; } }
   @keyframes introContentOut { from { transform: none; filter: none; } to { transform: scale(1.04); filter: blur(3px); } }
   .animate-shimmer {
