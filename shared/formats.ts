@@ -449,7 +449,7 @@ export const MODALITES: ModaliteInfo[] = [
   },
   {
     value: 'texte_trous', label: 'Texte à trous', description: 'Mots-clés à compléter', tools: TRAVAIL, count: MOTS_A_COMPLETER, groups: SCOLAIRE,
-    prompt: 'FORMAT : texte à trous, en trois parties. 1. « Texte » : un texte suivi, cohérent et exact sur la notion, au niveau de la classe ; chaque mot-clé retenu est REMPLACÉ par un blanc numéroté (le mot n’apparaît plus dans le texte), au plus deux blancs par phrase, numérotés dans l’ordre (1), (2), (3)… Forme seulement : « Le chat (1) ________ sur le canapé. » 2. « Banque de mots » : les mots retirés, dans le désordre (sauf si le niveau justifie de s’en passer). 3. « Corrigé » : un mot par blanc, dans l’ordre (« (1) dort »).',
+    prompt: 'FORMAT : texte à trous. Écris le texte COMPLET, suivi, cohérent et exact sur la notion, au niveau de la classe, et entoure de doubles crochets chaque mot-clé à faire trouver, et seulement eux (aucun gras ni italique dans le texte) : un mot ou un groupe très court par paire de crochets, au plus deux par phrase. Forme seulement : « Le chat [[dort]] sur le canapé pendant que le [[chien]] joue. » Magistra remplace ensuite chaque mot entre doubles crochets par un blanc numéroté, puis ajoute la banque de mots et le corrigé : ne les écris pas, et n’écris aucun blanc toi-même.',
   },
   {
     value: 'questions_cours', label: 'Questions de cours', description: 'Restitution des connaissances', tools: TRAVAIL, count: QUESTIONS, groups: SECONDAIRE_SUP,

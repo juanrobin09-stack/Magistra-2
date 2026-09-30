@@ -6,6 +6,7 @@ import { PROFILS_DIFFERENCIATION, PROFILS_ELEVE, TYPES_LETTRE, type ProfilDiffer
 import {
   BAREMES, BESOINS_PARTICULIERS, countText, countUnit, getModalite, modalitePrompt, TONS, TYPES_EVALUATION,
 } from '../formats.js';
+import { isClozeRequest } from '../cloze.js';
 import type { LevelGroup } from '../levels.js';
 import type { GenerationRequest } from '../types.js';
 
@@ -36,7 +37,7 @@ interface Ctx {
   primary: boolean;
   /** Format de séance du supérieur (CM, TD, TP, séminaire), en toutes lettres ; vide sinon. */
   fmt: string;
-  /** Corrigé demandé (vrai par défaut). */
+  /** Corrigé à rédiger par le modèle (vrai par défaut ; faux pour une version élève seule ou un texte à trous). */
   withKey: boolean;
 }
 
@@ -78,7 +79,8 @@ export function toolInstructions(req: GenerationRequest, group: LevelGroup): str
     sup: SUP.includes(group),
     primary: PRIMARY.includes(group),
     fmt: formatLabel(req.format),
-    withKey: !req.sansCorrige,
+    // Texte à trous : le corrigé est établi par Magistra à partir des mots marqués (shared/cloze.ts).
+    withKey: !req.sansCorrige && !isClozeRequest(req),
   };
   const extra: string[] = [];
   if (req.type === 'evaluation') {
@@ -144,9 +146,11 @@ Structure :
     // Ce que l'on compte (exercices, questions, ateliers…) ; null : un travail d'un seul tenant (dissertation, dictée…).
     const unit = countUnit(req.modalite, group);
     const count = unit ? req.nombreExercices : undefined;
-    const exact = unit && count
-      ? `EXACTEMENT ${countText(count, unit)}, numéroté${unit.feminine ? 'e' : ''}s de 1 à ${count}`
-      : '';
+    const exact = !unit || !count
+      ? ''
+      : isClozeRequest(req)
+        ? `EXACTEMENT ${countText(count, unit)}, chacun entre doubles crochets`
+        : `EXACTEMENT ${countText(count, unit)}, numéroté${unit.feminine ? 'e' : ''}s de 1 à ${count}`;
     const diff = req.difficulte === 'facile' ? 'Niveau de difficulté : facile (consolidation des bases).'
       : req.difficulte === 'moyen' ? 'Niveau de difficulté : moyen.'
         : req.difficulte === 'difficile' ? 'Niveau de difficulté : difficile (transfert, problèmes complexes).'

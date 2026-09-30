@@ -9,6 +9,7 @@
 import type { AIProvider } from './ai/provider.js';
 import { getMatiereLabel, getToolLabel, type TypeContenu } from './catalog.js';
 import { documentSourceRef, extractUrls, finalizeCitations } from './citations.js';
+import { buildClozeDocument, ClozeStream, isClozeRequest } from './cloze.js';
 import { rankChunks } from './documents/retrieve.js';
 import { MagistraError, toMagistraError, type ErrorCode } from './errors.js';
 import { getLevelGroup, getNiveauLabel } from './levels.js';
@@ -247,6 +248,10 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
   let text = '';
   let providedForPartial: SourceRef[] = [];
   let allowedUrls: string[] = [];
+  // Texte à trous : le modèle marque les mots à trouver ([[mot]]) ; Magistra pose les blancs numérotés, la banque de
+  // mots et le corrigé (shared/cloze.ts), à l'affichage en direct comme dans le document final.
+  const cloze = isClozeRequest(req) ? { max: req.nombreExercices, withKey: !req.sansCorrige } : null;
+  const shape = (body: string) => (cloze ? buildClozeDocument(body, cloze) : body);
   try {
     if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
     const budgets = computeBudgets(provider, req, deps.maxOutputTokens);
@@ -362,6 +367,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     providedForPartial = provided;
     let finishReason: 'stop' | 'length' | 'unknown' = 'unknown';
     const retryDelays = deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+    const live = cloze ? new ClozeStream(cloze.max) : null;
     for (let attempt = 0; ; attempt++) {
       try {
         for await (const event of provider.stream({ messages, maxTokens: outputTokens, temperature: generationTemperature(req.type), signal })) {
@@ -369,7 +375,8 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
           if (event.type === 'delta') {
             if (!event.text) continue;
             text += event.text;
-            yield { type: 'delta', text: event.text };
+            const shown = live ? live.push(event.text) : event.text;
+            if (shown) yield { type: 'delta', text: shown };
           } else {
             finishReason = event.finishReason;
           }
@@ -390,13 +397,15 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
         await abortableSleep(wait, signal);
       }
     }
+    const held = live?.end();
+    if (held) yield { type: 'delta', text: held };
     if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
     if (!text.trim()) throw new MagistraError('AI_BAD_RESPONSE', "Le modèle n'a produit aucun contenu. Réessayez.");
 
     // ─── Finalisation : citations vérifiées ──────────────────────────────
     yield { type: 'status', stage: 'finalizing', message: 'Vérification des citations…' };
     // Un document entier entouré de « ```markdown » serait vu comme du code : aucune citation vérifiée.
-    const final = finalizeCitations(unwrapDocumentFence(text, { complete: finishReason === 'stop' }), provided, { allowedUrls, flagUncited: true });
+    const final = finalizeCitations(shape(unwrapDocumentFence(text, { complete: finishReason === 'stop' })), provided, { allowedUrls, flagUncited: true });
     const truncated = finishReason !== 'stop';
     if (finishReason === 'length') {
       yield { type: 'warning', code: 'GENERATION_TRUNCATED', message: 'Le contenu a atteint la longueur maximale et peut être incomplet.' };
@@ -440,7 +449,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
   } catch (err) {
     const e = signal?.aborted ? new MagistraError('GENERATION_ABORTED') : toMagistraError(err);
     // Le texte déjà produit n'est jamais rendu brut : ses citations sont vérifiées comme en fin normale.
-    const partial = text.trim() ? finalizeCitations(unwrapDocumentFence(text), providedForPartial, { allowedUrls }).content : undefined;
+    const partial = text.trim() ? finalizeCitations(shape(unwrapDocumentFence(text)), providedForPartial, { allowedUrls }).content : undefined;
     yield { type: 'error', code: e.code, message: e.message, retryable: e.retryable, ...(partial ? { partial } : {}) };
   }
 }

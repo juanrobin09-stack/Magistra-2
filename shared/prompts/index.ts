@@ -4,6 +4,7 @@ import type { ChatMessage } from '../ai/provider.js';
 import { getMatiereLabel, getToolInfo, TOOL_FIELDS, TYPES_LETTRE, type TypeContenu } from '../catalog.js';
 import { BAREMES, BESOINS_PARTICULIERS, countLabel, countUnit, getModalite, TONS, TYPES_EVALUATION } from '../formats.js';
 import { formatLocator } from '../citations.js';
+import { isClozeRequest } from '../cloze.js';
 import { getLevelGroup, getNiveauLabel, isSuperieur, LEVEL_GROUP_LABELS } from '../levels.js';
 import type { GenerationRequest, SourceRef } from '../types.js';
 import { LETTER_AUDIENCE, LEVEL_GUIDANCE, REFERENTIEL_SUPERIEUR_RULES, SCOLAIRE_RULES, SUPERIEUR_RULES } from './levels.js';
@@ -49,6 +50,9 @@ const QUALITY_RULES = `QUALITÉ ATTENDUE :
 - Consignes destinées aux élèves : un verbe d'action, une tâche par consigne, adaptées à l'âge.
 - N'utilise des crochets [ … ] que pour une information que seul l'enseignant peut fournir.`;
 
+/** Texte à trous : les doubles crochets marquent les mots à trouver (Magistra pose les blancs, shared/cloze.ts). */
+const CLOZE_QUALITY_RULE = "- Crochets : des doubles crochets [[ … ]] autour de chaque mot à faire trouver ; des crochets simples [ … ] seulement pour une information que seul l'enseignant peut fournir.";
+
 const LETTER_FORMAT_RULES = `FORMAT :
 - Réponds en français, dans un registre soutenu et bienveillant.
 - Markdown sobre : un courrier prêt à imprimer ou à envoyer, sans tableau ni titre superflu.
@@ -78,7 +82,7 @@ export function buildSystemPrompt(req: GenerationRequest, hasSources: boolean): 
     sup ? SUPERIEUR_RULES : SCOLAIRE_RULES,
     ...(group === 'bts_but' || group === 'cpge' ? [REFERENTIEL_SUPERIEUR_RULES] : []),
     toolInstructions(req, group),
-    QUALITY_RULES,
+    isClozeRequest(req) ? QUALITY_RULES.replace(/^- N'utilise des crochets.*$/m, CLOZE_QUALITY_RULE) : QUALITY_RULES,
     FORMAT_RULES,
   ].join('\n\n');
 }
