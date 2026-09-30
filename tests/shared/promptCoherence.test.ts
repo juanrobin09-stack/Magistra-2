@@ -10,6 +10,7 @@ import { isModaliteAvailable, MODALITES, modalitePrompt } from '../../shared/for
 import { isLangueAncienne, isLangueVivante, LANGUES_ANCIENNES, LANGUES_VIVANTES, targetLanguage } from '../../shared/languages.js';
 import { ALL_NIVEAUX, type NiveauScolaire } from '../../shared/levels.js';
 import { buildSystemPrompt, buildUserPrompt } from '../../shared/prompts/index.js';
+import { defaultEvaluationNotation, hasOwnBareme, isPracticeFormat } from '../../shared/prompts/tools.js';
 import type { GenerationRequest } from '../../shared/types.js';
 
 function req(extra: Partial<GenerationRequest>): GenerationRequest {
@@ -310,12 +311,13 @@ describe('matières de langue : le contenu des élèves dans la langue étudiée
   it('latin : textes et formes en latin, consignes en français', () => {
     const r = { type: 'cours' as const, niveau: '4eme' as const, matiere: 'latin' as const, sujet: 'La première déclinaison' };
     expect(sys(r)).toMatch(/sont en latin, la langue étudiée/);
-    expect(user(r).trim().split('\n').at(-1)).toBe('Langue : textes et mots étudiés en latin ; consignes et explications en français.');
+    expect(user(r).trim().split('\n').at(-1)).toBe('Langue : formes, textes et mots étudiés en latin ; consignes, explications et civilisation en français.');
   });
 
   it('documents de préparation, copies corrigées : en français, exemples et corrections dans la langue', () => {
     expect(sys({ type: 'sequence', niveau: '4eme', matiere: 'espagnol' })).toMatch(/document de préparation rédigé en français soigné ; exemples, lexique, consignes et supports destinés aux élèves en espagnol/);
-    expect(sys({ type: 'corrige', niveau: '4eme', matiere: 'anglais', texteEleve: 'Copie' })).toMatch(/corrections proposées en anglais correct et naturel/);
+    // Un passage écrit en anglais se corrige en anglais (et un passage écrit en français, en français).
+    expect(sys({ type: 'corrige', niveau: '4eme', matiere: 'anglais', texteEleve: 'Copie' })).toMatch(/anglais correct et naturel pour un passage écrit en anglais/);
     expect(user({ type: 'sequence', niveau: '4eme', matiere: 'espagnol' })).not.toMatch(/^Langue :/m);
   });
 
@@ -324,6 +326,198 @@ describe('matières de langue : le contenu des élèves dans la langue étudiée
     expect(sys({ type: 'lettre_parents', niveau: '4eme', matiere: 'anglais' })).not.toMatch(/langue cible/);
     expect(sys({})).toMatch(/Écris un français soigné et fluide/);
     expect(user({})).not.toMatch(/^Langue :/m);
+  });
+});
+
+describe('matières de langue : le français là où le travail l’exige (copie, traduction, civilisation)', () => {
+  const rule = (text: string) => text.split('\n').find(l => l.startsWith('- Langue :')) ?? '';
+  const reminder = (r: Partial<GenerationRequest>) => user(r).trim().split('\n').find(l => l.startsWith('Langue :'));
+
+  it('copie de latin ou de grec (version, réponses, commentaire) : corrigée en français, jamais « en latin »', () => {
+    for (const matiere of ['latin', 'grec'] as const) {
+      const text = sys({ type: 'corrige', niveau: '4eme', matiere, texteEleve: 'Le maître appelle les esclaves.' });
+      expect(text, matiere).not.toMatch(/corrections proposées en (latin|grec)/);
+      expect(rule(text), matiere).toMatch(/français soigné pour un passage écrit en français \(version, commentaire, réponse rédigée\)/);
+    }
+    const commentaire = sys({ type: 'corrige', niveau: '1ere_gen', matiere: 'latin', modalite: 'commentaire', texteEleve: 'Copie' });
+    expect(commentaire).toMatch(/TYPE DE TRAVAIL : commentaire de texte/);
+    expect(rule(commentaire)).toMatch(/chaque correction proposée dans la langue du passage corrigé : français soigné/);
+  });
+
+  it('copie de traduction : chaque correction dans la langue d’arrivée (français pour une version)', () => {
+    const text = sys({ type: 'corrige', niveau: '1ere_gen', matiere: 'anglais', modalite: 'traduction', texteEleve: 'Copie' });
+    expect(text).not.toMatch(/corrections proposées en anglais/);
+    expect(rule(text)).toMatch(/chaque correction proposée dans la langue d’arrivée de la traduction \(français pour une version, anglais pour un thème\)/);
+    expect(text).toMatch(/correction de la langue d’arrivée/);
+  });
+
+  it('exercice de traduction en anglais : version et thème possibles, ni « jamais en français » ni réponses « en anglais »', () => {
+    const r = { type: 'exercices' as const, niveau: 'terminale_gen' as const, matiere: 'anglais' as const, modalite: 'traduction' };
+    for (const text of [sys(r), user(r)]) {
+      expect(text).not.toMatch(/jamais en français/);
+      expect(text).not.toMatch(/restent en anglais/);
+      expect(text).not.toMatch(/tout ce qui est destiné aux élèves est en anglais/);
+    }
+    expect(rule(sys(r))).toMatch(/version : texte source en anglais, traduction en français ; thème : texte source en français, traduction en anglais/);
+    expect(user(r).trim().split('\n').at(-2)).toBe('Langue : la traduction se fait dans la langue d’arrivée (français pour une version, anglais pour un thème) ; explications en français.');
+  });
+
+  it('sujet type bac de LLCER : la partie 2 (traduction ou transposition) en français, le reste en espagnol', () => {
+    const r = { type: 'evaluation' as const, niveau: 'terminale_gen' as const, matiere: 'espagnol' as const, modalite: 'sujet_bac' };
+    const text = sys(r);
+    expect(text).toMatch(/Partie 2 \(4 points\) : traduction en français/);
+    for (const t of [text, user(r)]) {
+      expect(t).not.toMatch(/jamais en français/);
+      expect(t).not.toMatch(/restent en espagnol/);
+    }
+    expect(rule(text)).toMatch(/sauf la partie 2 : passage source en espagnol, traduction ou transposition attendue en français/);
+    expect(reminder(r)).toBe('Langue : documents, questions et synthèse en espagnol ; partie 2 (traduction ou transposition) en français.');
+  });
+
+  it('témoins : les autres formats de langue vivante gardent la règle stricte (langue cible, jamais en français)', () => {
+    expect(sys({ niveau: '4eme', matiere: 'anglais', modalite: 'texte_trous' })).toMatch(/jamais en français/);
+    expect(sys({ type: 'evaluation', niveau: 'terminale_gen', matiere: 'anglais', modalite: 'qcm' })).toMatch(/jamais en français/);
+    expect(reminder({ type: 'evaluation', niveau: 'terminale_gen', matiere: 'anglais' })).toBe('Langue : tout ce qui est destiné aux élèves est en anglais.');
+  });
+
+  it('traduction en latin : le thème (latin langue d’arrivée) reste possible', () => {
+    const text = rule(sys({ niveau: '2nde_gt', matiere: 'latin', modalite: 'traduction' }));
+    expect(text).toMatch(/thème : texte source en français, traduction en latin/);
+    expect(text).not.toMatch(/traductions et explications toujours en français/);
+  });
+
+  it('latin ou grec sur la civilisation : en français, comme le format du texte à trous', () => {
+    const r = { niveau: '5eme' as const, matiere: 'latin' as const, modalite: 'texte_trous', nombreExercices: 10, sujet: 'Les dieux romains' };
+    const text = sys(r);
+    expect(text).toMatch(/texte en latin si le sujet porte sur la langue \(formes à retrouver\), en français s’il porte sur la civilisation/);
+    expect(rule(text)).toMatch(/quand le travail porte sur la langue \(textes à lire ou à traduire, formes, lexique\), les textes, phrases, formes et mots étudiés ou à trouver sont en latin/);
+    expect(rule(text)).toMatch(/quand il porte sur la civilisation, l'histoire ou la mythologie, le contenu est en français soigné/);
+    expect(user(r).trim().split('\n').at(-2)).toBe('Langue : formes, textes et mots étudiés en latin ; consignes, explications et civilisation en français.');
+    expect(rule(sys({ type: 'evaluation', niveau: '3eme', matiere: 'grec', modalite: 'qcm' }))).toMatch(/civilisation[^\n]*en français soigné, avec seulement quelques termes cités en grec ancien/);
+    // Préparation : jamais « consignes … en latin ».
+    const sequence = rule(sys({ type: 'sequence', niveau: '4eme', matiere: 'latin' }));
+    expect(sequence).toMatch(/consignes et supports de civilisation en français/);
+    expect(sequence).not.toMatch(/consignes et supports destinés aux élèves en latin/);
+  });
+});
+
+describe('évaluation diagnostique et format d’épreuve à barème : le barème du format l’emporte', () => {
+  const epreuves = [
+    { niveau: '4eme', matiere: 'mathematiques', modalite: 'interro' },
+    { niveau: 'licence_2', matiere: 'economie', modalite: 'partiel' },
+    { niveau: '3eme', matiere: 'mathematiques', modalite: 'sujet_brevet' },
+  ] as const;
+  const WINS = 'NOTATION : le barème de ce format d’épreuve s’applique, même pour une évaluation diagnostique.';
+
+  it('sans notation choisie : aucun « sans note », et la règle est dite après le format', () => {
+    for (const e of epreuves) {
+      const text = sys({ type: 'evaluation', typeEvaluation: 'diagnostique', ...e });
+      expect(text, e.modalite).not.toMatch(/sans note|sans points ni note|sans barème ni note/);
+      expect(text.indexOf('FORMAT :'), e.modalite).toBeGreaterThan(-1);
+      expect(text.indexOf(WINS), e.modalite).toBeGreaterThan(text.indexOf('FORMAT :'));
+      expect(count(text, 'NOTATION :'), e.modalite).toBe(1);
+      expect(defaultEvaluationNotation({ typeEvaluation: 'diagnostique', modalite: e.modalite }), e.modalite).toBe('format');
+    }
+  });
+
+  it('notation choisie : elle prime seule ; sans format à barème : sans note ; hors diagnostic : rien de plus', () => {
+    const sur20 = sys({ type: 'evaluation', niveau: '4eme', modalite: 'interro', typeEvaluation: 'diagnostique', bareme: 'sur20' });
+    expect(sur20).not.toContain(WINS);
+    expect(sur20).toMatch(/NOTATION : note sur 20 ; .*Cette notation prime/);
+    for (const modalite of [undefined, 'qcm']) {
+      const text = sys({ type: 'evaluation', niveau: '4eme', modalite, typeEvaluation: 'diagnostique' });
+      expect(text, String(modalite)).toMatch(/durée, sans note\./);
+      expect(text, String(modalite)).not.toContain(WINS);
+      expect(defaultEvaluationNotation({ typeEvaluation: 'diagnostique', modalite }), String(modalite)).toBe('aucune');
+    }
+    expect(sys({ type: 'evaluation', niveau: '4eme', modalite: 'interro', typeEvaluation: 'sommative' })).not.toContain(WINS);
+    expect(defaultEvaluationNotation({ typeEvaluation: 'sommative' })).toBe('sur20');
+  });
+
+  it('tout format d’évaluation dont la consigne prévoit un barème ou des points est une épreuve à barème ou une pratique', () => {
+    for (const m of MODALITES.filter(f => f.tools.includes('evaluation'))) {
+      const mentions = ALL_NIVEAUX.some(niveau => getMatieresForNiveau(niveau).some(({ value: matiere }) => (
+        isModaliteAvailable(m.value, 'evaluation', niveau, matiere) && /barème|\d+ points|sur 20/.test(modalitePrompt(m.value, { niveau, matiere }))
+      )));
+      if (mentions) expect(hasOwnBareme(m.value) || isPracticeFormat(m.value), m.value).toBe(true);
+      if (hasOwnBareme(m.value)) expect(mentions, m.value).toBe(true);
+    }
+    for (const m of MODALITES.filter(f => hasOwnBareme(f.value) || isPracticeFormat(f.value))) expect(m.tools, m.value).toContain('evaluation');
+  });
+});
+
+describe('évaluation en texte à trous et objectif diagnostique : aucune autre question', () => {
+  it('collège et primaire : ni « questions courtes », tableau de remédiation seulement pour l’enseignant', () => {
+    for (const [niveau, matiere] of [['5eme', 'svt'], ['ce2', 'francais']] as const) {
+      const r = { type: 'evaluation' as const, niveau, matiere, modalite: 'texte_trous', typeEvaluation: 'diagnostique' as const };
+      const withKey = sys(r);
+      expect(withKey, niveau).toMatch(/UNIQUEMENT de texte à trous/);
+      expect(withKey, niveau).not.toMatch(/questions courtes/);
+      expect(withKey, niveau).toMatch(/OBJECTIF : évaluation diagnostique, avant l’apprentissage : le texte à trous porte sur les prérequis/);
+      expect(withKey, niveau).toMatch(/piste de remédiation/);
+      const studentOnly = sys({ ...r, sansCorrige: true });
+      expect(studentOnly, niveau).not.toMatch(/questions courtes/);
+      expect(studentOnly, niveau).not.toMatch(/piste de remédiation/);
+      expect(studentOnly, niveau).toMatch(/le texte à trous porte sur les prérequis/);
+    }
+  });
+});
+
+describe('EPS et enseignements artistiques : évalués en pratiquant, jamais sous la structure d’un devoir écrit', () => {
+  it('évaluation (EPS en 5e et au CE2, arts plastiques en 4e) : ni copie sur 20, ni parties de questions, ni corrigé', () => {
+    const cases = [
+      { niveau: '5eme', matiere: 'eps', modalite: 'situation_eps' },
+      { niveau: 'ce2', matiere: 'eps', modalite: 'situation_eps' },
+      { niveau: '4eme', matiere: 'arts_plastiques', modalite: 'pratique_artistique' },
+    ] as const;
+    for (const c of cases) {
+      const text = sys({ type: 'evaluation', ...c });
+      expect(text, c.niveau).toMatch(/TÂCHE : concevoir une situation d'évaluation pratique/);
+      expect(text, c.niveau).not.toMatch(/parties progressives|Corrigé détaillé|note sur 20|exactement 20 points|exercices courts|corrigé et grille/);
+    }
+    // Lycée : la grille sur 20 du référentiel (AFL) est celle du format.
+    expect(sys({ type: 'evaluation', niveau: 'terminale_gen', matiere: 'eps', modalite: 'situation_eps' })).toMatch(/Grille d’évaluation sur 20 conforme au référentiel du baccalauréat.*AFL1 sur 12 points/s);
+    // Témoin : sans format, une évaluation écrite d'EPS garde sa structure.
+    expect(sys({ type: 'evaluation', niveau: '5eme', matiere: 'eps' })).toMatch(/3 ou 4 parties progressives/);
+  });
+
+  it('exercices : une situation de pratique, sans « Corrigé » écrit ni barème indicatif', () => {
+    const text = sys({ niveau: '5eme', matiere: 'eps', modalite: 'situation_eps' });
+    expect(text).toMatch(/TÂCHE : concevoir UNE situation de pratique complète/);
+    expect(text).not.toMatch(/« Corrigé » complète|barème indicatif/);
+  });
+
+  it('notation choisie, version élève, objectif : sur la grille et la pratique, jamais des questions sur copie', () => {
+    const base = { type: 'evaluation' as const, niveau: '5eme' as const, matiere: 'eps' as const, modalite: 'situation_eps' };
+    const sur20 = sys({ ...base, bareme: 'sur20' });
+    expect(sur20).toMatch(/NOTATION : note sur 20 ; la grille d’évaluation répartit exactement 20 points entre ses critères\. Cette notation prime/);
+    expect(sur20).not.toMatch(/points de chaque question/);
+    const eleve = sys({ ...base, sansCorrige: true });
+    expect(eleve).toMatch(/VERSION ÉLÈVE SEULE : ne rédige AUCUN corrigé ni élément de correction/);
+    expect(eleve).not.toMatch(/espaces de réponse/);
+    const diagnostic = sys({ ...base, typeEvaluation: 'diagnostique' });
+    expect(diagnostic).not.toMatch(/questions courtes/);
+    expect(diagnostic).toMatch(/la situation, pratiquée, repère les acquis/);
+    expect(sys({ ...base, typeEvaluation: 'formative' })).not.toMatch(/corrigé commenté/);
+    expect(sys({ ...base, difficulte: 'differencie' })).not.toMatch(/Questions de difficulté/);
+    expect(defaultEvaluationNotation({ typeEvaluation: 'diagnostique', modalite: 'situation_eps' })).toBe('format');
+  });
+});
+
+describe('différencié en maternelle : des variantes des ateliers, activités et jeux, jamais des questions', () => {
+  it('une ou deux unités : chacune a trois variantes graduées', () => {
+    const cases = [
+      { modalite: 'ateliers', nombreExercices: 2, unit: 'atelier' },
+      { modalite: 'jeux', nombreExercices: 1, unit: 'jeu' },
+      { modalite: undefined, nombreExercices: 2, unit: 'activité' },
+    ];
+    for (const { unit, ...c } of cases) {
+      const text = sys({ niveau: 'maternelle_ms', matiere: 'nombres_formes', difficulte: 'differencie', ...c });
+      expect(text, unit).not.toMatch(/Questions de difficulté/);
+      expect(text, unit).toMatch(new RegExp(`Chaque ${unit} prévoit trois variantes de difficulté graduée`));
+    }
+    // Évaluation en maternelle (situation d'observation) : des variantes aussi.
+    expect(sys({ type: 'evaluation', niveau: 'maternelle_gs', matiere: 'nombres_formes', difficulte: 'differencie' })).not.toMatch(/Questions de difficulté/);
   });
 });
 

@@ -70,7 +70,53 @@ const NO_ANSWER_KEY_CLOZE = 'VERSION ÉLÈVE SEULE : Magistra n’ajoutera pas d
 /** Texte à trous « différencié » : un seul texte, des mots de difficulté graduée (plusieurs textes casseraient les blancs). */
 const CLOZE_GRADED = 'Un seul texte : les mots à trouver sont de difficulté graduée (des plus évidents aux plus exigeants) ; n’écris ni plusieurs textes ni plusieurs versions.';
 
-/** Notation d'une évaluation : celle choisie par l'enseignant ; sinon sans note pour un diagnostic, sur 20 par défaut. */
+/**
+ * Formats évalués en pratiquant (EPS, arts plastiques, éducation musicale) : ni copie, ni questions sur copie, ni
+ * corrigé écrit ; la situation et sa grille d'évaluation sont celles que décrit le format.
+ */
+const PRACTICE_FORMATS: ReadonlySet<string> = new Set(['situation_eps', 'pratique_artistique']);
+
+/**
+ * Formats d'épreuve qui portent leur propre barème (interrogation, partiel, devoir surveillé, sujets type brevet, bac,
+ * bac pro, BTS, épreuve composée de SES). Sans notation choisie, ce barème s'applique, même pour une évaluation
+ * diagnostique : la règle « sans note » du diagnostic ne vaut que pour une évaluation dont le format n'impose pas de
+ * barème. Tout format d'évaluation dont la consigne prévoit un barème figure ici (vérifié par les tests).
+ */
+const EPREUVES_AVEC_BAREME: ReadonlySet<string> = new Set([
+  'interro', 'partiel', 'devoir_surveille', 'sujet_bts', 'sujet_brevet', 'sujet_bac', 'sujet_bac_pro', 'epreuve_composee',
+]);
+
+export function isPracticeFormat(modalite: string | undefined): boolean {
+  return !!modalite && PRACTICE_FORMATS.has(modalite);
+}
+
+export function hasOwnBareme(modalite: string | undefined): boolean {
+  return !!modalite && EPREUVES_AVEC_BAREME.has(modalite);
+}
+
+/**
+ * Notation d'une évaluation quand l'enseignant n'en choisit aucune (hors école primaire, qui positionne sans note) :
+ * - 'format' : celle du format (barème d'une épreuve, grille d'une situation pratique), même pour un diagnostic ;
+ * - 'aucune' : sans note, pour une évaluation diagnostique ;
+ * - 'sur20' : sinon.
+ * Source unique pour le prompt et pour l'indication « Par défaut : … » du formulaire.
+ */
+export function defaultEvaluationNotation(req: Pick<GenerationRequest, 'typeEvaluation' | 'modalite'>): 'format' | 'aucune' | 'sur20' {
+  if (hasOwnBareme(req.modalite) || isPracticeFormat(req.modalite)) return 'format';
+  return req.typeEvaluation === 'diagnostique' ? 'aucune' : 'sur20';
+}
+
+/** Notation choisie pour une situation pratique : elle porte sur la grille d'évaluation (il n'y a pas de questions). */
+const PRACTICE_NOTATION: Record<NonNullable<GenerationRequest['bareme']>, string> = {
+  sur20: 'NOTATION : note sur 20 ; la grille d’évaluation répartit exactement 20 points entre ses critères.',
+  sur10: 'NOTATION : note sur 10 ; la grille d’évaluation répartit exactement 10 points entre ses critères.',
+  competences: 'NOTATION : par compétences, sans note chiffrée : grille de positionnement à 4 niveaux (maîtrise insuffisante, fragile, satisfaisante, très bonne maîtrise) avec les indicateurs observables de chaque niveau.',
+};
+
+/** Situation pratique sans corrigé : ce que les élèves reçoivent (il n'y a ni énoncé écrit ni espace de réponse). */
+const NO_ANSWER_KEY_PRACTICE = 'VERSION ÉLÈVE SEULE : ne rédige AUCUN corrigé ni élément de correction. Uniquement ce que les élèves reçoivent : la situation, les consignes, les critères de réussite et, si utile, les fiches d’observation à remplir.';
+
+/** Notation d'une évaluation : celle choisie par l'enseignant ; sinon voir defaultEvaluationNotation. */
 type Notation = NonNullable<GenerationRequest['bareme']> | 'aucune';
 
 interface Ctx {
@@ -78,9 +124,11 @@ interface Ctx {
   group: LevelGroup;
   sup: boolean;
   primary: boolean;
+  /** Format évalué en pratiquant (voir PRACTICE_FORMATS). */
+  practice: boolean;
   /** Format de séance du supérieur (CM, TD, TP, séminaire), en toutes lettres ; vide sinon. */
   fmt: string;
-  /** Corrigé à rédiger par le modèle (vrai par défaut ; faux pour une version élève seule ou un texte à trous). */
+  /** Corrigé à rédiger par le modèle (vrai par défaut ; faux pour une version élève seule, un texte à trous ou une situation pratique). */
   withKey: boolean;
   /** Notation de l'outil Évaluation (voir Notation). */
   notation: Notation;
@@ -128,22 +176,31 @@ function modaliteLine(req: GenerationRequest, studentOnly: boolean): string {
   }
 }
 
-/** Difficulté d'une évaluation (et d'un texte à trous : les mots, pas des questions). */
-function difficultyLine(req: GenerationRequest): string {
+/** « Différencié » sans écrit (maternelle, situation pratique) : des variantes de la situation, jamais des questions. */
+const GRADED_VARIANTS = 'Variantes de difficulté graduée de la même situation, clairement identifiées (★ facile, ★★ intermédiaire, ★★★ avancé).';
+
+/** Difficulté d'une évaluation (texte à trous : les mots ; maternelle et situation pratique : des variantes). */
+function difficultyLine(req: GenerationRequest, group: LevelGroup): string {
   switch (req.difficulte) {
     case 'facile': return 'Niveau de difficulté : facile (vérification des connaissances et savoir-faire essentiels).';
     case 'moyen': return 'Niveau de difficulté : moyen.';
     case 'difficile': return 'Niveau de difficulté : exigeant (transfert, situations complexes).';
-    case 'differencie': return isClozeRequest(req)
-      ? CLOZE_GRADED
-      : 'Questions de difficulté graduée, clairement identifiées (★ facile, ★★ intermédiaire, ★★★ avancé).';
+    case 'differencie':
+      if (isClozeRequest(req)) return CLOZE_GRADED;
+      return group === 'maternelle' || isPracticeFormat(req.modalite)
+        ? GRADED_VARIANTS
+        : 'Questions de difficulté graduée, clairement identifiées (★ facile, ★★ intermédiaire, ★★★ avancé).';
     default: return '';
   }
 }
 
+/** Ce qui se manipule ou se joue (maternelle, ateliers, jeux) : ni questions ni écrit, des variantes. */
+const HANDS_ON_UNITS: ReadonlySet<string> = new Set(['activité', 'atelier', 'jeu']);
+
 /**
  * Difficulté d'une série d'exercices. « Différencié » : trois niveaux parmi le nombre demandé (au total, jamais par
- * niveau) ; un seul texte pour un texte à trous ; des aides graduées pour un travail d'un seul tenant.
+ * niveau) ; un seul texte pour un texte à trous ; des aides graduées pour un travail d'un seul tenant ; pour une ou
+ * deux activités, ateliers ou jeux, des variantes graduées de chacun (des élèves qui ne lisent pas encore).
  */
 function exercicesDifficulty(req: GenerationRequest, unit: CountUnit | null, count: number | undefined): string {
   switch (req.difficulte) {
@@ -157,7 +214,9 @@ function exercicesDifficulty(req: GenerationRequest, unit: CountUnit | null, cou
         return `Les ${countText(count, unit)} se répartissent, au total et non par niveau, en trois niveaux clairement identifiés (★ facile, ★★ intermédiaire, ★★★ avancé), du plus simple au plus avancé, travaillant les mêmes compétences.`;
       }
       if (count) {
-        return `Questions de difficulté graduée, clairement identifiées (★ facile, ★★ intermédiaire, ★★★ avancé), sans rien ajouter au nombre demandé (${countText(count, unit)} au total).`;
+        return HANDS_ON_UNITS.has(unit.one)
+          ? `Chaque ${unit.one} prévoit trois variantes de difficulté graduée, clairement identifiées (★ facile, ★★ intermédiaire, ★★★ avancé), sans rien ajouter au nombre demandé (${countText(count, unit)} au total).`
+          : `Questions de difficulté graduée, clairement identifiées (★ facile, ★★ intermédiaire, ★★★ avancé), sans rien ajouter au nombre demandé (${countText(count, unit)} au total).`;
       }
       return `Répartis les ${unit.many} en trois niveaux clairement identifiés (★ facile, ★★ intermédiaire, ★★★ avancé), travaillant les mêmes compétences.`;
     default: return 'Progression du plus simple au plus complexe.';
@@ -187,29 +246,48 @@ function besoinsLines(req: GenerationRequest): string[] {
   return lines;
 }
 
+/**
+ * Objectif de l'évaluation. Texte à trous ou situation pratique : l'objectif ne demande jamais d'autres questions que
+ * le format (un diagnostic n'y ajoute pas de « questions courtes ») ni de corrigé commenté (celui d'un texte à trous
+ * est établi par Magistra ; une situation pratique n'en a pas). Version élève seule : aucune partie pour l'enseignant.
+ */
+function objectiveLine(req: GenerationRequest, cloze: boolean, practice: boolean): string {
+  const objective = TYPES_EVALUATION.find(t => t.value === req.typeEvaluation);
+  if (!objective) return '';
+  if (objective.value === 'diagnostique' && (cloze || practice)) {
+    const support = cloze
+      ? 'le texte à trous porte sur les prérequis, et les mots à trouver repèrent les acquis et les représentations des élèves.'
+      : 'la situation, pratiquée, repère les acquis et les représentations des élèves (ce qu’ils savent déjà faire).';
+    const table = cloze
+      ? ' Après le texte, pour l’enseignant, un tableau « mot manqué ou erreur observée → besoin repéré → piste de remédiation » (sans doubles crochets).'
+      : ' Pour l’enseignant, un tableau « réussite ou difficulté observée → besoin repéré → piste de remédiation ».';
+    return `OBJECTIF : évaluation diagnostique, avant l’apprentissage : ${support}${req.sansCorrige ? '' : table}`;
+  }
+  const noKey = req.sansCorrige || ((cloze || practice) && objective.value === 'formative');
+  return noKey ? objective.promptSansCorrige ?? objective.prompt : objective.prompt;
+}
+
 export function toolInstructions(req: GenerationRequest, group: LevelGroup): string {
   const cloze = isClozeRequest(req);
   const travail = req.type === 'exercices' || req.type === 'evaluation';
+  const practice = travail && isPracticeFormat(req.modalite);
   const ctx: Ctx = {
     req,
     group,
     sup: SUP.includes(group),
     primary: PRIMARY.includes(group),
+    practice,
     fmt: formatLabel(req.format),
     // Texte à trous : le corrigé est établi par Magistra à partir des mots marqués (shared/cloze.ts).
-    withKey: !req.sansCorrige && !cloze,
-    notation: req.bareme ?? (req.type === 'evaluation' && req.typeEvaluation === 'diagnostique' ? 'aucune' : 'sur20'),
+    withKey: !req.sansCorrige && !cloze && !practice,
+    notation: req.bareme ?? (req.type === 'evaluation' && defaultEvaluationNotation(req) === 'aucune' ? 'aucune' : 'sur20'),
   };
   // Version élève seule : le format ne fait pas écrire son corrigé (texte à trous : voir NO_ANSWER_KEY_CLOZE).
   const studentOnly = travail && !!req.sansCorrige && !cloze;
   const extra: string[] = [];
   if (req.type === 'evaluation') {
-    const objective = TYPES_EVALUATION.find(t => t.value === req.typeEvaluation);
-    // Version élève seule : ni corrigé commenté, ni tableau de remédiation destiné à l'enseignant. Texte à trous : le
-    // corrigé est celui de Magistra, l'objectif formatif ne fait donc pas écrire de corrigé commenté au modèle.
-    const noKeyObjective = req.sansCorrige || (cloze && req.typeEvaluation === 'formative');
-    const text = noKeyObjective ? objective?.promptSansCorrige ?? objective?.prompt : objective?.prompt;
-    if (text) extra.push(text);
+    const objective = objectiveLine(req, cloze, practice);
+    if (objective) extra.push(objective);
   }
   // Cours : la forme choisie remplace la structure par défaut (voir BY_TOOL.cours). Correction d'une copie : le
   // format construit un sujet et son corrigé modèle ; seul le type de travail compte (voir BY_TOOL.corrige).
@@ -218,12 +296,17 @@ export function toolInstructions(req: GenerationRequest, group: LevelGroup): str
     if (format) extra.push(format);
   }
   if (travail) {
-    const bareme = BAREMES.find(b => b.value === req.bareme)?.prompt;
+    // Notation choisie : elle prime, y compris sur le barème d'un format d'épreuve. Sans notation choisie, le barème
+    // d'un format d'épreuve prime sur le « sans note » d'une évaluation diagnostique (voir defaultEvaluationNotation).
+    const bareme = req.bareme && (practice ? PRACTICE_NOTATION[req.bareme] : BAREMES.find(b => b.value === req.bareme)?.prompt);
     if (bareme) extra.push(`${bareme} Cette notation prime sur celle indiquée ci-dessus.`);
+    else if (req.type === 'evaluation' && req.typeEvaluation === 'diagnostique' && hasOwnBareme(req.modalite)) {
+      extra.push('NOTATION : le barème de ce format d’épreuve s’applique, même pour une évaluation diagnostique.');
+    }
   }
   // Correction d'une copie : la note se justifie critère par critère (il n'y a pas de questions à pondérer).
   if (req.type === 'corrige' && req.bareme) extra.push(`${CORRECTION_GRADING[req.bareme]} Cette notation remplace celle du point 5.`);
-  if (travail && req.sansCorrige) extra.push(cloze ? NO_ANSWER_KEY_CLOZE : NO_ANSWER_KEY);
+  if (travail && req.sansCorrige) extra.push(cloze ? NO_ANSWER_KEY_CLOZE : practice ? NO_ANSWER_KEY_PRACTICE : NO_ANSWER_KEY);
   if (req.type === 'appreciations') {
     const ton = TONS.find(t => t.value === req.ton)?.prompt;
     if (ton) extra.push(ton);
@@ -266,10 +349,11 @@ const CLOZE_POINTS: Record<Notation, string> = {
 
 /**
  * Structure de l'évaluation, selon le niveau et la notation effective (celle choisie, sinon sans note pour un
- * diagnostic, sinon sur 20) : l'en-tête et les points ne contredisent jamais la notation. Texte à trous : une
- * évaluation faite UNIQUEMENT de texte à trous, dont Magistra établit la banque de mots et le corrigé.
+ * diagnostic dont le format n'impose pas de barème, sinon sur 20) : l'en-tête et les points ne contredisent jamais la
+ * notation. Texte à trous : une évaluation faite UNIQUEMENT de texte à trous, dont Magistra établit la banque de mots
+ * et le corrigé. Situation pratique (EPS, arts) : ni copie ni corrigé, la grille du format.
  */
-function evaluationBase({ req, group, sup, primary, withKey, notation }: Ctx): string {
+function evaluationBase({ req, group, sup, primary, practice, withKey, notation }: Ctx): string {
   const graded = notation === 'sur20' || notation === 'sur10';
   if (sup) {
     return `TÂCHE : rédiger un sujet d'examen${req.duree ? '' : ' (précise la durée)'}.
@@ -278,6 +362,11 @@ Structure : en-tête (intitulé, durée, documents autorisés), consignes, exerc
   if (group === 'maternelle') {
     return `TÂCHE : concevoir une situation d'observation des apprentissages en maternelle (évaluation positive).
 Structure : objectif observé, domaine d'apprentissage, matériel, déroulement (activité ou jeu, consigne orale), critères de réussite observables, grille d'observation (non encore acquis / en cours d'acquisition / acquis) à reporter dans le carnet de suivi. Aucune note, aucun écrit demandé à l'élève.`;
+  }
+  if (practice) {
+    // EPS, arts : ni copie, ni parties de questions, ni corrigé ; la grille (et sa notation) est celle du format.
+    return `TÂCHE : concevoir une situation d'évaluation pratique, au format ci-dessous : les élèves sont évalués en pratiquant, sans devoir écrit ni questions sur copie.
+Structure : en-tête (classe, date, durée), puis la situation et sa grille d'évaluation telles que décrites par le format.`;
   }
   const cloze = isClozeRequest(req);
   if (primary) {
@@ -340,10 +429,18 @@ Structure :
 6. Prolongement (travail personnel, séance suivante).`;
   },
 
-  exercices: ({ req, group, sup, primary, fmt, withKey }) => {
+  exercices: ({ req, group, sup, primary, practice, fmt, withKey }) => {
     // Ce que l'on compte (exercices, questions, ateliers…) ; null : un travail d'un seul tenant (dissertation, dictée…).
     const unit = countUnit(req.modalite, group);
     const count = unit ? req.nombreExercices : undefined;
+    if (practice) {
+      // EPS, arts : on apprend en pratiquant ; ni exercice écrit, ni corrigé (les observables sont dans le format).
+      return [
+        'TÂCHE : concevoir UNE situation de pratique complète, au format demandé ci-dessous : les élèves apprennent en pratiquant, sans exercice écrit ni corrigé.',
+        exercicesDifficulty(req, unit, count),
+        'Un titre et les compétences travaillées, puis la situation telle que décrite par le format.',
+      ].join('\n');
+    }
     const exact = !unit || !count
       ? ''
       : isClozeRequest(req)
@@ -388,7 +485,7 @@ Chaque énoncé est complet (données, hypothèses, questions numérotées).${ke
     ].filter(Boolean).join('\n');
   },
 
-  evaluation: (ctx) => [evaluationBase(ctx), difficultyLine(ctx.req)].filter(Boolean).join('\n'),
+  evaluation: (ctx) => [evaluationBase(ctx), difficultyLine(ctx.req, ctx.group)].filter(Boolean).join('\n'),
 
   sequence: ({ req, group, sup, primary }) => {
     const n = req.nombreSeances;

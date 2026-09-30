@@ -60,32 +60,75 @@ const CLOZE_QUALITY_RULE = "- Crochets : des doubles crochets [[ … ]] autour d
 const STUDENT_CONTENT: readonly TypeContenu[] = ['exercices', 'evaluation', 'differenciation', 'cours'];
 
 /**
+ * Travail de traduction, où le français est l'une des deux langues : le format « Traduction » (version ou thème), et,
+ * en langue vivante, le sujet type bac de LLCER (partie 2 : traduction ou transposition en français).
+ */
+type Translation = 'traduction' | 'llcer' | null;
+
+function translationWork(req: GenerationRequest, kind: 'vivante' | 'ancienne'): Translation {
+  if (req.modalite === 'traduction') return 'traduction';
+  return kind === 'vivante' && req.type === 'evaluation' && req.modalite === 'sujet_bac' ? 'llcer' : null;
+}
+
+/** Sens d'une traduction : la langue d'arrivée n'est le français que pour une version. */
+const translationDirection = (name: string) =>
+  `la traduction se fait dans la langue d’arrivée (version : texte source en ${name}, traduction en français ; thème : texte source en français, traduction en ${name})`;
+
+/**
  * Matière de langue (anglais, espagnol… latin, grec) : dans quelle langue écrire. Sans cette règle, un petit modèle
  * écrit en français (règle « français soigné », exemples des formats en français, sujet saisi en français) : un texte
  * à trous d'anglais en français est inutilisable. Les appréciations restent en français (bulletin, livret).
+ * La règle ne contredit jamais un format où le français a sa place : une traduction (version ou thème, partie 2 du
+ * sujet de LLCER), une copie rédigée en français (version, commentaire latin), la civilisation antique.
  */
 function languageRule(req: GenerationRequest): string | null {
   const lang = targetLanguage(req.matiere);
   if (!lang || req.type === 'appreciations' || req.type === 'lettre_parents') return null;
   const { name } = lang;
+  const vivante = lang.kind === 'vivante';
+  const translation = translationWork(req, lang.kind);
   if (req.type === 'corrige') {
-    return `- Langue : appréciations, explications et conseils en français soigné ; citations de la copie reproduites telles quelles ; corrections proposées en ${name} correct${lang.kind === 'vivante' ? ' et naturel' : ''}.`;
+    // Chaque correction dans la langue du passage corrigé : une version ou un commentaire se corrige en français.
+    const target = translation
+      ? `la langue d’arrivée de la traduction (français pour une version, ${name} pour un thème)`
+      : `la langue du passage corrigé : français soigné pour un passage écrit en français${vivante ? '' : ' (version, commentaire, réponse rédigée)'}, ${name} correct${vivante ? ' et naturel' : ' (graphie et morphologie exactes)'} pour un passage écrit en ${name}`;
+    return `- Langue : appréciations, explications et conseils en français soigné ; citations de la copie reproduites telles quelles ; chaque correction proposée dans ${target}.`;
   }
   if (!STUDENT_CONTENT.includes(req.type)) {
-    return `- Langue : document de préparation rédigé en français soigné ; exemples, lexique, consignes et supports destinés aux élèves en ${name}${lang.kind === 'vivante' ? ', au niveau du CECRL adapté à la classe' : ''}.`;
+    return vivante
+      ? `- Langue : document de préparation rédigé en français soigné ; exemples, lexique, consignes et supports destinés aux élèves en ${name}, au niveau du CECRL adapté à la classe.`
+      : `- Langue : document de préparation rédigé en français soigné ; textes, formes, exemples et lexique étudiés en ${name} (graphie et morphologie exactes) ; consignes et supports de civilisation en français.`;
   }
-  return lang.kind === 'vivante'
-    ? `- Langue : tout le contenu destiné aux élèves (textes, phrases, questions, choix du QCM, affirmations, mots à trouver, trace écrite) est en ${name}, la langue cible, jamais en français : ${name} correct et naturel, au niveau du CECRL adapté à la classe. Consignes en ${name} simple ou en français selon l'âge des élèves ; explications destinées à l'enseignant et commentaires du corrigé en français soigné (les réponses elles-mêmes restent en ${name}). Les exemples de présentation donnés en français ne montrent que la forme.`
-    : `- Langue : les textes, phrases, formes et mots à étudier ou à trouver sont en ${name}, la langue étudiée (graphie et morphologie exactes) ; consignes, traductions et explications en français soigné. Les exemples de présentation donnés en français ne montrent que la forme.`;
+  const examples = 'Les exemples de présentation donnés en français ne montrent que la forme.';
+  if (translation === 'traduction') {
+    return vivante
+      ? `- Langue : ${translationDirection(name)} ; le reste (questions, autres textes) en ${name} correct et naturel, au niveau du CECRL adapté à la classe ; consignes en ${name} simple ou en français selon l'âge des élèves ; aides lexicales, explications destinées à l'enseignant et commentaires du corrigé en français soigné. ${examples}`
+      : `- Langue : ${translationDirection(name)} ; graphie et morphologie exactes pour tout ce qui est en ${name} ; consignes, aides lexicales et explications en français soigné. ${examples}`;
+  }
+  if (translation === 'llcer') {
+    return `- Langue : documents, questions et synthèse en ${name} correct et naturel, au niveau du CECRL adapté à la classe, sauf la partie 2 : passage source en ${name}, traduction ou transposition attendue en français. Explications destinées à l'enseignant et commentaires du corrigé en français soigné. ${examples}`;
+  }
+  return vivante
+    ? `- Langue : tout le contenu destiné aux élèves (textes, phrases, questions, choix du QCM, affirmations, mots à trouver, trace écrite) est en ${name}, la langue cible, jamais en français : ${name} correct et naturel, au niveau du CECRL adapté à la classe. Consignes en ${name} simple ou en français selon l'âge des élèves ; explications destinées à l'enseignant et commentaires du corrigé en français soigné (les réponses elles-mêmes restent en ${name}). ${examples}`
+    // Langue ancienne : le latin pour la langue, le français pour la civilisation (comme le format « texte à trous »).
+    : `- Langue : quand le travail porte sur la langue (textes à lire ou à traduire, formes, lexique), les textes, phrases, formes et mots étudiés ou à trouver sont en ${name}, la langue étudiée (graphie et morphologie exactes) ; quand il porte sur la civilisation, l'histoire ou la mythologie, le contenu est en français soigné, avec seulement quelques termes cités en ${name}. Consignes, traductions et explications toujours en français soigné. ${examples}`;
 }
 
-/** Rappel en fin de demande (un petit modèle suit mieux la dernière consigne lue). */
+/** Rappel en fin de demande (un petit modèle suit mieux la dernière consigne lue), cohérent avec languageRule. */
 function languageReminder(req: GenerationRequest): string | null {
   const lang = targetLanguage(req.matiere);
   if (!lang || !STUDENT_CONTENT.includes(req.type)) return null;
-  return lang.kind === 'vivante'
-    ? `Langue : tout ce qui est destiné aux élèves est en ${lang.name}.`
-    : `Langue : textes et mots étudiés en ${lang.name} ; consignes et explications en français.`;
+  const { name } = lang;
+  switch (translationWork(req, lang.kind)) {
+    case 'traduction':
+      return `Langue : la traduction se fait dans la langue d’arrivée (français pour une version, ${name} pour un thème) ; explications en français.`;
+    case 'llcer':
+      return `Langue : documents, questions et synthèse en ${name} ; partie 2 (traduction ou transposition) en français.`;
+    default:
+      return lang.kind === 'vivante'
+        ? `Langue : tout ce qui est destiné aux élèves est en ${name}.`
+        : `Langue : formes, textes et mots étudiés en ${name} ; consignes, explications et civilisation en français.`;
+  }
 }
 
 /** Exigences de qualité adaptées à la demande (texte à trous, matière de langue). */
