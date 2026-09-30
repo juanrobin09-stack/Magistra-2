@@ -1,55 +1,33 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
-import path from 'path'
+import { defineConfig, loadEnv } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { magistraDevApi } from './server/viteDevApi';
 
-// Electron plugin is only loaded when BUILD_TARGET=electron
-// This keeps the standard web build (for Vercel) unchanged.
-const isElectron = process.env.BUILD_TARGET === 'electron'
+const root = path.dirname(fileURLToPath(import.meta.url));
 
-async function getPlugins() {
-  if (!isElectron) return []
-  const { default: electron } = await import('vite-plugin-electron/simple')
-  return [
-    electron({
-      main: {
-        entry: 'electron/main.ts',
-        vite: {
-          resolve: { alias: { '@': path.resolve(__dirname, './src') } },
-          build: {
-            outDir: 'dist-electron',
-            rollupOptions: { external: ['electron'] },
-          },
-        },
-      },
-      preload: {
-        input: 'electron/preload.ts',
-        vite: {
-          build: { outDir: 'dist-electron' },
-        },
-      },
-    }),
-  ]
-}
-
-export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss(), ...(await getPlugins())],
-  resolve: {
-    alias: { '@': path.resolve(__dirname, './src') },
-  },
-  server: {
-    port: 5173,
-    proxy: {
-      // In Electron dev mode, the main process runs an API server on 3721.
-      // This proxy lets the Vite dev server forward /api/* calls to it.
-      '/api': {
-        target: 'http://127.0.0.1:3721',
-        changeOrigin: true,
+export default defineConfig(({ mode }) => {
+  // Variables serveur (AI_BASE_URL, CLERK_SECRET_KEY…) : lues côté Node uniquement,
+  // jamais exposées au navigateur (seules les variables VITE_* le sont).
+  const env = loadEnv(mode, root, '');
+  return {
+    base: '/',
+    plugins: [react(), tailwindcss(), magistraDevApi(env)],
+    resolve: {
+      alias: {
+        '@': path.resolve(root, 'src'),
+        '@shared': path.resolve(root, 'shared'),
       },
     },
-  },
-  build: {
-    outDir: 'dist',
-    emptyOutDir: true,
-  },
-}))
+    // server.fs.deny est complété par magistraDevApi : le dossier de données du mode personnel (.magistra-data ou
+    // MAGISTRA_DATA_DIR : jeton d'accès secret, historique, profil) n'est jamais servi par Vite.
+    server: { port: 5173 },
+    worker: { format: 'es' },
+    build: {
+      outDir: 'dist',
+      emptyOutDir: true,
+      chunkSizeWarningLimit: 700,
+    },
+  };
+});

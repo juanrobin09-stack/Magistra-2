@@ -1,45 +1,91 @@
 {
-  "appId": "com.magistra.desktop",
+  "appId": "com.futureai.magistra",
   "productName": "Magistra",
-  "copyright": "Copyright © 2026 FutureAI",
-  "asar": true,
+  "copyright": "Copyright © 2026 FutureAI — logiciel libre (licence MIT)",
   "directories": {
-    "output": "release"
+    "output": "release",
+    "buildResources": "build"
   },
   "files": [
     "dist-electron/**",
-    "!**/*.map"
+    "dist/**",
+    "package.json",
+    "!**/*.map",
+    "!node_modules/**"
+  ],
+  "asar": true,
+  "protocols": [
+    {
+      "name": "Magistra",
+      "schemes": [
+        "magistra"
+      ]
+    }
+  ],
+  "electronFuses": {
+    "runAsNode": false,
+    "enableNodeOptionsEnvironmentVariable": false,
+    "enableNodeCliInspectArguments": false,
+    "enableEmbeddedAsarIntegrityValidation": true,
+    "onlyLoadAppFromAsar": true,
+    "enableCookieEncryption": true,
+    "grantFileProtocolExtraPrivileges": false
+  },
+  "npmRebuild": false,
+  "nodeGypRebuild": false,
+  "buildDependenciesFromSource": false,
+  "electronLanguages": [
+    "fr",
+    "en-US"
   ],
   "extraResources": [
     {
-      "from": "dist",
-      "to": "dist",
-      "filter": ["**/*"]
+      "from": "build/icon.png",
+      "to": "icon.png"
     }
   ],
   "win": {
     "target": [
       {
         "target": "nsis",
-        "arch": ["x64"]
+        "arch": [
+          "x64"
+        ]
       },
       {
         "target": "zip",
-        "arch": ["x64"]
+        "arch": [
+          "x64"
+        ]
       }
     ],
-    "icon": "public/icon.png",
-    "artifactName": "Magistra-Setup-${version}.${ext}",
-    "sign": null,
-    "signingHashAlgorithms": null
+    "icon": "build/icon.png",
+    "artifactName": "Magistra-${version}-win-${arch}.${ext}",
+    "legalTrademarks": "Magistra"
   },
   "nsis": {
     "oneClick": true,
     "perMachine": false,
-    "allowToChangeInstallationDirectory": false,
+    "allowElevation": false,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "Magistra"
+    "runAfterFinish": true,
+    "shortcutName": "Magistra",
+    "uninstallDisplayName": "Magistra",
+    "deleteAppDataOnUninstall": false,
+    "artifactName": "Magistra-Setup-${version}.${ext}"
+  },
+  "linux": {
+    "target": [
+      "dir"
+    ],
+    "icon": "build/icon.png",
+    "category": "Education",
+    "executableName": "magistra"
+  },
+  "mac": {
+    "icon": "build/icon.png",
+    "category": "public.app-category.education"
   },
   "publish": null
 }

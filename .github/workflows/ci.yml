@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, typecheck, tests, build web
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck (src, shared, server, api, electron, tests)
+        run: npm run typecheck
+      - name: Tests unitaires et d'intégration
+        run: npm test
+      - name: Build web
+        run: npx vite build
+      - name: Build serveur autonome
+        run: npm run build:server
+      - name: Audit des dépendances de production
+        run: npm audit --omit=dev --audit-level=high
+      # Electron est livré aux utilisateurs (moteur Chromium + Node.js de l'application Windows) mais déclaré en
+      # devDependencies, comme l'exige electron-builder : l'étape précédente ne le voit pas. Un `npm audit` complet
+      # rendrait la CI rouge pour des outils de développement sans effet sur l'application installée (vite, eslint…).
+      # Ce script échoue uniquement sur un avis « high »/« critical » portant sur electron lui-même, et se contente
+      # d'avertir pour ses dépendances d'installation et la chaîne electron-builder (machine de construction).
+      - name: Audit d'Electron (livré avec l'application Windows)
+        run: node scripts/audit-electron.mjs
+      - name: Licences des dépendances
+        run: npm run licenses
+
+  e2e-web:
+    name: E2E web (démo)
+    runs-on: ubuntu-latest
+    needs: checks
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx vite build
+      - run: npm run test:e2e -- --project=web
+
+  electron:
+    name: Electron (démarrage réel + E2E local avec Ollama simulé + connecteur local)
+    runs-on: ubuntu-latest
+    needs: checks
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # Trousseau de clés du système (Linux) : les autorisations du connecteur local sont réellement chiffrées sur le
+      # disque (safeStorage, comme DPAPI sous Windows) et survivent au redémarrage de l'application. Le test démarre
+      # lui-même un bus de session et un gnome-keyring privés, déverrouillés, le temps des tests.
+      - name: Trousseau de clés (gnome-keyring)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnome-keyring dbus
+      - run: npx vite build
+      - run: node scripts/build-electron.mjs
+      - name: Test de démarrage (fenêtre, preload, rendu)
+        run: xvfb-run -a node scripts/electron-smoke.mjs
+      # Chaque projet Playwright a son dossier de sortie (e2e/outputDirs.ts) : Playwright ne vide que ceux des projets
+      # lancés, et les captures de l'application sont de plus envoyées AVANT le lancement du projet « connector ».
+      - name: E2E application Windows (IPC + Ollama simulé)
+        run: xvfb-run -a npm run test:e2e -- --project=electron
+      - name: Captures de l'application Windows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-application-windows
+          path: test-results/electron/captures
+          if-no-files-found: ignore
+          retention-days: 14
+      # Site web ⇄ connecteur local ⇄ application réelle, protection « Local Network Access » de Chromium active.
+      # Le harnais du site (e2e/connector-harness, jamais dans dist/) est construit par le test lui-même, dans
+      # test-results/connector/ que Playwright vide au début du lancement de ce projet (et de lui seul).
+      - name: E2E connecteur local (harnais du site ⇄ application réelle)
+        run: xvfb-run -a npm run test:e2e -- --project=connector
+      - name: Captures du connecteur local
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-connecteur-local
+          path: test-results/connector/captures
+          if-no-files-found: ignore
+          retention-days: 14
+
+  windows-package:
+    name: Installateur Windows (NSIS, comme une version publiée)
+    runs-on: windows-latest
+    needs: checks
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx vite build
+      - run: node scripts/build-electron.mjs
+      # Depuis les sources (`electron .`) : l'application empaquetée ignore --smoke-test et les variables
+      # MAGISTRA_* (electron/devOptions.ts), aucune exception n'est prévue pour elle.
+      - name: Test de démarrage sous Windows
+        run: node scripts/electron-smoke.mjs
+      # Mêmes options que release.yml : chaque envoi vérifie que la publication d'une version construira bien
+      # l'installateur. Le fichier est gardé 14 jours dans l'exécution (Artifacts), pour l'essayer avant de publier.
+      - name: Installateur NSIS et archive zip (mêmes options que release.yml)
+        run: npx electron-builder --win nsis zip --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Installateur à essayer
+        uses: actions/upload-artifact@v4
+        with:
+          name: magistra-installateur-windows
+          path: release/Magistra-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 14

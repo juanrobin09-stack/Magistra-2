@@ -1,0 +1,122 @@
+# Validation de Magistra avec une VRAIE IA (et non un faux serveur) : Ollama officiel dans Docker, sur le processeur
+# du runner (sans GPU), avec le petit modèle ministral-3:3b (Ministral 3 3B, Apache 2.0, même famille que les
+# niveaux Magistra Léger et Standard).
+#
+# scripts/real-ai-check.mjs (npm run test:real-ai) exerce les VRAIS fournisseurs de shared/ai contre ce serveur :
+#  1. API native d'Ollama : version, santé, liste des modèles, courte génération en français ;
+#  2. même serveur par /v1 (compatible OpenAI) : santé, liste des modèles, courte génération ;
+#  3. chaîne complète runGeneration avec un court document : citation [S1] vérifiée et « Sources utilisées ».
+#
+# Déclenchement : chaque lundi (branche par défaut uniquement) et à la main (Actions → « Vraie IA » → Run workflow),
+# avec un autre modèle ou une autre image d'Ollama si besoin. Rapport JSON et journal d'Ollama joints à l'exécution.
+# Même vérification sur un poste : voir « Valider avec une vraie IA » dans README.md.
+
+name: Vraie IA (Ollama)
+
+on:
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Modèle Ollama à valider (téléchargé si absent du cache)'
+        required: false
+        default: 'ministral-3:3b'
+      ollama_image:
+        description: "Image Docker d'Ollama (épinglée par empreinte de préférence)"
+        required: false
+        default: 'ollama/ollama:0.34.4@sha256:8262851b2846b87c649eddf3e76beb270c52f4d1bc94559f47efde16b0841551'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-ai-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  real-ai:
+    name: Vraie IA — Ollama + ministral-3 (processeur seul)
+    # Les dépôts dérivés (forks) n'exécutent pas la vérification hebdomadaire.
+    if: github.event_name != 'schedule' || github.repository == 'juanrobin09-stack/magistra-2'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # Valeurs saisies transmises par l'environnement, jamais insérées dans les scripts.
+      MODEL: ${{ github.event.inputs.model || 'ministral-3:3b' }}
+      OLLAMA_IMAGE: ${{ github.event.inputs.ollama_image || 'ollama/ollama:0.34.4@sha256:8262851b2846b87c649eddf3e76beb270c52f4d1bc94559f47efde16b0841551' }}
+      # Même taille de contexte côté serveur (OLLAMA_CONTEXT_LENGTH, utilisée par /v1) et côté Magistra (num_ctx) :
+      # le modèle n'est pas rechargé entre les étapes.
+      CONTEXT_TOKENS: '12288'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Seuls les modèles sont mis en cache (≈ 3 Go pour ministral-3:3b), jamais la clé d'identité d'Ollama, et hors
+      # du dossier du dépôt. « ollama pull » compare ensuite le cache au registre et ne télécharge que ce qui a
+      # changé ; changer « -v1 » en « -v2 » force un cache neuf.
+      - name: Cache du modèle
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ollama-ci/models
+          key: ollama-models-${{ env.MODEL }}-v1
+
+      - name: Démarrage d'Ollama (Docker, boucle locale uniquement)
+        run: |
+          mkdir -p "$HOME/.ollama-ci/models"
+          docker run -d --name ollama -p 127.0.0.1:11434:11434 \
+            -v "$HOME/.ollama-ci:/root/.ollama" \
+            -e OLLAMA_CONTEXT_LENGTH="$CONTEXT_TOKENS" -e OLLAMA_KEEP_ALIVE=30m -e OLLAMA_NO_CLOUD=1 \
+            "$OLLAMA_IMAGE"
+          for _ in $(seq 1 60); do
+            curl -fsS --max-time 2 http://127.0.0.1:11434/api/version >/dev/null 2>&1 && break
+            sleep 1
+          done
+          echo "Ollama : $(curl -fsS --max-time 5 http://127.0.0.1:11434/api/version)"
+
+      - name: Modèle (cache, sinon téléchargement)
+        timeout-minutes: 30
+        run: |
+          docker exec ollama ollama pull "$MODEL"
+          docker exec ollama ollama list
+
+      - name: Validation avec la vraie IA
+        timeout-minutes: 60
+        env:
+          REAL_AI_URL: http://127.0.0.1:11434
+          REAL_AI_MODEL: ${{ env.MODEL }}
+          REAL_AI_CONTEXT_TOKENS: ${{ env.CONTEXT_TOKENS }}
+          # Processeur seul : délais généreux (chargement du modèle, lecture du prompt à quelques dizaines de tokens/s).
+          REAL_AI_TIMEOUT_S: '1200'
+          REAL_AI_ATTEMPTS: '2'
+          REAL_AI_REPORT: rapport-vraie-ia/rapport.json
+        run: npm run test:real-ai
+
+      - name: Journal d'Ollama
+        if: always()
+        run: |
+          mkdir -p rapport-vraie-ia
+          docker logs ollama > rapport-vraie-ia/ollama.log 2>&1 || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: rapport-vraie-ia
+          path: rapport-vraie-ia/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # Fichiers écrits par le conteneur (root) : rendus au runner pour que le cache puisse les enregistrer.
+      - name: Arrêt d'Ollama
+        if: always()
+        run: |
+          docker rm -f ollama >/dev/null 2>&1 || true
+          sudo chown -R "$(id -u):$(id -g)" "$HOME/.ollama-ci" || true

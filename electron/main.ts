@@ -1,464 +1,621 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
-import http from 'http';
-import fs from 'fs';
-import path from 'path';
-import { buildSystemPrompt, buildUserPrompt } from '../src/lib/prompts';
+// Processus principal de Magistra (application Windows, également fonctionnelle sous macOS et Linux).
+//
+// Architecture : React (fenêtre) ⇄ IPC sécurisé (preload) ⇄ processus principal ⇄ { données locales, Ollama }.
+// L'interface est servie par le protocole app:// directement depuis app.asar (aucun serveur HTTP pour elle).
+// La fenêtre a sa propre session (partition « magistra-ui ») où tout accès réseau est bloqué ; le processus
+// principal, lui, accède au réseau par la session par défaut (net.fetch).
+//
+// SEUL serveur HTTP : le connecteur local (electron/connector/), qui permet au SITE WEB officiel Magistra, ouvert
+// dans le navigateur de l'enseignant, d'utiliser l'IA de cet ordinateur :
+//   site web ──HTTP boucle locale (127.0.0.1, port dédié), requêtes signées──▶ connecteur ──▶ GenerationManager
+//   (même moteur, même créneau unique que la fenêtre) ──▶ moteur IA ──▶ modèle.
+// Il n'expose que cinq routes Magistra (présence, appairage, état, génération en flux, arrêt), jamais Ollama, ni
+// fichier, ni commande, ni réglage ; il n'accepte que l'origine officielle, après un appairage accepté par
+// l'enseignant dans une boîte de l'application (URL magistra://pair). Réglage « Site web Magistra » : activation,
+// navigateurs autorisés, retrait. Éteint pendant le test de démarrage.
 
-// ─── Config (stored in %APPDATA%/Roaming/Magistra/) ───────────────────────────
+import {
+  app, BrowserWindow, dialog, Menu, net, protocol, safeStorage, session, shell, type MenuItemConstructorOptions, type MessageBoxOptions,
+  type Session,
+} from 'electron';
+import { execFile, spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, promises as fsp, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { fetchPublicPage } from '../server/safeFetch.js';
+import { isLoopbackUrl } from '../shared/ai/ollama.js';
+import type { FetchLike } from '../shared/ai/provider.js';
+import { IPC, type AIProgressEvent, type UpdateCheckResult } from '../shared/ipc.js';
+import { CONNECTOR_PORTS, CONNECTOR_URL_SCHEME, OFFICIAL_WEB_ORIGINS } from '../shared/localConnector.js';
+import { AIConfigStore, safeStorageCipher } from './aiConfig.js';
+import { appUrlFromArgv, LocalConnector, PROTOCOL_HANDLER_ARGS, type ConsentRequest } from './connector/service.js';
+import { GenerationManager } from './generation.js';
+import { detectHardware, freeDiskBytes, ollamaModelsDir, systemHardwareDeps } from './hardware.js';
+import { registerIpcHandlers } from './ipc.js';
+import { LocalStore } from './localStore.js';
+import { AIManager } from './ollamaSetup.js';
+import { createAppProtocolHandler } from './protocol.js';
+import { devOptionsFrom } from './devOptions.js';
+import { APP_SCHEME, APP_URL, isSafeExternalUrl, isTrustedUrl, trustedOrigins } from './security.js';
+import { SmokeTest } from './smoke.js';
+import { checkForUpdate } from './updateCheck.js';
+import { configureWindowSession, denyAllPermissions, WINDOW_PARTITION } from './windowSession.js';
 
-const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function readConfig(): Record<string, string> {
-  try {
-    if (!fs.existsSync(CONFIG_PATH)) return {};
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-  } catch {
-    return {};
-  }
+const APP_ID = 'com.futureai.magistra';
+const BACKGROUND = '#0a0a0f';
+
+// ─── Options de lancement ───────────────────────────────────────────────────
+
+/** Options de développement et de test : toutes ignorées dans l'application installée (voir devOptions.ts). */
+const devOptions = devOptionsFrom(app.isPackaged, process.argv, process.env);
+const smokeOptions = devOptions.smoke;
+let smoke: SmokeTest | null = null;
+let smokeUserData: string | null = null;
+
+/** Serveur Vite (développement uniquement ; jamais dans l'application installée). */
+const devServerUrl = devOptions.devServerUrl;
+const origins = trustedOrigins(devServerUrl);
+
+// Dossier de données séparé pour le test de démarrage (et surcharge possible en développement).
+if (devOptions.userDataDir) {
+  app.setPath('userData', devOptions.userDataDir);
+} else if (smokeOptions) {
+  smokeUserData = mkdtempSync(path.join(os.tmpdir(), 'magistra-smoke-'));
+  app.setPath('userData', smokeUserData);
+} else if (process.platform === 'linux') {
+  // Versions sans « productName » : dossier « magistra » en minuscules. Windows et macOS ignorent la casse des noms
+  // de dossiers ; sous Linux, l'ancien dossier est conservé s'il existe, pour ne perdre aucune donnée.
+  const legacy = path.join(app.getPath('appData'), 'magistra');
+  if (existsSync(legacy) && !existsSync(app.getPath('userData'))) app.setPath('userData', legacy);
 }
 
-function writeConfig(data: Record<string, string>) {
-  try {
-    const dir = path.dirname(CONFIG_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2));
-  } catch (e) {
-    console.error('[magistra] Failed to write config:', e);
-  }
-}
-
-function cfg(key: string): string {
-  return readConfig()[key] || process.env[key.toUpperCase().replace(/-/g, '_')] || '';
-}
-
-// ─── Supabase helpers ─────────────────────────────────────────────────────────
-
-async function sb(urlPath: string, options: RequestInit = {}) {
-  const url = cfg('supabaseUrl');
-  const key = cfg('supabaseServiceKey');
-  if (!url || !key) throw new Error('Supabase non configuré. Allez dans Paramètres.');
-
-  const res = await fetch(`${url}/rest/v1/${urlPath}`, {
-    ...options,
-    headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
-      Prefer: options.method === 'POST' ? 'return=representation' : 'return=minimal',
-      ...(options.headers as Record<string, string> ?? {}),
-    },
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`Supabase ${res.status}: ${text}`);
-  return text ? JSON.parse(text) : null;
-}
-
-const MAX_DAILY = 20;
-
-async function ensureProfile(userId: string) {
-  await sb('profiles', {
-    method: 'POST',
-    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-    body: JSON.stringify({ id: userId }),
-  });
-}
-
-async function checkRateLimit(userId: string): Promise<{ allowed: boolean; remaining: number }> {
-  const today = new Date().toISOString().split('T')[0];
-  const data = await sb(`usage?user_id=eq.${userId}&date=eq.${today}&select=generation_count`);
-  const count = data?.[0]?.generation_count ?? 0;
-  return { allowed: count < MAX_DAILY, remaining: MAX_DAILY - count };
-}
-
-async function incrementUsage(userId: string, tokens: number) {
-  await sb('rpc/increment_usage', {
-    method: 'POST',
-    body: JSON.stringify({ p_user_id: userId, p_tokens: tokens }),
-  });
-}
-
-async function saveGeneration(data: Record<string, unknown>) {
-  const result = await sb('generations', {
-    method: 'POST',
-    headers: { Prefer: 'return=representation' },
-    body: JSON.stringify(data),
-  });
-  return result?.[0];
-}
-
-// ─── JSON body parser ─────────────────────────────────────────────────────────
-
-function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (c) => (data += c));
-    req.on('end', () => {
-      try {
-        resolve(data ? JSON.parse(data) : {});
-      } catch {
-        reject(new Error('Invalid JSON'));
-      }
-    });
-    req.on('error', reject);
-  });
-}
-
-function json(res: http.ServerResponse, status: number, body: unknown) {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
-    'Content-Length': Buffer.byteLength(payload),
-  });
-  res.end(payload);
-}
-
-// ─── API route handlers ───────────────────────────────────────────────────────
-
-async function handleGenerate(req: http.IncomingMessage, res: http.ServerResponse) {
-  const body = (await readBody(req)) as Parameters<typeof buildUserPrompt>[0] & {
-    userId: string;
-  };
-
-  if (!body.userId || !body.type || !body.matiere || !body.niveau || !body.sujet) {
-    return json(res, 400, { error: 'Champs requis manquants.' });
-  }
-
-  const anthropicKey = cfg('anthropicKey');
-  if (!anthropicKey) {
-    return json(res, 500, {
-      error: 'Clé API Anthropic manquante. Configurez-la dans Paramètres > Clés API.',
-    });
-  }
-
-  try {
-    await ensureProfile(body.userId);
-
-    const { allowed, remaining } = await checkRateLimit(body.userId);
-    if (!allowed) {
-      return json(res, 429, {
-        error: 'Limite quotidienne atteinte (20 générations/jour). Revenez demain !',
-        remaining: 0,
-      });
-    }
-
-    const systemPrompt = buildSystemPrompt(body.type, body.niveau);
-    const userPrompt = buildUserPrompt(body);
-
-    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': anthropicKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 8000,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
-    });
-
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      console.error('[magistra] Anthropic error:', errText);
-      return json(res, 502, { error: 'Erreur lors de la génération. Réessayez.' });
-    }
-
-    const anthropicData = await anthropicRes.json() as {
-      content: Array<{ text: string }>;
-      usage: { output_tokens: number };
-    };
-    const contenu: string = anthropicData.content?.[0]?.text ?? '';
-    const tokensUsed: number = anthropicData.usage?.output_tokens ?? 0;
-
-    if (!contenu) {
-      return json(res, 502, { error: "Réponse vide de l'IA. Réessayez dans quelques instants." });
-    }
-
-    const saved = await saveGeneration({
-      user_id: body.userId,
-      type: body.type,
-      matiere: body.matiere,
-      niveau: body.niveau,
-      sujet: body.sujet,
-      duree: body.duree,
-      objectifs: body.objectifs,
-      difficulte: body.difficulte,
-      consignes: body.consignes,
-      contenu,
-      tokens_used: tokensUsed,
-    });
-
-    await incrementUsage(body.userId, tokensUsed);
-
-    return json(res, 200, {
-      id: saved?.id,
-      contenu,
-      remaining: remaining - 1,
-      tokens_used: tokensUsed,
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Erreur serveur.';
-    console.error('[magistra] Generate error:', err);
-    return json(res, 500, { error: msg });
-  }
-}
-
-async function handleHistory(req: http.IncomingMessage, res: http.ServerResponse) {
-  const urlObj = new URL(req.url ?? '/', `http://localhost`);
-  const userId = urlObj.searchParams.get('userId');
-  if (!userId) return json(res, 400, { error: 'userId required' });
-
-  try {
-    const data = await sb(
-      `generations?user_id=eq.${userId}&order=created_at.desc&limit=100&select=id,type,matiere,niveau,sujet,contenu,is_favorite,created_at`
-    );
-    return json(res, 200, data ?? []);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Erreur serveur.';
-    console.error('[magistra] History error:', err);
-    return json(res, 500, { error: msg });
-  }
-}
-
-async function handleFavorite(req: http.IncomingMessage, res: http.ServerResponse) {
-  const body = (await readBody(req)) as { id: string; userId: string; isFavorite: boolean };
-  if (!body.id || !body.userId) return json(res, 400, { error: 'id and userId required' });
-
-  try {
-    const url = cfg('supabaseUrl');
-    const key = cfg('supabaseServiceKey');
-    await fetch(`${url}/rest/v1/generations?id=eq.${body.id}&user_id=eq.${body.userId}`, {
-      method: 'PATCH',
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-        Prefer: 'return=minimal',
-      },
-      body: JSON.stringify({ is_favorite: body.isFavorite }),
-    });
-    return json(res, 200, { success: true });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Erreur serveur.';
-    return json(res, 500, { error: msg });
-  }
-}
-
-async function handleDelete(req: http.IncomingMessage, res: http.ServerResponse) {
-  const body = (await readBody(req)) as { id: string; userId: string };
-  if (!body.id || !body.userId) return json(res, 400, { error: 'id and userId required' });
-
-  try {
-    const url = cfg('supabaseUrl');
-    const key = cfg('supabaseServiceKey');
-    await fetch(`${url}/rest/v1/generations?id=eq.${body.id}&user_id=eq.${body.userId}`, {
-      method: 'DELETE',
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        Prefer: 'return=minimal',
-      },
-    });
-    return json(res, 200, { success: true });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Erreur serveur.';
-    return json(res, 500, { error: msg });
-  }
-}
-
-// ─── Static file server ───────────────────────────────────────────────────────
-
-const MIME_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'application/javascript',
-  '.mjs': 'application/javascript',
-  '.css': 'text/css',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.ico': 'image/x-icon',
-  '.json': 'application/json',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf',
-  '.map': 'application/json',
-};
-
-function getDistPath(): string {
-  // __dirname is dist-electron/ after build
-  return app.isPackaged
-    ? path.join(process.resourcesPath, 'dist')
-    : path.resolve(__dirname, '../dist');
-}
-
-function serveStatic(urlPath: string, res: http.ServerResponse) {
-  const distPath = getDistPath();
-  const cleanPath = urlPath.split('?')[0];
-  let filePath = path.join(distPath, cleanPath === '/' ? 'index.html' : cleanPath);
-
-  // SPA fallback: serve index.html for unknown routes
-  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-    filePath = path.join(distPath, 'index.html');
-  }
-
-  try {
-    const content = fs.readFileSync(filePath);
-    const ext = path.extname(filePath);
-    res.writeHead(200, {
-      'Content-Type': MIME_TYPES[ext] ?? 'application/octet-stream',
-      'Cache-Control': 'no-cache',
-    });
-    res.end(content);
-  } catch {
-    res.writeHead(404);
-    res.end('Not found');
-  }
-}
-
-// ─── HTTP server (API + static on same port) ──────────────────────────────────
-
-export const API_PORT = 3721;
-
-function startServer() {
-  const server = http.createServer(async (req, res) => {
-    // CORS for renderer
-    res.setHeader('Access-Control-Allow-Origin', `http://localhost:${API_PORT}`);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      return res.end();
-    }
-
-    const url = req.url ?? '/';
-
-    if (url.startsWith('/api/')) {
-      if (url.startsWith('/api/generate') && req.method === 'POST') return handleGenerate(req, res);
-      if (url.startsWith('/api/history') && req.method === 'GET') return handleHistory(req, res);
-      if (url.startsWith('/api/favorite') && req.method === 'PATCH') return handleFavorite(req, res);
-      if (url.startsWith('/api/delete') && req.method === 'DELETE') return handleDelete(req, res);
-      return json(res, 404, { error: 'Unknown API route' });
-    }
-
-    serveStatic(url, res);
-  });
-
-  server.listen(API_PORT, '127.0.0.1', () => {
-    console.log(`[magistra] Server running on http://127.0.0.1:${API_PORT}`);
-  });
-
-  server.on('error', (err) => {
-    console.error('[magistra] Server error:', err);
-  });
-
-  return server;
-}
-
-// ─── Window ───────────────────────────────────────────────────────────────────
+// ─── Erreurs fatales : jamais de processus fantôme sans fenêtre ────────────
 
 let mainWindow: BrowserWindow | null = null;
+let startupDone = false;
+let quitting = false;
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1380,
-    height: 860,
-    minWidth: 1080,
-    minHeight: 680,
-    backgroundColor: '#0a0a0f',
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
+function shortMessage(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  return text.split('\n')[0].slice(0, 300);
+}
+
+function fatal(err: unknown, what = 'démarrer'): void {
+  console.error('[magistra] Erreur fatale :', err);
+  if (smoke) {
+    smoke.fail(`Erreur fatale : ${shortMessage(err)}`);
+    return;
+  }
+  if (quitting) return;
+  quitting = true;
+  try {
+    dialog.showErrorBox(
+      'Magistra',
+      `Magistra n'a pas pu ${what} et doit se fermer.\n\nRelancez l'application. Si le problème persiste, réinstallez Magistra.\n\nDétail : ${shortMessage(err)}`,
+    );
+  } catch {
+    /* boîte de dialogue impossible : on quitte quand même */
+  }
+  app.exit(1);
+}
+
+process.on('uncaughtException', err => fatal(err, 'continuer'));
+process.on('unhandledRejection', reason => {
+  if (!startupDone || !mainWindow || mainWindow.isDestroyed()) fatal(reason);
+  else console.error('[magistra] Promesse rejetée non gérée :', reason);
+});
+
+// ─── Protocole app:// (avant « ready ») ────────────────────────────────────
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+]);
+// Bac à sable pour tous les processus d'affichage. Exception : lancement explicite avec --no-sandbox
+// (conteneurs Linux en root, CI) où Chromium refuse de combiner les deux ; la fenêtre garde sandbox: true.
+if (!app.commandLine.hasSwitch('no-sandbox')) app.enableSandbox();
+
+function distDirectory(): string {
+  return devOptions.distDir ?? path.join(app.getAppPath(), 'dist');
+}
+
+function iconPath(): string | undefined {
+  const candidate = app.isPackaged ? path.join(process.resourcesPath, 'icon.png') : path.join(app.getAppPath(), 'build', 'icon.png');
+  return existsSync(candidate) ? candidate : undefined;
+}
+
+// ─── Réseau ─────────────────────────────────────────────────────────────────
+
+const localFetch: FetchLike = (input, init) => fetch(input, init);
+/** Accès Internet par la pile réseau de Chromium : respecte le proxy de l'établissement. */
+const internetFetch: FetchLike = (input, init) => net.fetch(input, init);
+
+// ─── Menu en français ───────────────────────────────────────────────────────
+
+function buildMenu(): Menu {
+  const isMac = process.platform === 'darwin';
+  const view: MenuItemConstructorOptions[] = [
+    { role: 'reload', label: 'Recharger' },
+    { type: 'separator' },
+    { role: 'resetZoom', label: 'Taille réelle' },
+    { role: 'zoomIn', label: 'Zoom avant' },
+    { role: 'zoomOut', label: 'Zoom arrière' },
+    { type: 'separator' },
+    { role: 'togglefullscreen', label: 'Plein écran' },
+  ];
+  if (!app.isPackaged) view.push({ type: 'separator' }, { role: 'toggleDevTools', label: 'Outils de développement' });
+  const template: MenuItemConstructorOptions[] = [
+    ...(isMac ? [{ role: 'appMenu' } as MenuItemConstructorOptions] : []),
+    { label: 'Fichier', submenu: [isMac ? { role: 'close', label: 'Fermer la fenêtre' } : { role: 'quit', label: 'Quitter' }] },
+    {
+      label: 'Édition',
+      submenu: [
+        { role: 'undo', label: 'Annuler' },
+        { role: 'redo', label: 'Rétablir' },
+        { type: 'separator' },
+        { role: 'cut', label: 'Couper' },
+        { role: 'copy', label: 'Copier' },
+        { role: 'paste', label: 'Coller' },
+        { role: 'pasteAndMatchStyle', label: 'Coller sans mise en forme' },
+        { type: 'separator' },
+        { role: 'selectAll', label: 'Tout sélectionner' },
+      ],
     },
-    // App icon
-    ...(process.platform === 'win32'
-      ? { icon: path.join(__dirname, '../public/icon.png') }
-      : {}),
-  });
+    { label: 'Affichage', submenu: view },
+  ];
+  return Menu.buildFromTemplate(template);
+}
 
-  // Open external links in default browser (important for Clerk OAuth popups)
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1')) {
-      return { action: 'allow' };
-    }
-    shell.openExternal(url);
+// ─── Sessions : permissions, téléchargements, requêtes ─────────────────────
+
+/** Session de la fenêtre (partition dédiée, voir windowSession.ts) ; créée au démarrage. */
+let windowSession: Session | null = null;
+
+function openExternalSafely(url: string): void {
+  if (isSafeExternalUrl(url) && !isTrustedUrl(url, origins)) {
+    shell.openExternal(url).catch(err => console.warn('[magistra] Ouverture du lien impossible :', err));
+  }
+}
+
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('will-attach-webview', event => event.preventDefault());
+  contents.setWindowOpenHandler(({ url }) => {
+    openExternalSafely(url);
+    return { action: 'deny' };
+  });
+});
+
+// ─── Fenêtre ────────────────────────────────────────────────────────────────
+
+let services: { onAppReady: () => void } | null = null;
+let rendererCrashes = 0;
+/**
+ * Appelé quand la page affichée est remplacée (rechargement, redémarrage de l'affichage) : l'ancienne page
+ * suivait peut-être une génération ; plus personne ne peut l'afficher ni l'arrêter, elle est donc interrompue
+ * (sinon la suivante serait refusée — « génération déjà en cours » — pendant parfois plusieurs minutes).
+ */
+let onDocumentReplaced: (() => void) | null = null;
+
+function createWindow(): BrowserWindow {
+  // Jamais de fenêtre dans la session par défaut (celle du réseau du processus principal).
+  if (!windowSession) throw new Error('session de la fenêtre non initialisée');
+  const win = new BrowserWindow({
+    width: 1380,
+    height: 880,
+    minWidth: 960,
+    minHeight: 640,
+    show: false,
+    title: 'Magistra',
+    backgroundColor: BACKGROUND,
+    icon: iconPath(),
+    webPreferences: {
+      // Session dédiée : réseau bloqué, protocole app://, permissions (jamais la session par défaut de net.fetch).
+      session: windowSession,
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      spellcheck: false,
+      devTools: !app.isPackaged,
+    },
+  });
+  mainWindow = win;
+  const wc = win.webContents;
+
+  // Navigation : seule l'origine de l'application ; les liens http(s) s'ouvrent dans le navigateur du système.
+  wc.on('will-navigate', event => {
+    if (isTrustedUrl(event.url, origins)) return;
+    event.preventDefault();
+    openExternalSafely(event.url);
+  });
+  wc.on('will-frame-navigate', event => {
+    if (event.isMainFrame || isTrustedUrl(event.url, origins) || event.url === 'about:blank' || event.url === 'about:srcdoc') return;
+    event.preventDefault();
+  });
+  wc.on('will-redirect', event => {
+    if (!isTrustedUrl(event.url, origins)) event.preventDefault();
+  });
+  wc.setWindowOpenHandler(({ url }) => {
+    openExternalSafely(url);
     return { action: 'deny' };
   });
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
-    if (!app.isPackaged) mainWindow?.webContents.openDevTools();
+  let shown = false;
+  const show = () => {
+    if (shown || win.isDestroyed()) return;
+    shown = true;
+    win.show();
+    win.focus();
+    startupDone = true;
+  };
+  win.once('ready-to-show', show);
+  // Filet de sécurité : la fenêtre apparaît même si « ready-to-show » n'arrive pas (pilote graphique capricieux).
+  setTimeout(show, 10_000).unref();
+
+  // Nouveau document dans la fenêtre (navigation validée : Ctrl+R, rechargement automatique…).
+  // Les navigations refusées (liens externes) et les changements de route de l'application n'en sont pas.
+  wc.on('did-navigate', () => onDocumentReplaced?.());
+
+  wc.on('render-process-gone', (_e, details) => {
+    console.error('[magistra] Processus d’affichage arrêté :', details.reason);
+    onDocumentReplaced?.();
+    if (smoke || details.reason === 'clean-exit' || win.isDestroyed()) return;
+    if (++rendererCrashes <= 3) wc.reload();
+    else fatal(new Error(`affichage arrêté (${details.reason})`), 'afficher son interface');
+  });
+  wc.on('did-fail-load', (_e, code, description, url, isMainFrame) => {
+    if (isMainFrame && code !== -3) console.error(`[magistra] Chargement impossible (${code} ${description}) : ${url}`);
   });
 
-  // Dev: load from Vite dev server; Prod: load from local HTTP server
-  const url = app.isPackaged
-    ? `http://127.0.0.1:${API_PORT}`
-    : 'http://localhost:5173';
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+  });
 
-  mainWindow.loadURL(url);
+  smoke?.attach(win);
+  const target = devServerUrl ?? APP_URL;
+  win.loadURL(target).catch(err => {
+    if ((err as { code?: string })?.code === 'ERR_ABORTED') return;
+    fatal(err, 'afficher son interface');
+  });
+  return win;
 }
 
-// ─── IPC handlers ─────────────────────────────────────────────────────────────
-
-ipcMain.handle('config:get', (_e, key: string) => {
-  const val = cfg(key);
-  // Mask sensitive keys (show only last 4 chars)
-  if ((key === 'anthropicKey' || key === 'supabaseServiceKey') && val.length > 8) {
-    return val.slice(0, 4) + '••••••••' + val.slice(-4);
-  }
-  return val;
-});
-
-ipcMain.handle('config:get-raw', (_e, key: string) => cfg(key));
-
-ipcMain.handle('config:set', (_e, key: string, value: string) => {
-  const config = readConfig();
-  config[key] = value;
-  writeConfig(config);
-  return true;
-});
-
-ipcMain.handle('config:has', (_e, key: string) => {
-  return Boolean(cfg(key));
-});
-
-ipcMain.on('window:minimize', () => mainWindow?.minimize());
-ipcMain.on('window:maximize', () => {
-  if (mainWindow?.isMaximized()) mainWindow.unmaximize();
-  else mainWindow?.maximize();
-});
-ipcMain.on('window:close', () => mainWindow?.close());
-
-// ─── App lifecycle ────────────────────────────────────────────────────────────
-
-// Single instance lock
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-  process.exit(0);
-}
-
-app.on('second-instance', () => {
-  if (mainWindow) {
+/** Fenêtre au premier plan, créée si besoin (deuxième lancement, magistra://open, demande d'appairage). */
+function showMainWindow(): BrowserWindow | null {
+  if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
     mainWindow.focus();
+    return mainWindow;
   }
-});
+  if (app.isReady() && services) return createWindow();
+  return null;
+}
 
-app.whenReady().then(() => {
-  startServer();
+/** Attend que la fenêtre soit affichée (au plus 10 s) : une boîte liée à une fenêtre cachée resterait invisible. */
+function whenShown(win: BrowserWindow): Promise<void> {
+  if (win.isDestroyed() || win.isVisible()) return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => {
+      clearTimeout(timer);
+      win.off('show', done);
+      win.off('closed', done);
+      resolve();
+    };
+    const timer = setTimeout(done, 10_000);
+    win.once('show', done);
+    win.once('closed', done);
+  });
+}
+
+// ─── Connecteur local : URL magistra:// et consentement ────────────────────
+
+let connector: LocalConnector | null = null;
+/** Vrai une fois le connecteur prêt à traiter les URL magistra:// (après le démarrage). */
+let connectorReady = false;
+/** URL reçue avant la fin du démarrage (ligne de commande, « open-url » de macOS) : seule la dernière est gardée. */
+let pendingAppUrl: string | null = null;
+
+/** URL magistra:// reçue (ligne de commande, deuxième instance, macOS). Jamais pendant le test de démarrage. */
+function receiveAppUrl(raw: string): void {
+  if (smokeOptions) return;
+  if (!connector || !connectorReady) {
+    pendingAppUrl = raw;
+    return;
+  }
+  connector.handleAppUrl(raw, () => {
+    showMainWindow();
+  }).catch(err => console.warn('[magistra] Adresse magistra:// non traitée :', err instanceof Error ? err.name : err));
+}
+
+/** Boîte de consentement native, liée à la fenêtre (créée et mise au premier plan d'abord). */
+async function askConsent(request: ConsentRequest, signal: AbortSignal): Promise<boolean> {
+  const win = showMainWindow();
+  if (win) await whenShown(win);
+  if (signal.aborted) return false;
+  const options: MessageBoxOptions = {
+    type: 'question',
+    buttons: ['Autoriser', 'Refuser'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    title: 'Magistra',
+    message: request.message,
+    detail: request.detail,
+    // Demande remplacée par une nouvelle ou expirée : la boîte se ferme (réponse « Refuser », sans effet).
+    signal,
+  };
+  const { response } = win && !win.isDestroyed() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+  return response === 0 && !signal.aborted;
+}
+
+// ─── Démarrage ──────────────────────────────────────────────────────────────
+
+async function start(): Promise<void> {
+  if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
+  Menu.setApplicationMenu(buildMenu());
+
+  let appProtocolHandler: ((request: Request) => Promise<Response>) | undefined;
+  if (!devServerUrl) {
+    const distDir = distDirectory();
+    if (!existsSync(path.join(distDir, 'index.html'))) {
+      throw new Error(`fichiers de l'interface introuvables (${distDir})`);
+    }
+    appProtocolHandler = createAppProtocolHandler(distDir);
+  }
+  // La session par défaut ne sert qu'au réseau du processus principal (net.fetch) : aucune page ne l'utilise.
+  denyAllPermissions(session.defaultSession);
+  windowSession = session.fromPartition(WINDOW_PARTITION);
+  configureWindowSession(windowSession, { origins, devServerUrl, appProtocolHandler });
+
+  const userData = app.getPath('userData');
+  const store = new LocalStore(userData);
+  await store.init();
+
+  const cipher = safeStorageCipher(safeStorage);
+  const config = new AIConfigStore(path.join(userData, 'ai-config.json'), cipher, { ollamaUrl: devOptions.ollamaUrl });
+  await config.load();
+
+  const sendToWindow = (channel: string, payload: unknown): boolean => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return false;
+    win.webContents.send(channel, payload);
+    return true;
+  };
+
+  const modelsDir = ollamaModelsDir();
+  const ai = new AIManager({
+    config,
+    localFetch,
+    netFetch: internetFetch,
+    platform: process.platform,
+    env: process.env,
+    homedir: os.homedir(),
+    tmpdir: os.tmpdir(),
+    fileExists: async p => {
+      try {
+        await fsp.stat(p);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    spawnDetached: (file, args, env) => {
+      const child = spawn(file, args, { detached: true, stdio: 'ignore', windowsHide: true, env });
+      child.on('error', err => console.warn('[magistra] Lancement impossible :', file, err.message));
+      child.unref();
+    },
+    // L'installateur lance Ollama à la fin : il reçoit l'environnement préparé (proxy du système en HTTPS_PROXY).
+    runInstaller: (file, args, signal, env) =>
+      new Promise<number>((resolve, reject) => {
+        const child = spawn(file, args, { windowsHide: true, stdio: 'ignore', ...(env ? { env } : {}) });
+        const timer = setTimeout(() => {
+          child.kill();
+          reject(new Error('délai d’installation dépassé'));
+        }, 15 * 60_000);
+        // Annulation : on cesse d'attendre, mais on n'interrompt pas un installateur en cours (état incohérent).
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(new Error('annulé'));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        child.on('error', err => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', onAbort);
+          reject(err);
+        });
+        child.on('exit', code => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', onAbort);
+          resolve(code ?? 1);
+        });
+      }),
+    openExternal: url => shell.openExternal(url),
+    detectHardware: () => detectHardware({ ...systemHardwareDeps(() => app.getGPUInfo('complete')), modelsDir }),
+    freeDiskBytes,
+    modelsDir,
+    emit: (event: AIProgressEvent) => {
+      sendToWindow(IPC.aiProgress, event);
+    },
+    // Proxy du système (celui que suit net.fetch) : transmis à Ollama, qui ne lit que HTTPS_PROXY. Jamais journalisé.
+    resolveProxy: url => session.defaultSession.resolveProxy(url),
+    // Relance du moteur (Windows) : arrêt de « ollama app.exe » et ollama.exe, comme le fait l'installateur officiel.
+    ...(process.platform === 'win32'
+      ? {
+        killProcesses: async (names: readonly string[]) => {
+          for (const name of names) {
+            await new Promise<void>(resolve => {
+              // Code de sortie non nul si le processus n'existe pas : sans importance, l'arrêt est vérifié ensuite.
+              execFile('taskkill', ['/f', '/t', '/im', name], { windowsHide: true, timeout: 10_000 }, () => resolve());
+            });
+          }
+        },
+      }
+      : {}),
+  });
+
+  const generation = new GenerationManager({
+    store,
+    resolveProvider: (signal, onStatus) => ai.resolveProvider(signal, onStatus),
+    describeActive: () => ai.describeActive(),
+    send: payload => sendToWindow(IPC.genEvent, payload),
+    fetch: internetFetch,
+    fetchPage: fetchPublicPage,
+    // Générations du site (connecteur local) : uniquement avec le moteur de CET ordinateur.
+    isLocalEngine: () => {
+      const cfg = config.get();
+      return cfg.mode === 'local' && isLoopbackUrl(cfg.ollamaUrl);
+    },
+  });
+
+  const localConnector = new LocalConnector({
+    file: path.join(userData, 'local-connector.json'),
+    cipher,
+    version: app.getVersion(),
+    // Origines de développement (boucle locale) : jamais dans l'application installée (voir devOptions.ts).
+    allowedOrigins: [...OFFICIAL_WEB_ORIGINS, ...(devOptions.connectorDevOrigins ?? [])],
+    ports: devOptions.connectorPorts ?? CONNECTOR_PORTS,
+    generation,
+    askConsent,
+    onChange: status => {
+      sendToWindow(IPC.connectorChanged, status);
+    },
+    ...(devOptions.connectorDisabled ? { disabledForSession: true } : {}),
+  });
+  await localConnector.init();
+  connector = localConnector;
+
+  services = {
+    onAppReady: () => {
+      if (smoke) void smoke.onAppReady();
+    },
+  };
+  // Seules les générations de la fenêtre sont concernées : celles du site continuent (leur page n'a pas changé).
+  onDocumentReplaced = () => generation.cancelWindow();
+
+  // Une seule vérification de version à la fois (clics répétés : même réponse).
+  let updateCheck: Promise<UpdateCheckResult> | null = null;
+
+  registerIpcHandlers({
+    getWindow: () => mainWindow,
+    trustedOrigins: origins,
+    store,
+    ai,
+    generation,
+    appInfo: () => ({
+      version: app.getVersion(),
+      platform: process.platform,
+      userDataPath: app.getPath('userData'),
+      isPackaged: app.isPackaged,
+    }),
+    openExternal: url => shell.openExternal(url),
+    checkForUpdate: () =>
+      (updateCheck ??= checkForUpdate({ fetch: internetFetch, currentVersion: app.getVersion() }).finally(() => {
+        updateCheck = null;
+      })),
+    onAppReady: () => services?.onAppReady(),
+    connector: {
+      status: () => localConnector.status(),
+      revoke: clientId => localConnector.revoke(clientId),
+      setEnabled: enabled => localConnector.setEnabled(enabled),
+    },
+  });
+
+  app.on('before-quit', () => {
+    quitting = true;
+    generation.cancelAll();
+    void localConnector.stop();
+    ai.dispose();
+  });
+
   createWindow();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
+  // Détection matérielle en arrière-plan : l'assistant de configuration s'affiche ensuite sans attente.
+  ai.getHardware().catch(err => console.warn('[magistra] Détection matérielle impossible :', err));
+  // Moteur IA installé mais arrêté : démarrage automatique, sans bloquer l'interface.
+  if (!smoke) {
+    ai.autoStart().catch(err => console.warn('[magistra] Démarrage automatique du moteur IA impossible :', err));
+  }
+}
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+/**
+ * Après le démarrage : schéma magistra:// (application installée), connecteur local (sauf test de démarrage), puis
+ * URL reçue pendant le démarrage (lancement par le site).
+ */
+async function startConnector(): Promise<void> {
+  const current = connector;
+  if (!current || smoke) return;
+  if (app.isPackaged) {
+    try {
+      // Commande « "<exe>" -- "%1" » : aucune option ne peut être injectée par l'URL (PROTOCOL_HANDLER_ARGS). Vérifiée
+      // avec les mêmes arguments : l'inscription d'une version précédente, sans « -- », est réécrite.
+      const args = [...PROTOCOL_HANDLER_ARGS];
+      if (!app.isDefaultProtocolClient(CONNECTOR_URL_SCHEME, process.execPath, args)) {
+        app.setAsDefaultProtocolClient(CONNECTOR_URL_SCHEME, process.execPath, args);
+      }
+    } catch (err) {
+      console.warn('[magistra] Enregistrement du schéma magistra:// impossible :', err instanceof Error ? err.message : err);
+    }
+  }
+  await current.start();
+  connectorReady = true;
+  const url = pendingAppUrl;
+  pendingAppUrl = null;
+  if (url) receiveAppUrl(url);
+}
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  // Une autre fenêtre Magistra est déjà ouverte : elle sera mise au premier plan.
+  app.quit();
+} else {
+  if (smokeOptions) {
+    smoke = new SmokeTest(smokeOptions, code => {
+      if (smokeUserData) {
+        try {
+          rmSync(smokeUserData, { recursive: true, force: true });
+        } catch {
+          /* nettoyage facultatif */
+        }
+      }
+      app.exit(code);
+    });
+  }
+
+  // Premier lancement par le site (Windows, Linux) : l'URL magistra:// est un argument de la ligne de commande.
+  pendingAppUrl = appUrlFromArgv(process.argv);
+
+  app.on('second-instance', (_event, argv) => {
+    const url = appUrlFromArgv(argv);
+    // Lancement avec une URL magistra:// : c'est elle qui décide (« open » ou appairage accepté : fenêtre au premier
+    // plan ; URL ignorée, site non autorisé : rien). Sinon (nouveau clic sur l'icône) : fenêtre au premier plan.
+    if (url && !smokeOptions) receiveAppUrl(url);
+    else showMainWindow();
+  });
+
+  // macOS : l'URL arrive par cet évènement, parfois avant « ready » (enregistré ici, avant le démarrage).
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    receiveAppUrl(url);
+  });
+
+  app.on('activate', () => {
+    if (services && BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+
+  app.on('window-all-closed', () => {
+    app.quit();
+  });
+
+  app.whenReady()
+    .then(start)
+    .then(() => startConnector().catch(err => console.warn('[magistra] Connecteur local non démarré :', err instanceof Error ? err.name : err)))
+    .catch(err => fatal(err));
+}

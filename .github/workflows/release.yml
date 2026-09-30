@@ -1,0 +1,234 @@
+# Publication de l'application Windows : installateur NSIS + archive zip + SHA256SUMS.txt, dans une release GitHub
+# en BROUILLON. Un mainteneur la relit (notes, fichiers), puis la publie à la main : c'est seulement alors que
+# « Rechercher une mise à jour » (electron/updateCheck.ts, /releases/latest) la propose aux enseignants.
+#
+# Déclenchement :
+#  - sans ligne de commande : sur GitHub, Releases → « Draft a new release » → tag v2.0.1 (« Create new tag on
+#    publish ») sur la branche voulue → « Publish release » : ce workflow construit alors l'installateur et le JOINT à
+#    cette release publiée (évènement « release: published » ; rien n'est jamais remplacé) ;
+#  - pousser un tag de version : git tag v2.0.1 && git push origin v2.0.1
+#    (le tag doit être égal à « v » + la version de package.json : v2.0.1 ↔ "version": "2.0.1" ;
+#     un tag avec suffixe, v2.1.0-rc.1, donne une préversion, jamais proposée comme mise à jour) ;
+#  - ou « Run workflow » (Actions) : avec un tag EXISTANT, même résultat ; sans tag, construction seule
+#    (fichiers téléchargeables dans l'exécution, aucune release).
+# Ce workflow ne crée jamais de tag (gh release create --verify-tag) et ne remplace jamais un fichier d'une release
+# publiée : il n'y ajoute l'installateur que s'il en est absent.
+#
+# Chaîne d'approvisionnement : actions épinglées par SHA de commit (version en commentaire), aucun cache de
+# dépendances (npm ci depuis package-lock.json), aucun autre secret que GITHUB_TOKEN. La construction s'exécute avec
+# un jeton en lecture seule et sans identifiants git conservés ; seul le job « release », qui n'exécute aucun code
+# du dépôt ni aucune dépendance npm, reçoit « contents: write ».
+
+name: Publication Windows
+
+on:
+  push:
+    tags: ['v*']
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag existant à publier en brouillon (ex. v2.0.1). Vide : construction seule, sans release."
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  # Même groupe pour le tag poussé et la release publiée qui le crée : les deux exécutions se suivent, la seconde
+  # trouve l'installateur déjà joint et ne modifie rien.
+  group: release-${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Installateur Windows (NSIS + zip)
+    # Brouillon préparé par ce workflow puis publié à la main : l'installateur y est déjà, rien à reconstruire.
+    if: github.event_name != 'release' || !contains(join(github.event.release.assets.*.name, ','), 'Magistra-Setup-')
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.target.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      artifact: ${{ steps.version.outputs.artifact }}
+    steps:
+      # Les valeurs fournies (tag saisi, nom de référence) passent par l'environnement, jamais dans le script.
+      - name: Tag à publier
+        id: target
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          tag=""
+          if [ "$EVENT" = "push" ] && [ "$REF_TYPE" = "tag" ]; then tag="$REF_NAME"; fi
+          if [ "$EVENT" = "release" ]; then tag="$RELEASE_TAG"; fi
+          if [ "$EVENT" = "workflow_dispatch" ]; then tag="$(printf '%s' "$INPUT_TAG" | tr -d '[:space:]')"; fi
+          if [ -n "$tag" ] && ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error title=Tag invalide::« $tag » n'est pas un tag de version (attendu : v2.0.1 ou v2.1.0-rc.1)."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -n "$tag" ]; then echo "ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"; else echo "ref=" >> "$GITHUB_OUTPUT"; fi
+          echo "Tag : ${tag:-aucun (construction seule)}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.target.outputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Version (package.json) et tag concordants
+        id: version
+        shell: bash
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ -n "$TAG" ] && [ "$TAG" != "v$version" ]; then
+            echo "::error title=Version différente::Le tag $TAG ne correspond pas à la version de package.json ($version). Corrigez package.json (\"version\": \"${TAG#v}\"), commitez, puis recréez le tag."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "artifact=magistra-windows-$version" >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+
+      - name: Build web (vérification des types + Vite)
+        run: npm run build
+
+      - name: Build Electron (processus principal + preload)
+        run: node scripts/build-electron.mjs
+
+      # Installateur non signé (pas de certificat de signature de code) : voir l'avertissement SmartScreen du README.
+      - name: Installateur NSIS et archive zip (sans publication)
+        run: npx electron-builder --win nsis zip --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Empreintes SHA-256
+        shell: bash
+        working-directory: release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          files=("Magistra-Setup-$VERSION.exe" "Magistra-$VERSION-win-x64.zip")
+          for f in "${files[@]}"; do
+            if [ ! -s "$f" ]; then echo "::error title=Fichier manquant::$f n'a pas été produit par electron-builder."; ls -la; exit 1; fi
+          done
+          # Même installateur sous un nom FIXE : …/releases/latest/download/Magistra-Setup.exe télécharge toujours la
+          # dernière version stable (bouton « Télécharger » du site quand la version exacte n'est pas connue).
+          cp "Magistra-Setup-$VERSION.exe" "Magistra-Setup.exe"
+          files+=("Magistra-Setup.exe")
+          sha256sum "${files[@]}" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.version.outputs.artifact }}
+          path: |
+            release/Magistra-Setup-${{ steps.version.outputs.version }}.exe
+            release/Magistra-Setup.exe
+            release/Magistra-${{ steps.version.outputs.version }}-win-x64.zip
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Release GitHub en brouillon
+    needs: build
+    if: needs.build.outputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Seul job autorisé à écrire : il ne lance que sha256sum et gh, jamais le code du dépôt.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: fichiers
+
+      - name: Vérification des empreintes
+        working-directory: fichiers
+        run: sha256sum --check --strict SHA256SUMS.txt
+
+      - name: Notes de version
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+        run: |
+          cat > notes.md <<EOF
+          ## Magistra $VERSION pour Windows 10 et 11
+
+          **À télécharger :** \`Magistra-Setup-$VERSION.exe\` (installation en un clic, sans droits d'administrateur).
+          \`Magistra-Setup.exe\` est le même fichier sous un nom fixe (lien de téléchargement direct du site).
+          L'archive \`Magistra-$VERSION-win-x64.zip\` contient la même application sans installateur.
+
+          ### Première utilisation
+          1. Ouvrez l'installateur. **Windows SmartScreen** peut afficher « Windows a protégé votre ordinateur » :
+             l'installateur n'est pas encore signé numériquement (certificat payant). Cliquez sur
+             **Informations complémentaires**, puis **Exécuter quand même**, uniquement si le fichier vient de cette page.
+          2. Magistra s'installe en quelques secondes, sans droits d'administrateur, et s'ouvre toute seule.
+          3. Dans Magistra, **Activer l'IA** installe le moteur d'IA locale (Ollama, version 0.13.1 ou plus récente) et
+             un modèle open weights adapté à l'ordinateur : un seul clic, taille du téléchargement annoncée avant, sans
+             compte ni clé. Vos documents et vos générations restent sur l'ordinateur.
+
+          ### Vérifier le fichier téléchargé (facultatif, pour le service informatique)
+          L'empreinte SHA-256 de l'installateur est affichée sur le site Magistra (Réglages → « Magistra pour Windows ») :
+          elle doit correspondre à la ligne de \`Magistra-Setup-$VERSION.exe\` dans \`SHA256SUMS.txt\`.
+
+          Guide complet : $SERVER/$REPO#brancher-une-vraie-ia
+          EOF
+
+      - name: Création ou mise à jour du brouillon
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          files=(fichiers/*)
+          state="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+          if [ "$state" = "true" ]; then
+            echo "Brouillon existant pour $TAG : fichiers remplacés."
+            gh release upload "$TAG" "${files[@]}" --clobber
+          elif [ "$state" = "false" ]; then
+            # Release publiée (par exemple depuis la page Releases de GitHub, sans ligne de commande) : l'installateur y
+            # est ajouté s'il est absent ; un fichier déjà présent n'est JAMAIS remplacé (intégrité de ce qui a été
+            # téléchargé).
+            assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            if printf '%s\n' "$assets" | grep -Fxq "Magistra-Setup-$VERSION.exe"; then
+              echo "::notice title=Release déjà complète::La release $TAG publiée contient déjà l'installateur : rien n'est modifié."
+              exit 0
+            fi
+            for f in "${files[@]}"; do
+              if printf '%s\n' "$assets" | grep -Fxq "$(basename "$f")"; then
+                echo "::error title=Fichier déjà présent::$(basename "$f") existe déjà dans la release publiée $TAG sans l'installateur : rien n'est remplacé. Vérifiez la release."
+                exit 1
+              fi
+            done
+            gh release upload "$TAG" "${files[@]}"
+            body="$(gh release view "$TAG" --json body --jq '.body')"
+            if [ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then gh release edit "$TAG" --notes-file notes.md; fi
+            echo "Installateur joint à la release publiée $TAG : le site le propose maintenant." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          else
+            prerelease=()
+            case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+            gh release create "$TAG" "${files[@]}" --draft --verify-tag "${prerelease[@]}" \
+              --title "Magistra $VERSION" --notes-file notes.md
+          fi
+          echo "Brouillon prêt : relisez-le dans Releases, puis publiez-le à la main." >> "$GITHUB_STEP_SUMMARY"

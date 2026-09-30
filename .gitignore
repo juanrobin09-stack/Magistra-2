@@ -24,3 +24,17 @@ release
 *.njsproj
 *.sln
 *.sw?
+
+# Environnement (ne jamais committer de secrets)
+.env
+.env.*
+!.env.example
+# Données du serveur en mode personnel (historique, jeton d'accès secret) : MAGISTRA_DATA_DIR
+.magistra-data
+*.tsbuildinfo
+.vercel
+.netlify
+playwright-report
+test-results
+coverage
+dist-server
