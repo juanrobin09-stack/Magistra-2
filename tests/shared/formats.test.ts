@@ -217,7 +217,9 @@ describe('consignes transmises au modèle', () => {
   it('correction de copie : le type de travail oriente la correction', () => {
     const sys = buildSystemPrompt(req({ type: 'corrige', niveau: 'terminale_gen', matiere: 'philosophie', modalite: 'dissertation', texteEleve: 'Copie' }), false);
     expect(sys).toMatch(/TYPE DE TRAVAIL : dissertation\./);
-    expect(sys).toMatch(/FORMAT : dissertation\./);
+    // La consigne du format construit un sujet et son corrigé modèle : jamais reprise pour corriger une copie.
+    expect(sys).not.toMatch(/FORMAT : dissertation/);
+    expect(sys).not.toMatch(/prime sur toute autre indication/);
   });
 
   it('qualité : structure et nombres exacts, français soigné ; température selon l’outil', () => {

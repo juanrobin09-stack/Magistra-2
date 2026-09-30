@@ -1,10 +1,12 @@
 // Consignes spécifiques à chacun des 11 outils, adaptées au niveau, puis précisées par les options choisies par
 // l'enseignant : format normé (shared/formats.ts), objectif de l'évaluation, notation, corrigé, nombres exacts,
-// ton, besoins particuliers. Une option choisie prime toujours sur le comportement par défaut de l'outil.
+// ton, besoins particuliers. Une option choisie prime toujours sur le comportement par défaut de l'outil, mais
+// jamais sur une autre option : chaque consigne est formulée pour ne contredire aucune des autres (un petit modèle
+// local suit la consigne la plus détaillée ou la dernière lue, pas une règle de priorité).
 
 import { PROFILS_DIFFERENCIATION, PROFILS_ELEVE, TYPES_LETTRE, type ProfilDifferenciation, type TypeContenu } from '../catalog.js';
 import {
-  BAREMES, BESOINS_PARTICULIERS, countText, countUnit, getModalite, modalitePrompt, TONS, TYPES_EVALUATION,
+  BAREMES, BESOINS_PARTICULIERS, countText, countUnit, getModalite, modalitePrompt, TONS, TYPES_EVALUATION, type CountUnit,
 } from '../formats.js';
 import { isClozeRequest } from '../cloze.js';
 import type { LevelGroup } from '../levels.js';
@@ -27,8 +29,49 @@ const CORRECTION_GRADING: Record<NonNullable<GenerationRequest['bareme']>, strin
   competences: 'NOTATION : par compétences, sans note chiffrée : positionnement de chaque compétence (maîtrise insuffisante, fragile, satisfaisante, très bonne maîtrise), justifié par des éléments de la copie.',
 };
 
+/**
+ * Attendus d'une copie selon le type de travail corrigé. La consigne du format (shared/formats.ts) sert à CONSTRUIRE
+ * un sujet et son corrigé modèle : elle n'est jamais reprise pour corriger une copie. Sans entrée ici, des attendus
+ * généraux s'appliquent.
+ */
+const ATTENDUS_COPIE: Record<string, string> = {
+  dissertation: 'analyse des termes du sujet, problématique, plan en deux ou trois parties, arguments illustrés d’exemples précis, introduction (accroche, définition des termes, problématique, annonce du plan) et conclusion (réponse, ouverture)',
+  commentaire: 'projet de lecture, plan en deux ou trois parties, citations analysées (procédés et effets), introduction et conclusion',
+  contraction_essai: 'contraction fidèle au texte, reformulée et à la longueur demandée ; essai à la thèse claire, aux arguments organisés et illustrés',
+  explication_lineaire: 'mouvements du texte, projet de lecture, explication qui suit le texte (citations, procédés, interprétations), introduction et conclusion, question de grammaire',
+  redaction: 'respect du sujet (situation, destinataire, type de texte, longueur), organisation, cohérence, correction et richesse de la langue',
+  explication_texte: 'thème, thèse, enjeu, structure argumentative, explication suivie, intérêt philosophique',
+  developpement_construit: 'réponse organisée en paragraphes, notions clés définies, exemples précis, repères datés',
+  composition: 'analyse du sujet (termes, bornes chronologiques et spatiales), problématique, plan en deux ou trois parties, arguments, exemples et repères précis, introduction et conclusion',
+  etude_critique: 'présentation des documents (nature, auteur, date, contexte), analyse, regard critique (portée, limites), réponse organisée',
+  croquis: 'titre, légende organisée en parties titrées, figurés adaptés (surfaces, points, lignes, flèches), lisibilité',
+  epreuve_composee: 'mobilisation des connaissances, exploitation rigoureuse du document statistique, raisonnement appuyé sur le dossier',
+  demonstration: 'hypothèses et conclusion identifiées, chaque étape justifiée par une propriété ou un théorème nommé, rigueur de la rédaction',
+  algorithmique: 'algorithme ou programme correct (entrées, sorties, cas limites), lisible et commenté',
+  expression_ecrite: 'réalisation de la tâche, cohérence, richesse et correction de la langue, nombre de mots',
+  traduction: 'fidélité au sens, correction de la langue d’arrivée, aucun contresens ni omission, choix de traduction justifiables',
+  cas_pratique: 'syllogisme juridique : qualification des faits, problème de droit, règle applicable, application aux faits, solution',
+  commentaire_arret: 'fiche d’arrêt (faits, procédure, prétentions, problème de droit, solution), problématique, plan en deux parties et deux sous-parties (sens, valeur, portée)',
+  etude_cas: 'réponses justifiées par les annexes, calculs exacts, vocabulaire de la discipline',
+  note_synthese: 'plan en deux parties, reformulation neutre, renvoi aux documents, longueur respectée',
+  probleme: 'démarche complète et justifiée, calculs exacts, unités, réponse à la question posée',
+  etude_documents: 'informations prélevées avec exactitude, analyse, mise en relation avec les connaissances',
+};
+
 /** Sans corrigé : version élève seule, prête à distribuer. */
 const NO_ANSWER_KEY = 'VERSION ÉLÈVE SEULE : ne rédige AUCUN corrigé, aucune réponse, aucune solution. Uniquement les énoncés, les consignes et, si utile, les espaces de réponse et le barème.';
+
+/**
+ * Texte à trous sans corrigé : les mots à trouver restent marqués, sinon Magistra ne peut poser aucun blanc
+ * (shared/cloze.ts) ; c'est Magistra qui laisse le corrigé de côté.
+ */
+const NO_ANSWER_KEY_CLOZE = 'VERSION ÉLÈVE SEULE : Magistra n’ajoutera pas de corrigé. Marque quand même chaque mot à trouver entre doubles crochets, comme indiqué ci-dessus (c’est ce qui permet de poser les blancs), sans écrire de blanc ni de corrigé toi-même.';
+
+/** Texte à trous « différencié » : un seul texte, des mots de difficulté graduée (plusieurs textes casseraient les blancs). */
+const CLOZE_GRADED = 'Un seul texte : les mots à trouver sont de difficulté graduée (des plus évidents aux plus exigeants) ; n’écris ni plusieurs textes ni plusieurs versions.';
+
+/** Notation d'une évaluation : celle choisie par l'enseignant ; sinon sans note pour un diagnostic, sur 20 par défaut. */
+type Notation = NonNullable<GenerationRequest['bareme']> | 'aucune';
 
 interface Ctx {
   req: GenerationRequest;
@@ -39,6 +82,8 @@ interface Ctx {
   fmt: string;
   /** Corrigé à rédiger par le modèle (vrai par défaut ; faux pour une version élève seule ou un texte à trous). */
   withKey: boolean;
+  /** Notation de l'outil Évaluation (voir Notation). */
+  notation: Notation;
 }
 
 function formatLabel(format?: string): string {
@@ -56,23 +101,95 @@ function plural(n: number, singular: string): string {
   return `${n} ${n > 1 ? `${singular}s` : singular}`;
 }
 
-/** Consigne du format normé choisi par l'enseignant (vide sans format). */
-function modaliteLine(req: GenerationRequest): string {
+/**
+ * Consigne du format normé choisi par l'enseignant (vide sans format), avec sa portée :
+ * - en général, le format prime sur la forme par défaut de l'outil ;
+ * - pour une version élève seule, il ne prime jamais sur l'absence de corrigé (la plupart des formats décrivent le
+ *   corrigé qu'ils prévoient) ;
+ * - pour une séquence ou une fiche de séance, le format est une démarche : il s'applique DANS la structure de l'outil
+ *   (tableau, détail des séances, nombre de séances), sans la remplacer.
+ */
+function modaliteLine(req: GenerationRequest, studentOnly: boolean): string {
   const text = modalitePrompt(req.modalite, { niveau: req.niveau, matiere: req.matiere });
-  return text ? `${text}\nCe format prime sur toute autre indication de forme ci-dessus.` : '';
+  if (!text) return '';
+  switch (req.type) {
+    case 'sequence': {
+      const flipped = req.modalite === 'classe_inversee'
+        ? ' En classe inversée, les séances s’appuient chacune sur une capsule préparée à la maison avant la séance, puis sur des activités en classe.'
+        : '';
+      return `${text}\nApplique cette démarche à toute la séquence et à chacune de ses séances, en conservant la structure demandée ci-dessus (tableau des séances, détail de chaque séance) et le nombre de séances indiqué.${flipped}`;
+    }
+    case 'fiche_prep':
+      return `${text}\nOrganise le déroulement (tableau) selon cette démarche, en conservant toutes les rubriques de la fiche demandées ci-dessus.`;
+    default:
+      return studentOnly
+        ? `${text}\nCe format prime sur toute autre indication de forme ci-dessus, sauf pour le corrigé : c’est une version élève seule, donc n’écris ni le corrigé, ni les réponses, ni les solutions, ni les éléments de correction que ce format prévoit.`
+        : `${text}\nCe format prime sur toute autre indication de forme ci-dessus.`;
+  }
 }
 
+/** Difficulté d'une évaluation (et d'un texte à trous : les mots, pas des questions). */
 function difficultyLine(req: GenerationRequest): string {
   switch (req.difficulte) {
     case 'facile': return 'Niveau de difficulté : facile (vérification des connaissances et savoir-faire essentiels).';
     case 'moyen': return 'Niveau de difficulté : moyen.';
     case 'difficile': return 'Niveau de difficulté : exigeant (transfert, situations complexes).';
-    case 'differencie': return 'Questions de difficulté graduée, clairement identifiées (★ facile, ★★ intermédiaire, ★★★ avancé).';
+    case 'differencie': return isClozeRequest(req)
+      ? CLOZE_GRADED
+      : 'Questions de difficulté graduée, clairement identifiées (★ facile, ★★ intermédiaire, ★★★ avancé).';
     default: return '';
   }
 }
 
+/**
+ * Difficulté d'une série d'exercices. « Différencié » : trois niveaux parmi le nombre demandé (au total, jamais par
+ * niveau) ; un seul texte pour un texte à trous ; des aides graduées pour un travail d'un seul tenant.
+ */
+function exercicesDifficulty(req: GenerationRequest, unit: CountUnit | null, count: number | undefined): string {
+  switch (req.difficulte) {
+    case 'facile': return 'Niveau de difficulté : facile (consolidation des bases).';
+    case 'moyen': return 'Niveau de difficulté : moyen.';
+    case 'difficile': return 'Niveau de difficulté : difficile (transfert, problèmes complexes).';
+    case 'differencie':
+      if (isClozeRequest(req)) return CLOZE_GRADED;
+      if (!unit) return 'Un seul travail, différencié par des aides graduées clairement identifiées (★ aide forte, ★★ aide légère, ★★★ prolongement en autonomie) ; n’écris pas plusieurs versions du travail.';
+      if (count && count >= 3) {
+        return `Les ${countText(count, unit)} se répartissent, au total et non par niveau, en trois niveaux clairement identifiés (★ facile, ★★ intermédiaire, ★★★ avancé), du plus simple au plus avancé, travaillant les mêmes compétences.`;
+      }
+      if (count) {
+        return `Questions de difficulté graduée, clairement identifiées (★ facile, ★★ intermédiaire, ★★★ avancé), sans rien ajouter au nombre demandé (${countText(count, unit)} au total).`;
+      }
+      return `Répartis les ${unit.many} en trois niveaux clairement identifiés (★ facile, ★★ intermédiaire, ★★★ avancé), travaillant les mêmes compétences.`;
+    default: return 'Progression du plus simple au plus complexe.';
+  }
+}
+
+/**
+ * Besoins particuliers d'une différenciation. Les aménagements d'accessibilité (DYS, TDAH, allophones, TSA,
+ * malvoyance) valent pour chaque version : un élève concerné peut être dans n'importe quel groupe. Le haut potentiel,
+ * lui, relève de l'approfondissement : l'appliquer à la version « Accompagnement renforcé » en retirerait l'étayage.
+ */
+function besoinsLines(req: GenerationRequest): string[] {
+  const besoins = req.besoins ?? [];
+  const lines: string[] = [];
+  const access = BESOINS_PARTICULIERS.filter(b => b.value !== 'hpi' && besoins.includes(b.value));
+  if (access.length) {
+    lines.push(`BESOINS PARTICULIERS à prendre en compte dans chaque version (aménagements pédagogiques, jamais de diagnostic ni de terme médical appliqué à un élève) :\n${access.map(b => `- ${b.prompt}`).join('\n')}`);
+  }
+  const hpi = BESOINS_PARTICULIERS.find(b => b.value === 'hpi');
+  if (hpi && besoins.includes('hpi')) {
+    const profiles = req.profilsDifferenciation?.length ? req.profilsDifferenciation : PROFILS_DIFFERENCIATION.map(p => p.value);
+    const approfondissement = PROFILS_DIFFERENCIATION.find(p => p.value === 'approfondissement')!.label;
+    lines.push(profiles.includes('approfondissement')
+      ? `HAUT POTENTIEL (aménagement pédagogique, jamais un diagnostic appliqué à un élève) : dans la version « ${approfondissement} » seulement. ${hpi.prompt} Ne retire ni l’étayage ni les aides des autres versions.`
+      : `HAUT POTENTIEL (aménagement pédagogique, jamais un diagnostic appliqué à un élève) : ajoute à la fin de chaque version un « Défi » facultatif (tâche ouverte à plusieurs solutions, transfert), sans rien modifier du reste de la version.`);
+  }
+  return lines;
+}
+
 export function toolInstructions(req: GenerationRequest, group: LevelGroup): string {
+  const cloze = isClozeRequest(req);
+  const travail = req.type === 'exercices' || req.type === 'evaluation';
   const ctx: Ctx = {
     req,
     group,
@@ -80,41 +197,122 @@ export function toolInstructions(req: GenerationRequest, group: LevelGroup): str
     primary: PRIMARY.includes(group),
     fmt: formatLabel(req.format),
     // Texte à trous : le corrigé est établi par Magistra à partir des mots marqués (shared/cloze.ts).
-    withKey: !req.sansCorrige && !isClozeRequest(req),
+    withKey: !req.sansCorrige && !cloze,
+    notation: req.bareme ?? (req.type === 'evaluation' && req.typeEvaluation === 'diagnostique' ? 'aucune' : 'sur20'),
   };
+  // Version élève seule : le format ne fait pas écrire son corrigé (texte à trous : voir NO_ANSWER_KEY_CLOZE).
+  const studentOnly = travail && !!req.sansCorrige && !cloze;
   const extra: string[] = [];
   if (req.type === 'evaluation') {
-    const objective = TYPES_EVALUATION.find(t => t.value === req.typeEvaluation)?.prompt;
-    if (objective) extra.push(objective);
+    const objective = TYPES_EVALUATION.find(t => t.value === req.typeEvaluation);
+    // Version élève seule : ni corrigé commenté, ni tableau de remédiation destiné à l'enseignant. Texte à trous : le
+    // corrigé est celui de Magistra, l'objectif formatif ne fait donc pas écrire de corrigé commenté au modèle.
+    const noKeyObjective = req.sansCorrige || (cloze && req.typeEvaluation === 'formative');
+    const text = noKeyObjective ? objective?.promptSansCorrige ?? objective?.prompt : objective?.prompt;
+    if (text) extra.push(text);
   }
-  // Cours : la forme choisie remplace la structure par défaut (voir BY_TOOL.cours).
-  if (req.type !== 'cours') {
-    const format = modaliteLine(req);
+  // Cours : la forme choisie remplace la structure par défaut (voir BY_TOOL.cours). Correction d'une copie : le
+  // format construit un sujet et son corrigé modèle ; seul le type de travail compte (voir BY_TOOL.corrige).
+  if (req.type !== 'cours' && req.type !== 'corrige') {
+    const format = modaliteLine(req, studentOnly);
     if (format) extra.push(format);
   }
-  if (req.type === 'exercices' || req.type === 'evaluation') {
+  if (travail) {
     const bareme = BAREMES.find(b => b.value === req.bareme)?.prompt;
     if (bareme) extra.push(`${bareme} Cette notation prime sur celle indiquée ci-dessus.`);
   }
   // Correction d'une copie : la note se justifie critère par critère (il n'y a pas de questions à pondérer).
   if (req.type === 'corrige' && req.bareme) extra.push(`${CORRECTION_GRADING[req.bareme]} Cette notation remplace celle du point 5.`);
-  if ((req.type === 'exercices' || req.type === 'evaluation') && req.sansCorrige) extra.push(NO_ANSWER_KEY);
+  if (travail && req.sansCorrige) extra.push(cloze ? NO_ANSWER_KEY_CLOZE : NO_ANSWER_KEY);
   if (req.type === 'appreciations') {
     const ton = TONS.find(t => t.value === req.ton)?.prompt;
     if (ton) extra.push(ton);
   }
-  if (req.type === 'differenciation' && req.besoins?.length) {
-    const lines = BESOINS_PARTICULIERS.filter(b => req.besoins!.includes(b.value)).map(b => `- ${b.prompt}`);
-    extra.push(`BESOINS PARTICULIERS à prendre en compte dans chaque version (aménagements pédagogiques, jamais de diagnostic ni de terme médical appliqué à un élève) :\n${lines.join('\n')}`);
-  }
+  if (req.type === 'differenciation') extra.push(...besoinsLines(req));
   return [BY_TOOL[req.type](ctx), ...extra].filter(Boolean).join('\n');
+}
+
+/** En-tête de la copie selon la notation de l'évaluation. */
+const NOTATION_HEADER: Record<Notation, string> = {
+  sur20: 'note sur 20',
+  sur10: 'note sur 10',
+  competences: 'positionnement par compétences (sans note chiffrée)',
+  aucune: 'sans note',
+};
+
+/** Points des questions selon la notation (collège, lycée). */
+const NOTATION_POINTS: Record<Notation, string> = {
+  sur20: 'avec les points de chaque question ; le total doit faire exactement 20 points',
+  sur10: 'avec les points de chaque question ; le total doit faire exactement 10 points',
+  competences: 'chaque question rattachée à la compétence qu’elle évalue, sans points',
+  aucune: 'sans points ni note',
+};
+
+/** Points des questions selon la notation (supérieur). */
+const SUP_POINTS: Record<Notation, string> = {
+  sur20: 'avec barème par question (total sur 20)',
+  sur10: 'avec barème par question (total sur 10)',
+  competences: 'chacun rattaché à l’acquis d’apprentissage évalué (sans note chiffrée)',
+  aucune: 'sans barème ni note',
+};
+
+/** Texte à trous : le barème porte sur les mots trouvés (les blancs sont posés et numérotés par Magistra). */
+const CLOZE_POINTS: Record<Notation, string> = {
+  sur20: '10 à 20 mots à trouver, points par mot trouvé, total exactement 20 points (par exemple 20 mots à 1 point, ou 10 mots à 2 points)',
+  sur10: '10 à 20 mots à trouver, points par mot trouvé, total exactement 10 points (par exemple 10 mots à 1 point, ou 20 mots à 0,5 point)',
+  competences: '10 à 20 mots à trouver, sans points : positionnement sur la compétence évaluée',
+  aucune: '10 à 20 mots à trouver, sans points ni note',
+};
+
+/**
+ * Structure de l'évaluation, selon le niveau et la notation effective (celle choisie, sinon sans note pour un
+ * diagnostic, sinon sur 20) : l'en-tête et les points ne contredisent jamais la notation. Texte à trous : une
+ * évaluation faite UNIQUEMENT de texte à trous, dont Magistra établit la banque de mots et le corrigé.
+ */
+function evaluationBase({ req, group, sup, primary, withKey, notation }: Ctx): string {
+  const graded = notation === 'sur20' || notation === 'sur10';
+  if (sup) {
+    return `TÂCHE : rédiger un sujet d'examen${req.duree ? '' : ' (précise la durée)'}.
+Structure : en-tête (intitulé, durée, documents autorisés), consignes, exercices/questions/cas ${SUP_POINTS[notation]}${withKey ? ", puis « Corrigé et grille d'évaluation » (réponses attendues, critères, niveaux d'exigence)" : ''}.`;
+  }
+  if (group === 'maternelle') {
+    return `TÂCHE : concevoir une situation d'observation des apprentissages en maternelle (évaluation positive).
+Structure : objectif observé, domaine d'apprentissage, matériel, déroulement (activité ou jeu, consigne orale), critères de réussite observables, grille d'observation (non encore acquis / en cours d'acquisition / acquis) à reporter dans le carnet de suivi. Aucune note, aucun écrit demandé à l'élève.`;
+  }
+  const cloze = isClozeRequest(req);
+  if (primary) {
+    // Pas de note à l'école primaire, sauf note chiffrée choisie par l'enseignant (sa notation suit, et prime).
+    const noNote = req.bareme === 'sur20' || req.bareme === 'sur10' ? '' : ' Pas de note sur 20.';
+    return cloze
+      ? `TÂCHE : concevoir une évaluation adaptée à l'école primaire, sous forme de texte à trous et UNIQUEMENT de texte à trous (aucune autre question).
+Structure : en-tête (prénom, date), une consigne unique et très claire (« Complète le texte avec les mots de la banque. »), un seul texte à trous avec un nombre de mots à trouver adapté à l'âge, compétences évaluées, puis grille de positionnement (non atteint / partiellement atteint / atteint / dépassé).${noNote}`
+      : `TÂCHE : concevoir une évaluation adaptée à l'école primaire.
+Structure : en-tête (prénom, date), consignes très claires, exercices courts, compétences évaluées pour chaque exercice, puis ${withKey ? 'corrigé et ' : ''}grille de positionnement (non atteint / partiellement atteint / atteint / dépassé).${noNote}`;
+  }
+  if (cloze) {
+    return `TÂCHE : rédiger une évaluation sous forme de texte à trous, et UNIQUEMENT de texte à trous (aucune question ouverte, aucun QCM, aucune autre question).
+Structure :
+1. En-tête : établissement, nom, prénom, classe, date, durée, ${NOTATION_HEADER[notation]}.
+2. Consigne unique : « Complète le texte avec les mots de la banque. » ; ${CLOZE_POINTS[notation]}.
+3. Un seul texte à trous, suivi et cohérent, qui couvre les notions évaluées.
+4. Compétences évaluées.`;
+  }
+  const parts = req.typeEvaluation === 'diagnostique'
+    ? '2 à 4 parties de questions courtes, une par prérequis ou notion à repérer'
+    : '3 ou 4 parties progressives (connaissances, compréhension, application, synthèse)';
+  return `TÂCHE : rédiger une évaluation complète.
+Structure :
+1. En-tête : établissement, nom, prénom, classe, date, durée, ${NOTATION_HEADER[notation]}.
+2. Consignes générales (matériel autorisé, conseils).
+3. ${parts}, ${NOTATION_POINTS[notation]}.
+4. Compétences évaluées pour chaque partie.${withKey ? `\n5. Corrigé détaillé, ${graded ? 'barème point par point' : 'réponses attendues'} et grille critériée pour les questions ouvertes.` : ''}`;
 }
 
 const BY_TOOL: Record<TypeContenu, (ctx: Ctx) => string> = {
   cours: ({ req, group, sup, fmt }) => {
     if (getModalite(req.modalite)) {
       return `TÂCHE : produire un support de cours ${sup ? 'de niveau universitaire' : 'prêt à être utilisé en classe'}, sous la forme demandée ci-dessous et seulement celle-ci.
-${modaliteLine(req)}
+${modaliteLine(req, false)}
 Contenu exact et complet sur le sujet : définitions précises, notions clés, exemples adaptés au niveau.`;
     }
     if (sup) {
@@ -151,11 +349,7 @@ Structure :
       : isClozeRequest(req)
         ? `EXACTEMENT ${countText(count, unit)}, chacun entre doubles crochets`
         : `EXACTEMENT ${countText(count, unit)}, numéroté${unit.feminine ? 'e' : ''}s de 1 à ${count}`;
-    const diff = req.difficulte === 'facile' ? 'Niveau de difficulté : facile (consolidation des bases).'
-      : req.difficulte === 'moyen' ? 'Niveau de difficulté : moyen.'
-        : req.difficulte === 'difficile' ? 'Niveau de difficulté : difficile (transfert, problèmes complexes).'
-          : req.difficulte === 'differencie' ? 'Propose trois niveaux clairement identifiés (★ facile, ★★ intermédiaire, ★★★ avancé) travaillant les mêmes compétences.'
-            : 'Progression du plus simple au plus complexe.';
+    const diff = exercicesDifficulty(req, unit, count);
     if (group === 'maternelle') {
       return `TÂCHE : proposer ${count && unit ? (unit.many === 'activités' ? `EXACTEMENT ${plural(count, 'activité')} ou atelier${count > 1 ? 's' : ''}` : `EXACTEMENT ${countText(count, unit)}`) : '4 à 6 activités ou ateliers'} de maternelle sur le sujet.
 ${diff}
@@ -194,24 +388,7 @@ Chaque énoncé est complet (données, hypothèses, questions numérotées).${ke
     ].filter(Boolean).join('\n');
   },
 
-  evaluation: ({ req, group, sup, primary, withKey }) => {
-    const base = sup
-      ? `TÂCHE : rédiger un sujet d'examen${req.duree ? '' : ' (précise la durée)'}.
-Structure : en-tête (intitulé, durée, documents autorisés), consignes, exercices/questions/cas avec barème par question (total sur 20)${withKey ? ", puis « Corrigé et grille d'évaluation » (réponses attendues, critères, niveaux d'exigence)" : ''}.`
-      : group === 'maternelle'
-        ? `TÂCHE : concevoir une situation d'observation des apprentissages en maternelle (évaluation positive).
-Structure : objectif observé, domaine d'apprentissage, matériel, déroulement (activité ou jeu, consigne orale), critères de réussite observables, grille d'observation (non encore acquis / en cours d'acquisition / acquis) à reporter dans le carnet de suivi. Aucune note, aucun écrit demandé à l'élève.`
-        : primary
-          ? `TÂCHE : concevoir une évaluation adaptée à l'école primaire.
-Structure : en-tête (prénom, date), consignes très claires, exercices courts, compétences évaluées pour chaque exercice, puis ${withKey ? 'corrigé et ' : ''}grille de positionnement (non atteint / partiellement atteint / atteint / dépassé). Pas de note sur 20.`
-          : `TÂCHE : rédiger une évaluation complète.
-Structure :
-1. En-tête : établissement, nom, prénom, classe, date, durée, note sur 20.
-2. Consignes générales (matériel autorisé, conseils).
-3. 3 ou 4 parties progressives (connaissances, compréhension, application, synthèse) avec les points de chaque question ; le total doit faire exactement 20 points.
-4. Compétences évaluées pour chaque partie.${withKey ? '\n5. Corrigé détaillé, barème point par point et grille critériée pour les questions ouvertes.' : ''}`;
-    return [base, difficultyLine(req)].filter(Boolean).join('\n');
-  },
+  evaluation: (ctx) => [evaluationBase(ctx), difficultyLine(ctx.req)].filter(Boolean).join('\n'),
 
   sequence: ({ req, group, sup, primary }) => {
     const n = req.nombreSeances;
@@ -251,21 +428,34 @@ Découpe l'année en 5 périodes séparées par les vacances scolaires.`;
   appreciations: ({ req, group, sup }) => {
     const n = req.nombreAppreciations ?? 10;
     const profil = PROFILS_ELEVE.find(p => p.value === req.profilEleve)?.label ?? 'Bon niveau';
+    // Destination : bulletin du trimestre par défaut ; livret scolaire du bac (annuel : aucun trimestre) ; conseil de
+    // classe (avis du professeur principal sur l'ensemble des disciplines).
+    const livret = !sup && req.modalite === 'livret_bac';
+    const conseil = !sup && req.modalite === 'conseil_classe';
     // Accord en genre et en nombre : « 7 appréciations différentes, numérotées », « 1 commentaire ».
     const noun: { singular: string; plural: string; feminine: boolean } = sup
       ? { singular: "commentaire d'évaluation", plural: "commentaires d'évaluation", feminine: false }
       : group === 'maternelle'
         ? { singular: 'commentaire pour le carnet de suivi des apprentissages', plural: 'commentaires pour le carnet de suivi des apprentissages', feminine: false }
-        : { singular: 'appréciation de bulletin', plural: 'appréciations de bulletin', feminine: true };
+        : livret
+          ? { singular: 'appréciation annuelle du livret scolaire', plural: 'appréciations annuelles du livret scolaire', feminine: true }
+          : conseil
+            ? { singular: 'appréciation générale du conseil de classe', plural: 'appréciations générales du conseil de classe', feminine: true }
+            : { singular: 'appréciation de bulletin', plural: 'appréciations de bulletin', feminine: true };
     const e = noun.feminine ? 'e' : '';
     const who = sup ? "l'étudiant" : "l'élève";
-    const period = req.trimestre && !sup ? `, pour le trimestre ${req.trimestre}` : '';
+    const period = req.trimestre && !sup && !livret ? `, pour le trimestre ${req.trimestre}` : '';
     const head = n > 1
       ? `TÂCHE : rédiger EXACTEMENT ${n} ${noun.plural} différent${e}s, numéroté${e}s de 1 à ${n}${period}. Ni plus, ni moins.`
       : `TÂCHE : rédiger EXACTEMENT 1 ${noun.singular}${period}. ${noun.feminine ? 'Une seule' : 'Un seul'}, pas davantage.`;
+    const content = livret
+      ? "le bilan de l'année entière (compétences et méthodes, régularité du travail), puis le potentiel et les perspectives ; registre sobre et précis"
+      : conseil
+        ? "un point positif d'abord, les points forts et les axes de progrès sur l'ensemble des disciplines (jamais une seule matière), le comportement et l'investissement, un conseil concret et bienveillant pour la suite"
+        : `un point positif d'abord, ${group === 'maternelle' ? 'les réussites observées' : 'les compétences travaillées'}, un conseil concret et bienveillant pour progresser`;
     return `${head}
 Profil de ${who} : ${profil}.
-Pour chaque texte : 2 à 3 phrases (300 caractères maximum), un point positif d'abord, ${group === 'maternelle' ? 'les réussites observées' : 'les compétences travaillées'}, un conseil concret et bienveillant pour progresser.
+Pour chaque texte : 2 à 3 phrases (300 caractères maximum), ${content}.
 Varie les formulations d'un texte à l'autre ; évite les formules toutes faites (« peut mieux faire »). N'invente pas de prénom : rédige de façon neutre.
 L'enseignant choisira et personnalisera ensuite.`;
   },
@@ -317,7 +507,12 @@ Prévoir les pauses et un temps de préparation / correction.`),
       ? 'Positionnement sur une échelle de maîtrise (non atteint / partiellement atteint / atteint / dépassé), sans note sur 20.'
       : 'Note indicative sur 20 avec justification du barème.';
     const work = getModalite(req.modalite);
-    return `TÂCHE : corriger et annoter le travail ${sup ? "d'étudiant" : "d'élève"} fourni.${work ? `\nTYPE DE TRAVAIL : ${work.label.toLowerCase()}. Évalue-le avec les attendus méthodologiques de ce format, rappelés ci-dessous : structure, démarche, argumentation, expression.` : ''}
+    // Le type de travail oriente la correction (ses attendus), sans jamais faire construire un sujet ni un corrigé modèle.
+    const attendus = work ? ATTENDUS_COPIE[work.value] ?? 'structure, démarche, argumentation, expression, respect de la consigne' : '';
+    const typeLine = work
+      ? `\nTYPE DE TRAVAIL : ${work.label.toLowerCase()}. Évalue la copie avec les attendus méthodologiques de ce type de travail : ${attendus}. Ne rédige ni nouveau sujet, ni texte support, ni corrigé modèle complet : corrige le travail fourni.`
+      : '';
+    return `TÂCHE : corriger et annoter le travail ${sup ? "d'étudiant" : "d'élève"} fourni.${typeLine}
 Structure :
 1. Appréciation globale (2 à 3 phrases).
 2. Points réussis.

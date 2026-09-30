@@ -15,18 +15,31 @@ export type Bareme = 'sur20' | 'sur10' | 'competences';
 export type TonRedaction = 'encourageant' | 'exigeant' | 'factuel';
 export type BesoinParticulier = 'dys' | 'tdah' | 'allophone' | 'tsa' | 'deficience_visuelle' | 'hpi';
 
-export const TYPES_EVALUATION: { value: TypeEvaluation; label: string; description: string; prompt: string }[] = [
+export const TYPES_EVALUATION: {
+  value: TypeEvaluation;
+  label: string;
+  description: string;
+  prompt: string;
+  /**
+   * Consigne sans corrigé ni partie réservée à l'enseignant, pour une version élève seule (et, si l'objectif prévoit
+   * un corrigé commenté, pour un texte à trous, dont Magistra établit le corrigé).
+   */
+  promptSansCorrige?: string;
+}[] = [
   {
     value: 'diagnostique',
     label: 'Diagnostique',
     description: 'Avant la séquence : repérer les acquis et les besoins',
-    prompt: 'OBJECTIF : évaluation diagnostique, avant l’apprentissage. Elle repère les acquis et les représentations des élèves, sans note : questions courtes sur les prérequis, puis un tableau « réponse → besoin repéré → piste de remédiation ».',
+    // Sans notation choisie, la structure de l'évaluation est elle-même sans note (shared/prompts/tools.ts).
+    prompt: 'OBJECTIF : évaluation diagnostique, avant l’apprentissage. Elle repère les acquis et les représentations des élèves : questions courtes sur les prérequis, puis, pour l’enseignant, un tableau « réponse ou erreur observée → besoin repéré → piste de remédiation ».',
+    promptSansCorrige: 'OBJECTIF : évaluation diagnostique, avant l’apprentissage. Elle repère les acquis et les représentations des élèves : questions courtes sur les prérequis.',
   },
   {
     value: 'formative',
     label: 'Formative',
     description: 'Pendant l’apprentissage : faire le point, sans enjeu',
     prompt: 'OBJECTIF : évaluation formative, pendant l’apprentissage. Elle aide l’élève à se situer : critères de réussite explicites, auto-évaluation possible, corrigé commenté qui explique les erreurs fréquentes et indique quoi retravailler.',
+    promptSansCorrige: 'OBJECTIF : évaluation formative, pendant l’apprentissage. Elle aide l’élève à se situer : critères de réussite explicites et grille d’auto-évaluation (je sais faire / pas encore) à remplir par l’élève.',
   },
   {
     value: 'sommative',
