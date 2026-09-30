@@ -42,13 +42,14 @@ const ALL: Cycle[] = ['maternelle', 'cycle2', 'cycle3', 'college', 'lycee', 'lyc
 
 export const ALL_MATIERES: MatiereInfo[] = [
   // === MATERNELLE (domaines du programme en vigueur depuis la rentrée 2026 ; clés inchangées pour l'historique) ===
-  { value: 'langage_oral', label: 'Mobiliser le langage — Oral', emoji: '🗣️', cycles: ['maternelle'] },
-  { value: 'graphisme_ecriture', label: 'Mobiliser le langage — Écrit / Graphisme', emoji: '✏️', cycles: ['maternelle'] },
+  // « Le développement et la structuration du langage oral et écrit » : un domaine, deux matières (oral ; écrit et graphisme).
+  { value: 'langage_oral', label: 'Développement et structuration du langage — Oral', emoji: '🗣️', cycles: ['maternelle'] },
+  { value: 'graphisme_ecriture', label: 'Développement et structuration du langage — Écrit / Graphisme', emoji: '✏️', cycles: ['maternelle'] },
   { value: 'nombres_formes', label: 'Acquérir les premiers outils mathématiques', emoji: '🔷', cycles: ['maternelle'] },
   { value: 'temps_espace', label: "Se repérer dans le temps et l'espace", emoji: '🧭', cycles: ['maternelle'] },
   { value: 'explorer_monde', label: 'Découvrir le monde du vivant, de la matière et des objets', emoji: '🌱', cycles: ['maternelle'] },
-  { value: 'activites_artistiques', label: 'Activités artistiques', emoji: '🎨', cycles: ['maternelle'] },
-  { value: 'activites_physiques', label: "Agir, s'exprimer avec son corps", emoji: '🤸', cycles: ['maternelle'] },
+  { value: 'activites_artistiques', label: "Agir, s'exprimer, comprendre à travers les activités artistiques", emoji: '🎨', cycles: ['maternelle'] },
+  { value: 'activites_physiques', label: "Agir, s'exprimer, comprendre à travers les activités physiques", emoji: '🤸', cycles: ['maternelle'] },
 
   // === FONDAMENTALES ===
   { value: 'francais', label: 'Français', emoji: '📖', cycles: ['cycle2', 'cycle3', 'college', 'lycee', 'lycee_pro', 'superieur'] },
@@ -161,9 +162,14 @@ const LEGACY_MATIERE_LABELS: Record<string, Matiere> = {
   'arts plastiques': 'arts_plastiques',
   'management / stmg': 'management',
   'gestion-finance / compta': 'gestion',
-  // Domaines de maternelle d'avant la rentrée 2026 (« Explorer le monde » a été scindé en deux domaines).
+  // Domaines de maternelle d'avant la rentrée 2026 (« Explorer le monde » a été scindé en deux domaines) et anciens
+  // libellés abrégés, remplacés par les intitulés des domaines du programme de 2026.
+  'mobiliser le langage — oral': 'langage_oral',
+  'mobiliser le langage — écrit / graphisme': 'graphisme_ecriture',
   'nombres, formes et grandeurs': 'nombres_formes',
   'explorer le monde': 'explorer_monde',
+  'activités artistiques': 'activites_artistiques',
+  "agir, s'exprimer avec son corps": 'activites_physiques',
 };
 
 const normalizeLabel = (label: string) => label.trim().toLowerCase().replaceAll('’', "'");

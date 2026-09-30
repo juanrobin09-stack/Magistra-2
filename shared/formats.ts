@@ -6,7 +6,7 @@
 // structure attendue, sans jamais inventer de document, d'extrait d'auteur ni de référence réglementaire.
 
 import type { Matiere, TypeContenu } from './catalog.js';
-import { getLevelGroup, type LevelGroup, type NiveauScolaire } from './levels.js';
+import { getCycle, getLevelGroup, type LevelGroup, type NiveauScolaire } from './levels.js';
 import { LANGUES_ANCIENNES, LANGUES_VIVANTES, targetLanguage } from './languages.js';
 
 // ─── Options simples ────────────────────────────────────────────────────────
@@ -248,9 +248,20 @@ function consigneCecrl(niveau: NiveauScolaire): string {
     : 'niveau du CECRL visé (indique-le, de A1 à C1)';
 }
 
-/** Langue vivante étudiée : les textes, questions et réponses à trouver sont dans cette langue (vide sinon). */
-function consigneLangueCible(matiere: Matiere, contenu: string): string {
-  return LANGUES.includes(matiere) ? ` Matière de langue vivante : ${contenu} entièrement en ${nomLangue(matiere)} (langue cible), au niveau du CECRL de la classe ; explications du corrigé en français seulement si cela aide les élèves.` : '';
+/**
+ * Langue vivante étudiée : les textes, questions et réponses à trouver sont dans cette langue (vide sinon). Au cycle 2
+ * (CP-CE2), les élèves apprennent à lire en français et la langue vivante se travaille surtout à l'oral : la fiche est
+ * en français, lue par l'enseignant, et seuls des mots ou de très courtes expressions déjà entendus sont dans la langue.
+ */
+function consigneLangueCible(
+  matiere: Matiere, niveau: NiveauScolaire, contenu: string, cycle2: (langue: string) => string,
+): string {
+  if (!LANGUES.includes(matiere)) return '';
+  const langue = nomLangue(matiere);
+  if (getCycle(niveau) === 'cycle2') {
+    return ` Matière de langue vivante, cycle 2, niveau visé ${cibleCecrl(niveau)} : ${cycle2(langue)}, des mots ou de très courtes expressions déjà travaillés à l’oral ; corrigé en français.`;
+  }
+  return ` Matière de langue vivante : ${contenu} entièrement en ${langue} (langue cible) ; ${consigneCecrl(niveau)} ; explications du corrigé en français seulement si cela aide les élèves.`;
 }
 
 /** Exemple de texte à trous (en français) : ce que le modèle doit écrire à la place, selon la matière. */
@@ -262,8 +273,13 @@ function langueTexteATrous(matiere: Matiere): string {
   return 'exemple à adapter au sujet';
 }
 
-/** À compter de la session 2027 (BO spécial n° 4 du 17 septembre 2026) : la langue compte dans chaque épreuve écrite. */
-const MAITRISE_LANGUE = 'Maîtrise de la langue : au moins 2 points du total lui sont réservés (orthographe, syntaxe, vocabulaire, organisation du raisonnement), comme dans chaque épreuve écrite des examens à compter de la session 2027.';
+/**
+ * À compter de la session 2027 (BO spécial n° 4 du 17 septembre 2026) : la langue compte pour au moins 2 points dans
+ * chaque épreuve écrite, appréciés sur l'ensemble de la copie (grille commune), À L'INTÉRIEUR du total de l'épreuve.
+ * Sans cette précision, le modèle ajoutait une ligne « Maîtrise de la langue (2 points) » à un barème officiel déjà
+ * complet (6 + 14, 16 + 4, 10 + 10…) ou retranchait 2 points à une partie.
+ */
+const MAITRISE_LANGUE = 'Maîtrise de la langue (épreuves écrites, à compter de la session 2027) : elle compte pour au moins 2 points, compris dans le total et dans les parties ci-dessus, jamais ajoutés en plus (sans note chiffrée : un critère de la grille). Elle s’apprécie sur l’ensemble de la copie (orthographe, syntaxe, vocabulaire, organisation du raisonnement) : ne crée ni partie ni ligne de barème séparée, ne change ni la répartition des parties ni le total ; rappelle ce critère dans les éléments de correction.';
 
 /** Épreuve notée sur plus de 20 points : le barème officiel est gardé, ou ramené à la notation demandée. */
 const BAREME_OFFICIEL = 'Ce barème officiel prime sur une note totale sur 20 ; si une notation sur 20 ou sur 10 est demandée, garde cette structure et ramène les points proportionnellement.';
@@ -292,8 +308,30 @@ function structureBrevet(matiere: Matiere): string {
   }
 }
 
+/**
+ * Spécialités dont l'épreuve écrite se passe en terminale : aucune épreuve en première (une spécialité abandonnée en fin
+ * de première relève du contrôle continu). Français (épreuve anticipée) et mathématiques (épreuve anticipée) ont leur
+ * propre sujet de première ; l'histoire-géographie relève du contrôle continu dans les deux classes.
+ */
+const EPREUVES_DE_TERMINALE: Matiere[] = [
+  'ses', 'hggsp', 'svt', 'physique_chimie', 'nsi', 'sciences_ingenieur', 'droit_economie', 'management', ...LANGUES,
+];
+
+/** En première, un sujet d'une épreuve de terminale est un entraînement, pas l'épreuve des élèves (vide sinon). */
+function entrainementPremiere(matiere: Matiere, niveau: NiveauScolaire): string {
+  return PREMIERES.includes(niveau) && EPREUVES_DE_TERMINALE.includes(matiere)
+    ? ' En première, cette épreuve n’a pas lieu (elle se passe en terminale) : sujet d’entraînement sur son modèle, limité aux notions du programme de première ; indique-le en tête.'
+    : '';
+}
+
 function sujetBac({ matiere, niveau }: ModaliteContext): string {
-  return `${structureBac(matiere, niveau)} ${MAITRISE_LANGUE}`;
+  return `${structureBac(matiere, niveau)}${entrainementPremiere(matiere, niveau)} ${MAITRISE_LANGUE}`;
+}
+
+/** Épreuve écrite de la spécialité LLCER (voie générale), distincte de l'évaluation des LVA et LVB du tronc commun. */
+function sujetBacLlcer({ matiere, niveau }: ModaliteContext): string {
+  const structure = `FORMAT : sujet de type épreuve écrite de la spécialité LLCER (langues, littératures et cultures étrangères et régionales, voie générale, 3 heures 30), et non d’une évaluation de LVA ou de LVB du tronc commun. Partie 1 (16 points) : un dossier de trois ou quatre documents en ${nomLangue(matiere)} (textes et, si utile, un document iconographique décrit) sur une thématique du programme, et une synthèse d’environ 500 mots à rédiger en ${nomLangue(matiere)}, guidée par deux ou trois questions. Partie 2 (4 points) : traduction en français d’un passage de l’un des textes (environ 500 signes), OU transposition en français des idées principales d’un texte. ${TEXTE_SUPPORT}`;
+  return `${structure}${entrainementPremiere(matiere, niveau)} ${MAITRISE_LANGUE}`;
 }
 
 /** Structure de l'épreuve écrite du baccalauréat général ou technologique (épreuves de la session 2027). */
@@ -326,8 +364,9 @@ function structureBac(matiere: Matiere, niveau: NiveauScolaire): string {
     case 'svt':
       return 'FORMAT : sujet de type baccalauréat de SVT (3 heures 30). Un exercice de mobilisation des connaissances (réponse argumentée et structurée), puis un exercice de raisonnement scientifique à partir de documents.';
     case 'physique_chimie':
+      // La voie technologique n'a pas une épreuve de physique-chimie mais une par série : la série n'est pas connue ici.
       return techno
-        ? 'FORMAT : sujet de type épreuve de physique-chimie et mathématiques (STI2D, STL). Exercices indépendants et contextualisés, de physique-chimie, de mathématiques ou mêlant les deux : modélisation, calculs, exploitation de données expérimentales.'
+        ? 'FORMAT : sujet de niveau baccalauréat technologique en physique-chimie, sur le modèle de l’épreuve de la série des élèves (à indiquer en tête) : épreuve écrite de physique-chimie et mathématiques (STI2D, STL), de sciences physiques et chimiques en laboratoire (STL), ou partie chimie de l’épreuve de chimie, biologie et physiopathologie humaines (ST2S). Exercices indépendants et contextualisés (de physique-chimie, et aussi de mathématiques pour l’épreuve de physique-chimie et mathématiques) : modélisation, calculs, exploitation de données expérimentales.'
         : 'FORMAT : sujet de type baccalauréat de physique-chimie (3 heures 30). Exercices indépendants et contextualisés : modélisation, calculs, exploitation de données expérimentales, esprit critique sur les résultats.';
     case 'nsi':
       return 'FORMAT : sujet de type baccalauréat de NSI (épreuve écrite, 3 heures 30). Exercices indépendants : structures de données, algorithmique, bases de données, réseaux et programmation en Python.';
@@ -343,9 +382,6 @@ function structureBac(matiere: Matiere, niveau: NiveauScolaire): string {
     case 'sciences_ingenieur':
       return 'FORMAT : sujet de type baccalauréat de sciences de l’ingénieur (épreuve écrite, 3 heures 30). Partie sciences de l’ingénieur (environ 2 heures 30) : étude d’un produit ou d’un système à partir d’un dossier technique (besoin, architecture, modélisation, performances attendues, mesurées et simulées, écarts). Partie sciences physiques (environ 1 heure) : exercices indépendants.';
     default:
-      if (LANGUES.includes(matiere)) {
-        return `FORMAT : sujet de type épreuve écrite de la spécialité LLCER (voie générale, 3 heures 30). Partie 1 (16 points) : un dossier de trois ou quatre documents en ${nomLangue(matiere)} (textes et, si utile, un document iconographique décrit) sur une thématique du programme, et une synthèse d’environ 500 mots à rédiger en ${nomLangue(matiere)}, guidée par deux ou trois questions. Partie 2 (4 points) : traduction en français d’un passage de l’un des textes (environ 500 signes), OU transposition en français des idées principales d’un texte. ` + TEXTE_SUPPORT;
-      }
       return 'FORMAT : sujet de niveau baccalauréat, construit sur les attendus de l’épreuve de la discipline (structure, durée, barème indicatif).';
   }
 }
@@ -373,15 +409,30 @@ function situationEps({ niveau, group }: ModaliteContext): string {
   }
 }
 
-/** Pratique artistique : on évalue une production et sa verbalisation, par compétences du programme. */
+/** Compétences évaluées en éducation musicale : programme de l'école, du collège ou du lycée. */
+function competencesMusique(group: LevelGroup): string {
+  switch (group) {
+    case 'elementaire':
+      return 'compétences : chanter et interpréter ; écouter, comparer et commenter ; explorer, imaginer et créer ; échanger, partager et argumenter';
+    case 'lycee':
+      return 'champs de compétences du programme de lycée : réaliser des projets musicaux d’interprétation et de création ; explorer, imaginer, élaborer une stratégie : faire et créer ; écouter, comparer, commenter : construire une culture musicale et artistique ; échanger, partager, argumenter et débattre';
+    default:
+      return 'compétences : réaliser des projets musicaux d’interprétation ou de création ; écouter, comparer, construire une culture musicale commune ; explorer, imaginer, créer et produire ; échanger, partager, argumenter et débattre';
+  }
+}
+
+/**
+ * Pratique artistique : on évalue une production et sa verbalisation, par compétences du programme. Au lycée
+ * (enseignements optionnels et de spécialité, programmes de 2019), les compétences ne sont pas celles des cycles 2 à 4.
+ */
 function pratiqueArtistique({ matiere, group }: ModaliteContext): string {
   if (matiere === 'musique') {
-    const competences = group === 'elementaire'
-      ? 'chanter et interpréter ; écouter, comparer et commenter ; explorer, imaginer et créer ; échanger, partager et argumenter'
-      : 'réaliser des projets musicaux d’interprétation ou de création ; écouter, comparer, construire une culture musicale commune ; explorer, imaginer, créer et produire ; échanger, partager, argumenter et débattre';
-    return `FORMAT : activité d’éducation musicale. Un projet musical (interpréter ou créer : chant, rythme, arrangement simple) et un temps d’écoute (œuvre nommée seulement si tu es certain de son compositeur et de son titre, sinon [Œuvre à choisir]), avec les repères et le vocabulaire à mobiliser ; déroulé ; grille d’évaluation par compétences : ${competences}.`;
+    return `FORMAT : activité d’éducation musicale. Un projet musical (interpréter ou créer : chant, rythme, arrangement simple) et un temps d’écoute (œuvre nommée seulement si tu es certain de son compositeur et de son titre, sinon [Œuvre à choisir]), avec les repères et le vocabulaire à mobiliser ; déroulé ; grille d’évaluation par ${competencesMusique(group)}.`;
   }
-  return 'FORMAT : pratique plastique. Une incitation (phrase ouverte, question ou situation) et ses contraintes (matériaux, outils, format, durée) ; une ou deux références artistiques en lien (œuvre nommée seulement si tu es certain de son auteur et de son titre, sinon [Référence à choisir]) ; déroulé (recherche, réalisation, présentation) ; un temps de verbalisation avec des questions pour analyser les productions ; grille d’évaluation par compétences : expérimenter, produire, créer ; mettre en œuvre un projet ; s’exprimer, analyser sa pratique et celle de ses pairs, établir une relation avec celle des artistes ; se repérer dans les domaines liés aux arts plastiques.';
+  const competences = group === 'lycee'
+    ? 'compétences du programme de lycée : pratiquer les arts plastiques de manière réflexive ; questionner le fait artistique ; exposer l’œuvre, la démarche, la pratique'
+    : 'compétences : expérimenter, produire, créer ; mettre en œuvre un projet ; s’exprimer, analyser sa pratique et celle de ses pairs, établir une relation avec celle des artistes ; se repérer dans les domaines liés aux arts plastiques';
+  return `FORMAT : pratique plastique. Une incitation (phrase ouverte, question ou situation) et ses contraintes (matériaux, outils, format, durée) ; une ou deux références artistiques en lien (œuvre nommée seulement si tu es certain de son auteur et de son titre, sinon [Référence à choisir]) ; déroulé (recherche, réalisation, présentation) ; un temps de verbalisation avec des questions pour analyser les productions ; grille d’évaluation par ${competences}.`;
 }
 
 /**
@@ -400,17 +451,25 @@ export const MODALITES: ModaliteInfo[] = [
     niveaux: [...PREMIERES, ...TERMINALES],
     matieres: [
       'francais', 'philosophie', 'mathematiques', 'ses', 'hggsp', 'svt', 'physique_chimie', 'nsi', 'histoire_geo',
-      'sciences_ingenieur', 'droit_economie', 'management', ...LANGUES,
+      'sciences_ingenieur', 'droit_economie', 'management',
     ],
-    // Épreuve anticipée de français en première, philosophie en terminale ; spécialités propres à une voie (LLCER, SI
-    // et SES, HGGSP, SVT, NSI en voie générale ; droit et économie, management en STMG).
+    // Épreuve anticipée de français en première, philosophie en terminale ; spécialités propres à une voie (SI et SES,
+    // HGGSP, SVT, NSI en voie générale ; droit et économie, management en STMG).
     exclusions: [
       { niveaux: TERMINALES, matieres: ['francais'] },
       { niveaux: PREMIERES, matieres: ['philosophie'] },
-      { niveaux: VOIE_TECHNO, matieres: ['ses', 'hggsp', 'svt', 'nsi', 'sciences_ingenieur', ...LANGUES] },
+      { niveaux: VOIE_TECHNO, matieres: ['ses', 'hggsp', 'svt', 'nsi', 'sciences_ingenieur'] },
       { niveaux: VOIE_GENERALE, matieres: ['droit_economie', 'management'] },
     ],
     prompt: sujetBac,
+  },
+  {
+    // Une seule matière par langue dans le catalogue : l'épreuve de la spécialité LLCER est nommée comme telle, pour
+    // qu'un professeur de LVA ou de LVB du tronc commun (contrôle continu, sans épreuve écrite terminale) ne la prenne
+    // pas pour celle de ses élèves. Voie générale seulement ; en première, sujet d'entraînement (voir sujetBacLlcer).
+    value: 'sujet_bac_llcer', label: 'Sujet type bac LLCER', description: 'Épreuve de spécialité (terminale), pas LVA/LVB',
+    tools: ['evaluation'], niveaux: VOIE_GENERALE, matieres: LANGUES,
+    prompt: sujetBacLlcer,
   },
   {
     value: 'sujet_bac_pro', label: 'Sujet type bac pro', description: 'Structure de l’épreuve écrite du bac professionnel', tools: ['evaluation'],
@@ -638,13 +697,15 @@ export const MODALITES: ModaliteInfo[] = [
   {
     value: 'qcm', label: 'QCM', description: 'Une bonne réponse sur quatre', tools: TRAVAIL, count: QUESTIONS, groups: TOUS,
     // Mise en page en Markdown valide : les choix en liste à puces (sinon ils s'affichent sur une seule ligne).
-    prompt: ({ matiere }) => 'FORMAT : QCM. Chaque question porte sur un seul point et propose 4 réponses (A, B, C, D) dont une seule exacte. Pour chaque question : détermine d’abord la réponse exacte (refais le calcul ou le raisonnement), écris-la telle quelle comme l’un des 4 choix, puis trois distracteurs faux, plausibles et fondés sur les erreurs fréquentes ; ni « toutes les réponses », ni piège de formulation. Présentation (forme seulement, contenu à adapter au sujet) : « **Question 1.** Combien font 3 × 4 ? », puis les 4 choix en liste à puces, un par ligne : « - A) 7 », « - B) 12 », « - C) 34 », « - D) 1 » ; une ligne vide entre deux questions. Le corrigé est une liste à puces, une ligne par question avec la lettre exacte et une explication d’une ligne : « - Question 1 : B — 3 × 4 = 12 ».'
-      + consigneLangueCible(matiere, 'questions et choix de réponse'),
+    prompt: ({ matiere, niveau }) => 'FORMAT : QCM. Chaque question porte sur un seul point et propose 4 réponses (A, B, C, D) dont une seule exacte. Pour chaque question : détermine d’abord la réponse exacte (refais le calcul ou le raisonnement), écris-la telle quelle comme l’un des 4 choix, puis trois distracteurs faux, plausibles et fondés sur les erreurs fréquentes ; ni « toutes les réponses », ni piège de formulation. Présentation (forme seulement, contenu à adapter au sujet) : « **Question 1.** Combien font 3 × 4 ? », puis les 4 choix en liste à puces, un par ligne : « - A) 7 », « - B) 12 », « - C) 34 », « - D) 1 » ; une ligne vide entre deux questions. Le corrigé est une liste à puces, une ligne par question avec la lettre exacte et une explication d’une ligne : « - Question 1 : B — 3 × 4 = 12 ».'
+      + consigneLangueCible(matiere, niveau, 'questions et choix de réponse', langue =>
+        `consignes et questions en français, lues à voix haute par l’enseignant ; seuls les choix de réponse sont en ${langue}`),
   },
   {
     value: 'vrai_faux', label: 'Vrai / faux justifié', description: 'Affirmations à justifier', tools: TRAVAIL, count: AFFIRMATIONS, groups: TOUS,
-    prompt: ({ matiere }) => 'FORMAT : vrai ou faux, avec justification. Affirmations nettes, chacune vraie ou fausse sans ambiguïté (ni piège, ni double négation), autant de vraies que de fausses, dans un ordre mélangé ; l’élève coche puis justifie en une phrase. Présentation (forme seulement) : une affirmation par paragraphe, séparée de la suivante par une ligne vide : « **1.** [affirmation] ☐ Vrai ☐ Faux — Justification : … ». Le corrigé est une liste à puces, une ligne par affirmation : « Vrai » ou « Faux » et la justification attendue (pour une affirmation fausse, l’énoncé correct), par exemple « - Affirmation 1 : Faux — … ».'
-      + consigneLangueCible(matiere, 'affirmations et justifications attendues'),
+    prompt: ({ matiere, niveau }) => 'FORMAT : vrai ou faux, avec justification. Affirmations nettes, chacune vraie ou fausse sans ambiguïté (ni piège, ni double négation), autant de vraies que de fausses, dans un ordre mélangé ; l’élève coche puis justifie en une phrase. Présentation (forme seulement) : une affirmation par paragraphe, séparée de la suivante par une ligne vide : « **1.** [affirmation] ☐ Vrai ☐ Faux — Justification : … ». Le corrigé est une liste à puces, une ligne par affirmation : « Vrai » ou « Faux » et la justification attendue (pour une affirmation fausse, l’énoncé correct), par exemple « - Affirmation 1 : Faux — … ».'
+      + consigneLangueCible(matiere, niveau, 'affirmations et justifications attendues', langue =>
+        `consignes et affirmations en français, lues à voix haute par l’enseignant, justification à l’oral ; seuls les mots cités dans les affirmations (entre guillemets) sont en ${langue}`),
   },
   {
     value: 'texte_trous', label: 'Texte à trous', description: 'Mots-clés à compléter', tools: TRAVAIL, count: MOTS_A_COMPLETER, groups: SCOLAIRE,

@@ -75,32 +75,92 @@ describe('baccalauréat général et technologique : chaque épreuve à sa class
     expect(prompt('sujet_bac', 'terminale_gen', 'philosophie')).toMatch(/N’invente jamais un extrait/);
   });
 
-  it('STMG, sciences de l’ingénieur, LLCER : un sujet type bac ; aucune épreuve hors de leur voie', () => {
+  it('STMG, sciences de l’ingénieur : un sujet type bac ; aucune épreuve hors de leur voie', () => {
     expect(values('evaluation', 'terminale_techno', 'droit_economie')).toContain('sujet_bac');
     expect(values('evaluation', 'terminale_techno', 'management')).toContain('sujet_bac');
     expect(values('evaluation', 'terminale_gen', 'sciences_ingenieur')).toContain('sujet_bac');
-    expect(values('evaluation', 'terminale_gen', 'anglais')).toContain('sujet_bac');
     expect(values('evaluation', 'terminale_gen', 'droit_economie')).not.toContain('sujet_bac');
-    expect(values('evaluation', 'terminale_techno', 'anglais')).not.toContain('sujet_bac');
     expect(values('evaluation', 'terminale_techno', 'ses')).not.toContain('sujet_bac');
     expect(values('evaluation', 'terminale_techno', 'physique_chimie')).toContain('sujet_bac');
     expect(prompt('sujet_bac', 'terminale_techno', 'droit_economie')).toMatch(/Partie droit \(10 points\).*Partie économie \(10 points\)/s);
     expect(prompt('sujet_bac', 'terminale_techno', 'management')).toMatch(/fictive présentée comme telle/);
     expect(prompt('sujet_bac', 'terminale_gen', 'sciences_ingenieur')).toMatch(/3 heures 30.*sciences physiques/s);
-    const llcer = prompt('sujet_bac', 'terminale_gen', 'espagnol');
-    expect(llcer).toMatch(/LLCER.*synthèse d’environ 500 mots à rédiger en espagnol.*traduction en français.*OU transposition/s);
-    expect(llcer).toMatch(/16 points.*4 points/s);
-    expect(prompt('sujet_bac', 'terminale_techno', 'physique_chimie')).toMatch(/physique-chimie et mathématiques \(STI2D, STL\)/);
   });
 
-  it('session 2027 : au moins 2 points pour la maîtrise de la langue dans chaque épreuve (brevet, bac, bac pro)', () => {
+  it('langues vivantes : l’épreuve de la spécialité LLCER est un format à part, nommé, jamais le « sujet type bac » d’une LVA ou LVB', () => {
+    // Une seule matière par langue : « Sujet type bac » d'anglais donnait l'épreuve de LLCER à un professeur de LVA.
+    for (const niveau of ['1ere_gen', 'terminale_gen'] as const) {
+      expect(values('evaluation', niveau, 'anglais'), niveau).not.toContain('sujet_bac');
+      expect(values('evaluation', niveau, 'anglais'), niveau).toContain('sujet_bac_llcer');
+      expect(isModaliteAvailable('sujet_bac', 'evaluation', niveau, 'espagnol'), niveau).toBe(false);
+    }
+    for (const niveau of ['1ere_techno', 'terminale_techno', '2nde_gt', '3eme', 'terminale_pro', 'licence_1'] as const) {
+      expect(values('evaluation', niveau, 'anglais'), niveau).not.toContain('sujet_bac_llcer');
+    }
+    expect(values('evaluation', 'terminale_gen', 'philosophie')).not.toContain('sujet_bac_llcer');
+    expect(validateGenerationRequest(req({ niveau: 'terminale_gen', matiere: 'anglais', modalite: 'sujet_bac' }))).not.toHaveProperty('modalite');
+    expect(validateGenerationRequest(req({ niveau: 'terminale_gen', matiere: 'anglais', modalite: 'sujet_bac_llcer' })).modalite).toBe('sujet_bac_llcer');
+    const llcer = MODALITES.find(m => m.value === 'sujet_bac_llcer')!;
+    expect(llcer.label).toMatch(/LLCER/);
+    expect(llcer.description).toMatch(/pas LVA\/LVB/);
+    const text = prompt('sujet_bac_llcer', 'terminale_gen', 'espagnol');
+    expect(text).toMatch(/LLCER.*synthèse d’environ 500 mots à rédiger en espagnol.*traduction en français.*OU transposition/s);
+    expect(text).toMatch(/16 points.*4 points/s);
+    expect(text).toMatch(/et non d’une évaluation de LVA ou de LVB du tronc commun/);
+    expect(text).not.toMatch(/En première/);
+    // En première : l'épreuve se passe en terminale, le sujet est un entraînement.
+    expect(prompt('sujet_bac_llcer', '1ere_gen', 'espagnol')).toMatch(/En première, cette épreuve n’a pas lieu.*sujet d’entraînement/s);
+  });
+
+  it('première : une épreuve de spécialité de terminale n’y est qu’un entraînement ; épreuves anticipées et histoire-géographie inchangées', () => {
+    for (const [niveau, matiere] of [
+      ['1ere_gen', 'ses'], ['1ere_gen', 'svt'], ['1ere_gen', 'nsi'], ['1ere_gen', 'physique_chimie'], ['1ere_techno', 'physique_chimie'],
+      ['1ere_techno', 'droit_economie'], ['1ere_techno', 'management'],
+    ] as const) {
+      expect(prompt('sujet_bac', niveau, matiere), `${niveau} ${matiere}`).toMatch(/En première, cette épreuve n’a pas lieu \(elle se passe en terminale\) : sujet d’entraînement/);
+      expect(prompt('sujet_bac', niveau.replace('1ere', 'terminale') as NiveauScolaire, matiere), matiere).not.toMatch(/En première/);
+    }
+    for (const [niveau, matiere] of [['1ere_gen', 'francais'], ['1ere_gen', 'mathematiques'], ['1ere_techno', 'mathematiques'], ['1ere_gen', 'histoire_geo']] as const) {
+      expect(prompt('sujet_bac', niveau, matiere), `${niveau} ${matiere}`).not.toMatch(/En première, cette épreuve n’a pas lieu/);
+    }
+  });
+
+  it('physique-chimie en voie technologique : l’épreuve dépend de la série (STI2D, STL, ST2S), aucune n’est imposée', () => {
+    for (const niveau of ['1ere_techno', 'terminale_techno'] as const) {
+      const text = prompt('sujet_bac', niveau, 'physique_chimie');
+      expect(text, niveau).toMatch(/sur le modèle de l’épreuve de la série des élèves \(à indiquer en tête\)/);
+      expect(text, niveau).toMatch(/physique-chimie et mathématiques \(STI2D, STL\)/);
+      expect(text, niveau).toMatch(/sciences physiques et chimiques en laboratoire \(STL\)/);
+      expect(text, niveau).toMatch(/chimie, biologie et physiopathologie humaines \(ST2S\)/);
+      expect(text, niveau).not.toMatch(/^FORMAT : sujet de type épreuve de physique-chimie et mathématiques/);
+    }
+    expect(prompt('sujet_bac', 'terminale_gen', 'physique_chimie')).toMatch(/baccalauréat de physique-chimie \(3 heures 30\)/);
+    expect(prompt('sujet_bac', 'terminale_gen', 'physique_chimie')).not.toMatch(/STI2D/);
+  });
+
+  it('session 2027 : au moins 2 points de maîtrise de la langue, compris dans le barème officiel, jamais ajoutés (brevet, bac, bac pro)', () => {
     for (const [value, niveau, matiere] of [
       ['sujet_bac', '1ere_gen', 'mathematiques'], ['sujet_bac', 'terminale_gen', 'svt'], ['sujet_brevet', '3eme', 'francais'],
-      ['sujet_brevet', '3eme', 'histoire_geo'], ['sujet_bac_pro', 'terminale_pro', 'francais'],
+      ['sujet_brevet', '3eme', 'histoire_geo'], ['sujet_bac_pro', 'terminale_pro', 'francais'], ['sujet_bac', '1ere_gen', 'francais'],
+      ['sujet_bac', 'terminale_gen', 'philosophie'], ['sujet_bac', 'terminale_techno', 'droit_economie'],
+      ['sujet_bac_llcer', 'terminale_gen', 'anglais'],
     ] as const) {
-      expect(prompt(value, niveau, matiere), `${value} ${matiere}`).toMatch(/Maîtrise de la langue : au moins 2 points du total/);
+      const text = prompt(value, niveau, matiere);
+      expect(text, `${value} ${matiere}`).toMatch(/Maîtrise de la langue \(épreuves écrites, à compter de la session 2027\) : elle compte pour au moins 2 points, compris dans le total et dans les parties ci-dessus, jamais ajoutés en plus/);
+      expect(text, `${value} ${matiere}`).toMatch(/s’apprécie sur l’ensemble de la copie/);
+      expect(text, `${value} ${matiere}`).toMatch(/ne crée ni partie ni ligne de barème séparée, ne change ni la répartition des parties ni le total/);
+      // Plus de points « réservés » qu'un modèle ajoute en ligne séparée à un barème déjà complet.
+      expect(text, `${value} ${matiere}`).not.toMatch(/lui sont réservés/);
     }
-    expect(prompt('interro', '4eme', 'mathematiques')).not.toMatch(/maîtrise de la langue/);
+    // Les répartitions officielles restent celles du sujet (6 + 14, 16 + 4, 10 + 10) : la langue est comprise dedans.
+    expect(prompt('sujet_bac', '1ere_gen', 'mathematiques')).toMatch(/Partie 1 \(6 points\).*Partie 2 \(14 points\).*compris dans le total et dans les parties ci-dessus/s);
+    expect(prompt('sujet_bac_llcer', 'terminale_gen', 'anglais')).toMatch(/Partie 1 \(16 points\).*Partie 2 \(4 points\).*compris dans le total/s);
+    expect(prompt('sujet_bac_pro', 'terminale_pro', 'francais')).toMatch(/\(10 points\).*\(10 points\).*compris dans le total/s);
+    expect(prompt('interro', '4eme', 'mathematiques')).not.toMatch(/maîtrise de la langue/i);
+    // Dans la consigne complète : la règle « total exactement 20 » et la maîtrise de la langue ne se contredisent plus.
+    const sys = buildSystemPrompt(req({ niveau: '1ere_gen', matiere: 'mathematiques', sujet: 'Suites', modalite: 'sujet_bac', bareme: 'sur20' }), false);
+    expect(sys).toMatch(/total fait exactement 20/);
+    expect(sys).toMatch(/au moins 2 points, compris dans le total.*jamais ajoutés en plus/s);
   });
 });
 
@@ -207,6 +267,29 @@ describe('maternelle : programme de la rentrée 2026, six domaines', () => {
     expect(values('exercices', 'maternelle_ms', 'temps_espace')).toEqual(['ateliers', 'jeux']);
     expect(validateGenerationRequest(req({ type: 'cours', niveau: 'maternelle_ps', matiere: 'temps_espace', sujet: 'Les saisons' })).matiere).toBe('temps_espace');
   });
+
+  it('libellés : les intitulés des domaines de 2026, plus « Mobiliser le langage » (2015) ; anciens libellés reconnus', () => {
+    for (const { label } of getMatieresForNiveau('maternelle_ms')) {
+      expect(label).not.toMatch(/Mobiliser le langage|avec son corps|Explorer le monde/);
+    }
+    expect(getMatiereLabel('langage_oral')).toBe('Développement et structuration du langage — Oral');
+    expect(getMatiereLabel('graphisme_ecriture')).toBe('Développement et structuration du langage — Écrit / Graphisme');
+    expect(getMatiereLabel('activites_physiques')).toBe("Agir, s'exprimer, comprendre à travers les activités physiques");
+    expect(getMatiereLabel('activites_artistiques')).toBe("Agir, s'exprimer, comprendre à travers les activités artistiques");
+    // Mêmes intitulés que ceux des six domaines donnés au modèle (shared/prompts/levels.ts).
+    const sys = buildSystemPrompt(req({ type: 'fiche_prep', niveau: 'maternelle_ps', matiere: 'langage_oral', sujet: 'Raconter une histoire' }), false);
+    expect(sys).toMatch(/le développement et la structuration du langage oral et écrit/);
+    expect(sys).toMatch(/agir, s'exprimer, comprendre à travers les activités physiques/);
+    expect(sys).toMatch(/agir, s'exprimer, comprendre à travers les activités artistiques/);
+    // Historique : les libellés enregistrés avant la rentrée 2026 (y compris avec une apostrophe typographique).
+    expect(resolveMatiere('Mobiliser le langage — Oral')).toBe('langage_oral');
+    expect(resolveMatiere('Mobiliser le langage — Écrit / Graphisme')).toBe('graphisme_ecriture');
+    expect(resolveMatiere("Agir, s'exprimer avec son corps")).toBe('activites_physiques');
+    expect(resolveMatiere('Agir, s’exprimer avec son corps')).toBe('activites_physiques');
+    expect(resolveMatiere('Activités artistiques')).toBe('activites_artistiques');
+    expect(getMatiereLabel('Mobiliser le langage — Oral')).toBe('Développement et structuration du langage — Oral');
+    expect(resolveMatiere('Développement et structuration du langage — Oral')).toBe('langage_oral');
+  });
 });
 
 describe('langues vivantes : niveau du CECRL de la classe (programmes de 2025)', () => {
@@ -244,6 +327,25 @@ describe('langues vivantes : niveau du CECRL de la classe (programmes de 2025)',
     for (const value of ['qcm', 'vrai_faux', 'texte_trous']) {
       expect(prompt(value, '5eme', 'svt'), value).not.toMatch(/langue cible|langue étudiée/);
     }
+    // Cible CECRL de la classe citée, plus un vague « niveau de la classe ».
+    expect(qcm).toMatch(/A2 en LVA, A1\+ en LVB/);
+    expect(prompt('qcm', 'licence_1', 'anglais')).toMatch(/de A1 à C1/);
+  });
+
+  it('cycle 2 (CP-CE2) : QCM et vrai/faux en français, lus par l’enseignant ; seuls des mots déjà travaillés à l’oral en langue cible', () => {
+    for (const [value, niveau, matiere] of [['qcm', 'cp', 'anglais'], ['qcm', 'ce2', 'allemand'], ['vrai_faux', 'ce1', 'allemand'], ['vrai_faux', 'cp', 'anglais']] as const) {
+      const text = prompt(value, niveau, matiere);
+      expect(text, `${value} ${niveau}`).not.toMatch(/entièrement en/);
+      expect(text, `${value} ${niveau}`).toMatch(/cycle 2, niveau visé A1 \(premiers acquis, surtout à l’oral\)/);
+      expect(text, `${value} ${niveau}`).toMatch(/en français, lues à voix haute par l’enseignant/);
+      expect(text, `${value} ${niveau}`).toMatch(/des mots ou de très courtes expressions déjà travaillés à l’oral ; corrigé en français/);
+    }
+    expect(prompt('qcm', 'cp', 'anglais')).toMatch(/consignes et questions en français.*seuls les choix de réponse sont en anglais/s);
+    expect(prompt('vrai_faux', 'ce1', 'allemand')).toMatch(/justification à l’oral ; seuls les mots cités dans les affirmations \(entre guillemets\) sont en allemand/);
+    // Dès le CM1 (cycle 3) : tout en langue cible, comme au collège.
+    expect(prompt('qcm', 'cm1', 'anglais')).toMatch(/questions et choix de réponse entièrement en anglais/);
+    expect(prompt('qcm', 'cm1', 'anglais')).not.toMatch(/cycle 2/);
+    expect(prompt('qcm', 'cp', 'mathematiques')).not.toMatch(/langue vivante/);
   });
 });
 
@@ -283,6 +385,24 @@ describe('EPS et enseignements artistiques : évalués en pratiquant', () => {
     expect(musique).toMatch(/réaliser des projets musicaux/);
     expect(prompt('pratique_artistique', 'ce1', 'musique')).toMatch(/chanter et interpréter/);
     expect(countUnit('pratique_artistique')).toBeNull();
+  });
+
+  it('pratique artistique au lycée : les compétences du programme de lycée, pas celles du collège', () => {
+    expect(values('evaluation', '2nde_gt', 'arts_plastiques')).toContain('pratique_artistique');
+    for (const niveau of ['2nde_gt', '1ere_gen', 'terminale_techno'] as const) {
+      const arts = prompt('pratique_artistique', niveau, 'arts_plastiques');
+      expect(arts, niveau).toMatch(/compétences du programme de lycée : pratiquer les arts plastiques de manière réflexive ; questionner le fait artistique ; exposer l’œuvre, la démarche, la pratique/);
+      expect(arts, niveau).not.toMatch(/se repérer dans les domaines/);
+      const musique = prompt('pratique_artistique', niveau, 'musique');
+      expect(musique, niveau).toMatch(/champs de compétences du programme de lycée/);
+      expect(musique, niveau).toMatch(/explorer, imaginer, élaborer une stratégie : faire et créer/);
+      expect(musique, niveau).not.toMatch(/culture musicale commune/);
+    }
+    // Collège et école : inchangés (cycles 2 à 4).
+    expect(prompt('pratique_artistique', '4eme', 'arts_plastiques')).toMatch(/grille d’évaluation par compétences : expérimenter, produire, créer.*se repérer dans les domaines liés aux arts plastiques/s);
+    expect(prompt('pratique_artistique', 'cm1', 'arts_plastiques')).not.toMatch(/programme de lycée/);
+    expect(prompt('pratique_artistique', '4eme', 'musique')).toMatch(/grille d’évaluation par compétences : réaliser des projets musicaux/);
+    expect(prompt('pratique_artistique', 'ce1', 'musique')).toMatch(/grille d’évaluation par compétences : chanter et interpréter/);
   });
 
   it('la consigne d’évaluation de l’EPS parvient au modèle et prime sur le contrôle écrit par défaut', () => {

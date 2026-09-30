@@ -35,7 +35,7 @@ describe('Onboarding — première configuration', () => {
     await click(button(container, /Maternelle/));
     await click(button(container, /Petite Section \(PS\)/));
     await click(button(container, /Continuer/)); // → Matières
-    expect(pressed(container, 'Mobiliser le langage — Oral')).toBe(true);
+    expect(pressed(container, 'Développement et structuration du langage — Oral')).toBe(true);
     expect(container.textContent).not.toContain('Français');
     await click(button(container, /Continuer/)); // → Récapitulatif
     await click(button(container, /Commencer à générer/));
