@@ -562,6 +562,9 @@ function bankLine(line: string): boolean {
   if (!items.length) return false;
   if (line.includes('[[')) return items.every(item => /^\[\[[^\]]*\]\]?[.;]?$/.test(item));
   const sentence = /[.!?…]\s*$/.test(line.trim());
+  // Longue énumération (« - O₂, CO₂, dioxyde de carbone, …, expiration. ») : une banque, même terminée par un point
+  // (constaté avec un vrai petit modèle, dont la banque était restée en double).
+  if (items.length >= 4 && items.every(item => wordCount(item) <= 4)) return true;
   return items.every(item => wordCount(item) <= (sentence ? 2 : 5));
 }
 

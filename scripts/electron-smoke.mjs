@@ -7,7 +7,8 @@
 //   node scripts/electron-smoke.mjs --mock-ollama   + faux serveur Ollama : vérifie ai.status (moteur « running »)
 //   node scripts/electron-smoke.mjs --mock-ollama --generate   + une génération complète de bout en bout
 // Variables : MAGISTRA_DIST_DIR (dossier dist/ de remplacement, hors application empaquetée),
-//             MAGISTRA_SMOKE_TIMEOUT_MS (45 000 par défaut).
+//             MAGISTRA_SMOKE_TIMEOUT_MS (45 000 par défaut ; 120 000 sous Windows en CI, où le premier lancement d'un
+//             binaire Electron fraîchement téléchargé est lent : il a dépassé 45 s une fois sur un exécuteur froid).
 // Sous Linux sans affichage, le test est lancé sous xvfb-run automatiquement.
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -36,6 +37,7 @@ for (const [file, hint] of [
 
 let mock = null;
 const env = { ...process.env, MAGISTRA_SMOKE_TEST: '1', ELECTRON_ENABLE_LOGGING: '1' };
+if (!env.MAGISTRA_SMOKE_TIMEOUT_MS && process.platform === 'win32' && process.env.CI) env.MAGISTRA_SMOKE_TIMEOUT_MS = '120000';
 delete env.ELECTRON_RUN_AS_NODE;
 if (withMock) {
   const { startMockOllama } = await import('./mock-ollama.mjs');
@@ -101,7 +103,7 @@ child.stderr.on('data', chunk => {
 const hardTimeout = setTimeout(() => {
   console.error('[smoke] Délai global dépassé : arrêt forcé.');
   child.kill('SIGKILL');
-}, Number(process.env.MAGISTRA_SMOKE_TIMEOUT_MS ?? 45_000) + 45_000);
+}, Number(env.MAGISTRA_SMOKE_TIMEOUT_MS ?? 45_000) + 45_000);
 
 child.on('exit', async (code, signal) => {
   clearTimeout(hardTimeout);

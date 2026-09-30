@@ -806,3 +806,24 @@ describe('temps de construction', () => {
     }
   });
 });
+
+describe('sortie réelle d’un petit modèle (Ministral 3B) : banque de mots en longue énumération', () => {
+  it('« **Banque de mots** (…) : » suivi d’une liste terminée par un point : remplacée, jamais en double', () => {
+    const raw = [
+      '### **Exercice : La respiration**',
+      '',
+      'La respiration est un processus [[essentiel]] pour les êtres vivants. L’oxygène [[O₂]] est utilisé par les cellules.',
+      '',
+      '---',
+      '',
+      '**Banque de mots** (à afficher aux élèves après correction) :',
+      '- O₂, CO₂, réaction chimique, alvéoles, échange gazeux, dioxyde de carbone, poumons, expiration.',
+    ].join('\n');
+    for (const withKey of [true, false]) {
+      const doc = buildClozeDocument(raw, { max: 8, withKey });
+      expect(doc.match(/Banque de mots/g), `withKey=${withKey}`).toHaveLength(1);
+      expect(doc).not.toMatch(/dioxyde de carbone|à afficher aux élèves/);
+      expect(doc).toMatch(/### Banque de mots\n\nessentiel · O₂/);
+    }
+  });
+});
