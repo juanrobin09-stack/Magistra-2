@@ -1,7 +1,8 @@
 // Construction des prompts : source unique de vérité pour le web, Windows et les tests.
 
 import type { ChatMessage } from '../ai/provider.js';
-import { getMatiereLabel, getToolInfo, TOOL_FIELDS, TYPES_LETTRE } from '../catalog.js';
+import { getMatiereLabel, getToolInfo, TOOL_FIELDS, TYPES_LETTRE, type TypeContenu } from '../catalog.js';
+import { BAREMES, BESOINS_PARTICULIERS, getModalite, TONS, TYPES_EVALUATION } from '../formats.js';
 import { formatLocator } from '../citations.js';
 import { getLevelGroup, getNiveauLabel, isSuperieur, LEVEL_GROUP_LABELS } from '../levels.js';
 import type { GenerationRequest, SourceRef } from '../types.js';
@@ -39,6 +40,14 @@ const FORMAT_RULES = `FORMAT :
 - Formules : notation simple en Unicode (x², H₂O, ≤, √, π) ; pour une formule complexe, LaTeX entre $…$.
 - Pas d'émojis. Contenu complet, structuré et directement utilisable par l'enseignant.`;
 
+/** Exigences de qualité communes : structure respectée, nombres exacts, langue soignée (y compris avec un petit modèle). */
+const QUALITY_RULES = `QUALITÉ ATTENDUE :
+- Suis exactement la structure et le format demandés, dans l'ordre, avec des titres explicites.
+- Respecte exactement les nombres demandés (exercices, séances, questions, points du barème) et vérifie-les avant de terminer.
+- Écris un français soigné et fluide : phrases complètes et claires, vocabulaire précis, aucune répétition, aucun remplissage.
+- Consignes destinées aux élèves : un verbe d'action, une tâche par consigne, adaptées à l'âge.
+- N'utilise des crochets [ … ] que pour une information que seul l'enseignant peut fournir.`;
+
 const LETTER_FORMAT_RULES = `FORMAT :
 - Réponds en français, dans un registre soutenu et bienveillant.
 - Markdown sobre : un courrier prêt à imprimer ou à envoyer, sans tableau ni titre superflu.
@@ -68,8 +77,47 @@ export function buildSystemPrompt(req: GenerationRequest, hasSources: boolean): 
     sup ? SUPERIEUR_RULES : SCOLAIRE_RULES,
     ...(group === 'bts_but' || group === 'cpge' ? [REFERENTIEL_SUPERIEUR_RULES] : []),
     toolInstructions(req, group),
+    QUALITY_RULES,
     FORMAT_RULES,
   ].join('\n\n');
+}
+
+/**
+ * Température de génération selon l'outil : basse pour les documents qui doivent être exacts et structurés
+ * (évaluations, corrigés, exercices, plans), un peu plus haute pour les textes rédigés (appréciations variées,
+ * courriers au ton naturel).
+ */
+export function generationTemperature(type: TypeContenu): number {
+  switch (type) {
+    case 'appreciations':
+    case 'lettre_parents':
+      return 0.6;
+    case 'cours':
+    case 'differenciation':
+      return 0.4;
+    default:
+      return 0.3;
+  }
+}
+
+/** Options choisies par l'enseignant, en clair, pour la demande (leurs consignes détaillées sont dans le système). */
+function optionLines(req: GenerationRequest, allowed: (field: string) => boolean): string[] {
+  const lines: string[] = [];
+  const modalite = allowed('modalite') ? getModalite(req.modalite) : undefined;
+  if (modalite) lines.push(`- Format demandé : ${modalite.label}`);
+  const evaluation = allowed('typeEvaluation') ? TYPES_EVALUATION.find(t => t.value === req.typeEvaluation) : undefined;
+  if (evaluation) lines.push(`- Objectif de l'évaluation : ${evaluation.label.toLowerCase()}`);
+  if (req.nombreExercices && allowed('nombreExercices')) lines.push(`- Nombre d'exercices : ${req.nombreExercices}`);
+  if (req.nombreSeances && allowed('nombreSeances')) lines.push(`- Nombre de séances : ${req.nombreSeances}`);
+  const bareme = allowed('bareme') ? BAREMES.find(b => b.value === req.bareme) : undefined;
+  if (bareme) lines.push(`- Notation : ${bareme.label.toLowerCase()}`);
+  if (req.sansCorrige && allowed('sansCorrige')) lines.push('- Corrigé : non (version élève seule)');
+  const ton = allowed('ton') ? TONS.find(t => t.value === req.ton) : undefined;
+  if (ton) lines.push(`- Ton : ${ton.label.toLowerCase()}`);
+  if (req.besoins?.length && allowed('besoins')) {
+    lines.push(`- Besoins particuliers : ${BESOINS_PARTICULIERS.filter(b => req.besoins!.includes(b.value)).map(b => b.label).join(', ')}`);
+  }
+  return lines;
 }
 
 function profileContext(req: GenerationRequest): string | null {
@@ -142,6 +190,7 @@ export function buildUserPrompt(req: GenerationRequest, sources: PromptSource[])
   if (req.typeLettre && allowed('typeLettre')) {
     lines.push(`- Type de courrier : ${TYPES_LETTRE.find(t => t.value === req.typeLettre)?.label ?? req.typeLettre}`);
   }
+  lines.push(...optionLines(req, allowed));
   if (req.consignes && allowed('consignes')) lines.push(`- Consignes de l'enseignant (à respecter en priorité) : ${req.consignes}`);
   const ctx = profileContext(req);
   if (ctx) lines.push(`- ${ctx}`);
@@ -152,6 +201,10 @@ export function buildUserPrompt(req: GenerationRequest, sources: PromptSource[])
   lines.push(sources.length
     ? '\nProduis maintenant le contenu complet en Markdown, en citant les sources fournies ([S1], [S2]…) à chaque idée qui en provient.'
     : '\nProduis maintenant le contenu complet en Markdown.');
+  // Format ou nombres imposés : rappelés en dernier (un petit modèle suit mieux la dernière consigne lue).
+  if (optionLines(req, allowed).some(l => /Format demandé|Nombre d|Corrigé : non/.test(l))) {
+    lines.push('Respecte exactement le format et les nombres demandés ci-dessus.');
+  }
   return lines.join('\n');
 }
 

@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { UserButton } from '@clerk/react';
 import { GraduationCap, Heart, History, LayoutDashboard, Menu, Settings, Sparkles, X } from 'lucide-react';
+import { isTypeContenu, type TypeContenu } from '@shared/catalog';
 import AIStatusBadge from '@/components/ai/AIStatusBadge';
+import SidebarTools from '@/components/layout/SidebarTools';
+import type { AppShell } from '@/components/layout/shell';
 import { appPageTitle, useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useRuntime } from '@/lib/runtime/context';
 
@@ -16,11 +19,40 @@ const NAV_ITEMS = [
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const SIDEBAR_ID = 'app-sidebar';
+/** « Outils pédagogiques » ouvert ou fermé, retenu sur cet appareil (fermé par défaut). */
+const TOOLS_OPEN_KEY = 'magistra_sidebar_tools_open';
+
+function readToolsOpen(): boolean {
+  try {
+    return localStorage.getItem(TOOLS_OPEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveToolsOpen(open: boolean): void {
+  try {
+    localStorage.setItem(TOOLS_OPEN_KEY, open ? '1' : '0');
+  } catch {
+    // Stockage indisponible : l'état n'est simplement pas retenu.
+  }
+}
+
+/** Outil affiché par la page Générer (paramètre ?type=, « cours » par défaut), null ailleurs. */
+function generateTool(pathname: string, search: string): TypeContenu | null {
+  if (pathname !== '/app/generate' && pathname !== '/app/generate/') return null;
+  const type = new URLSearchParams(search).get('type');
+  return isTypeContenu(type) ? type : 'cours';
+}
 
 export default function AppLayout() {
   const location = useLocation();
-  const { mode } = useRuntime();
+  const { mode, profile } = useRuntime();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(readToolsOpen);
+  const toolsToggleRef = useRef<HTMLButtonElement>(null);
+  const focusToolOnOpen = useRef(false);
+  const activeTool = generateTool(location.pathname, location.search);
   const sidebarRef = useRef<HTMLElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -73,6 +105,36 @@ export default function AppLayout() {
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [sidebarOpen, closeSidebar]);
+
+  const toggleTools = useCallback(() => {
+    setToolsOpen(open => {
+      saveToolsOpen(!open);
+      return !open;
+    });
+  }, []);
+
+  // « Changer d'outil » (page Générer) : la liste des outils s'ouvre (et le tiroir, sur mobile), focus sur l'outil en cours.
+  const openTools = useCallback(() => {
+    setToolsOpen(true);
+    saveToolsOpen(true);
+    const drawer = typeof window.matchMedia === 'function' && !window.matchMedia('(min-width: 1024px)').matches;
+    if (drawer) setSidebarOpen(true);
+    focusToolOnOpen.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!toolsOpen || !focusToolOnOpen.current) return;
+    focusToolOnOpen.current = false;
+    // Après le focus donné à « Fermer » par l'ouverture du tiroir (effet ci-dessus).
+    const id = requestAnimationFrame(() => {
+      const current = sidebarRef.current?.querySelector<HTMLElement>('[data-tool][aria-current]');
+      (current ?? toolsToggleRef.current)?.focus();
+      current?.scrollIntoView?.({ block: 'nearest' });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [toolsOpen, sidebarOpen]);
+
+  const shell = useMemo<AppShell>(() => ({ openTools }), [openTools]);
 
   const showUserButton = mode === 'web';
 
@@ -154,6 +216,14 @@ export default function AppLayout() {
               </Link>
             );
           })}
+          <SidebarTools
+            ref={toolsToggleRef}
+            open={toolsOpen}
+            onToggle={toggleTools}
+            activeType={activeTool}
+            niveau={profile?.niveaux?.[0]}
+            onNavigate={() => closeSidebar(false)}
+          />
         </nav>
 
         {/* Bas de la barre latérale */}
@@ -216,7 +286,7 @@ export default function AppLayout() {
             cette zone défilante ; sinon ils allongeaient le document, qui défilait tout entier (barre latérale
             comprise) quand un résultat était amené à l'écran. */}
         <main ref={mainRef} id="main-content" tabIndex={-1} aria-label={appPageTitle(location.pathname)} className="relative flex-1 overflow-y-auto focus:outline-none">
-          <Outlet />
+          <Outlet context={shell} />
         </main>
       </div>
     </div>

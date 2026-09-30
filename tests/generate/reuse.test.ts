@@ -60,3 +60,32 @@ describe('historique : paramètres et reprise d’une demande', () => {
     expect(researchMode).toBeNull();
   });
 });
+
+describe('historique : options des outils (formats normés, notation, corrigé, nombres, ton, besoins)', () => {
+  const EXERCICES: ReusableRecord = {
+    type: 'exercices',
+    niveau: '1ere_gen',
+    matiere: 'francais',
+    sujet: 'Le roman',
+    params: { modalite: 'dissertation', bareme: 'sur10', sansCorrige: true, nombreExercices: 3 },
+  };
+
+  it('affichées en clair, sous le libellé propre à l’outil', () => {
+    const rows = Object.fromEntries(describeRecordParams(EXERCICES).map(r => [r.label, r.value]));
+    expect(rows).toMatchObject({
+      'Type d’exercice': 'Dissertation', Notation: 'Sur 10', Corrigé: 'non (version élève seule)', "Nombre d'exercices": '3',
+    });
+    const seq = describeRecordParams({ type: 'sequence', niveau: '4eme', matiere: 'svt', sujet: 'Cellule', params: { nombreSeances: 6, modalite: 'investigation' } });
+    expect(Object.fromEntries(seq.map(r => [r.label, r.value]))).toMatchObject({ 'Nombre de séances': '6', 'Démarche de la séquence': 'Démarche d’investigation' });
+  });
+
+  it('reprises dans le formulaire ; valeurs inconnues ou hors bornes ignorées', () => {
+    const { form } = formFromRecord(EXERCICES, PROFILE);
+    expect(form).toMatchObject({ modalite: 'dissertation', bareme: 'sur10', sansCorrige: true, nombreExercices: 3 });
+    const odd = formFromRecord({
+      ...EXERCICES,
+      params: { modalite: 'format_futur', bareme: 'sur100', nombreExercices: 99, besoins: ['dys', 'x'], ton: 'agressif' },
+    }, PROFILE).form;
+    expect(odd).toMatchObject({ modalite: '', bareme: '', nombreExercices: '', besoins: ['dys'], ton: '', sansCorrige: false });
+  });
+});

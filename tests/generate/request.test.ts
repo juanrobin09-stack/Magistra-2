@@ -42,6 +42,14 @@ function fullForm(type: TypeContenu, niveau: NiveauScolaire): GenerateForm {
     contenuSource: 'Exercice 1 : calculer 3/4 + 1/2',
     typeLettre: 'reunion',
     texteEleve: 'La révolution a commencer en 1789.',
+    modalite: 'qcm',
+    typeEvaluation: 'formative',
+    bareme: 'sur10',
+    sansCorrige: true,
+    nombreExercices: 5,
+    nombreSeances: 6,
+    ton: 'exigeant',
+    besoins: ['dys', 'allophone'],
   };
 }
 

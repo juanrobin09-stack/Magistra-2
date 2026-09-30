@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { tierForModel } from '@shared/ai/models';
-import { getMatiereEmoji, getMatiereLabel } from '@shared/catalog';
+import { getMatiereEmoji, getMatiereLabel, isTypeContenu } from '@shared/catalog';
 import type { GenerationRecord } from '@shared/types';
 import MarkdownView from '@/components/MarkdownView';
 import ErrorBanner from '@/components/ui/ErrorBanner';
@@ -125,7 +125,8 @@ export default function GenerationDetail({
     const request: ReusableRecord = {
       type: record.type, niveau: record.niveau, matiere: record.matiere, discipline: record.discipline, sujet: record.sujet, params: record.params,
     };
-    navigate('/app/generate', { state: { reuse: request } });
+    // L'outil dans l'adresse : la barre latérale le signale, comme pour tout outil ouvert depuis le menu.
+    navigate(isTypeContenu(record.type) ? `/app/generate?type=${record.type}` : '/app/generate', { state: { reuse: request } });
   };
   // Démonstration : exemple pré-rédigé, jamais présenté comme produit par une IA.
   const isDemo = record.params?.demo === true;

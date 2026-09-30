@@ -1,9 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  ArrowRight, BookOpen, CalendarRange, ClipboardCheck, FileText, GraduationCap, Heart, Layers, Mail,
-  MessageSquare, NotebookPen, PenLine, Search, Sparkles, Star, TrendingUp, Users, Zap, type LucideIcon,
-} from 'lucide-react';
+import { ArrowRight, FileText, GraduationCap, Heart, Sparkles, Star, TrendingUp, Zap } from 'lucide-react';
 import { ALL_TYPES, getMatiereEmoji, getMatiereLabel, getSujetSuggestions, getToolInfo, type TypeContenu } from '@shared/catalog';
 import { getNiveauLabel, isSuperieur } from '@shared/levels';
 import type { GenerationSummary, UsageStats } from '@shared/types';
@@ -14,36 +11,10 @@ import ActivateAICard from '@/components/ai/ActivateAICard';
 import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import LocalEngineCard from '@/components/localEngine/LocalEngineCard';
 import { errorMessage, niveauLabelFor, timeAgo, toolLabelFor } from '@/components/history/logic';
+import { TOOL_ICONS, TOOL_STYLE } from '@/lib/toolIcons';
+import { useAppShell } from '@/components/layout/shell';
 
 type Loadable<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'error'; error: string };
-
-const TYPE_ICONS: Record<TypeContenu, LucideIcon> = {
-  cours: BookOpen,
-  exercices: PenLine,
-  evaluation: ClipboardCheck,
-  sequence: Layers,
-  fiche_prep: FileText,
-  appreciations: MessageSquare,
-  progression: CalendarRange,
-  differenciation: Users,
-  lettre_parents: Mail,
-  cahier_journal: NotebookPen,
-  corrige: Search,
-};
-
-const TOOL_STYLE: Record<TypeContenu, { iconBg: string; iconColor: string }> = {
-  cours: { iconBg: 'bg-violet-500/10', iconColor: 'text-violet-300' },
-  exercices: { iconBg: 'bg-emerald-500/10', iconColor: 'text-emerald-300' },
-  evaluation: { iconBg: 'bg-amber-500/10', iconColor: 'text-amber-300' },
-  sequence: { iconBg: 'bg-pink-500/10', iconColor: 'text-pink-300' },
-  fiche_prep: { iconBg: 'bg-sky-500/10', iconColor: 'text-sky-300' },
-  appreciations: { iconBg: 'bg-blue-500/10', iconColor: 'text-blue-300' },
-  progression: { iconBg: 'bg-indigo-500/10', iconColor: 'text-indigo-300' },
-  differenciation: { iconBg: 'bg-teal-500/10', iconColor: 'text-teal-300' },
-  lettre_parents: { iconBg: 'bg-rose-500/10', iconColor: 'text-rose-300' },
-  cahier_journal: { iconBg: 'bg-orange-500/10', iconColor: 'text-orange-300' },
-  corrige: { iconBg: 'bg-cyan-500/10', iconColor: 'text-cyan-300' },
-};
 
 /** Outils mis en avant selon le public : le supérieur privilégie TD, examens, syllabus et corrections. */
 const QUICK_TOOLS_SCOLAIRE: TypeContenu[] = ['cours', 'exercices', 'evaluation', 'sequence', 'appreciations', 'differenciation'];
@@ -78,6 +49,7 @@ function StatValue({ state, pick }: { state: Loadable<UsageStats>; pick: (s: Usa
 
 export default function DashboardPage() {
   const { store, profile, user, mode } = useRuntime();
+  const shell = useAppShell();
   // Site web uniquement : Magistra locale (IA de cet ordinateur, via l'application Windows).
   const localEngine = useLocalEngine();
   // L'heure est lue une seule fois, à l'ouverture de la page (jamais pendant le rendu).
@@ -240,14 +212,21 @@ export default function DashboardPage() {
           <section aria-labelledby="tools-title">
             <div className="flex items-center justify-between mb-3">
               <h2 id="tools-title" className="text-sm font-semibold text-mg-100">Outils rapides</h2>
-              <Link to="/app/generate" className="text-xs text-accent hover:underline flex items-center gap-1">
-                Voir les {ALL_TYPES.length} outils <ArrowRight size={10} aria-hidden="true" />
-              </Link>
+              {/* Les 11 outils sont dans la barre latérale (« Outils pédagogiques ») : ce lien les y déroule. */}
+              {shell ? (
+                <button type="button" onClick={shell.openTools} className="text-xs text-accent hover:underline flex items-center gap-1 rounded">
+                  Voir les {ALL_TYPES.length} outils <ArrowRight size={10} aria-hidden="true" />
+                </button>
+              ) : (
+                <Link to="/app/generate" className="text-xs text-accent hover:underline flex items-center gap-1">
+                  Voir les {ALL_TYPES.length} outils <ArrowRight size={10} aria-hidden="true" />
+                </Link>
+              )}
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {quickTools.map(type => {
                 const info = getToolInfo(type, niveau);
-                const Icon = TYPE_ICONS[type];
+                const Icon = TOOL_ICONS[type];
                 const style = TOOL_STYLE[type];
                 return (
                   <Link
@@ -336,7 +315,7 @@ export default function DashboardPage() {
             {recent.status === 'ready' && recent.data.length > 0 && (
               <ul className="space-y-1.5">
                 {recent.data.map(item => {
-                  const Icon = TYPE_ICONS[item.type] ?? FileText;
+                  const Icon = TOOL_ICONS[item.type] ?? FileText;
                   return (
                     <li key={item.id}>
                       <Link

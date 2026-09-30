@@ -13,7 +13,7 @@ import { rankChunks } from './documents/retrieve.js';
 import { MagistraError, toMagistraError, type ErrorCode } from './errors.js';
 import { getLevelGroup, getNiveauLabel } from './levels.js';
 import { unwrapDocumentFence } from './markdownFence.js';
-import { buildMessages, estimateTokens, type PromptSource } from './prompts/index.js';
+import { buildMessages, estimateTokens, generationTemperature, type PromptSource } from './prompts/index.js';
 import { planResearch, runResearch, type ResearchConfig, type ResearchDeps, type ResearchOutcome } from './research/index.js';
 import type { ResearchSource } from './research/types.js';
 import { modeUsesDocuments, type DocumentPassage, type GenerationEvent, type GenerationRecordDraft, type GenerationRequest, type SourceRef } from './types.js';
@@ -215,6 +215,14 @@ function recordParams(req: GenerationRequest): Record<string, unknown> {
     profilsDifferenciation: req.profilsDifferenciation,
     typeLettre: req.typeLettre,
     contenuSource: req.contenuSource,
+    modalite: req.modalite,
+    typeEvaluation: req.typeEvaluation,
+    bareme: req.bareme,
+    sansCorrige: req.sansCorrige,
+    nombreExercices: req.nombreExercices,
+    nombreSeances: req.nombreSeances,
+    ton: req.ton,
+    besoins: req.besoins,
     // Le travail d'élève n'est pas conservé (donnée personnelle) : seule sa longueur est notée.
     texteEleveLength: req.texteEleve ? req.texteEleve.length : undefined,
     documents: req.documents ? [...new Set(req.documents.map(d => d.docName))] : undefined,
@@ -356,7 +364,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     const retryDelays = deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
     for (let attempt = 0; ; attempt++) {
       try {
-        for await (const event of provider.stream({ messages, maxTokens: outputTokens, signal })) {
+        for await (const event of provider.stream({ messages, maxTokens: outputTokens, temperature: generationTemperature(req.type), signal })) {
           if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
           if (event.type === 'delta') {
             if (!event.text) continue;

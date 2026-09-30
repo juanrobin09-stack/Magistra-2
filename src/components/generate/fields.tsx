@@ -1,6 +1,6 @@
 // Briques de formulaire accessibles (libellés associés, erreurs annoncées, choix avec aria-pressed).
 
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { FOCUS_RING, LABEL_CLASS, fieldIds } from './fieldUtils';
 
 interface FieldProps {
@@ -70,5 +70,62 @@ export function ChoiceButton({ pressed, onClick, children, className = '', disab
     >
       {children}
     </button>
+  );
+}
+
+export interface ChipOption<T extends string | number> {
+  value: T;
+  label: string;
+  /** Info-bulle (description courte du choix). */
+  title?: string;
+}
+
+interface ChipGroupProps<T extends string | number> {
+  id: string;
+  label: ReactNode;
+  options: readonly ChipOption<T>[];
+  /** Choix unique : la valeur choisie. */
+  value?: T;
+  onChange?(value: T): void;
+  /** Choix multiple : les valeurs cochées (chaque puce bascule). */
+  values?: readonly T[];
+  onToggle?(value: T): void;
+  hint?: ReactNode;
+  className?: string;
+  /** Légende pleine largeur insérée avant cette option (ex. « Formats généraux » après ceux de la discipline). */
+  captionBefore?: { value: T; text: string };
+}
+
+/**
+ * Groupe de puces (role="group", titre relié) : un choix unique (`value`/`onChange`) ou multiple (`values`/`onToggle`).
+ * Chaque puce annonce son état par aria-pressed ; l'info-bulle décrit le choix.
+ */
+export function ChipGroup<T extends string | number>({ id, label, options, value, onChange, values, onToggle, hint, className = '', captionBefore }: ChipGroupProps<T>) {
+  const ids = fieldIds(id);
+  return (
+    <div role="group" aria-labelledby={ids.label} aria-describedby={hint ? ids.hint : undefined} className={className}>
+      <p id={ids.label} className={LABEL_CLASS}>{label}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map(option => {
+          const pressed = values ? values.includes(option.value) : value === option.value;
+          return (
+            <Fragment key={String(option.value)}>
+              {captionBefore && captionBefore.value === option.value && (
+                <span className="basis-full mt-1.5 text-[11px] font-medium text-mg-300">{captionBefore.text}</span>
+              )}
+              <ChoiceButton
+                pressed={pressed}
+                onClick={() => (values ? onToggle?.(option.value) : onChange?.(option.value))}
+                title={option.title}
+                className="px-2.5 py-1.5 text-[13px] leading-snug"
+              >
+                {option.label}
+              </ChoiceButton>
+            </Fragment>
+          );
+        })}
+      </div>
+      {hint && <p id={ids.hint} className="text-xs text-mg-300 mt-1.5 leading-relaxed">{hint}</p>}
+    </div>
   );
 }

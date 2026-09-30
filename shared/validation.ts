@@ -6,6 +6,10 @@ import {
   type DifficulteExercice, type FormatSeance, type ProfilDifferenciation, type ProfilEleve, type TypeLettre,
 } from './catalog.js';
 import { MagistraError } from './errors.js';
+import {
+  BAREMES, BESOINS_PARTICULIERS, isModaliteAvailable, LIMITES_NOMBRES, TONS, TYPES_EVALUATION,
+  type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
+} from './formats.js';
 import { isNiveau } from './levels.js';
 import {
   isResearchMode, RESEARCH_MODES, type DocKind, type DocumentPassage, type GenerationRecordDraft, type GenerationRequest, type Locator,
@@ -37,6 +41,12 @@ const DIFF_PROFILS: ProfilDifferenciation[] = ['renforce', 'standard', 'approfon
 const DOC_KINDS: DocKind[] = ['pdf', 'docx', 'pptx', 'txt', 'md'];
 const LOCATOR_TYPES: Locator['type'][] = ['pages', 'slides', 'section', 'paragraphs', 'lines'];
 const RESEARCH_MODE_VALUES: ResearchMode[] = RESEARCH_MODES.map(m => m.value);
+const EVALUATIONS: TypeEvaluation[] = TYPES_EVALUATION.map(t => t.value);
+const BAREME_VALUES: Bareme[] = BAREMES.map(b => b.value);
+const TON_VALUES: TonRedaction[] = TONS.map(t => t.value);
+const BESOINS: BesoinParticulier[] = BESOINS_PARTICULIERS.map(b => b.value);
+/** Identifiant de format enregistré avec une génération (liste ouverte : une application plus récente peut en ajouter). */
+const MODALITE_ID = /^[a-z][a-z_]{0,39}$/;
 
 /** Retire les caractères de contrôle invisibles (sauf tabulation et retours à la ligne). */
 function stripControlChars(value: string): string {
@@ -60,6 +70,16 @@ function str(value: unknown, max: number, field: string): string | undefined {
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
   return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
+}
+
+/** Entier dans les bornes, sinon undefined (choix facultatif ignoré). */
+function boundedInteger(value: unknown, bounds: { min: number; max: number }): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= bounds.min && value <= bounds.max ? value : undefined;
+}
+
+/** N'ajoute la clé que si la valeur existe (pas de clé « undefined » dans la demande). */
+function setIfDefined<K extends keyof GenerationRequest>(req: GenerationRequest, key: K, value: GenerationRequest[K] | undefined): void {
+  if (value !== undefined) req[key] = value;
 }
 
 const PAGE_LABEL = /^[\p{L}\p{N}][\p{L}\p{N}.\- ]{0,19}$/u;
@@ -189,6 +209,19 @@ export function validateGenerationRequest(input: unknown): GenerationRequest {
   if (allowed('contenuSource')) req.contenuSource = str(raw.contenuSource, REQUEST_LIMITS.contenuSource, 'contenu à adapter');
   if (allowed('typeLettre')) req.typeLettre = oneOf(raw.typeLettre, LETTRES) ?? 'information';
   if (allowed('texteEleve')) req.texteEleve = str(raw.texteEleve, REQUEST_LIMITS.texteEleve, 'travail à corriger');
+  // Options des outils : une valeur inconnue ou hors de propos (format d'une autre matière, nombre hors bornes) est
+  // ignorée, comme les autres choix facultatifs ; la génération se fait alors sans cette précision.
+  if (allowed('modalite') && isModaliteAvailable(raw.modalite, type, niveau, matiere)) req.modalite = raw.modalite;
+  if (allowed('typeEvaluation')) setIfDefined(req, 'typeEvaluation', oneOf(raw.typeEvaluation, EVALUATIONS));
+  if (allowed('bareme')) setIfDefined(req, 'bareme', oneOf(raw.bareme, BAREME_VALUES));
+  if (allowed('sansCorrige') && raw.sansCorrige === true) req.sansCorrige = true;
+  if (allowed('nombreExercices')) setIfDefined(req, 'nombreExercices', boundedInteger(raw.nombreExercices, LIMITES_NOMBRES.exercices));
+  if (allowed('nombreSeances')) setIfDefined(req, 'nombreSeances', boundedInteger(raw.nombreSeances, LIMITES_NOMBRES.seances));
+  if (allowed('ton')) setIfDefined(req, 'ton', oneOf(raw.ton, TON_VALUES));
+  if (allowed('besoins') && Array.isArray(raw.besoins)) {
+    const besoins = BESOINS.filter(b => (raw.besoins as unknown[]).includes(b));
+    if (besoins.length) req.besoins = besoins;
+  }
 
   req.documents = req.researchMode === 'internet' ? undefined : validatePassages(raw.documents);
   req.profile = validateProfile(raw.profile);
@@ -266,6 +299,13 @@ function optionalInteger(value: unknown, min: number, max: number, field: string
   if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
     throw invalidRecord(`Champ « ${field} » invalide.`);
   }
+  return value;
+}
+
+/** Identifiant de format facultatif (liste ouverte, forme stricte) : toute autre valeur est refusée. */
+function optionalModaliteId(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || !MODALITE_ID.test(value)) throw invalidRecord('Champ « format » invalide.');
   return value;
 }
 
@@ -386,6 +426,14 @@ function recordParams(value: unknown): Record<string, unknown> {
     profilsDifferenciation: optionalOneOfList(value.profilsDifferenciation, DIFF_PROFILS, 'profils de différenciation'),
     typeLettre: optionalOneOf(value.typeLettre, LETTRES, 'type de lettre'),
     contenuSource: str(value.contenuSource, REQUEST_LIMITS.contenuSource, 'contenu à adapter'),
+    modalite: optionalModaliteId(value.modalite),
+    typeEvaluation: optionalOneOf(value.typeEvaluation, EVALUATIONS, 'objectif de l’évaluation'),
+    bareme: optionalOneOf(value.bareme, BAREME_VALUES, 'notation'),
+    sansCorrige: optionalBoolean(value.sansCorrige, 'sans corrigé'),
+    nombreExercices: optionalInteger(value.nombreExercices, LIMITES_NOMBRES.exercices.min, LIMITES_NOMBRES.exercices.max, 'nombre d’exercices'),
+    nombreSeances: optionalInteger(value.nombreSeances, LIMITES_NOMBRES.seances.min, LIMITES_NOMBRES.seances.max, 'nombre de séances'),
+    ton: optionalOneOf(value.ton, TON_VALUES, 'ton'),
+    besoins: optionalOneOfList(value.besoins, BESOINS, 'besoins particuliers'),
     texteEleveLength: optionalInteger(value.texteEleveLength, 1, REQUEST_LIMITS.texteEleve, 'longueur du travail corrigé'),
     documents: optionalTextList(value.documents, RECORD_LIMITS.maxDocumentNames, RECORD_LIMITS.docName, 'documents'),
   };

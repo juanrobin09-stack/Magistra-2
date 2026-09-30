@@ -3,6 +3,7 @@
 import type {
   DifficulteExercice, FormatSeance, Matiere, ProfilDifferenciation, ProfilEleve, TypeContenu, TypeLettre,
 } from './catalog.js';
+import type { Bareme, BesoinParticulier, TonRedaction, TypeEvaluation } from './formats.js';
 import type { NiveauScolaire } from './levels.js';
 import type { ErrorCode } from './errors.js';
 
@@ -105,6 +106,16 @@ export interface GenerationRequest {
   contenuSource?: string;
   typeLettre?: TypeLettre;
   texteEleve?: string;
+  /** Format normé propre à l'outil, au niveau et à la matière (identifiant de MODALITES, shared/formats.ts). */
+  modalite?: string;
+  typeEvaluation?: TypeEvaluation;
+  bareme?: Bareme;
+  /** Vrai : version élève seule, sans corrigé (exercices, évaluation). Absent : corrigé inclus. */
+  sansCorrige?: boolean;
+  nombreExercices?: number;
+  nombreSeances?: number;
+  ton?: TonRedaction;
+  besoins?: BesoinParticulier[];
   researchMode: ResearchMode;
   documents?: DocumentPassage[];
   profile?: TeacherProfile | null;

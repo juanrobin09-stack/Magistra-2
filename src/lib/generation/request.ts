@@ -9,7 +9,11 @@ import {
   type TypeLettre,
 } from '@shared/catalog';
 import { rankChunks } from '@shared/documents/retrieve';
-import { isNiveau, isSuperieur, type NiveauScolaire } from '@shared/levels';
+import {
+  BESOINS_PARTICULIERS, isModaliteAvailable, modalitesFor,
+  type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
+} from '@shared/formats';
+import { getLevelGroup, isNiveau, isSuperieur, type NiveauScolaire } from '@shared/levels';
 import { modeUsesDocuments, type DocumentPassage, type GenerationRequest, type ResearchMode, type TeacherProfile } from '@shared/types';
 import { REQUEST_LIMITS } from '@shared/validation';
 
@@ -17,7 +21,8 @@ import { REQUEST_LIMITS } from '@shared/validation';
 export type FormField =
   | 'sujet' | 'discipline' | 'duree' | 'objectifs' | 'consignes' | 'difficulte' | 'format'
   | 'trimestre' | 'profilEleve' | 'nombreAppreciations' | 'profilsDifferenciation'
-  | 'contenuSource' | 'typeLettre' | 'texteEleve';
+  | 'contenuSource' | 'typeLettre' | 'texteEleve'
+  | 'modalite' | 'typeEvaluation' | 'bareme' | 'sansCorrige' | 'nombreExercices' | 'nombreSeances' | 'ton' | 'besoins';
 
 export type Trimestre = '1' | '2' | '3';
 
@@ -43,6 +48,17 @@ export interface GenerateForm {
   contenuSource: string;
   typeLettre: TypeLettre;
   texteEleve: string;
+  /** Format normé (shared/formats.ts) ; '' = au choix de Magistra. Transmis seulement s'il convient à l'outil, au niveau et à la matière. */
+  modalite: string;
+  /** '' = non précisé (rien n'est transmis), comme les autres choix facultatifs ci-dessous. */
+  typeEvaluation: TypeEvaluation | '';
+  bareme: Bareme | '';
+  /** Vrai : version élève seule, sans corrigé. */
+  sansCorrige: boolean;
+  nombreExercices: number | '';
+  nombreSeances: number | '';
+  ton: TonRedaction | '';
+  besoins: BesoinParticulier[];
 }
 
 export const DEFAULT_APPRECIATIONS = 10;
@@ -107,6 +123,14 @@ export function createInitialForm(
     contenuSource: '',
     typeLettre: 'information',
     texteEleve: '',
+    modalite: '',
+    typeEvaluation: '',
+    bareme: '',
+    sansCorrige: false,
+    nombreExercices: '',
+    nombreSeances: '',
+    ton: '',
+    besoins: [],
   };
 }
 
@@ -121,17 +145,25 @@ export function withNiveau(form: GenerateForm, niveau: NiveauScolaire, profile?:
 
 // ─── Champs visibles ────────────────────────────────────────────────────────
 
+/** Champs sans objet en maternelle : ni note, ni corrigé écrit, ni évaluation chiffrée. */
+const NOT_IN_MATERNELLE: ReadonlySet<string> = new Set(['bareme', 'typeEvaluation', 'sansCorrige']);
+
 /**
  * Champs affichés (et donc transmis) pour un outil à un niveau donné.
  * - « Discipline / intitulé de l'UE » et « Format » (CM/TD/TP/séminaire) : supérieur uniquement ;
- * - « Trimestre » : pas de sens dans le supérieur.
+ * - « Trimestre » : pas de sens dans le supérieur ;
+ * - notation, objectif de l'évaluation, corrigé : pas en maternelle ;
+ * - format normé : seulement s'il en existe pour cet outil, ce niveau et cette matière (`matiere` fournie).
  */
-export function visibleFields(tool: TypeContenu, niveau: NiveauScolaire): Set<FormField> {
+export function visibleFields(tool: TypeContenu, niveau: NiveauScolaire, matiere?: Matiere): Set<FormField> {
   const sup = isSuperieur(niveau);
+  const maternelle = getLevelGroup(niveau) === 'maternelle';
   const fields = new Set<FormField>();
   for (const f of TOOL_FIELDS[tool] as readonly string[]) {
     if (f === 'format' && !sup) continue;
     if (f === 'trimestre' && sup) continue;
+    if (maternelle && NOT_IN_MATERNELLE.has(f)) continue;
+    if (f === 'modalite' && matiere && modalitesFor(tool, niveau, matiere).length === 0) continue;
     fields.add(f as FormField);
   }
   if (sup) fields.add('discipline');
@@ -189,7 +221,7 @@ export function fieldLimit(field: FormField): number | undefined {
 /** Tous les problèmes bloquants du formulaire pour l'outil courant (liste vide = prêt). */
 export function validateForm(form: GenerateForm): FormProblem[] {
   const tool = form.type;
-  const fields = visibleFields(tool, form.niveau);
+  const fields = visibleFields(tool, form.niveau, form.matiere);
   const problems: FormProblem[] = [];
   const text = (f: FormField) => String(form[f as keyof GenerateForm] ?? '').trim();
 
@@ -241,12 +273,13 @@ export function buildGenerationRequest(
   researchMode: ResearchMode,
 ): GenerationRequest {
   const niveau = form.niveau;
-  const fields = visibleFields(tool, niveau);
+  const matiere = isMatiereAvailableFor(form.matiere, niveau) ? form.matiere : defaultMatiereFor(niveau);
+  const fields = visibleFields(tool, niveau, matiere);
   const has = (f: FormField) => fields.has(f);
   const req: GenerationRequest = {
     type: tool,
     niveau,
-    matiere: isMatiereAvailableFor(form.matiere, niveau) ? form.matiere : defaultMatiereFor(niveau),
+    matiere,
     sujet: has('sujet') ? clean(form.sujet, REQUEST_LIMITS.sujet) ?? '' : '',
     researchMode,
   };
@@ -271,6 +304,17 @@ export function buildGenerationRequest(
   if (has('contenuSource')) set('contenuSource', clean(form.contenuSource, REQUEST_LIMITS.contenuSource));
   if (has('typeLettre')) set('typeLettre', form.typeLettre);
   if (has('texteEleve')) set('texteEleve', clean(form.texteEleve, REQUEST_LIMITS.texteEleve));
+  // Format gardé d'un autre outil, niveau ou matière : transmis seulement s'il convient à la demande actuelle.
+  if (has('modalite') && isModaliteAvailable(form.modalite, tool, niveau, matiere)) set('modalite', form.modalite);
+  if (has('typeEvaluation') && form.typeEvaluation) set('typeEvaluation', form.typeEvaluation);
+  if (has('bareme') && form.bareme) set('bareme', form.bareme);
+  if (has('sansCorrige') && form.sansCorrige) set('sansCorrige', true);
+  if (has('nombreExercices') && form.nombreExercices) set('nombreExercices', form.nombreExercices);
+  if (has('nombreSeances') && form.nombreSeances) set('nombreSeances', form.nombreSeances);
+  if (has('ton') && form.ton) set('ton', form.ton);
+  // Formulaire d'une version antérieure (sans ce champ) : aucun besoin.
+  const besoins = form.besoins ?? [];
+  if (has('besoins') && besoins.length) set('besoins', BESOINS_PARTICULIERS.map(b => b.value).filter(v => besoins.includes(v)));
 
   if (modeUsesDocuments(researchMode) && documents && documents.length > 0) {
     req.documents = fitPassagesToLimits(documents, buildPassageQuery(form, tool));
@@ -284,7 +328,7 @@ export function buildGenerationRequest(
  * sujet + discipline + objectifs + consignes (champs de l'outil uniquement).
  */
 export function buildPassageQuery(form: GenerateForm, tool: TypeContenu = form.type): string {
-  const fields = visibleFields(tool, form.niveau);
+  const fields = visibleFields(tool, form.niveau, form.matiere);
   const parts = (['sujet', 'discipline', 'objectifs', 'consignes'] as const)
     .filter(f => fields.has(f))
     .map(f => form[f].trim())

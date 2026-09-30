@@ -441,20 +441,30 @@ export const PROFILS_DIFFERENCIATION: { value: ProfilDifferenciation; label: str
   { value: 'approfondissement', label: 'Approfondissement', description: 'Élèves avancés, HPI' },
 ];
 
-/** Champs de formulaire pertinents par outil : tout autre champ est ignoré (pas de paramètres fantômes). */
+/**
+ * Champs de formulaire pertinents par outil : tout autre champ est ignoré (pas de paramètres fantômes).
+ * « modalite » : format normé propre à l'outil, au niveau et à la matière (shared/formats.ts).
+ */
 export const TOOL_FIELDS: Record<TypeContenu, readonly string[]> = {
-  cours: ['sujet', 'duree', 'objectifs', 'consignes', 'format'],
-  exercices: ['sujet', 'objectifs', 'consignes', 'difficulte', 'format'],
-  evaluation: ['sujet', 'duree', 'objectifs', 'consignes', 'difficulte'],
-  sequence: ['sujet', 'duree', 'objectifs', 'consignes'],
-  fiche_prep: ['sujet', 'duree', 'objectifs', 'consignes', 'format'],
-  progression: ['sujet', 'consignes'],
-  appreciations: ['sujet', 'trimestre', 'profilEleve', 'nombreAppreciations', 'consignes'],
-  differenciation: ['sujet', 'contenuSource', 'profilsDifferenciation', 'consignes'],
-  lettre_parents: ['typeLettre', 'consignes'],
+  cours: ['sujet', 'duree', 'objectifs', 'consignes', 'format', 'modalite'],
+  exercices: ['sujet', 'objectifs', 'consignes', 'difficulte', 'format', 'modalite', 'nombreExercices', 'bareme', 'sansCorrige'],
+  evaluation: ['sujet', 'duree', 'objectifs', 'consignes', 'difficulte', 'modalite', 'typeEvaluation', 'bareme', 'sansCorrige'],
+  sequence: ['sujet', 'duree', 'objectifs', 'consignes', 'modalite', 'nombreSeances'],
+  fiche_prep: ['sujet', 'duree', 'objectifs', 'consignes', 'format', 'modalite'],
+  progression: ['sujet', 'consignes', 'modalite'],
+  appreciations: ['sujet', 'trimestre', 'profilEleve', 'nombreAppreciations', 'consignes', 'modalite', 'ton'],
+  differenciation: ['sujet', 'contenuSource', 'profilsDifferenciation', 'consignes', 'besoins'],
+  lettre_parents: ['typeLettre', 'consignes', 'modalite'],
   cahier_journal: ['sujet', 'duree', 'consignes'],
-  corrige: ['sujet', 'texteEleve', 'consignes'],
+  corrige: ['sujet', 'texteEleve', 'consignes', 'modalite', 'bareme'],
 };
+
+/** Familles d'outils, dans l'ordre de la barre latérale (« Outils pédagogiques »). */
+export const TOOL_GROUPS: { id: 'preparer' | 'evaluer' | 'accompagner'; label: string; tools: TypeContenu[] }[] = [
+  { id: 'preparer', label: 'Préparer', tools: ['cours', 'sequence', 'fiche_prep', 'progression', 'cahier_journal'] },
+  { id: 'evaluer', label: 'Entraîner et évaluer', tools: ['exercices', 'evaluation', 'corrige', 'appreciations'] },
+  { id: 'accompagner', label: 'Accompagner', tools: ['differenciation', 'lettre_parents'] },
+];
 
 /** L'outil exige-t-il un sujet saisi par l'enseignant ? */
 export const TOOL_REQUIRES_SUJET: Record<TypeContenu, boolean> = {

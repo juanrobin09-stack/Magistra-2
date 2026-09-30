@@ -1,19 +1,27 @@
-// Champs du formulaire, affichés selon l'outil (TOOL_FIELDS) et le niveau (supérieur ou non).
-// Un champ non affiché n'est jamais transmis (voir src/lib/generation/request.ts).
+// Champs du formulaire, affichés selon l'outil (TOOL_FIELDS), le niveau (supérieur ou non) et la matière (formats
+// normés). Un champ non affiché n'est jamais transmis (voir src/lib/generation/request.ts).
+// Ordre : niveau et matière, puis le choix principal de l'outil (format normé : « Type d'exercice », « Format de
+// l'épreuve »…), les champs propres à l'outil, une grille compacte de réglages, enfin objectifs et consignes.
 
+import type { ReactElement } from 'react';
 import { Clock } from 'lucide-react';
 import {
   DIFFICULTES, FORMATS_SEANCE, getMatieresForNiveau, getSujetSuggestions, PROFILS_DIFFERENCIATION, PROFILS_ELEVE,
   TOOL_REQUIRES_SUJET, TYPES_LETTRE,
   type DifficulteExercice, type FormatSeance, type Matiere, type ProfilDifferenciation, type ProfilEleve, type TypeContenu,
 } from '@shared/catalog';
-import { isNiveau, isSuperieur, NIVEAUX, type NiveauScolaire } from '@shared/levels';
+import {
+  BAREMES, BESOINS_PARTICULIERS, defaultModaliteLabel, modaliteFieldLabel, modalitesFor, NOMBRES_EXERCICES, NOMBRES_SEANCES,
+  TONS, TYPES_EVALUATION,
+  type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
+} from '@shared/formats';
+import { getLevelGroup, isNiveau, isSuperieur, NIVEAUX, type NiveauScolaire } from '@shared/levels';
 import SelectField from '@/components/ui/SelectField';
 import {
   appreciationSummary, fieldLimit, MAX_APPRECIATIONS, MIN_APPRECIATIONS, normalizeAppreciationInput, visibleFields,
   type FormField, type FormProblem, type GenerateForm, type Trimestre,
 } from '@/lib/generation/request';
-import { ChoiceButton, Field } from './fields';
+import { ChipGroup, ChoiceButton, Field, type ChipOption } from './fields';
 import { describedBy, FOCUS_RING, LABEL_CLASS } from './fieldUtils';
 
 interface GenerateFormFieldsProps {
@@ -67,16 +75,16 @@ function consignesText(tool: TypeContenu, sup: boolean): { label: string; placeh
         rows: 4,
       };
     case 'corrige':
-      return { label: 'Attentes de correction', placeholder: "Ex : barème sur 10, insister sur l'argumentation…", rows: 2 };
+      return { label: 'Attentes de correction', placeholder: "Ex : barème sur 10, insister sur l'argumentation…", rows: 3 };
     case 'differenciation':
-      return { label: 'Consignes supplémentaires', placeholder: 'Ex : calculatrice autorisée, consignes de 2 lignes maximum…', rows: 2 };
+      return { label: 'Consignes supplémentaires', placeholder: 'Ex : calculatrice autorisée, consignes de 2 lignes maximum…', rows: 3 };
     default:
       return {
         label: 'Consignes supplémentaires',
         placeholder: sup
           ? 'Ex : insister sur les controverses, inclure une étude de cas…'
           : 'Ex : inclure un exercice sur document, adapter pour des élèves allophones…',
-        rows: 2,
+        rows: 3,
       };
   }
 }
@@ -95,7 +103,8 @@ function CharCount({ value, field }: { value: string; field: FormField }) {
 export default function GenerateFormFields({ form, onChange, onNiveauChange, problems, showErrors }: GenerateFormFieldsProps) {
   const tool = form.type;
   const sup = isSuperieur(form.niveau);
-  const fields = visibleFields(tool, form.niveau);
+  const primary = ['maternelle', 'elementaire'].includes(getLevelGroup(form.niveau));
+  const fields = visibleFields(tool, form.niveau, form.matiere);
   const has = (f: FormField) => fields.has(f);
   const errorOf = (f: FormField) => (showErrors ? problems.find(p => p.field === f)?.message ?? null : null);
 
@@ -110,6 +119,167 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
   const sujet = sujetText(tool, sup);
   const consignes = consignesText(tool, sup);
   const learner = sup ? "l'étudiant" : "l'élève";
+
+  // Format normé : seulement ceux de cet outil, ce niveau et cette matière ; un format gardé d'un autre contexte
+  // n'est ni affiché comme choisi ni transmis (request.ts).
+  // Formats de la discipline ou de l'épreuve d'abord, puis les formats généraux (QCM, application…), séparés.
+  const available = has('modalite') ? modalitesFor(tool, form.niveau, form.matiere) : [];
+  const specific = available.filter(m => m.matieres || m.niveaux);
+  const general = available.filter(m => !m.matieres && !m.niveaux);
+  const modalites = [...specific, ...general];
+  const modalite = modalites.find(m => m.value === form.modalite);
+  const modaliteOptions: ChipOption<string>[] = [
+    { value: '', label: defaultModaliteLabel(tool), title: 'Magistra choisit la forme la plus adaptée au sujet et au niveau' },
+    ...modalites.map(m => ({ value: m.value, label: m.label, title: m.description })),
+  ];
+  const generalCaption = specific.length > 0 && general.length > 0 ? { value: general[0].value, text: 'Formats généraux' } : undefined;
+
+  const settings: ReactElement[] = [];
+  if (has('difficulte')) {
+    settings.push(
+      <div key="difficulte" role="group" aria-labelledby="gen-difficulte-label" aria-describedby="gen-difficulte-hint">
+        <p id="gen-difficulte-label" className={LABEL_CLASS}>
+          Difficulté <span className="ml-1 normal-case tracking-normal font-normal text-mg-300">(facultatif)</span>
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {DIFFICULTES.map(d => (
+            <ChoiceButton
+              key={d.value}
+              pressed={form.difficulte === d.value}
+              onClick={() => onChange({ difficulte: form.difficulte === d.value ? '' : (d.value as DifficulteExercice) })}
+              className="px-2.5 py-1.5 text-[13px]"
+            >
+              {d.label}
+            </ChoiceButton>
+          ))}
+        </div>
+        <p id="gen-difficulte-hint" className="text-xs text-mg-300 mt-1.5">
+          {form.difficulte ? 'Cliquez à nouveau pour retirer ce choix.' : 'Non précisée : progression du plus simple au plus complexe.'}
+        </p>
+      </div>,
+    );
+  }
+  if (has('nombreExercices')) {
+    settings.push(
+      <ChipGroup<number | ''>
+        key="nombreExercices"
+        id="gen-nombre-exercices"
+        label={getLevelGroup(form.niveau) === 'maternelle' ? "Nombre d'activités" : "Nombre d'exercices"}
+        value={form.nombreExercices}
+        onChange={v => onChange({ nombreExercices: v })}
+        options={[{ value: '', label: 'Auto', title: 'Magistra choisit selon le sujet' }, ...NOMBRES_EXERCICES.map(n => ({ value: n, label: String(n) }))]}
+      />,
+    );
+  }
+  if (has('nombreSeances')) {
+    settings.push(
+      <ChipGroup<number | ''>
+        key="nombreSeances"
+        id="gen-nombre-seances"
+        label="Nombre de séances"
+        value={form.nombreSeances}
+        onChange={v => onChange({ nombreSeances: v })}
+        options={[{ value: '', label: 'Auto', title: '4 à 6 séances' }, ...NOMBRES_SEANCES.map(n => ({ value: n, label: String(n) }))]}
+      />,
+    );
+  }
+  if (has('typeEvaluation')) {
+    settings.push(
+      <ChipGroup<TypeEvaluation | ''>
+        key="typeEvaluation"
+        id="gen-objectif-evaluation"
+        label="Objectif"
+        value={form.typeEvaluation}
+        onChange={v => onChange({ typeEvaluation: v })}
+        options={[{ value: '', label: 'Au choix' }, ...TYPES_EVALUATION.map(t => ({ value: t.value, label: t.label, title: t.description }))]}
+      />,
+    );
+  }
+  if (has('bareme')) {
+    settings.push(
+      <ChipGroup<Bareme | ''>
+        key="bareme"
+        id="gen-bareme"
+        label="Notation"
+        value={form.bareme}
+        onChange={v => onChange({ bareme: v })}
+        options={[
+          { value: '', label: 'Selon le niveau', title: primary ? 'Positionnement sans note' : 'Note sur 20' },
+          ...BAREMES.map(b => ({ value: b.value, label: b.label, title: b.description })),
+        ]}
+        hint={form.bareme ? undefined : primary ? 'Par défaut : positionnement sans note.' : 'Par défaut : note sur 20.'}
+      />,
+    );
+  }
+  if (has('sansCorrige')) {
+    settings.push(
+      <ChipGroup<'avec' | 'sans'>
+        key="sansCorrige"
+        id="gen-corrige"
+        label="Corrigé"
+        value={form.sansCorrige ? 'sans' : 'avec'}
+        onChange={v => onChange({ sansCorrige: v === 'sans' })}
+        options={[
+          { value: 'avec', label: 'Avec corrigé', title: 'Corrigé détaillé à la fin du document' },
+          { value: 'sans', label: 'Version élève seule', title: 'Énoncés seuls, prêts à distribuer' },
+        ]}
+      />,
+    );
+  }
+  if (has('ton')) {
+    settings.push(
+      <ChipGroup<TonRedaction | ''>
+        key="ton"
+        id="gen-ton"
+        label="Ton"
+        value={form.ton}
+        onChange={v => onChange({ ton: v })}
+        options={[{ value: '', label: 'Bienveillant' }, ...TONS.map(t => ({ value: t.value, label: t.label }))]}
+      />,
+    );
+  }
+  if (has('format')) {
+    settings.push(
+      <div key="format" role="group" aria-labelledby="gen-format-label">
+        <p id="gen-format-label" className={LABEL_CLASS}>
+          Format <span className="ml-1 normal-case tracking-normal font-normal text-mg-300">(facultatif)</span>
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {FORMATS_SEANCE.map(f => (
+            <ChoiceButton
+              key={f.value}
+              pressed={form.format === f.value}
+              onClick={() => onChange({ format: form.format === f.value ? '' : f.value })}
+              ariaLabel={f.label}
+              title={f.label}
+              className="px-2.5 py-1.5 text-[13px]"
+            >
+              {FORMAT_SHORT[f.value]}
+            </ChoiceButton>
+          ))}
+        </div>
+      </div>,
+    );
+  }
+  if (has('duree')) {
+    settings.push(
+      <Field key="duree" id="gen-duree" label="Durée" optional>
+        <div className="relative">
+          <Clock size={15} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-mg-300 pointer-events-none" />
+          <input
+            id="gen-duree"
+            type="text"
+            value={form.duree}
+            onChange={e => onChange({ duree: e.target.value })}
+            maxLength={fieldLimit('duree')}
+            placeholder={tool === 'cahier_journal' ? 'Ex : journée complète 8h30-16h30' : sup ? 'Ex : 2 heures, 1h30…' : 'Ex : 55 minutes, 2 heures…'}
+            className="input-field pl-9"
+            autoComplete="off"
+          />
+        </div>
+      </Field>,
+    );
+  }
 
   const textInput = (field: 'sujet' | 'discipline' | 'duree', id: string, props: { placeholder: string; hint?: boolean }) => {
     const error = errorOf(field);
@@ -151,7 +321,7 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
   return (
     <div className="space-y-5">
       {/* Niveau + matière */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label id="gen-niveau-label" htmlFor="gen-niveau" className={LABEL_CLASS}>Niveau</label>
           <SelectField
@@ -188,6 +358,20 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
         >
           {textInput('discipline', 'gen-discipline', { placeholder: "Ex : Systèmes d'information — UE Gouvernance des SI", hint: true })}
         </Field>
+      )}
+
+      {/* Choix principal de l'outil : format normé (dissertation, QCM, sujet type brevet, fiche de synthèse…) */}
+      {modalites.length > 0 && (
+        <ChipGroup<string>
+          id="gen-modalite"
+          label={modaliteFieldLabel(tool, sup)}
+          value={modalite ? modalite.value : ''}
+          onChange={v => onChange({ modalite: v })}
+          options={modaliteOptions}
+          captionBefore={generalCaption}
+          hint={modalite ? modalite.description : undefined}
+          className="p-3.5 rounded-xl bg-accent/[0.04] border border-accent/10"
+        />
       )}
 
       {/* Courrier : type */}
@@ -294,7 +478,7 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
         </Field>
       )}
 
-      {/* Différenciation : contenu à adapter + profils */}
+      {/* Différenciation : contenu à adapter + profils + besoins particuliers */}
       {has('contenuSource') && (
         <Field
           id="gen-contenu"
@@ -345,6 +529,20 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
         </fieldset>
       )}
 
+      {has('besoins') && (
+        <ChipGroup<BesoinParticulier>
+          id="gen-besoins"
+          label={<>Besoins particuliers <span className="ml-1 normal-case tracking-normal font-normal text-mg-300">(facultatif)</span></>}
+          values={form.besoins ?? []}
+          onToggle={v => {
+            const current = form.besoins ?? [];
+            onChange({ besoins: current.includes(v) ? current.filter(b => b !== v) : [...current, v] });
+          }}
+          options={BESOINS_PARTICULIERS.map(b => ({ value: b.value, label: b.label, title: b.description }))}
+          hint="Des aménagements pédagogiques adaptés sont ajoutés à chaque version (jamais de diagnostic)."
+        />
+      )}
+
       {/* Corrigé : travail à corriger */}
       {has('texteEleve') && (
         <Field
@@ -362,95 +560,37 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
         </Field>
       )}
 
-      {/* Format (supérieur) + durée */}
-      {(has('format') || has('duree')) && (
-        <div className={`grid grid-cols-1 gap-4 ${has('format') && has('duree') ? 'md:grid-cols-2' : ''}`}>
-          {has('format') && (
-            <div role="group" aria-labelledby="gen-format-label">
-              <p id="gen-format-label" className={LABEL_CLASS}>
-                Format <span className="ml-1 normal-case tracking-normal font-normal text-mg-300">(facultatif)</span>
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {FORMATS_SEANCE.map(f => (
-                  <ChoiceButton
-                    key={f.value}
-                    pressed={form.format === f.value}
-                    onClick={() => onChange({ format: form.format === f.value ? '' : f.value })}
-                    ariaLabel={f.label}
-                    title={f.label}
-                    className="px-3 py-2"
-                  >
-                    {FORMAT_SHORT[f.value]}
-                  </ChoiceButton>
-                ))}
-              </div>
-            </div>
+      {/* Réglages de l'outil : grille compacte (difficulté, nombre, objectif, notation, corrigé, ton, format, durée) */}
+      {settings.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 pt-4 border-t border-white/6">
+          {settings}
+        </div>
+      )}
+
+      {(has('objectifs') || has('consignes')) && (
+        <div className={`grid grid-cols-1 gap-4 ${has('objectifs') && has('consignes') ? 'md:grid-cols-2' : ''}`}>
+          {has('objectifs') && (
+            <Field id="gen-objectifs" label="Objectifs pédagogiques" optional error={errorOf('objectifs')}>
+              {textArea('objectifs', 'gen-objectifs', {
+                rows: 3,
+                placeholder: sup
+                  ? "Ex : à l'issue de la séance, l'étudiant sera capable de…"
+                  : 'Ex : identifier les causes de la Révolution, maîtriser la chronologie…',
+              })}
+            </Field>
           )}
-          {has('duree') && (
-            <Field id="gen-duree" label="Durée" optional>
-              <div className="relative">
-                <Clock size={15} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-mg-300 pointer-events-none" />
-                <input
-                  id="gen-duree"
-                  type="text"
-                  value={form.duree}
-                  onChange={e => onChange({ duree: e.target.value })}
-                  maxLength={fieldLimit('duree')}
-                  placeholder={tool === 'cahier_journal' ? 'Ex : journée complète 8h30-16h30' : sup ? 'Ex : 2 heures, 1h30…' : 'Ex : 55 minutes, 2 heures…'}
-                  className="input-field pl-9"
-                  autoComplete="off"
-                />
-              </div>
+          {has('consignes') && (
+            <Field
+              id="gen-consignes"
+              label={consignes.label}
+              optional
+              hint={consignes.hint}
+              error={errorOf('consignes')}
+            >
+              {textArea('consignes', 'gen-consignes', { rows: consignes.rows, placeholder: consignes.placeholder, hint: Boolean(consignes.hint) })}
             </Field>
           )}
         </div>
-      )}
-
-      {/* Difficulté (exercices / évaluation) : aucune valeur par défaut */}
-      {has('difficulte') && (
-        <div role="group" aria-labelledby="gen-difficulte-label" aria-describedby="gen-difficulte-hint">
-          <p id="gen-difficulte-label" className={LABEL_CLASS}>
-            Difficulté <span className="ml-1 normal-case tracking-normal font-normal text-mg-300">(facultatif)</span>
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {DIFFICULTES.map(d => (
-              <ChoiceButton
-                key={d.value}
-                pressed={form.difficulte === d.value}
-                onClick={() => onChange({ difficulte: form.difficulte === d.value ? '' : (d.value as DifficulteExercice) })}
-                className="px-3 py-1.5"
-              >
-                {d.label}
-              </ChoiceButton>
-            ))}
-          </div>
-          <p id="gen-difficulte-hint" className="text-xs text-mg-300 mt-1.5">
-            {form.difficulte ? 'Cliquez à nouveau pour retirer ce choix.' : 'Non précisée : progression du plus simple au plus complexe.'}
-          </p>
-        </div>
-      )}
-
-      {has('objectifs') && (
-        <Field id="gen-objectifs" label="Objectifs pédagogiques" optional error={errorOf('objectifs')}>
-          {textArea('objectifs', 'gen-objectifs', {
-            rows: 2,
-            placeholder: sup
-              ? "Ex : à l'issue de la séance, l'étudiant sera capable de…"
-              : 'Ex : identifier les causes de la Révolution, maîtriser la chronologie…',
-          })}
-        </Field>
-      )}
-
-      {has('consignes') && (
-        <Field
-          id="gen-consignes"
-          label={consignes.label}
-          optional
-          hint={consignes.hint}
-          error={errorOf('consignes')}
-        >
-          {textArea('consignes', 'gen-consignes', { rows: consignes.rows, placeholder: consignes.placeholder, hint: Boolean(consignes.hint) })}
-        </Field>
       )}
     </div>
   );

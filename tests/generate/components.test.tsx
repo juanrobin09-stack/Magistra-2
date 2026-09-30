@@ -8,7 +8,7 @@ import GenerateFormFields from '@/components/generate/GenerateFormFields';
 import LoadingSkeleton from '@/components/generate/LoadingSkeleton';
 import PrivacyNotice from '@/components/generate/PrivacyNotice';
 import ResearchModePicker from '@/components/generate/ResearchModePicker';
-import ToolPicker from '@/components/generate/ToolPicker';
+import SidebarTools from '@/components/layout/SidebarTools';
 import { createInitialForm, validateForm, type GenerateForm } from '@/lib/generation/request';
 import { describeResearchOptions, privacyNotes, researchHints } from '@/lib/generation/research';
 
@@ -24,20 +24,91 @@ function fields(form: GenerateForm, showErrors = false): string {
   );
 }
 
-describe('ToolPicker', () => {
-  it('11 outils (onglets mobiles + barre latérale), outil actif signalé', () => {
-    const html = renderToStaticMarkup(<ToolPicker value="evaluation" niveau="4eme" onChange={noop} />);
-    expect(html.match(/aria-pressed="true"/g)).toHaveLength(2);
-    expect(html.match(/aria-pressed="(true|false)"/g)).toHaveLength(22);
-    expect(html).toContain('lg:hidden');
-    expect(html).toContain('overflow-x-auto');
-    expect(html).toContain('hidden lg:block');
-    expect(html).not.toContain('w-[220px]');
+describe('SidebarTools (barre latérale : « Outils pédagogiques »)', () => {
+  const sidebar = (props: Partial<Parameters<typeof SidebarTools>[0]> = {}) => renderToStaticMarkup(
+    <MemoryRouter>
+      <SidebarTools open={false} onToggle={noop} activeType={null} onNavigate={noop} {...props} />
+    </MemoryRouter>,
+  );
+
+  it('fermée par défaut : une seule entrée, rien de plus (pas de surcharge du menu)', () => {
+    const html = sidebar();
+    expect(html).toContain('Outils pédagogiques');
+    expect(html).toContain('aria-expanded="false"');
+    // La liste existe (aria-controls) mais reste masquée.
+    expect(html).toMatch(/<div id="[^"]+" hidden=""/);
+  });
+
+  it('ouverte : les 11 outils en trois familles, chacun ouvre la page Générer sur cet outil', () => {
+    const html = sidebar({ open: true, activeType: 'evaluation', niveau: '4eme' });
+    expect(html).toContain('aria-expanded="true"');
+    for (const family of ['Préparer', 'Entraîner et évaluer', 'Accompagner']) expect(html).toContain(family);
+    expect(html.match(/href="\/app\/generate\?type=[a-z_]+"/g)).toHaveLength(11);
+    // Outil en cours signalé (un seul).
+    expect(html.match(/aria-current="true"/g)).toHaveLength(1);
+    expect(html).toMatch(/aria-current="true"[^>]*data-tool="evaluation"/);
+  });
+
+  it('fermée : l’outil en cours reste indiqué à côté de l’entrée', () => {
+    expect(sidebar({ activeType: 'corrige', niveau: '4eme' })).toContain('Corrigé annoté');
   });
 
   it('libellés adaptés au supérieur', () => {
-    const html = renderToStaticMarkup(<ToolPicker value="cours" niveau="master_1" onChange={noop} />);
+    const html = sidebar({ open: true, niveau: 'master_1' });
     for (const label of ['TD / Exercices', 'Examen', 'Syllabus', 'Plan de module', 'Correction de copie']) expect(html).toContain(label);
+  });
+});
+
+describe('GenerateFormFields — formats normés et réglages', () => {
+  it('exercices : « Type d’exercice » propre à la matière et au niveau, « Variés » par défaut', () => {
+    const html = fields({ ...createInitialForm(PROFILE, { type: 'exercices' }), niveau: '3eme', matiere: 'mathematiques' });
+    expect(html).toContain('Type d’exercice');
+    for (const label of ['Variés', 'Automatismes', 'Démonstration', 'QCM', 'Problème']) expect(html).toContain(`>${label}</button>`);
+    expect(html).not.toContain('>Dictée</button>');
+    // Le choix par défaut est signalé comme choisi.
+    expect(html).toMatch(/aria-pressed="true"[^>]*>Variés</);
+  });
+
+  it('réglages de l’outil : nombre d’exercices, notation, corrigé', () => {
+    const html = fields(createInitialForm(PROFILE, { type: 'exercices' }));
+    for (const label of ["Nombre d&#x27;exercices", 'Notation', 'Corrigé', 'Avec corrigé', 'Version élève seule', 'Sur 20', 'Par compétences']) {
+      expect(html).toContain(label);
+    }
+    expect(html).toContain('Par défaut : note sur 20.');
+  });
+
+  it('évaluation en 3e : sujet type brevet et objectif (diagnostique, formative, sommative)', () => {
+    const html = fields({ ...createInitialForm(PROFILE, { type: 'evaluation' }), niveau: '3eme', matiere: 'francais' });
+    expect(html).toContain('Format de l’épreuve');
+    expect(html).toContain('>Sujet type brevet</button>');
+    for (const label of ['Diagnostique', 'Formative', 'Sommative']) expect(html).toContain(label);
+  });
+
+  it('format choisi : sa description s’affiche ; format d’une autre matière : ni affiché ni choisi', () => {
+    const chosen = fields({ ...createInitialForm(PROFILE, { type: 'exercices' }), niveau: '1ere_gen', matiere: 'francais', modalite: 'dissertation' });
+    expect(chosen).toMatch(/aria-pressed="true"[^>]*>Dissertation</);
+    expect(chosen).toContain('Sujet, problématique, plan, rédaction');
+    const stale = fields({ ...createInitialForm(PROFILE, { type: 'exercices' }), niveau: '4eme', matiere: 'mathematiques', modalite: 'dissertation' });
+    expect(stale).toMatch(/aria-pressed="true"[^>]*>Variés</);
+  });
+
+  it('maternelle : ni notation, ni corrigé ; activités en ateliers ou jeux', () => {
+    const html = fields({ ...createInitialForm(PROFILE, { type: 'exercices' }), niveau: 'maternelle_gs', matiere: 'nombres_formes' });
+    expect(html).not.toContain('Notation');
+    expect(html).not.toContain('Version élève seule');
+    expect(html).toContain('>Ateliers</button>');
+    expect(html).toContain("Nombre d&#x27;activités");
+  });
+
+  it('différenciation : besoins particuliers (choix multiple) ; appréciations : ton et destination', () => {
+    const diff = fields({ ...createInitialForm(PROFILE, { type: 'differenciation' }), besoins: ['dys'] });
+    expect(diff).toContain('Besoins particuliers');
+    expect(diff).toMatch(/aria-pressed="true"[^>]*>DYS</);
+    expect(diff).toMatch(/aria-pressed="false"[^>]*>Allophones</);
+    const app = fields({ ...createInitialForm(PROFILE, { type: 'appreciations' }), niveau: 'terminale_gen', matiere: 'mathematiques' });
+    expect(app).toContain('>Livret scolaire (bac)</button>');
+    expect(app).toContain('>Conseil de classe</button>');
+    for (const label of ['Bienveillant', 'Encourageant', 'Exigeant', 'Factuel']) expect(app).toContain(label);
   });
 });
 

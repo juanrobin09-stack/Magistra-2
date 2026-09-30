@@ -222,6 +222,10 @@ Fichier : `shared/prompts/`.
 
 Les 11 outils ont des consignes adaptées au niveau. Au supérieur, par exemple, « Progression » devient un syllabus, « Évaluation » un examen, « Courrier parents » un message aux étudiants et « Appréciations » des commentaires d'évaluation.
 
+**Formats normés et options** (`shared/formats.ts`) : chaque outil propose des formats propres au niveau et à la matière (dissertation, commentaire, sujet type brevet ou bac, dictée, développement construit, épreuve composée, cas pratique, fiche de synthèse…) et des options (nombre exact d'exercices ou de séances, notation, corrigé, objectif de l'évaluation, ton, besoins particuliers). La même liste sert à l'interface et à la validation (serveur et application Windows) : un format hors de propos est ignoré, jamais transmis. Le format choisi ajoute sa consigne de structure, qui prime sur la forme par défaut de l'outil. Les consignes de format imposent le même principe d'honnêteté : jamais d'extrait attribué à un auteur réel, de décision de justice ou de statistique inventés ; un emplacement [Texte à coller] est laissé à l'enseignant.
+
+**Qualité** : une section « QUALITÉ ATTENDUE » demande la structure exacte, les nombres exacts (vérifiés avant de terminer) et un français soigné ; les nombres et le format sont rappelés en fin de demande (un petit modèle suit mieux la dernière consigne lue). **Température** selon l'outil (`generationTemperature`) : 0,3 pour les documents qui doivent être exacts (évaluations, corrigés, exercices, plans), 0,4 pour les cours et la différenciation, 0,6 pour les textes rédigés (appréciations, courriers).
+
 ---
 
 ## 8. Flux de génération (streaming)
