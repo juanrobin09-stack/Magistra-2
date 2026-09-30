@@ -3,6 +3,7 @@
 // par lancement) ; tout le site dans l'application — premier lancement : page d'accueil (sans connexion ni
 // téléchargement) → profil ; ensuite : tableau de bord ; aucun assistant imposé (plus de redirection vers /setup).
 
+import { readFileSync } from 'node:fs';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeConfig } from '@/lib/runtime/mode';
@@ -80,7 +81,7 @@ describe('AppIntro', () => {
     });
   }
 
-  it('≈ 2 s puis fondu, puis plus rien ne recouvre l’application', async () => {
+  it('≈ 3,4 s (posée, jamais longue) puis fondu, puis plus rien ne recouvre l’application', async () => {
     vi.useFakeTimers();
     const { mod } = await mountIntro();
     expect(intro()).not.toBeNull();
@@ -93,8 +94,35 @@ describe('AppIntro', () => {
     expect(document.documentElement.classList.contains('intro-active')).toBe(false);
     await advance(mod.INTRO_FADE_MS + 10);
     expect(intro()).toBeNull();
-    expect(mod.INTRO_HOLD_MS + mod.INTRO_FADE_MS).toBeGreaterThanOrEqual(1600);
-    expect(mod.INTRO_HOLD_MS + mod.INTRO_FADE_MS).toBeLessThanOrEqual(2200);
+    expect(mod.INTRO_HOLD_MS + mod.INTRO_FADE_MS).toBeGreaterThanOrEqual(3000);
+    expect(mod.INTRO_HOLD_MS + mod.INTRO_FADE_MS).toBeLessThanOrEqual(3600);
+  });
+
+  it('chaque effet se termine avant le fondu (aucun n’est coupé) ; durées des fondus identiques côté CSS et côté minuteries', async () => {
+    const mod = await import('@/components/AppIntro');
+    const css = readFileSync(`${process.cwd()}/src/index.css`, 'utf8');
+    /** Durée et délai (ms) de la propriété « animation » d'une règle .intro-… (valeurs en secondes dans le CSS). */
+    const timing = (selector: string) => {
+      const rule = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{[^}]*?animation:\\s*(intro\\w+)([^;]*);`).exec(css);
+      expect(rule, selector).not.toBeNull();
+      const seconds = Array.from(rule![2].matchAll(/(\d*\.?\d+)s\b/g), m => Math.round(Number(m[1]) * 1000));
+      return { name: rule![1], duration: seconds[0], delay: seconds[1] ?? 0 };
+    };
+    const entrance = ['.intro-halo', '.intro-content', '.intro-logo', '.intro-dot', '.intro-shine', '.intro-line', '.intro-subtitle'];
+    for (const selector of entrance) {
+      const { duration, delay } = timing(selector);
+      expect(delay + duration, selector).toBeLessThanOrEqual(mod.INTRO_HOLD_MS);
+    }
+    // Lettres : délai de la dernière (style en ligne) + durée CSS.
+    const letter = timing('.intro-letter');
+    const lastLetterEnd = mod.INTRO_LETTER_DELAY_MS + (mod.INTRO_WORD.length - 1) * mod.INTRO_LETTER_STAGGER_MS + letter.duration;
+    expect(lastLetterEnd).toBeLessThanOrEqual(mod.INTRO_HOLD_MS);
+    // Le point accent arrive après que la dernière lettre a commencé à se poser.
+    expect(timing('.intro-dot').delay).toBeGreaterThan(mod.INTRO_LETTER_DELAY_MS + (mod.INTRO_WORD.length - 1) * mod.INTRO_LETTER_STAGGER_MS);
+    // Fondus : même durée que les minuteries du composant.
+    expect(timing('.intro-leaving').duration).toBe(mod.INTRO_FADE_MS);
+    expect(timing('.intro-leaving .intro-content').duration).toBe(mod.INTRO_FADE_MS);
+    expect(/\.intro-skipped, \.intro-skipped \.intro-content \{ animation-duration: (\d*\.?\d+)s; \}/.exec(css)?.[1]).toBe(String(mod.INTRO_SKIP_FADE_MS / 1000));
   });
 
   it('passable par un clic', async () => {

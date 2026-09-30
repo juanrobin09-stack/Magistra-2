@@ -223,7 +223,7 @@ function appIntro(page: Page): Locator {
 }
 
 /**
- * Lancement : l'animation d'ouverture s'affiche au premier rendu, puis se retire d'elle-même (≈ 2 s), ou tout de
+ * Lancement : l'animation d'ouverture s'affiche au premier rendu, puis se retire d'elle-même (≈ 3,4 s), ou tout de
  * suite si l'enseignant clique ou appuie sur une touche (`skip`).
  */
 async function passIntro(page: Page, skip?: 'click' | 'key'): Promise<void> {
@@ -380,11 +380,12 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     session = await launchApp(userData, mock.url);
     const { page } = session;
 
-    // Animation d'ouverture : image accessible, puis retrait d'elle-même (≈ 2 s), sans aucune action.
+    // Animation d'ouverture : image accessible, puis retrait d'elle-même (≈ 3,4 s), sans aucune action.
     const intro = page.getByRole('img', { name: 'Magistra, votre assistant pédagogique' });
     await expect(intro).toBeVisible({ timeout: 30_000 });
     await expect(intro).toHaveAttribute('data-testid', 'app-intro');
-    await page.waitForTimeout(900);
+    // Capture pendant le balayage lumineux : mot, point, ligne et sous-titre en place (avant le fondu, à 2,8 s).
+    await page.waitForTimeout(1_900);
     await shotNow(page, '01a-animation-ouverture');
     await expect(intro).toHaveCount(0, { timeout: 10_000 });
 
