@@ -257,7 +257,7 @@ export const MODALITES: ModaliteInfo[] = [
   {
     value: 'dictee', label: 'Dictée', description: 'Texte, difficultés ciblées, grille', tools: TRAVAIL,
     groups: ['elementaire', 'college', 'lycee_pro'], matieres: ['francais'],
-    prompt: 'FORMAT : dictée. Un texte adapté au niveau (longueur indiquée en mots), les difficultés ciblées (accords, homophones, terminaisons verbales), les mots à écrire au tableau, une version aménagée (dictée à trous) pour les élèves en difficulté, puis une grille de correction.',
+    prompt: 'FORMAT : dictée. Un texte suivi et parfaitement correct, à lire tel quel aux élèves : verbes déjà conjugués et accords faits (jamais d’infinitif entre parenthèses dans le texte à dicter), longueur adaptée au niveau. Puis les difficultés ciblées (accords, homophones, terminaisons verbales), les mots à écrire au tableau, une version aménagée (dictée à trous) pour les élèves en difficulté, et une grille de correction.',
   },
   {
     value: 'reecriture', label: 'Réécriture', description: 'Transformer un passage', tools: TRAVAIL,
@@ -403,7 +403,7 @@ export const MODALITES: ModaliteInfo[] = [
   },
   {
     value: 'qcm', label: 'QCM', description: 'Une bonne réponse sur quatre', tools: TRAVAIL, groups: TOUS,
-    prompt: 'FORMAT : QCM. Chaque question propose 4 réponses (A, B, C, D) dont une seule exacte ; distracteurs plausibles fondés sur les erreurs fréquentes ; ni « toutes les réponses », ni piège de formulation. Le corrigé donne la bonne réponse et une explication d’une ligne.',
+    prompt: 'FORMAT : QCM. Chaque question propose 4 réponses (A, B, C, D) dont une seule exacte. Pour chaque question : détermine d’abord la réponse exacte (refais le calcul ou le raisonnement), écris-la telle quelle comme l’un des 4 choix, puis trois distracteurs faux, plausibles et fondés sur les erreurs fréquentes ; ni « toutes les réponses », ni piège de formulation. Le corrigé donne la lettre du choix exact et une explication d’une ligne.',
   },
   {
     value: 'vrai_faux', label: 'Vrai / faux justifié', description: 'Affirmations à justifier', tools: TRAVAIL, groups: TOUS,

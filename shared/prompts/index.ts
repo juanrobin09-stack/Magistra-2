@@ -44,6 +44,7 @@ const FORMAT_RULES = `FORMAT :
 const QUALITY_RULES = `QUALITÉ ATTENDUE :
 - Suis exactement la structure et le format demandés, dans l'ordre, avec des titres explicites.
 - Respecte exactement les nombres demandés (exercices, séances, questions, points du barème) et vérifie-les avant de terminer.
+- Exactitude : refais chaque calcul et vérifie chaque réponse du corrigé avant de l'écrire ; en cas de doute sur une règle ou un fait, choisis un exemple plus simple que tu maîtrises plutôt que d'écrire une erreur.
 - Écris un français soigné et fluide : phrases complètes et claires, vocabulaire précis, aucune répétition, aucun remplissage.
 - Consignes destinées aux élèves : un verbe d'action, une tâche par consigne, adaptées à l'âge.
 - N'utilise des crochets [ … ] que pour une information que seul l'enseignant peut fournir.`;
