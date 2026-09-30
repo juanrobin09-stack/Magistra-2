@@ -39,6 +39,11 @@ export const WINDOWS_REQUIREMENTS = 'Windows 10 ou 11 (64 bits)';
 
 /** Nom du fichier d'empreintes publié avec chaque version (voir .github/workflows/release.yml). */
 export const CHECKSUMS_FILE_NAME = 'SHA256SUMS.txt';
+/**
+ * Nom FIXE de l'installateur, publié par release.yml à côté de Magistra-Setup-X.Y.Z.exe (même fichier) :
+ * https://github.com/<dépôt>/releases/latest/download/Magistra-Setup.exe télécharge toujours la dernière version stable.
+ */
+export const STABLE_INSTALLER_NAME = 'Magistra-Setup.exe';
 
 export const WINDOWS_RELEASE_LIMITS = {
   /** Délai total (API GitHub, puis SHA256SUMS.txt si nécessaire). */

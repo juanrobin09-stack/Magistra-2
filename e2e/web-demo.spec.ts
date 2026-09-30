@@ -76,7 +76,7 @@ test('vers la vraie IA : une seule voie (Magistra pour Windows), téléchargemen
   await expect(card.getByText('L’IA y fonctionne gratuitement, en privé, même sans Internet.')).toBeVisible();
   // Téléchargement direct de l'installateur de la dernière version stable (sans nouvel onglet).
   const download = card.getByRole('link', { name: 'Télécharger Magistra pour Windows' });
-  await expect(download).toHaveAttribute('href', E2E_RELEASE.downloadUrl);
+  await expect(download).toHaveAttribute('href', '/telecharger');
   await expect(download).not.toHaveAttribute('target', /./);
   // Un clic télécharge le fichier : sa taille (et la configuration requise) est annoncée à côté du bouton.
   await expect(card.getByTestId('windows-installer-facts')).toHaveText(/^Installateur : 85,3\sMo · version 2\.0\.0 · Windows 10 ou 11 \(64 bits\)$/);
@@ -97,7 +97,7 @@ test('vers la vraie IA : une seule voie (Magistra pour Windows), téléchargemen
   // Même carte sur la page Générer, sans masquer le formulaire de démonstration.
   await page.goto('/app/generate');
   await expect(page.getByTestId('connect-real-ai').getByRole('link', { name: 'Télécharger Magistra pour Windows' }))
-    .toHaveAttribute('href', E2E_RELEASE.downloadUrl);
+    .toHaveAttribute('href', '/telecharger');
   await expect(page.getByRole('button', { name: 'Générer : Cours' })).toBeVisible();
 
   // Accueil : « Télécharger pour Windows » mène à la section (téléchargement direct, étapes, « Ouvrir Magistra »).
@@ -106,7 +106,7 @@ test('vers la vraie IA : une seule voie (Magistra pour Windows), téléchargemen
   await expect(page).toHaveURL(/\/#magistra-windows$/);
   const section = page.locator('section#magistra-windows');
   await expect(section.getByRole('heading', { name: 'Magistra pour Windows' })).toBeInViewport();
-  await expect(section.getByRole('link', { name: 'Télécharger Magistra pour Windows' })).toHaveAttribute('href', E2E_RELEASE.downloadUrl);
+  await expect(section.getByRole('link', { name: 'Télécharger Magistra pour Windows' })).toHaveAttribute('href', '/telecharger');
   await expect(section.getByTestId('windows-version')).toHaveText(E2E_RELEASE.version);
   await expect(section.getByRole('list', { name: 'Installation en trois étapes' }).getByRole('listitem')).toHaveCount(3);
   await expect(section.getByRole('link', { name: 'Ouvrir Magistra' })).toHaveAttribute('href', 'magistra://open');

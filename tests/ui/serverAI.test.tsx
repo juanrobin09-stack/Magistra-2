@@ -13,7 +13,7 @@ import { RuntimeContext } from '@/lib/runtime/context';
 import { setRuntimeConfig } from '@/lib/runtime/mode';
 import { PersonalAccessContext, type PersonalAccess } from '@/lib/runtime/personal';
 import type { GenerationClient, RuntimeMode } from '@/lib/runtime/types';
-import { resetWindowsReleaseCache } from '@/components/localEngine/windowsRelease';
+import { resetWindowsReleaseCache, SITE_DOWNLOAD_PATH } from '@/components/localEngine/windowsRelease';
 import { README_AI_SECTION_URL, WINDOWS_DOWNLOAD_URL } from '@/lib/links';
 import DashboardPage from '@/pages/DashboardPage';
 import GeneratePage from '@/pages/GeneratePage';
@@ -295,7 +295,7 @@ describe('Carte « Passez à la vraie IA » (démonstration)', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/windows-release');
     const download = downloadOf(card);
-    expect(download.getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(download.getAttribute('href')).toBe(SITE_DOWNLOAD_PATH);
     expect(download.target).toBe('');
     expect(download.className).toContain('btn-primary');
     const steps = Array.from(card.querySelectorAll('ol[aria-label="Installation en trois étapes"] li')).map(li => li.textContent?.trim());

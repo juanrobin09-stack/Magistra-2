@@ -133,6 +133,21 @@ describe('serveur autonome', () => {
     expect(JSON.parse(res.body)).toEqual({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases' });
   });
 
+  it('GET /telecharger : lien de téléchargement du site servi par l’API (jamais la page de l’interface)', async () => {
+    // Aucune version publiée (GitHub simulé) : retour à la section « Magistra pour Windows » de l'accueil.
+    for (const p of ['/telecharger', '/telecharger/']) {
+      const res = await rawGet(port, p);
+      expect(res.status, p).toBe(302);
+      expect(res.headers.location, p).toBe('/#magistra-windows');
+      expect(res.body, p).toBe('');
+      expect(String(res.headers['content-security-policy'])).toContain("default-src 'self'");
+    }
+    // Un autre chemin voisin reste une page de l'interface (repli SPA).
+    const other = await rawGet(port, '/telecharger-maintenant');
+    expect(other.status).toBe(200);
+    expect(other.body).toContain('<div id="root"></div>');
+  });
+
   it('route /api/* vers l’API (authentification exigée, réponse JSON)', async () => {
     const anon = await rawGet(port, '/api/status');
     expect(anon.status).toBe(401);

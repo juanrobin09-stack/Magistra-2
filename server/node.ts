@@ -160,6 +160,18 @@ export function sendJson(res: ServerResponse, status: number, body: unknown, hea
   res.end(payload);
 }
 
+/** Redirection 302 (adresse construite par le serveur : téléchargement de l'installateur Windows). */
+export function sendRedirect(res: ServerResponse, location: string, headers: Record<string, string> = {}): void {
+  if (res.headersSent) {
+    if (!res.writableEnded) res.end();
+    return;
+  }
+  res.statusCode = 302;
+  setHeaders(res, { ...API_HEADERS, ...headers, Location: location });
+  res.setHeader('Content-Length', 0);
+  res.end();
+}
+
 function sendResult(res: ServerResponse, result: Extract<ApiResult, { type: 'json' }>): void {
   sendJson(res, result.status, result.body, result.headers);
 }
@@ -274,6 +286,10 @@ export async function handleNodeRequest(req: IncomingMessage, res: ServerRespons
       ...(req.socket?.remoteAddress ? { remoteAddress: req.socket.remoteAddress } : {}),
     };
     const result = await handleApi(route, apiRequest, deps);
+    if (result.type === 'redirect') {
+      sendRedirect(res, result.location, result.headers);
+      return;
+    }
     if (result.type === 'json') {
       // Corps refusé (trop volumineux…) : la connexion est fermée plutôt que de lire le reste.
       sendJson(res, result.status, result.body, { ...result.headers, ...(bodyRejected ? { Connection: 'close' } : {}) });

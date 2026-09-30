@@ -11,12 +11,14 @@
     "api/history.ts": { "maxDuration": 15 },
     "api/generation.ts": { "maxDuration": 15 },
     "api/windows-release.ts": { "maxDuration": 15 },
+    "api/download.ts": { "maxDuration": 15 },
     "api/stats.ts": { "maxDuration": 15 },
     "api/profile.ts": { "maxDuration": 15 },
     "api/account.ts": { "maxDuration": 30 },
     "api/clerk-webhook.ts": { "maxDuration": 30 }
   },
   "rewrites": [
+    { "source": "/telecharger", "destination": "/api/download" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "headers": [

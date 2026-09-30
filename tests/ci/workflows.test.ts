@@ -177,8 +177,11 @@ describe('documentation', () => {
     const section = readme.slice(teacher, admin);
     const steps = section.split('\n').filter(l => /^\d\. /.test(l));
     expect(steps).toHaveLength(3);
-    // Un lien qui télécharge le fichier lui-même (nom fixe publié par release.yml), jamais une page GitHub.
-    expect(steps[0]).toContain('[Télécharger Magistra pour Windows](https://github.com/juanrobin09-stack/magistra-2/releases/latest/download/Magistra-Setup.exe)');
+    // Le bouton du site et le lien DU SITE (/telecharger : le serveur renvoie au fichier de l'installateur), jamais un
+    // lien GitHub.
+    expect(steps[0]).toContain('**Télécharger Magistra pour Windows**');
+    expect(steps[0]).toContain('[magistra-2.vercel.app/telecharger](https://magistra-2.vercel.app/telecharger)');
+    expect(steps[0]).not.toMatch(/github\.com/);
     expect(steps[1]).toContain('« Windows a protégé votre ordinateur »');
     expect(steps[1]).toContain('**Informations complémentaires** puis **Exécuter quand même**');
     expect(steps[2]).toContain('sans droits d\'administrateur, et s\'ouvre toute seule');

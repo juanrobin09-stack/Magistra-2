@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CONNECTOR_HOST, CONNECTOR_PORTS } from '../shared/localConnector.js';
 import { createServerDeps, describeStartup } from './deps.js';
+import { DOWNLOAD_PATH } from './handlers.js';
 import { handleNodeRequest, type DepsSource } from './node.js';
 
 const MIME_TYPES: Record<string, string> = {
@@ -196,7 +197,8 @@ export function createStandaloneHandler(options: StandaloneOptions): (req: Incom
       sendText(res, 200, 'ok', headers);
       return;
     }
-    if (pathname === '/api' || pathname.startsWith('/api/')) {
+    // /telecharger : lien de téléchargement du site (même route que /api/download, voir handlers.ts).
+    if (pathname === '/api' || pathname.startsWith('/api/') || pathname === DOWNLOAD_PATH || pathname === `${DOWNLOAD_PATH}/`) {
       done(handleNodeRequest(req, res, { deps: options.deps }));
       return;
     }

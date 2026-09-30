@@ -2,11 +2,12 @@
 //
 // La réponse est revérifiée ici champ par champ (seul un lien https vers les versions du dépôt sur github.com est
 // retenu, empreinte en hexadécimal strict…). Le bouton « Télécharger » télécharge TOUJOURS un fichier, jamais une page
-// GitHub :
-//  - version connue : son installateur (Magistra-Setup-X.Y.Z.exe) ;
-//  - réponse absente, illisible ou inattendue (hébergement statique sans API, 404, erreur réseau, délai dépassé,
-//    GitHub momentanément injoignable) : l'installateur de la dernière version stable sous son nom fixe
-//    (WINDOWS_DOWNLOAD_URL, publié par release.yml) ;
+// GitHub, et passe dès que possible par le lien DU SITE (/telecharger, redirection du serveur vers le fichier) :
+//  - version connue : le lien du site, qui renvoie à son installateur (Magistra-Setup-X.Y.Z.exe) ;
+//  - GitHub momentanément injoignable depuis le serveur : le lien du site, qui renvoie à l'installateur de la dernière
+//    version stable sous son nom fixe ;
+//  - réponse absente, illisible ou inattendue (hébergement statique sans API, 404, erreur réseau, délai dépassé) :
+//    l'installateur de la dernière version stable sous son nom fixe (WINDOWS_DOWNLOAD_URL, publié par release.yml) ;
 //  - aucune version stable publiée : rien à télécharger, le bouton est inactif et le dit.
 
 import { useEffect, useState } from 'react';
@@ -82,16 +83,27 @@ export function parseWindowsRelease(raw: unknown): WindowsReleaseResponse | null
   return info;
 }
 
-/** Lien de l'installateur à télécharger ; undefined pendant la recherche de la version ou si aucune n'est publiée. */
+/**
+ * Lien de téléchargement DU SITE (GET /telecharger, server/handlers.ts : redirection vers le fichier de la dernière
+ * version) : c'est lui que le bouton affiche et que l'on partage ; le clic télécharge l'installateur sans quitter la page.
+ * Il n'existe que là où le serveur du site répond : il n'est donc proposé qu'après une réponse de GET /api/windows-release.
+ */
+export const SITE_DOWNLOAD_PATH = '/telecharger';
+
+/**
+ * Lien de l'installateur à télécharger ; undefined pendant la recherche de la version ou si aucune n'est publiée.
+ * Version connue : le lien du site ; sinon le lien retenu par fetchWindowsRelease (celui du site si son serveur a
+ * répondu, le fichier sous son nom fixe s'il est injoignable).
+ */
 export function installerUrl(release: WindowsReleaseState): string | undefined {
-  if (release.status === 'ready') return release.release.downloadUrl;
+  if (release.status === 'ready') return SITE_DOWNLOAD_PATH;
   if (release.status === 'direct') return release.downloadUrl;
   return undefined;
 }
 
-/** Version inconnue : téléchargement direct de la dernière version stable (nom fixe). */
-function direct(): WindowsReleaseState {
-  return { status: 'direct', downloadUrl: WINDOWS_DOWNLOAD_URL };
+/** Version inconnue : téléchargement direct de la dernière version stable (nom fixe), par défaut sans passer par le site. */
+function direct(downloadUrl: string = WINDOWS_DOWNLOAD_URL): WindowsReleaseState {
+  return { status: 'direct', downloadUrl };
 }
 
 /** Interroge le serveur Magistra ; ne lève jamais (repli : téléchargement direct de la dernière version stable). */
@@ -112,7 +124,8 @@ export async function fetchWindowsRelease(
     const parsed = parseWindowsRelease(await res.json());
     if (!parsed) return direct();
     if (parsed.available) return { status: 'ready', release: parsed };
-    return parsed.reason === 'none' ? { status: 'none' } : direct();
+    // GitHub injoignable depuis le serveur : le serveur, lui, répond ; son lien renvoie au fichier sous son nom fixe.
+    return parsed.reason === 'none' ? { status: 'none' } : direct(SITE_DOWNLOAD_PATH);
   } catch {
     return direct();
   } finally {

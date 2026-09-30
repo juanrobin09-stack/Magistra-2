@@ -10,8 +10,8 @@ import { MemoryRouter } from 'react-router-dom';
 import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSection';
 import { readFileSync } from 'node:fs';
 import {
-  fetchWindowsRelease, formatDate, formatSize, parseWindowsRelease, resetWindowsReleaseCache, WINDOWS_RELEASE_TIMEOUT_MS,
-  WINDOWS_REQUIREMENTS_TEXT,
+  fetchWindowsRelease, formatDate, formatSize, installerUrl, parseWindowsRelease, resetWindowsReleaseCache, WINDOWS_RELEASE_TIMEOUT_MS,
+  SITE_DOWNLOAD_PATH, WINDOWS_REQUIREMENTS_TEXT,
 } from '@/components/localEngine/windowsRelease';
 import { WINDOWS_RELEASE_LIMITS } from '../../server/windowsRelease';
 import { LocalEngineContext } from '@/lib/localConnector/controller';
@@ -103,9 +103,11 @@ describe('Réponse de /api/windows-release revérifiée', () => {
     expect(state).toEqual({ status: 'none' });
   });
 
-  it('GitHub momentanément injoignable depuis le serveur (« unavailable ») : téléchargement direct de la dernière version', async () => {
+  it('GitHub momentanément injoignable depuis le serveur (« unavailable ») : lien du site (dernière version, nom fixe)', async () => {
+    // Le serveur du site répond : son lien /telecharger renvoie lui-même au fichier sous son nom fixe.
     const state = await fetchWindowsRelease(vi.fn(async () => jsonResponse({ available: false, reason: 'unavailable', releasesUrl: RELEASES_PAGE })) as unknown as typeof fetch);
-    expect(state).toEqual({ status: 'direct', downloadUrl: WINDOWS_DOWNLOAD_URL });
+    expect(state).toEqual({ status: 'direct', downloadUrl: SITE_DOWNLOAD_PATH });
+    expect(installerUrl(state)).toBe('/telecharger');
   });
 
   it('404, page HTML (hébergement sans API), réponse illisible, erreur réseau ou délai dépassé : téléchargement direct, sans erreur', async () => {
@@ -152,7 +154,7 @@ describe('Section « Magistra pour Windows »', () => {
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     const view = await mountSection('web', null);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(view.download().getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(view.download().getAttribute('href')).toBe(SITE_DOWNLOAD_PATH);
     expect(view.download().target).toBe('');
     expect(view.section().querySelector('[data-testid="windows-version"]')?.textContent).toBe('2.3.1');
     expect(view.section().querySelector('[data-testid="windows-size"]')?.textContent).toBe('85,3 Mo');
@@ -301,7 +303,7 @@ describe('Section « Magistra pour Windows »', () => {
     const fetchSpy = stubReleaseFetch(RELEASE);
     const view = await mountSection('demo', null, 'landing');
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(view.download().getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(view.download().getAttribute('href')).toBe(SITE_DOWNLOAD_PATH);
     expect(view.section().querySelector('[data-testid="windows-version"]')?.textContent).toBe('2.3.1');
     expect(view.section().querySelector('h2')?.textContent).toBe('Magistra pour Windows');
     // Le connecteur local n'existe que pour le site avec comptes : rien n'est promis ici.
@@ -347,7 +349,7 @@ describe('Page d’accueil', () => {
     // Démonstration du site public : la même API, une seule requête pour toute la page.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const download = Array.from(section.querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra pour Windows'))!;
-    expect(download.getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(download.getAttribute('href')).toBe(SITE_DOWNLOAD_PATH);
     expect(section.querySelector('[data-testid="open-installed-app"] a')?.getAttribute('href')).toBe('magistra://open');
     // Les autres liens « Télécharger pour Windows » de la page mènent à cette section (étapes et avertissement compris).
     const toSection = Array.from(view.container.querySelectorAll<HTMLAnchorElement>('a[href="#magistra-windows"]'));

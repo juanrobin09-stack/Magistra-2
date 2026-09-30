@@ -2,15 +2,19 @@
 // aucune version codée en dur ; brouillons et préversions ignorés, lien de téléchargement vérifié, SHA-256 (digest ou
 // SHA256SUMS.txt), cache mémoire, jeton GitHub jamais renvoyé. Aucun accès réseau : GitHub est simulé.
 
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FetchLike } from '../../shared/ai/provider.js';
 import type { WindowsReleaseResponse } from '../../shared/apiContract.js';
 import { loadConfig } from '../../server/config.js';
 import {
-  checksumFor, createWindowsReleaseCache, DEFAULT_RELEASES_REPO, fetchLatestWindowsRelease, parseReleasesRepo, verifiedDownloadUrl,
-  WINDOWS_RELEASE_CACHE_CONTROL, WINDOWS_RELEASE_LIMITS, WINDOWS_RELEASE_UNAVAILABLE_CACHE_CONTROL, WINDOWS_REQUIREMENTS,
-  type WindowsReleaseOptions,
+  checksumFor, createWindowsReleaseCache, DEFAULT_RELEASES_REPO, fetchLatestWindowsRelease, parseReleasesRepo, STABLE_INSTALLER_NAME,
+  verifiedDownloadUrl, WINDOWS_RELEASE_CACHE_CONTROL, WINDOWS_RELEASE_LIMITS, WINDOWS_RELEASE_UNAVAILABLE_CACHE_CONTROL,
+  WINDOWS_REQUIREMENTS, type WindowsReleaseOptions,
 } from '../../server/windowsRelease.js';
+import { DOWNLOAD_PATH, routeFromPath } from '../../server/handlers.js';
+import { DEV_DOWNLOAD_PATH } from '../../server/viteDevApi.js';
+import { SITE_DOWNLOAD_PATH } from '@/components/localEngine/windowsRelease';
 import { startApi, testDeps, type TestServer } from './helpers.js';
 
 const REPO = 'juanrobin09-stack/magistra-2';
@@ -586,5 +590,79 @@ describe('GET /api/windows-release (route publique)', () => {
       expect(res.headers.get('cache-control')).toBe('no-store');
     }
     expect(fetch.calls).toHaveLength(0);
+  });
+});
+
+describe('GET /telecharger (= /api/download) : le lien de téléchargement du site', () => {
+  let server: TestServer | undefined;
+  afterEach(async () => {
+    await server?.close();
+    server = undefined;
+  });
+
+  /** Requête de navigation (clic sur le bouton) : les redirections ne sont pas suivies, pour lire leur cible. */
+  const get = (path: string) => globalThis.fetch(`${server!.url}${path}`, { redirect: 'manual' });
+
+  it('version publiée : redirection vers LE FICHIER de l’installateur (jamais une page), publique, sans cache', async () => {
+    const fetch = fakeGitHub({ [API]: () => jsonResponse(release()) });
+    server = await startApi(testDeps({ overrides: { releasesFetch: fetch } }));
+    for (const path of ['/telecharger', '/telecharger/', '/api/download']) {
+      const res = await get(path);
+      expect(res.status, path).toBe(302);
+      expect(res.headers.get('location'), path).toBe(download(EXE));
+      expect(res.headers.get('cache-control'), path).toBe('no-store');
+      expect(res.headers.get('access-control-allow-origin'), path).toBeNull();
+      expect(await res.text(), path).toBe('');
+    }
+    // Instance en cache : une seule requête vers GitHub pour les trois clics.
+    expect(fetch.calls).toHaveLength(1);
+  });
+
+  it('GitHub momentanément injoignable : le même installateur sous son nom fixe (dernière version stable)', async () => {
+    const fetch = fakeGitHub({ [API]: () => jsonResponse({}, 500) });
+    server = await startApi(testDeps({ overrides: { releasesFetch: fetch } }));
+    const res = await get('/telecharger');
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`https://github.com/${REPO}/releases/latest/download/${STABLE_INSTALLER_NAME}`);
+    expect(STABLE_INSTALLER_NAME).toBe('Magistra-Setup.exe');
+  });
+
+  it('aucune version publiée (ou installateur pas encore joint) : retour à la section « Magistra pour Windows » du site, jamais une page GitHub', async () => {
+    for (const respond of [() => jsonResponse({ message: 'Not Found' }, 404), () => jsonResponse(release({ assets: [] }))]) {
+      const fetch = fakeGitHub({ [API]: respond });
+      server = await startApi(testDeps({ overrides: { releasesFetch: fetch } }));
+      const res = await get('/telecharger');
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toBe('/#magistra-windows');
+      await server.close();
+      server = undefined;
+    }
+  });
+
+  it('dépôt configuré : son installateur ; adresse jamais tirée de la requête ; GET uniquement', async () => {
+    const other = 'univ-exemple/magistra';
+    const otherApi = `https://api.github.com/repos/${other}/releases/latest`;
+    const fetch = fakeGitHub({ [otherApi]: () => jsonResponse({}, 500) });
+    server = await startApi(testDeps({ env: { MAGISTRA_RELEASES_REPO: other }, overrides: { releasesFetch: fetch } }));
+    const res = await get('/telecharger?url=https://evil.example/x.exe&repo=pirate/x');
+    expect(res.headers.get('location')).toBe(`https://github.com/${other}/releases/latest/download/Magistra-Setup.exe`);
+    const post = await globalThis.fetch(`${server.url}/telecharger`, { method: 'POST', redirect: 'manual' });
+    expect(post.status).toBe(405);
+    expect(post.headers.get('allow')).toBe('GET');
+  });
+
+  it('routeFromPath : /telecharger est la route « download », rien d’autre', () => {
+    expect(routeFromPath('/telecharger')).toBe('download');
+    expect(routeFromPath('/telecharger/')).toBe('download');
+    expect(routeFromPath('/api/download')).toBe('download');
+    expect(routeFromPath('/telecharger/x')).toBeNull();
+    expect(routeFromPath('/Telecharger')).toBeNull();
+  });
+
+  it('même chemin partout : bouton du site, serveur, serveur de développement, réécriture Vercel', () => {
+    const vercel = JSON.parse(readFileSync(new URL('../../vercel.json', import.meta.url), 'utf8')) as { rewrites: { source: string; destination: string }[] };
+    expect(SITE_DOWNLOAD_PATH).toBe(DOWNLOAD_PATH);
+    expect(DEV_DOWNLOAD_PATH).toBe(DOWNLOAD_PATH);
+    expect(vercel.rewrites).toContainEqual({ source: DOWNLOAD_PATH, destination: '/api/download' });
   });
 });

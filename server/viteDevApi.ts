@@ -73,9 +73,13 @@ interface DevApiModule {
   devStartupLines(env: Record<string, string>, info?: DevServerInfo): Promise<string[]>;
 }
 
+/** Même valeur que DOWNLOAD_PATH (server/handlers.ts), recopiée pour garder la configuration Vite légère. */
+export const DEV_DOWNLOAD_PATH = '/telecharger';
+
 function isApiPath(url: string | undefined): boolean {
   const path = (url ?? '').split('?')[0];
-  return path === '/api' || path.startsWith('/api/');
+  // /telecharger : lien de téléchargement du site (même route que /api/download).
+  return path === '/api' || path.startsWith('/api/') || path === DEV_DOWNLOAD_PATH || path === `${DEV_DOWNLOAD_PATH}/`;
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

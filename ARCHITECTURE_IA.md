@@ -388,7 +388,7 @@ Les tests Vitest et Playwright utilisent des serveurs simulés. `scripts/real-ai
 
 Variables : `REAL_AI_URL`, `REAL_AI_MODEL`, `REAL_AI_API_KEY` (jamais affichée), `REAL_AI_CONTEXT_TOKENS`, `REAL_AI_TIMEOUT_S`, `REAL_AI_REPORT`. Le workflow `.github/workflows/real-ai.yml` l'exécute chaque lundi et à la demande : image Docker officielle `ollama/ollama` épinglée par empreinte, port ouvert sur la boucle locale seulement, modèle `ministral-3:3b` (Apache 2.0) gardé en cache, processeur seul avec des délais généreux, rapport JSON et journal d'Ollama joints à l'exécution. Cette validation a mis en évidence le déballage du bloc « ```markdown » décrit au § 5.
 
-La publication de l'application Windows suit le même principe de chaîne vérifiable : `.github/workflows/release.yml` (tag `v*`) construit l'installateur NSIS et l'archive zip sous Windows, calcule `SHA256SUMS.txt` et crée une **release en brouillon** (actions épinglées par SHA, seul le job de publication peut écrire), qu'un mainteneur publie à la main. Une fois publiée, elle est proposée par le site (`GET /api/windows-release`, § 19).
+La publication de l'application Windows suit le même principe de chaîne vérifiable : `.github/workflows/release.yml` (tag `v*`) construit l'installateur NSIS et l'archive zip sous Windows, calcule `SHA256SUMS.txt` et crée une **release en brouillon** (actions épinglées par SHA, seul le job de publication peut écrire), qu'un mainteneur publie à la main. Une fois publiée, elle est proposée par le site (`GET /api/windows-release`, et téléchargée par son lien `/telecharger`, § 19).
 
 ## 19. Connecteur local (site web → IA de l'ordinateur)
 
@@ -402,7 +402,7 @@ Le site public (compte Clerk obligatoire) peut utiliser l'IA **locale** de l'ord
 | Site : WebCrypto, appairage mémorisé, autorisation du navigateur, client, état, choix du moteur | `src/lib/localConnector/` (`webCrypto.ts`, `pairingStore.ts`, `permission.ts`, `client.ts`, `controller.ts`, `engineChoice.ts`, `texts.ts`) |
 | Site : génération locale ou en ligne, sans repli silencieux | `src/lib/runtime/hybrid.ts` |
 | Interface | `src/components/localEngine/` (carte du tableau de bord, réglages, bandeau et panneau de la page Générer, « Magistra pour Windows », « Site web Magistra » de l'application) |
-| Serveur | `server/windowsRelease.ts` (`GET /api/windows-release`), `server/handlers.ts` (`POST /api/generation`) |
+| Serveur | `server/windowsRelease.ts` (`GET /api/windows-release`), `server/handlers.ts` (`POST /api/generation` ; `GET /telecharger` = `/api/download`, lien de téléchargement du site : redirection vers l'installateur de la dernière version stable, adresse vérifiée, jamais tirée de la requête) |
 
 ```
  navigateur : site officiel https://magistra-2.vercel.app (compte Clerk)

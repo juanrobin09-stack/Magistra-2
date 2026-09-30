@@ -20,7 +20,7 @@ Il s'appuie sur **vos documents** et sur des **sources vérifiables**. L'enseign
 
 Installez Magistra sur votre ordinateur Windows (10 ou 11, 64 bits) : l'IA y fonctionne **gratuitement, en privé, même sans Internet**. Aucun compte, aucune clé, aucune ligne de commande.
 
-1. **Téléchargez Magistra** : [Télécharger Magistra pour Windows](https://github.com/juanrobin09-stack/magistra-2/releases/latest/download/Magistra-Setup.exe) (le fichier se télécharge directement). Le bouton du site Magistra télécharge lui aussi directement la dernière version.
+1. **Téléchargez Magistra** : sur le site Magistra, cliquez sur **Télécharger Magistra pour Windows**, ou ouvrez directement le lien du site [magistra-2.vercel.app/telecharger](https://magistra-2.vercel.app/telecharger). Le fichier `Magistra-Setup-x.y.z.exe` (dernière version) se télécharge aussitôt, sans autre page.
 2. **Ouvrez le fichier téléchargé.** Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur **Informations complémentaires** puis **Exécuter quand même**.
 3. **Magistra s'installe en quelques secondes**, sans droits d'administrateur, et s'ouvre toute seule.
 
@@ -76,7 +76,7 @@ Les faits de ce tableau sont ceux que chaque prestataire **annonce** ; ils sont 
    - `VITE_CLERK_PUBLISHABLE_KEY` et `CLERK_SECRET_KEY` (même instance Clerk ; une clé `pk_live_…` exige votre propre domaine, une instance de développement `pk_test_…` fonctionne sur `*.vercel.app` — [Clerk](https://clerk.com/docs/guides/development/deployment/vercel)) ;
    - `SUPABASE_URL` et `SUPABASE_SERVICE_ROLE_KEY` ;
    - `AI_PRESET=ovhcloud` (et, si vous en avez une, `AI_API_KEY`) ;
-   - recommandé : `GITHUB_TOKEN`, jeton GitHub « fine-grained » en lecture seule, **sans aucune permission** (dépôts publics). Sur Vercel, les fonctions sortent par des adresses IP partagées avec d'autres clients : sans jeton, la limite de l'API GitHub (60 requêtes par heure et par adresse) peut être déjà atteinte, et « Télécharger Magistra pour Windows » renvoie alors vers la page des versions au lieu de télécharger l'installateur (ni version, ni taille, ni empreinte affichées) ;
+   - recommandé : `GITHUB_TOKEN`, jeton GitHub « fine-grained » en lecture seule, **sans aucune permission** (dépôts publics). Sur Vercel, les fonctions sortent par des adresses IP partagées avec d'autres clients : sans jeton, la limite de l'API GitHub (60 requêtes par heure et par adresse) peut être déjà atteinte : « Télécharger Magistra pour Windows » télécharge alors toujours la dernière version, mais sans afficher ni sa version, ni sa taille, ni son empreinte ;
    - facultatif : `MAGISTRA_ADMIN_CONTACT` (adresse affichée aux enseignants si l'IA ne répond pas).
 
    L'IA seule ne suffit pas : sans les clés Clerk, le site reste en **démonstration** (aucune IA n'est utilisée) ; sans Supabase, il affiche une erreur de configuration. Supprimez la clé d'API commerciale de l'ancienne version si elle figure encore dans les variables : elle n'est plus utilisée. Révoquez-la aussi chez son fournisseur.
@@ -152,7 +152,7 @@ Le navigateur ne parle jamais au moteur d'IA lui-même : l'application n'accepte
 
 1. **Compte** : sur l'ordinateur Windows 10 ou 11 où Magistra sera installée, connectez-vous au site (`https://magistra-2.vercel.app`), de préférence avec Chrome ou Edge.
 2. **Tableau de bord** : la carte « Magistra locale » affiche « Activez l’intelligence Magistra sur votre ordinateur. ».
-3. **Télécharger** : **Télécharger Magistra pour Windows** télécharge directement l'installateur de la dernière version **stable** publiée. Sa version, sa taille, sa date et son empreinte SHA-256 sont affichées dans Réglages → « Magistra pour Windows » et sur la page d'accueil, avec les trois étapes d'installation et **Ouvrir Magistra** si elle est déjà installée.
+3. **Télécharger** : **Télécharger Magistra pour Windows** (lien du site `/telecharger`) télécharge directement l'installateur de la dernière version **stable** publiée. Sa version, sa taille, sa date et son empreinte SHA-256 sont affichées dans Réglages → « Magistra pour Windows » et sur la page d'accueil, avec les trois étapes d'installation et **Ouvrir Magistra** si elle est déjà installée.
 4. **Installer** : ouvrez `Magistra-Setup-x.y.z.exe` (avertissement SmartScreen : voir « [Installer Magistra](#installer-magistra-enseignants) ») ; Magistra s'installe et s'ouvre toute seule. Dans l'application, **Activer l'IA** prépare le moteur et le modèle (taille annoncée avant). **Laissez l'application ouverte** : fermer sa fenêtre la quitte, et le site ne la trouve plus.
 5. **Détection** : sur le tableau de bord, cliquez sur **J'ai déjà Magistra : la rechercher** (ou, dans la section « Magistra pour Windows », sur **Détecter maintenant**, sous « J’ai installé Magistra »). Si le navigateur doit demander son autorisation, le site l'explique **avant** (voir ci-dessous), puis affiche « Recherche de Magistra sur cet ordinateur… » et « ✓ Magistra trouvée ». Si l'application n'est pas trouvée, il affiche « Magistra n’est pas encore détectée. », avec **Réessayer** et **Télécharger Magistra**.
 6. **Connecter Magistra locale** : si le navigateur demande d'ouvrir Magistra, acceptez. Le site affiche « Confirmez dans l’application Magistra… » et un **code de vérification** (par exemple `K7F-2QX`).
@@ -239,7 +239,7 @@ Au-delà de 10 navigateurs autorisés, le plus ancien est retiré automatiquemen
 ### Mainteneurs : versions, variables, domaine, ports
 
 **Publier une version de l'application** — `"version": "X.Y.Z"` doit être dans `package.json` (commité). Deux façons :
-- **Sans ligne de commande (le plus simple).** Sur GitHub : **Releases → Draft a new release** → *Choose a tag* : tapez `vX.Y.Z` puis « Create new tag: vX.Y.Z on publish » → *Target* : la branche à publier → titre « Magistra X.Y.Z » → **Publish release** (laissez cochée « Set as the latest release »). Le workflow [`release.yml`](.github/workflows/release.yml) construit alors l'installateur, l'archive et `SHA256SUMS.txt` (≈ 10 à 15 minutes) et les **joint à cette release** (il n'y remplace jamais un fichier existant ; il ajoute les notes de version si vous n'en avez pas écrit). Pendant la construction, le site propose la page des versions ; ensuite, le téléchargement direct.
+- **Sans ligne de commande (le plus simple).** Sur GitHub : **Releases → Draft a new release** → *Choose a tag* : tapez `vX.Y.Z` puis « Create new tag: vX.Y.Z on publish » → *Target* : la branche à publier → titre « Magistra X.Y.Z » → **Publish release** (laissez cochée « Set as the latest release »). Le workflow [`release.yml`](.github/workflows/release.yml) construit alors l'installateur, l'archive et `SHA256SUMS.txt` (≈ 10 à 15 minutes) et les **joint à cette release** (il n'y remplace jamais un fichier existant ; il ajoute les notes de version si vous n'en avez pas écrit). Pendant la construction, le bouton du site reste inactif (« Pas encore disponible… ») ; ensuite, il télécharge l'installateur.
 - **Avec git.** `git tag vX.Y.Z && git push origin vX.Y.Z` : le workflow crée une **release en brouillon** avec les fichiers ; relisez-la puis **publiez-la** (même case cochée).
 
 Dans les deux cas, une fois la release publiée avec son installateur, le site la propose **automatiquement** : `GET /api/windows-release` interroge l'API GitHub (`/releases/latest`). Il affiche la version, la taille, la date, l'empreinte SHA-256 (champ `digest` de GitHub, sinon `SHA256SUMS.txt`) et « Windows 10 ou 11 (64 bits) ». Aucune version n'est écrite dans le code.
@@ -250,17 +250,20 @@ Dans les deux cas, une fois la release publiée avec son installateur, le site l
 
 Ne sont **jamais** proposés : un brouillon, une préversion (tag `vX.Y.Z-rc.1`), une étiquette autre que `vX.Y.Z`, une release sans `Magistra-Setup-X.Y.Z.exe` du même numéro, ni un lien de téléchargement hors de `https://github.com/<dépôt>/releases/download/`.
 
-Le bouton « Télécharger » télécharge **toujours un fichier**, jamais une page GitHub :
-- version connue : son installateur `Magistra-Setup-X.Y.Z.exe` ;
-- version exacte inconnue (GitHub momentanément injoignable depuis le serveur, limite de l'API atteinte, hébergement sans API) : `…/releases/latest/download/Magistra-Setup.exe`, le **même installateur sous un nom fixe**, que `release.yml` publie dans chaque version et que GitHub résout vers la dernière version stable ;
-- aucune version stable publiée : le bouton est inactif et le site l'explique (« Pas encore disponible… »).
+**Lien de téléchargement du site : `/telecharger`** (par exemple `https://magistra-2.vercel.app/telecharger`, à partager tel quel). C'est l'adresse du bouton « Télécharger » : le serveur y répond par une redirection vers le fichier, et le navigateur télécharge l'installateur sans quitter la page. Même route que `GET /api/download` (réécriture dans `vercel.json` ; `npm start` et `npm run dev` la servent aussi). Le fichier lui-même reste hébergé par la release GitHub : un installateur d'environ 100 Mo ne peut pas être versionné dans le dépôt (limite de 100 Mo par fichier) et épuiserait vite la bande passante gratuite de Vercel ; l'enseignant ne voit jamais de page GitHub.
+
+Le bouton télécharge **toujours un fichier**, jamais une page GitHub :
+- version connue : le lien du site, qui renvoie à son installateur `Magistra-Setup-X.Y.Z.exe` ;
+- GitHub momentanément injoignable depuis le serveur, ou limite de l'API atteinte : le lien du site, qui renvoie à `…/releases/latest/download/Magistra-Setup.exe`, le **même installateur sous un nom fixe**, que `release.yml` publie dans chaque version et que GitHub résout vers la dernière version stable ;
+- serveur du site injoignable (hébergement statique sans API) : directement `…/releases/latest/download/Magistra-Setup.exe` ;
+- aucune version stable publiée : le bouton est inactif et le site l'explique (« Pas encore disponible… ») ; le lien `/telecharger` ouvert directement renvoie à la section « Magistra pour Windows » de l'accueil, qui le dit aussi.
 
 **Variables du serveur (facultatives)**
 
 | Variable | Rôle |
 |---|---|
 | `MAGISTRA_RELEASES_REPO` | dépôt GitHub `propriétaire/dépôt` dont les versions sont proposées. Vide : dépôt officiel `juanrobin09-stack/magistra-2`. Valeur invalide : dépôt officiel, avec un avertissement dans le journal. À changer seulement pour une copie qui publie ses propres versions : l'application, elle, cherche ses mises à jour sur le dépôt officiel (`electron/updateCheck.ts`). |
-| `GITHUB_TOKEN` | **recommandé sur Vercel** et sur tout hébergement dont l'adresse de sortie est partagée : jeton « fine-grained » en lecture seule, sans aucune permission (dépôts publics). Sans jeton, l'API GitHub accepte 60 requêtes par heure et par adresse IP, **partagées avec les autres clients de l'hébergeur** ; le cache (10 minutes) est propre à chaque instance du serveur, et une instance qui démarre commence sans lui. Limite atteinte : `/api/windows-release` renvoie `unavailable` et le site propose la page des versions au lieu du téléchargement direct. Le jeton est envoyé seulement à `api.github.com`, jamais au navigateur ni dans les journaux. |
+| `GITHUB_TOKEN` | **recommandé sur Vercel** et sur tout hébergement dont l'adresse de sortie est partagée : jeton « fine-grained » en lecture seule, sans aucune permission (dépôts publics). Sans jeton, l'API GitHub accepte 60 requêtes par heure et par adresse IP, **partagées avec les autres clients de l'hébergeur** ; le cache (10 minutes) est propre à chaque instance du serveur, et une instance qui démarre commence sans lui. Limite atteinte : `/api/windows-release` renvoie `unavailable` ; le bouton télécharge toujours la dernière version (nom fixe), sans afficher sa version, sa taille ni son empreinte. Le jeton est envoyé seulement à `api.github.com`, jamais au navigateur ni dans les journaux. |
 
 `POST /api/generation` enregistre le résultat d'une génération locale. Cette route compte pour `RATE_LIMIT_PER_MINUTE`, pas pour `RATE_LIMIT_GLOBAL_PER_MINUTE`. Après la mise à jour, réexécutez `supabase-schema.sql` : il ajoute la colonne `kind` de `api_requests`.
 

@@ -396,15 +396,39 @@ const CONTENT_TYPES: Record<string, string> = {
 
 interface SiteServer {
   server: Server;
-  /** Requêtes reçues sur /api/* (seule /api/windows-release existe ici). */
+  /** Requêtes reçues sur /api/* (seule /api/windows-release existe ici) et sur le lien de téléchargement du site. */
   apiRequests: string[];
 }
 
-/** Sert le harnais construit dans `dir` (et un faux GET /api/windows-release) sur 127.0.0.1:<port>. */
+/** Fichier de l'installateur servi par le harnais lui-même (le test ne contacte jamais GitHub). */
+const HARNESS_INSTALLER_PATH = `/fichiers/${RELEASE.fileName}`;
+
+/**
+ * Sert le harnais construit dans `dir` sur 127.0.0.1:<port>, avec un faux GET /api/windows-release et le lien de
+ * téléchargement du site (/telecharger).
+ */
 async function serveHarness(port: number, dir: string): Promise<SiteServer> {
   const apiRequests: string[] = [];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
+    // Lien de téléchargement du site : comme le vrai serveur (server/handlers.ts, route « download »), redirection vers
+    // le fichier de l'installateur de la dernière version. En production, le fichier est celui de la release ; ici, le
+    // harnais le sert lui-même (Playwright n'intercepte pas la cible d'une redirection : le test resterait hors ligne).
+    if (url.pathname === '/telecharger') {
+      apiRequests.push(`${req.method} ${url.pathname}`);
+      res.writeHead(302, { Location: HARNESS_INSTALLER_PATH, 'Cache-Control': 'no-store' });
+      res.end();
+      return;
+    }
+    if (url.pathname === HARNESS_INSTALLER_PATH) {
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${RELEASE.fileName}"`,
+        'Cache-Control': 'no-store',
+      });
+      res.end('MZ');
+      return;
+    }
     if (url.pathname.startsWith('/api/')) {
       apiRequests.push(`${req.method} ${url.pathname}`);
       const release = req.method === 'GET' && url.pathname === '/api/windows-release';
@@ -857,7 +881,7 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
 
     await test.step('application absente : « Magistra n’est pas encore détectée. »', async () => {
       await expect(card(page).getByText(T.intro)).toBeVisible();
-      await expect(card(page).getByRole('link', { name: 'Télécharger Magistra pour Windows' })).toHaveAttribute('href', RELEASE.downloadUrl);
+      await expect(card(page).getByRole('link', { name: 'Télécharger Magistra pour Windows' })).toHaveAttribute('href', '/telecharger');
       // Comme partout où l'on télécharge : taille de l'installateur et trois étapes (avertissement SmartScreen).
       await expect(card(page).getByTestId('windows-installer-facts')).toContainText(/^Installateur : 85,3\sMo · version 2\.1\.0/);
       await expect(card(page).getByRole('list', { name: 'Installation en trois étapes' }).getByRole('listitem')).toHaveCount(3);
@@ -865,7 +889,7 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
       await card(page).getByRole('button', { name: T.searchExisting }).click();
       await expect(card(page).getByText(T.notDetected)).toBeVisible();
       await expect(card(page).getByRole('button', { name: T.retry })).toBeVisible();
-      await expect(card(page).getByRole('link', { name: 'Télécharger Magistra', exact: true })).toHaveAttribute('href', RELEASE.downloadUrl);
+      await expect(card(page).getByRole('link', { name: 'Télécharger Magistra', exact: true })).toHaveAttribute('href', '/telecharger');
       await expect(card(page).getByText(/elle s’installe en quelques secondes, sans droits d’administrateur/)).toBeVisible();
       await expectNoTechnicalText(page, ports);
       await shot(page, '02-non-detectee');
@@ -1072,12 +1096,12 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     d.consentAuto = true;
     await d.launch();
     await grant(page);
-    // Le téléchargement direct de l'installateur ne quitte pas la page (fichier servi par le test, pas par GitHub).
-    await page.route('https://github.com/**', route => route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${RELEASE.fileName}"` },
-      body: 'MZ',
-    }));
+    // Aucune page GitHub : le téléchargement passe par le lien du site, qui renvoie au fichier (servi ici par le harnais).
+    const githubRequests: string[] = [];
+    await page.route('https://github.com/**', route => {
+      githubRequests.push(route.request().url());
+      return route.abort();
+    });
     await openHarness(page, d, { view: 'settings' });
 
     const windows = page.getByTestId('windows-download');
@@ -1087,9 +1111,16 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     await windows.getByText('Empreinte SHA-256').click();
     await expect(windows.getByTestId('windows-sha256')).toHaveText(RELEASE.sha256);
     await expect(windows.getByText(RELEASE.requirements).first()).toBeVisible();
+    // Le bouton pointe vers le lien DU SITE (/telecharger) ; le clic télécharge le fichier sans quitter la page.
+    await expect(windows.getByRole('link', { name: 'Télécharger Magistra pour Windows' })).toHaveAttribute('href', '/telecharger');
     const download = page.waitForEvent('download');
+    const pageBefore = page.url();
+    const downloadsBefore = site.apiRequests.filter(r => r === 'GET /telecharger').length;
     await windows.getByRole('link', { name: 'Télécharger Magistra pour Windows' }).click();
     expect((await download).suggestedFilename()).toBe(RELEASE.fileName);
+    expect(page.url()).toBe(pageBefore);
+    expect(site.apiRequests.filter(r => r === 'GET /telecharger')).toHaveLength(downloadsBefore + 1);
+    expect(githubRequests).toEqual([]);
     const installed = page.getByTestId('windows-installed');
     await expect(installed.getByText(T.installed)).toBeVisible();
     await installed.getByRole('button', { name: T.detectNow }).click();

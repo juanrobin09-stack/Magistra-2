@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { defaultMessage } from '@shared/errors';
 import LocalEngineCard from '@/components/localEngine/LocalEngineCard';
-import { resetWindowsReleaseCache } from '@/components/localEngine/windowsRelease';
+import { resetWindowsReleaseCache, SITE_DOWNLOAD_PATH } from '@/components/localEngine/windowsRelease';
 import { APP_UPDATE_REQUIRED_MESSAGE, PAGE_RELOAD_REQUIRED_MESSAGE, UNEXPECTED_REPLY_MESSAGE, UNRECOGNIZED_BY_APP_MESSAGE } from '@/lib/localConnector/client';
 import { LocalEngineContext, NOT_ANSWERED_PERMISSION_MESSAGE, UNPAIR_BLOCKED_MESSAGE, useLocalEngine } from '@/lib/localConnector/controller';
 import { ENGINE_CHOICE_STORAGE_KEY, setEngineChoice } from '@/lib/localConnector/engineChoice';
@@ -50,7 +50,7 @@ describe('Carte Magistra locale — jamais appairée', () => {
     const { card, status } = await mountCard(engine);
     expect(status().textContent).toContain('Activez l’intelligence Magistra sur votre ordinateur.');
     const download = Array.from(card().querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra pour Windows'));
-    expect(download?.getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(download?.getAttribute('href')).toBe(SITE_DOWNLOAD_PATH);
     expect(download?.getAttribute('rel')).toContain('noreferrer');
     await click(button(card(), "J'ai déjà Magistra : la rechercher"));
     expect(engine.detect).toHaveBeenCalledTimes(1);
@@ -64,7 +64,7 @@ describe('Carte Magistra locale — jamais appairée', () => {
     expect(status().textContent).toContain('Magistra n’est pas encore détectée.');
     expect(button(card(), /Réessayer/)).not.toBeNull();
     const short = Array.from(card().querySelectorAll('a')).find(a => a.textContent?.trim() === 'Télécharger Magistra');
-    expect(short?.getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(short?.getAttribute('href')).toBe(SITE_DOWNLOAD_PATH);
     await click(button(card(), /Réessayer/));
     expect(engine.detect).toHaveBeenCalledTimes(2);
   });
@@ -341,7 +341,7 @@ describe('Carte Magistra locale — application d’une autre version', () => {
     expect(status().textContent).not.toContain('pas encore détectée');
     expect(status().textContent).not.toContain('ouvrez-la puis réessayez');
     const download = Array.from(card().querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra'));
-    expect(download?.getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(download?.getAttribute('href')).toBe(SITE_DOWNLOAD_PATH);
   });
 
   it('appairé (mise à jour du site), seule une Magistra plus ancienne répond : le téléchargement annoncé par le message est bien proposé', async () => {
@@ -350,7 +350,7 @@ describe('Carte Magistra locale — application d’une autre version', () => {
     expect(status().textContent).toContain(APP_UPDATE_REQUIRED_MESSAGE);
     expect(status().textContent).not.toContain('fermée');
     const download = Array.from(card().querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra'));
-    expect(download?.getAttribute('href')).toBe(RELEASE.downloadUrl);
+    expect(download?.getAttribute('href')).toBe(SITE_DOWNLOAD_PATH);
     expect(download?.getAttribute('rel')).toContain('noreferrer');
     expect(button(card(), /Réessayer/)).not.toBeNull();
     cleanup();

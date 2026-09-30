@@ -22,9 +22,15 @@ interface VercelConfig {
 describe('déploiement', () => {
   const vercel = JSON.parse(read('vercel.json')) as VercelConfig;
 
+  /** Réécriture vers l'interface (application monopage). */
+  const spaRule = () => vercel.rewrites.find(r => r.destination === '/index.html')!;
+
   it('vercel.json : réécriture SPA hors /api et durée longue pour la génération', () => {
-    expect(vercel.rewrites).toEqual([{ source: '/((?!api/).*)', destination: '/index.html' }]);
-    const spa = new RegExp(`^${vercel.rewrites[0].source}$`);
+    expect(vercel.rewrites).toEqual([
+      { source: '/telecharger', destination: '/api/download' },
+      { source: '/((?!api/).*)', destination: '/index.html' },
+    ]);
+    const spa = new RegExp(`^${spaRule().source}$`);
     expect(spa.test('/app/generate')).toBe(true);
     expect(spa.test('/api/generate')).toBe(false);
     expect(vercel.functions['api/generate.ts'].maxDuration).toBe(300);
@@ -58,20 +64,28 @@ describe('déploiement', () => {
   it('GET /api/windows-release : fonction Vercel courte, hors de la réécriture vers l’interface', () => {
     expect(vercel.functions['api/windows-release.ts'].maxDuration).toBeGreaterThanOrEqual(10);
     expect(vercel.functions['api/windows-release.ts'].maxDuration).toBeLessThanOrEqual(30);
-    expect(new RegExp(`^${vercel.rewrites[0].source}$`).test('/api/windows-release')).toBe(false);
+    expect(new RegExp(`^${spaRule().source}$`).test('/api/windows-release')).toBe(false);
+  });
+
+  it('GET /telecharger (lien du site) : réécrit vers la fonction de téléchargement AVANT la réécriture vers l’interface', () => {
+    // Vercel applique la première réécriture qui correspond : /telecharger ne doit jamais tomber sur l'interface.
+    const first = vercel.rewrites.findIndex(r => new RegExp(`^${r.source}$`).test('/telecharger'));
+    expect(vercel.rewrites[first]).toEqual({ source: '/telecharger', destination: '/api/download' });
+    expect(first).toBeLessThan(vercel.rewrites.indexOf(spaRule()));
+    expect(vercel.functions['api/download.ts'].maxDuration).toBeLessThanOrEqual(30);
   });
 
   it('une fonction Vercel par route du contrat, et plus aucune ancienne route', () => {
     const files = readdirSync(path.join(root, 'api')).sort();
     expect(files).toEqual([
-      'account.ts', 'clerk-webhook.ts', 'generate.ts', 'generation.ts', 'history.ts', 'mode.ts', 'profile.ts', 'stats.ts', 'status.ts',
-      'windows-release.ts',
+      'account.ts', 'clerk-webhook.ts', 'download.ts', 'generate.ts', 'generation.ts', 'history.ts', 'mode.ts', 'profile.ts', 'stats.ts',
+      'status.ts', 'windows-release.ts',
     ]);
     // Chaque route du serveur a sa fonction Vercel, servie hors de la réécriture vers l'interface.
     for (const route of Object.keys(ROUTE_METHODS)) {
       expect(files, route).toContain(`${route}.ts`);
       expect(vercel.functions[`api/${route}.ts`], route).toBeDefined();
-      expect(new RegExp(`^${vercel.rewrites[0].source}$`).test(`/api/${route}`), route).toBe(false);
+      expect(new RegExp(`^${spaRule().source}$`).test(`/api/${route}`), route).toBe(false);
     }
     expect(existsSync(path.join(root, 'netlify.toml'))).toBe(false);
   });

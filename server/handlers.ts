@@ -20,10 +20,11 @@ import { personalUnauthenticated } from './personal.js';
 import { sanitizeProfile } from './profile.js';
 import { HISTORY_LIMITS, type GenerationAdmission, type GenerationStore } from './store.js';
 import { normalizeTimeZone } from './time.js';
-import { fetchLatestWindowsRelease, windowsReleaseCacheControl } from './windowsRelease.js';
+import { fetchLatestWindowsRelease, STABLE_INSTALLER_NAME, windowsReleaseCacheControl } from './windowsRelease.js';
 
 export type RouteName =
-  | 'mode' | 'status' | 'generate' | 'history' | 'generation' | 'windows-release' | 'stats' | 'profile' | 'account' | 'clerk-webhook';
+  | 'mode' | 'status' | 'generate' | 'history' | 'generation' | 'windows-release' | 'download' | 'stats' | 'profile' | 'account'
+  | 'clerk-webhook';
 
 export const ROUTE_METHODS: Record<RouteName, readonly string[]> = {
   mode: ['GET'],
@@ -32,6 +33,7 @@ export const ROUTE_METHODS: Record<RouteName, readonly string[]> = {
   history: ['GET'],
   generation: ['GET', 'POST', 'PATCH', 'DELETE'],
   'windows-release': ['GET'],
+  download: ['GET'],
   stats: ['GET'],
   profile: ['GET', 'PUT'],
   account: ['DELETE'],
@@ -42,8 +44,15 @@ export function isRouteName(value: string): value is RouteName {
   return Object.prototype.hasOwnProperty.call(ROUTE_METHODS, value);
 }
 
-/** « /api/history » ou « /api/history/ » → « history » ; toute autre forme → null. */
+/**
+ * Adresse de téléchargement du site, à partager telle quelle (« magistra-2.vercel.app/telecharger ») : même route que
+ * /api/download (réécriture dans vercel.json ; alias du serveur autonome et du serveur de développement).
+ */
+export const DOWNLOAD_PATH = '/telecharger';
+
+/** « /api/history » ou « /api/history/ » → « history » ; « /telecharger » → « download » ; toute autre forme → null. */
 export function routeFromPath(pathname: string): RouteName | null {
+  if (pathname === DOWNLOAD_PATH || pathname === `${DOWNLOAD_PATH}/`) return 'download';
   const match = /^\/api\/([a-z]+(?:-[a-z]+)*)\/?$/.exec(pathname);
   return match && isRouteName(match[1]) ? match[1] : null;
 }
@@ -68,6 +77,8 @@ export interface ApiRequest {
 
 export type ApiResult =
   | { type: 'json'; status: number; body: unknown; headers?: Record<string, string> }
+  /** Redirection 302 vers une adresse construite par le serveur (jamais tirée de la requête). */
+  | { type: 'redirect'; location: string; headers?: Record<string, string> }
   | {
       type: 'stream';
       events: AsyncIterable<GenerationEvent>;
@@ -468,6 +479,33 @@ async function windowsRelease(deps: ServerDeps): Promise<ApiResult> {
   return json(body, 200, { 'Cache-Control': windowsReleaseCacheControl(body) });
 }
 
+/**
+ * GET /telecharger (= /api/download) : le bouton « Télécharger » du site pointe ici, sur le site lui-même, et le clic
+ * télécharge l'installateur Windows sans jamais afficher de page GitHub :
+ *  - dernière version stable connue : redirection vers son installateur (Magistra-Setup-X.Y.Z.exe, lien vérifié) ;
+ *  - GitHub momentanément injoignable : redirection vers le même installateur sous son nom fixe
+ *    (…/releases/latest/download/Magistra-Setup.exe, publié par release.yml) ;
+ *  - aucune version publiée : retour à la section « Magistra pour Windows » de l'accueil, qui l'explique.
+ * L'adresse de redirection est construite par le serveur (dépôt de la configuration), jamais tirée de la requête.
+ */
+async function download(deps: ServerDeps): Promise<ApiResult> {
+  const { repo, token } = deps.config.releases;
+  const release = await fetchLatestWindowsRelease({
+    fetch: deps.releasesFetch,
+    repo,
+    ...(token ? { token } : {}),
+    now: () => deps.now().getTime(),
+    cache: deps.releasesCache,
+    log: message => deps.log(message),
+  });
+  const headers = { 'Cache-Control': 'no-store' };
+  if (release.available) return { type: 'redirect', location: release.downloadUrl, headers };
+  if (release.reason === 'unavailable') {
+    return { type: 'redirect', location: `https://github.com/${repo}/releases/latest/download/${STABLE_INSTALLER_NAME}`, headers };
+  }
+  return { type: 'redirect', location: '/#magistra-windows', headers };
+}
+
 /** Webhook Clerk : « user.deleted » → même suppression que DELETE /api/account ; autres évènements ignorés. */
 async function clerkWebhook(req: ApiRequest, deps: ServerDeps): Promise<ApiResult> {
   const key = deps.config.clerkWebhookKey;
@@ -520,6 +558,8 @@ export async function handleApi(route: RouteName, req: ApiRequest, deps: ServerD
     if (route === 'mode') return json(deps.modeInfo);
     // Dernière version stable de l'application Windows : publique (page d'accueil), sans aucun secret.
     if (route === 'windows-release') return await windowsRelease(deps);
+    // Téléchargement de l'installateur Windows : public (bouton « Télécharger » de l'accueil).
+    if (route === 'download') return await download(deps);
     // Webhook Clerk : authentifié par sa signature, jamais par un jeton de session.
     if (route === 'clerk-webhook') return await clerkWebhook(req, deps);
     const userId = await authenticateRequest(req, deps);
