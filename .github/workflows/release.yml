@@ -127,6 +127,10 @@ jobs:
           for f in "${files[@]}"; do
             if [ ! -s "$f" ]; then echo "::error title=Fichier manquant::$f n'a pas été produit par electron-builder."; ls -la; exit 1; fi
           done
+          # Même installateur sous un nom FIXE : …/releases/latest/download/Magistra-Setup.exe télécharge toujours la
+          # dernière version stable (bouton « Télécharger » du site quand la version exacte n'est pas connue).
+          cp "Magistra-Setup-$VERSION.exe" "Magistra-Setup.exe"
+          files+=("Magistra-Setup.exe")
           sha256sum "${files[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -135,6 +139,7 @@ jobs:
           name: ${{ steps.version.outputs.artifact }}
           path: |
             release/Magistra-Setup-${{ steps.version.outputs.version }}.exe
+            release/Magistra-Setup.exe
             release/Magistra-${{ steps.version.outputs.version }}-win-x64.zip
             release/SHA256SUMS.txt
           if-no-files-found: error
@@ -169,6 +174,7 @@ jobs:
           ## Magistra $VERSION pour Windows 10 et 11
 
           **À télécharger :** \`Magistra-Setup-$VERSION.exe\` (installation en un clic, sans droits d'administrateur).
+          \`Magistra-Setup.exe\` est le même fichier sous un nom fixe (lien de téléchargement direct du site).
           L'archive \`Magistra-$VERSION-win-x64.zip\` contient la même application sans installateur.
 
           ### Première utilisation

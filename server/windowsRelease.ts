@@ -213,6 +213,11 @@ interface ReleaseAsset {
 
 type ParsedRelease =
   | { kind: 'not-stable' }
+  /**
+   * Version stable publiée SANS son installateur (encore en construction par release.yml, ou en cours d'envoi) : rien à
+   * télécharger pour l'instant — comme « aucune version », jamais un lien qui mènerait à une erreur 404.
+   */
+  | { kind: 'no-installer'; tag: string; reason: string }
   | { kind: 'invalid'; reason: string }
   | { kind: 'ok'; tag: string; version: string; publishedAt: string; installer: ReleaseAsset; checksums?: ReleaseAsset };
 
@@ -264,7 +269,12 @@ function parseRelease(data: unknown, repo: string): ParsedRelease {
     const name = isRecord(a) && typeof a.name === 'string' ? a.name : '';
     return INSTALLER_RE.exec(name)?.[1] === version;
   });
-  if (candidates.length !== 1) return { kind: 'invalid', reason: `installateur ${expected} absent de la version` };
+  if (candidates.length === 0) return { kind: 'no-installer', tag, reason: `installateur ${expected} pas encore joint à la version` };
+  if (candidates.length !== 1) return { kind: 'invalid', reason: `plusieurs installateurs ${expected} dans la version` };
+  // Fichier en cours d'envoi (« open ») : bientôt disponible, pas une erreur.
+  if (isRecord(candidates[0]) && candidates[0].state === 'open') {
+    return { kind: 'no-installer', tag, reason: `installateur ${expected} en cours d'envoi` };
+  }
   const installer = assetOf(candidates[0], repo, tag, expected, WINDOWS_RELEASE_LIMITS.maxInstallerBytes);
   if (!installer) return { kind: 'invalid', reason: `installateur ${expected} incomplet ou lien de téléchargement refusé` };
   const checksumAssets = data.assets.filter(a => isRecord(a) && a.name === CHECKSUMS_FILE_NAME);
@@ -361,6 +371,10 @@ async function loadRelease(o: WindowsReleaseOptions): Promise<WindowsReleaseResp
 
   const release = parseRelease(data, repo);
   if (release.kind === 'not-stable') return { available: false, reason: 'none', releasesUrl };
+  if (release.kind === 'no-installer') {
+    log(`Version Windows ${release.tag} : ${release.reason}.`);
+    return { available: false, reason: 'none', releasesUrl };
+  }
   if (release.kind === 'invalid') return unavailable(release.reason);
 
   let sha256 = release.installer.digest;

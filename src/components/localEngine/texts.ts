@@ -66,6 +66,8 @@ export const ENGINE_BUSY_TEXT = 'Une génération est en cours dans l’applicat
 // ─── Boutons ────────────────────────────────────────────────────────────────
 
 export const DOWNLOAD_WINDOWS_LABEL = 'Télécharger Magistra pour Windows';
+/** Aucune version stable publiée : le bouton de téléchargement est inactif (jamais un renvoi vers une page vide). */
+export const NOT_PUBLISHED_TEXT = 'Pas encore disponible : la première version de Magistra pour Windows n’est pas encore publiée. Le téléchargement s’activera ici dès sa publication.';
 export const DOWNLOAD_SHORT_LABEL = 'Télécharger Magistra';
 export const SEARCH_EXISTING_LABEL = "J'ai déjà Magistra : la rechercher";
 export const CONNECT_LABEL = 'Connecter Magistra locale';

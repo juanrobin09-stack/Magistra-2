@@ -15,7 +15,7 @@ import {
 } from '@/components/localEngine/windowsRelease';
 import { WINDOWS_RELEASE_LIMITS } from '../../server/windowsRelease';
 import { LocalEngineContext } from '@/lib/localConnector/controller';
-import { WINDOWS_DOWNLOAD_URL } from '@/lib/links';
+import { WINDOWS_DOWNLOAD_URL, WINDOWS_RELEASES_URL } from '@/lib/links';
 import { RuntimeContext } from '@/lib/runtime/context';
 import type { RuntimeMode } from '@/lib/runtime/types';
 import LandingPage from '@/pages/LandingPage';
@@ -52,7 +52,9 @@ async function mountSection(mode: RuntimeMode, engine: FakeEngine | null, varian
   await flush(4);
   const section = () => view.container.querySelector<HTMLElement>('[data-testid="windows-download"]')!;
   const download = () => Array.from(section().querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra pour Windows'))!;
-  return { ...view, section, download };
+  /** Bouton inactif (aucune version publiée, ou version en cours de recherche). */
+  const unavailable = () => section().querySelector<HTMLElement>('[data-testid="windows-download-unavailable"]');
+  return { ...view, section, download, unavailable };
 }
 
 describe('Réponse de /api/windows-release revérifiée', () => {
@@ -84,15 +86,29 @@ describe('Réponse de /api/windows-release revérifiée', () => {
     expect(parsed && parsed.available && parsed.requirements).toBe(WINDOWS_REQUIREMENTS_TEXT);
   });
 
-  it('aucune version : lien de repli limité à github.com', () => {
+  it('aucune version : page des versions limitée à github.com', () => {
     expect(parseWindowsRelease({ available: false, reason: 'none', releasesUrl: RELEASES_PAGE }))
       .toEqual({ available: false, reason: 'none', releasesUrl: RELEASES_PAGE });
     expect(parseWindowsRelease({ available: false, reason: 'none', releasesUrl: 'https://evil.example/releases' }))
-      .toEqual({ available: false, reason: 'none', releasesUrl: WINDOWS_DOWNLOAD_URL });
+      .toEqual({ available: false, reason: 'none', releasesUrl: WINDOWS_RELEASES_URL });
     expect(parseWindowsRelease({ available: false, reason: 'autre', releasesUrl: RELEASES_PAGE })).toBeNull();
   });
 
-  it('404, page HTML (hébergement sans API), réponse illisible, erreur réseau ou délai dépassé : repli sans erreur', async () => {
+  it('lien direct de repli : un FICHIER (installateur de la dernière version stable, nom fixe), jamais une page', () => {
+    expect(WINDOWS_DOWNLOAD_URL).toBe('https://github.com/juanrobin09-stack/magistra-2/releases/latest/download/Magistra-Setup.exe');
+  });
+
+  it('aucune version stable publiée (réponse sûre du serveur) : rien à télécharger', async () => {
+    const state = await fetchWindowsRelease(vi.fn(async () => jsonResponse({ available: false, reason: 'none', releasesUrl: RELEASES_PAGE })) as unknown as typeof fetch);
+    expect(state).toEqual({ status: 'none' });
+  });
+
+  it('GitHub momentanément injoignable depuis le serveur (« unavailable ») : téléchargement direct de la dernière version', async () => {
+    const state = await fetchWindowsRelease(vi.fn(async () => jsonResponse({ available: false, reason: 'unavailable', releasesUrl: RELEASES_PAGE })) as unknown as typeof fetch);
+    expect(state).toEqual({ status: 'direct', downloadUrl: WINDOWS_DOWNLOAD_URL });
+  });
+
+  it('404, page HTML (hébergement sans API), réponse illisible, erreur réseau ou délai dépassé : téléchargement direct, sans erreur', async () => {
     const responses: (() => Promise<Response>)[] = [
       async () => jsonResponse({ error: { code: 'NOT_FOUND', message: 'x', retryable: false } }, 404),
       async () => new Response('<!doctype html><title>Magistra</title>', { status: 200, headers: { 'content-type': 'text/html' } }),
@@ -103,12 +119,12 @@ describe('Réponse de /api/windows-release revérifiée', () => {
     ];
     for (const respond of responses) {
       const state = await fetchWindowsRelease(vi.fn(respond) as unknown as typeof fetch);
-      expect(state).toEqual({ status: 'fallback', reason: 'unavailable', releasesUrl: WINDOWS_DOWNLOAD_URL });
+      expect(state).toEqual({ status: 'direct', downloadUrl: WINDOWS_DOWNLOAD_URL });
     }
     const hanging = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('abandon', 'AbortError')));
     }));
-    expect(await fetchWindowsRelease(hanging as unknown as typeof fetch, 5)).toMatchObject({ status: 'fallback', reason: 'unavailable' });
+    expect(await fetchWindowsRelease(hanging as unknown as typeof fetch, 5)).toEqual({ status: 'direct', downloadUrl: WINDOWS_DOWNLOAD_URL });
     const request = hanging.mock.calls[0][1]!;
     expect(request.credentials).toBe('omit');
     expect(hanging.mock.calls[0][0]).toBe('/api/windows-release');
@@ -253,21 +269,32 @@ describe('Section « Magistra pour Windows »', () => {
     expect(installed.textContent).not.toContain('détectera');
   });
 
-  it('information indisponible : lien vers la page officielle des versions (nouvel onglet), sans version inventée', async () => {
+  it('information indisponible : le bouton télécharge quand même la dernière version (fichier, même onglet), sans version inventée', async () => {
     stubReleaseFetch(new TypeError('Failed to fetch'));
     const view = await mountSection('web', null);
     expect(view.download().getAttribute('href')).toBe(WINDOWS_DOWNLOAD_URL);
-    expect(view.download().target).toBe('_blank');
+    // Un fichier se télécharge sur place : jamais un nouvel onglet ouvert sur GitHub.
+    expect(view.download().target).toBe('');
     expect(view.download().rel).toContain('noopener');
     expect(view.section().textContent).toContain('ne sont pas disponibles pour le moment');
+    expect(view.section().textContent).toContain('le bouton télécharge quand même la dernière version publiée');
     expect(view.section().querySelector('[data-testid="windows-version"]')).toBeNull();
   });
 
-  it('aucune version stable publiée : dit clairement, lien vers la page des versions', async () => {
+  it('aucune version stable publiée : bouton inactif qui le dit, AUCUN lien vers GitHub', async () => {
     stubReleaseFetch({ available: false, reason: 'none', releasesUrl: RELEASES_PAGE });
     const view = await mountSection('web', null);
-    expect(view.download().getAttribute('href')).toBe(RELEASES_PAGE);
-    expect(view.section().textContent).toContain('Aucune version stable n’est encore publiée');
+    expect(view.download()).toBeUndefined();
+    const inactive = view.unavailable()!;
+    expect(inactive.textContent).toContain('Télécharger Magistra pour Windows');
+    expect(inactive.getAttribute('aria-disabled')).toBe('true');
+    expect(view.section().querySelector('[data-testid="windows-not-published"]')?.textContent)
+      .toContain('Pas encore disponible : la première version de Magistra pour Windows n’est pas encore publiée.');
+    // Aucune page GitHub proposée pour télécharger (seul un lien d'information pourrait y mener : il n'y en a pas ici).
+    expect(Array.from(view.section().querySelectorAll('a')).filter(a => a.href.startsWith('https://github.com'))).toEqual([]);
+    // Rien ne se passe au clic : pas de « J’ai installé Magistra » sans téléchargement.
+    await click(inactive);
+    expect(view.section().querySelector('[data-testid="windows-installed"]')).toBeNull();
   });
 
   it('démonstration (site public sans comptes, API présente) : téléchargement direct ; après le clic, Magistra s’ouvre seule', async () => {
@@ -284,11 +311,11 @@ describe('Section « Magistra pour Windows »', () => {
     expect(view.section().querySelector('[data-testid="windows-installed"] button')).toBeNull();
   });
 
-  it('démonstration sur un hébergement statique (aucune API : page HTML) : page des versions, sans version inventée', async () => {
+  it('démonstration sur un hébergement statique (aucune API : page HTML) : téléchargement direct de la dernière version, sans version inventée', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('<!doctype html><title>Magistra</title>', { status: 200, headers: { 'content-type': 'text/html' } })));
     const view = await mountSection('demo', null, 'landing');
     expect(view.download().getAttribute('href')).toBe(WINDOWS_DOWNLOAD_URL);
-    expect(view.download().target).toBe('_blank');
+    expect(view.download().target).toBe('');
     expect(view.section().querySelector('[data-testid="windows-version"]')).toBeNull();
   });
 

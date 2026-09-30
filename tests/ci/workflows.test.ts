@@ -93,6 +93,15 @@ describe('release.yml : application Windows publiée en brouillon', () => {
     expect(release.match(/--clobber/g)).toHaveLength(1);
   });
 
+  it('installateur aussi publié sous le nom FIXE Magistra-Setup.exe (lien direct du site : releases/latest/download)', () => {
+    const build = job(release, 'build');
+    expect(build).toContain('cp "Magistra-Setup-$VERSION.exe" "Magistra-Setup.exe"');
+    expect(build).toContain('files+=("Magistra-Setup.exe")');
+    // Le fichier au nom fixe a lui aussi son empreinte, et part dans l'artefact puis dans la release.
+    expect(build.indexOf('files+=("Magistra-Setup.exe")')).toBeLessThan(build.indexOf('sha256sum "${files[@]}" > SHA256SUMS.txt'));
+    expect(build).toContain('release/Magistra-Setup.exe\n');
+  });
+
   it('construction sous Windows : npm ci, build web + Electron, NSIS + zip sans publication, empreintes', () => {
     const build = job(release, 'build');
     expect(build).toContain('runs-on: windows-latest');
@@ -168,7 +177,8 @@ describe('documentation', () => {
     const section = readme.slice(teacher, admin);
     const steps = section.split('\n').filter(l => /^\d\. /.test(l));
     expect(steps).toHaveLength(3);
-    expect(steps[0]).toContain('[Télécharger Magistra pour Windows](https://github.com/juanrobin09-stack/magistra-2/releases/latest)');
+    // Un lien qui télécharge le fichier lui-même (nom fixe publié par release.yml), jamais une page GitHub.
+    expect(steps[0]).toContain('[Télécharger Magistra pour Windows](https://github.com/juanrobin09-stack/magistra-2/releases/latest/download/Magistra-Setup.exe)');
     expect(steps[1]).toContain('« Windows a protégé votre ordinateur »');
     expect(steps[1]).toContain('**Informations complémentaires** puis **Exécuter quand même**');
     expect(steps[2]).toContain('sans droits d\'administrateur, et s\'ouvre toute seule');
@@ -221,6 +231,22 @@ describe('documentation', () => {
       'Quotas', 'État « non vérifié »', 'Mise à jour du moteur', 'Proxy', 'Validation avec une vraie IA']) {
       expect(architecture, title).toContain(title);
     }
+  });
+});
+
+describe('ci.yml : installateur Windows construit à chaque envoi', () => {
+  it('mêmes options que release.yml (NSIS + zip, sans publication, sans signature), installateur gardé à essayer', () => {
+    const win = job(ci, 'windows-package');
+    expect(win).toContain('runs-on: windows-latest');
+    expect(win).toContain('npx electron-builder --win nsis zip --x64 --publish never');
+    expect(job(release, 'build')).toContain('npx electron-builder --win nsis zip --x64 --publish never');
+    expect(win).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
+    expect(win).not.toContain('--dir');
+    expect(win).toContain('name: magistra-installateur-windows');
+    expect(win).toContain('path: release/Magistra-Setup-*.exe');
+    expect(win).toContain('if-no-files-found: error');
+    // Aucun droit d'écriture : l'installateur reste dans l'exécution, jamais publié par la CI.
+    expect(win).not.toMatch(/contents: write/);
   });
 });
 

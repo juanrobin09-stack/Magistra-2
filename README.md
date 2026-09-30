@@ -20,7 +20,7 @@ Il s'appuie sur **vos documents** et sur des **sources vérifiables**. L'enseign
 
 Installez Magistra sur votre ordinateur Windows (10 ou 11, 64 bits) : l'IA y fonctionne **gratuitement, en privé, même sans Internet**. Aucun compte, aucune clé, aucune ligne de commande.
 
-1. **Téléchargez Magistra** : [Télécharger Magistra pour Windows](https://github.com/juanrobin09-stack/magistra-2/releases/latest) (fichier `Magistra-Setup-x.y.z.exe`). Le bouton du site Magistra télécharge directement la dernière version.
+1. **Téléchargez Magistra** : [Télécharger Magistra pour Windows](https://github.com/juanrobin09-stack/magistra-2/releases/latest/download/Magistra-Setup.exe) (le fichier se télécharge directement). Le bouton du site Magistra télécharge lui aussi directement la dernière version.
 2. **Ouvrez le fichier téléchargé.** Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur **Informations complémentaires** puis **Exécuter quand même**.
 3. **Magistra s'installe en quelques secondes**, sans droits d'administrateur, et s'ouvre toute seule.
 
@@ -248,7 +248,12 @@ Dans les deux cas, une fois la release publiée avec son installateur, le site l
 
 **Vérifier l'empreinte d'un installateur** (service informatique, facultatif) : sous Windows, `Get-FileHash .\Magistra-Setup-x.y.z.exe -Algorithm SHA256` doit donner l'empreinte affichée sur le site (Réglages → « Magistra pour Windows ») et dans `SHA256SUMS.txt` de la release. Les textes destinés aux enseignants ne demandent jamais de ligne de commande.
 
-Ne sont **jamais** proposés : un brouillon, une préversion (tag `vX.Y.Z-rc.1`), une étiquette autre que `vX.Y.Z`, une release sans `Magistra-Setup-X.Y.Z.exe` du même numéro, ni un lien de téléchargement hors de `https://github.com/<dépôt>/releases/download/`. Si aucune version stable n'existe, ou si GitHub ne répond pas, le site renvoie vers la page des versions.
+Ne sont **jamais** proposés : un brouillon, une préversion (tag `vX.Y.Z-rc.1`), une étiquette autre que `vX.Y.Z`, une release sans `Magistra-Setup-X.Y.Z.exe` du même numéro, ni un lien de téléchargement hors de `https://github.com/<dépôt>/releases/download/`.
+
+Le bouton « Télécharger » télécharge **toujours un fichier**, jamais une page GitHub :
+- version connue : son installateur `Magistra-Setup-X.Y.Z.exe` ;
+- version exacte inconnue (GitHub momentanément injoignable depuis le serveur, limite de l'API atteinte, hébergement sans API) : `…/releases/latest/download/Magistra-Setup.exe`, le **même installateur sous un nom fixe**, que `release.yml` publie dans chaque version et que GitHub résout vers la dernière version stable ;
+- aucune version stable publiée : le bouton est inactif et le site l'explique (« Pas encore disponible… »).
 
 **Variables du serveur (facultatives)**
 
@@ -364,7 +369,7 @@ La CI (GitHub Actions) exécute sur chaque push et chaque PR ([`ci.yml`](.github
 - les tests de bout en bout du site ;
 - le démarrage réel d'Electron et les tests de bout en bout de l'application avec Ollama simulé ;
 - les tests de bout en bout du connecteur local (site ⇄ application, dans Chromium avec la protection « Local Network Access » active) ;
-- l'empaquetage Windows (sans installeur) sur `windows-latest`.
+- l'installateur Windows NSIS sur `windows-latest`, avec les mêmes options qu'une version publiée ; il est gardé 14 jours dans l'exécution (**Artifacts** → `magistra-installateur-windows`), pour l'essayer avant de publier.
 
 Deux autres workflows :
 - [`release.yml`](.github/workflows/release.yml) (tag `v*` ou lancement manuel) : installateur et archive Windows, `SHA256SUMS.txt`, **release GitHub en brouillon** (voir « Brancher une vraie IA », chemin 3) ;

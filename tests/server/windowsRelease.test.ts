@@ -151,7 +151,7 @@ describe('fetchLatestWindowsRelease — dernière version stable', () => {
     }
   });
 
-  it('installateur absent, d’une autre version, incomplet ou de taille invalide : indisponible', async () => {
+  it('version publiée SANS son installateur (en construction, en cours d’envoi, d’une autre version) : rien à télécharger (« none »), jamais un lien vers une erreur 404', async () => {
     const variants: unknown[][] = [
       [],
       [asset('Magistra-2.1.0-win-x64.zip'), asset('SHA256SUMS.txt')],
@@ -159,13 +159,24 @@ describe('fetchLatestWindowsRelease — dernière version stable', () => {
       [asset('magistra-setup-2.1.0.exe', { browser_download_url: download('magistra-setup-2.1.0.exe') })],
       [asset(`${EXE}.blockmap`, { browser_download_url: download(`${EXE}.blockmap`) })],
       [asset(EXE, { state: 'open' })],
+      ['texte', null, 42],
+    ];
+    for (const assets of variants) {
+      const logs: string[] = [];
+      const fetch = fakeGitHub({ [API]: () => jsonResponse(release({ assets })) });
+      expect(await run(fetch, {}, logs), JSON.stringify(assets).slice(0, 120)).toEqual(NONE);
+      expect(logs.join('\n')).toMatch(/pas encore joint|en cours d'envoi/);
+    }
+  });
+
+  it('installateur incomplet, en double ou de taille invalide : indisponible', async () => {
+    const variants: unknown[][] = [
       [asset(EXE, { size: 0 })],
       [asset(EXE, { size: -5 })],
       [asset(EXE, { size: 12.5 })],
       [asset(EXE, { size: '98765432' })],
       [asset(EXE, { size: 3 * 1024 ** 3 })],
       [asset(EXE), asset(EXE)],
-      ['texte', null, 42],
     ];
     for (const assets of variants) {
       const fetch = fakeGitHub({ [API]: () => jsonResponse(release({ assets })) });

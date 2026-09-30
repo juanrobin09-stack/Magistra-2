@@ -2,8 +2,9 @@
 // version, sa taille, sa date et son empreinte SHA-256 ; les trois étapes très courtes (avertissement SmartScreen
 // compris) et « Déjà installée ? Ouvrir Magistra », communes avec la carte du mode démonstration (WindowsInstall.tsx) ;
 // ce que l'application apporte. Après le téléchargement : « J’ai installé Magistra » [Détecter maintenant] sur le site
-// avec comptes. Aucune version n'est écrite en dur : sans réponse du serveur, le lien mène à la page officielle des
-// versions.
+// avec comptes. Aucune version n'est écrite en dur : sans réponse du serveur, le bouton télécharge l'installateur de la
+// dernière version stable sous son nom fixe ; tant qu'aucune version n'est publiée, il est inactif et le dit — jamais
+// un renvoi vers une page GitHub.
 // Accessibilité : après « Continuer » ou « Annuler » de l'explication (qui disparaît), le focus revient sur
 // « Détecter maintenant » au lieu d'être perdu au début de la page.
 
@@ -16,7 +17,7 @@ import type { RuntimeMode } from '@/lib/runtime/types';
 import { useLocalActions } from './localActions';
 import LocalEngineStatus, { type LocalEngineHandle } from './LocalEngineStatus';
 import { PermissionExplainer } from './PermissionNotes';
-import { DETECT_NOW_LABEL, INSTALLED_TEXT, SIGNED_OUT_DETECT_TEXT } from './texts';
+import { DETECT_NOW_LABEL, INSTALLED_TEXT, NOT_PUBLISHED_TEXT, SIGNED_OUT_DETECT_TEXT } from './texts';
 import { formatDate, formatSize, useWindowsRelease, WINDOWS_REQUIREMENTS_TEXT, type WindowsReleaseState } from './windowsRelease';
 import { InstallSteps, OpenInstalledApp, WindowsDownloadLink } from './WindowsInstall';
 
@@ -148,14 +149,21 @@ function ReleaseFacts({ state, queried }: { state: WindowsReleaseState; queried:
   if (state.status === 'loading') {
     return <p className="text-xs text-mg-200" role="status">Recherche de la dernière version…</p>;
   }
-  if (state.status === 'fallback') {
+  if (state.status === 'none') {
+    return (
+      <div className="space-y-1 text-xs text-mg-200" data-testid="windows-not-published">
+        <p role="note" className="text-sm text-mg-100">{NOT_PUBLISHED_TEXT}</p>
+        <p>{WINDOWS_REQUIREMENTS_TEXT}</p>
+      </div>
+    );
+  }
+  if (state.status === 'direct') {
     return (
       <div className="space-y-1 text-xs text-mg-200">
         {queried && (
           <p role="note">
-            {state.reason === 'none'
-              ? 'Aucune version stable n’est encore publiée : la page des versions indique où en est Magistra pour Windows.'
-              : 'Les informations sur la dernière version ne sont pas disponibles pour le moment : le lien ouvre la page officielle des versions.'}
+            Les détails de la dernière version (taille, date, empreinte) ne sont pas disponibles pour le moment : le bouton
+            télécharge quand même la dernière version publiée.
           </p>
         )}
         <p>{WINDOWS_REQUIREMENTS_TEXT}</p>

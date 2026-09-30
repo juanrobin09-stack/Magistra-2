@@ -1,12 +1,17 @@
 // Dernière version STABLE de l'application Windows (GET /api/windows-release, route publique du serveur Magistra).
 //
 // La réponse est revérifiée ici champ par champ (seul un lien https vers les versions du dépôt sur github.com est
-// retenu, empreinte en hexadécimal strict…). Toute réponse absente, illisible ou inattendue (hébergement statique
-// sans API, 404, erreur réseau, délai dépassé) donne le repli : un lien vers la page des versions (WINDOWS_DOWNLOAD_URL).
+// retenu, empreinte en hexadécimal strict…). Le bouton « Télécharger » télécharge TOUJOURS un fichier, jamais une page
+// GitHub :
+//  - version connue : son installateur (Magistra-Setup-X.Y.Z.exe) ;
+//  - réponse absente, illisible ou inattendue (hébergement statique sans API, 404, erreur réseau, délai dépassé,
+//    GitHub momentanément injoignable) : l'installateur de la dernière version stable sous son nom fixe
+//    (WINDOWS_DOWNLOAD_URL, publié par release.yml) ;
+//  - aucune version stable publiée : rien à télécharger, le bouton est inactif et le dit.
 
 import { useEffect, useState } from 'react';
 import { API_ROUTES, type WindowsReleaseInfo, type WindowsReleaseResponse } from '@shared/apiContract';
-import { safeExternalUrl, WINDOWS_DOWNLOAD_URL } from '@/lib/links';
+import { safeExternalUrl, WINDOWS_DOWNLOAD_URL, WINDOWS_RELEASES_URL } from '@/lib/links';
 
 /** Configuration requise affichée (celle du serveur si elle est lisible). */
 export const WINDOWS_REQUIREMENTS_TEXT = 'Windows 10 ou 11 (64 bits)';
@@ -25,8 +30,13 @@ const MAX_SIZE_BYTES = 4 * 1024 ** 3;
 export type WindowsReleaseState =
   | { status: 'loading' }
   | { status: 'ready'; release: WindowsReleaseInfo }
-  /** Aucune version stable publiée (« none ») ou information indisponible (« unavailable ») : lien de repli. */
-  | { status: 'fallback'; reason: 'none' | 'unavailable'; releasesUrl: string };
+  /**
+   * Version exacte inconnue (serveur ou GitHub injoignable, hébergement sans API) : téléchargement direct de
+   * l'installateur de la dernière version stable, sous son nom fixe — sans taille ni version à annoncer.
+   */
+  | { status: 'direct'; downloadUrl: string }
+  /** Aucune version stable publiée (réponse sûre du serveur) : rien à télécharger, jamais un renvoi vers une page vide. */
+  | { status: 'none' };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -46,7 +56,7 @@ export function parseWindowsRelease(raw: unknown): WindowsReleaseResponse | null
   if (!isRecord(raw)) return null;
   if (raw.available === false) {
     if (raw.reason !== 'none' && raw.reason !== 'unavailable') return null;
-    return { available: false, reason: raw.reason, releasesUrl: githubUrl(raw.releasesUrl, '/releases') ?? WINDOWS_DOWNLOAD_URL };
+    return { available: false, reason: raw.reason, releasesUrl: githubUrl(raw.releasesUrl, '/releases') ?? WINDOWS_RELEASES_URL };
   }
   if (raw.available !== true) return null;
   const { version, fileName, sizeBytes, sha256, publishedAt, requirements } = raw;
@@ -57,7 +67,7 @@ export function parseWindowsRelease(raw: unknown): WindowsReleaseResponse | null
   if (!downloadUrl || !downloadUrl.endsWith(`/${fileName}`)) return null;
   if (typeof sizeBytes !== 'number' || !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0 || sizeBytes > MAX_SIZE_BYTES) return null;
   if (typeof publishedAt !== 'string' || !Number.isFinite(Date.parse(publishedAt))) return null;
-  const releaseUrl = githubUrl(raw.releaseUrl, '/releases') ?? WINDOWS_DOWNLOAD_URL;
+  const releaseUrl = githubUrl(raw.releaseUrl, '/releases') ?? WINDOWS_RELEASES_URL;
   const info: WindowsReleaseInfo = {
     available: true,
     version,
@@ -72,11 +82,19 @@ export function parseWindowsRelease(raw: unknown): WindowsReleaseResponse | null
   return info;
 }
 
-function fallback(reason: 'none' | 'unavailable', releasesUrl = WINDOWS_DOWNLOAD_URL): WindowsReleaseState {
-  return { status: 'fallback', reason, releasesUrl };
+/** Lien de l'installateur à télécharger ; undefined pendant la recherche de la version ou si aucune n'est publiée. */
+export function installerUrl(release: WindowsReleaseState): string | undefined {
+  if (release.status === 'ready') return release.release.downloadUrl;
+  if (release.status === 'direct') return release.downloadUrl;
+  return undefined;
 }
 
-/** Interroge le serveur Magistra ; ne lève jamais (repli sur la page des versions). */
+/** Version inconnue : téléchargement direct de la dernière version stable (nom fixe). */
+function direct(): WindowsReleaseState {
+  return { status: 'direct', downloadUrl: WINDOWS_DOWNLOAD_URL };
+}
+
+/** Interroge le serveur Magistra ; ne lève jamais (repli : téléchargement direct de la dernière version stable). */
 export async function fetchWindowsRelease(
   fetchImpl: typeof fetch = (input, init) => fetch(input, init),
   timeoutMs = WINDOWS_RELEASE_TIMEOUT_MS,
@@ -90,12 +108,13 @@ export async function fetchWindowsRelease(
       credentials: 'omit',
       signal: controller.signal,
     });
-    if (!res.ok || !(res.headers.get('content-type') ?? '').toLowerCase().includes('application/json')) return fallback('unavailable');
+    if (!res.ok || !(res.headers.get('content-type') ?? '').toLowerCase().includes('application/json')) return direct();
     const parsed = parseWindowsRelease(await res.json());
-    if (!parsed) return fallback('unavailable');
-    return parsed.available ? { status: 'ready', release: parsed } : fallback(parsed.reason, parsed.releasesUrl);
+    if (!parsed) return direct();
+    if (parsed.available) return { status: 'ready', release: parsed };
+    return parsed.reason === 'none' ? { status: 'none' } : direct();
   } catch {
-    return fallback('unavailable');
+    return direct();
   } finally {
     clearTimeout(timer);
   }
@@ -106,8 +125,8 @@ let shared: Promise<WindowsReleaseState> | null = null;
 
 function loadShared(): Promise<WindowsReleaseState> {
   shared ??= fetchWindowsRelease().then(state => {
-    // Échec passager : une prochaine page réessaiera.
-    if (state.status === 'fallback' && state.reason === 'unavailable') shared = null;
+    // Version inconnue (échec passager) ou pas encore publiée : une prochaine page redemandera.
+    if (state.status !== 'ready') shared = null;
     return state;
   });
   return shared;
@@ -120,8 +139,8 @@ export function resetWindowsReleaseCache(): void {
 
 /**
  * Dernière version publiée. Le site en démonstration la demande aussi : le site public sans comptes garde son API (seul
- * un hébergement statique n'en a pas, et sa réponse 404 ou HTML donne le repli). `enabled` faux (application Windows,
- * déjà installée) : aucune requête, repli immédiat sur la page des versions.
+ * un hébergement statique n'en a pas, et sa réponse 404 ou HTML donne le téléchargement direct). `enabled` faux
+ * (application Windows, déjà installée) : aucune requête, téléchargement direct de la dernière version stable.
  */
 export function useWindowsRelease(enabled: boolean): WindowsReleaseState {
   const [state, setState] = useState<{ enabled: boolean; value: WindowsReleaseState } | null>(null);
@@ -135,7 +154,7 @@ export function useWindowsRelease(enabled: boolean): WindowsReleaseState {
       cancelled = true;
     };
   }, [enabled]);
-  if (!enabled) return fallback('unavailable');
+  if (!enabled) return direct();
   return state?.enabled ? state.value : { status: 'loading' };
 }
 

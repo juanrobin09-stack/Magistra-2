@@ -3,8 +3,16 @@
 /** Dépôt du projet. */
 export const REPOSITORY_URL = 'https://github.com/juanrobin09-stack/magistra-2';
 
-/** Dernière version publiée de l'application Windows (installateur). */
-export const WINDOWS_DOWNLOAD_URL = `${REPOSITORY_URL}/releases/latest`;
+/**
+ * Installateur de la dernière version STABLE de l'application Windows, sous son nom fixe (release.yml le publie à côté
+ * de Magistra-Setup-X.Y.Z.exe) : le clic télécharge le fichier lui-même, sans page intermédiaire. GitHub exclut
+ * d'office de « latest » les brouillons et les préversions. Sert quand la version exacte n'est pas connue (GitHub
+ * momentanément injoignable depuis le serveur, hébergement sans API).
+ */
+export const WINDOWS_DOWNLOAD_URL = `${REPOSITORY_URL}/releases/latest/download/Magistra-Setup.exe`;
+
+/** Page des versions (notes, fichiers, empreintes) : un lien d'information, jamais le bouton de téléchargement. */
+export const WINDOWS_RELEASES_URL = `${REPOSITORY_URL}/releases`;
 
 /**
  * Mode d'emploi de l'administrateur et du développeur dans le README : brancher une vraie IA (préréglage du site en

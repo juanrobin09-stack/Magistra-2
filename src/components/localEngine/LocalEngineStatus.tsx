@@ -8,7 +8,7 @@
 // Windows » les donne déjà sur la même page (réglages, « J'ai installé Magistra »).
 
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Info, Loader2, Monitor, Plug, RefreshCw, Search } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, Info, Loader2, Monitor, Plug, RefreshCw, Search } from 'lucide-react';
 import { defaultMessage } from '@shared/errors';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
 import { APP_UPDATE_REQUIRED_MESSAGE, PAGE_RELOAD_REQUIRED_MESSAGE } from '@/lib/localConnector/client';
@@ -18,11 +18,11 @@ import { PermissionDeniedHelp, PermissionExplainer } from './PermissionNotes';
 import {
   APP_CLOSED_DETAIL, APP_CLOSED_TEXT, appClosedPlain, CANCEL_LABEL, CONNECT_LABEL, CONNECTED_TEXT, DOWNLOAD_SHORT_LABEL, DOWNLOAD_WINDOWS_LABEL,
   ENGINE_BUSY_TEXT, FOUND_DETAIL, FOUND_TEXT, JUST_CONNECTED_TEXT, LOCAL_INTRO_DETAIL, LOCAL_INTRO_TEXT, localEngineMessage,
-  localModelLabel, NEEDS_PERMISSION_TEXT, NOT_DETECTED_DETAIL, NOT_DETECTED_TEXT, OPEN_APP_LABEL, PAIRING_DETAIL, PAIRING_TEXT,
+  localModelLabel, NEEDS_PERMISSION_TEXT, NOT_DETECTED_DETAIL, NOT_DETECTED_TEXT, NOT_PUBLISHED_TEXT, OPEN_APP_LABEL, PAIRING_DETAIL, PAIRING_TEXT,
   PAIRING_CODE_HINT, PAIRING_CODE_LABEL, PERMISSION_DENIED_TEXT, RETRY_LABEL, SEARCH_EXISTING_LABEL, SEARCH_WITH_PERMISSION_LABEL, SEARCHING_TEXT,
   SITE_ACCESS_HINT, UNRECOGNIZED_TEXT, UNUSABLE_TEXT,
 } from './texts';
-import { useWindowsRelease } from './windowsRelease';
+import { installerUrl, useWindowsRelease } from './windowsRelease';
 import { InstallerFacts, InstallSteps } from './WindowsInstall';
 
 export interface LocalEngineHandle {
@@ -175,9 +175,8 @@ export default function LocalEngineStatus({ engine, headline = true, omit = [], 
   // répond (installateur direct si la version est connue).
   const needsDownload = (state.kind === 'not-found' && !state.paired) || appUpdateRequired(state);
   const release = useWindowsRelease(needsDownload);
-  const download = release.status === 'ready'
-    ? { href: release.release.downloadUrl, direct: true }
-    : { href: release.status === 'fallback' ? release.releasesUrl : undefined, direct: false };
+  // Toujours un fichier (installateur exact, ou dernière version stable sous son nom fixe), jamais une page GitHub.
+  const downloadHref = installerUrl(release);
 
   // Focus rendu à la ligne d'état quand le bouton utilisé a disparu : une seule fois, au premier changement qui suit
   // l'action de l'enseignant, et seulement si le focus a été perdu (jamais volé à un autre élément de la page).
@@ -209,22 +208,25 @@ export default function LocalEngineStatus({ engine, headline = true, omit = [], 
   const factsId = `${idPrefix}-installer-facts`;
   function downloadLink(label: string, primary: boolean) {
     const className = primary ? BTN_PRIMARY : BTN_SECONDARY;
-    if (!download.href) {
+    if (!downloadHref) {
+      // Version en cours de recherche, ou aucune version publiée (la raison est dite à côté : title, InstallerFacts).
+      const loading = release.status === 'loading';
       return (
-        <span className={`${className} opacity-60 cursor-wait`} aria-busy="true" aria-disabled="true">
+        <span
+          className={`${className} opacity-60 ${loading ? 'cursor-wait' : 'cursor-not-allowed'}`}
+          aria-busy={loading || undefined}
+          aria-disabled="true"
+          title={loading ? undefined : NOT_PUBLISHED_TEXT}
+          data-testid="windows-download-unavailable"
+        >
           <Download size={15} aria-hidden="true" /> {label}
         </span>
       );
     }
     const describedBy = installSteps && release.status !== 'loading' ? factsId : undefined;
-    return download.direct ? (
-      <a href={download.href} className={className} rel="noopener noreferrer" aria-describedby={describedBy}>
+    return (
+      <a href={downloadHref} className={className} rel="noopener noreferrer" aria-describedby={describedBy}>
         <Download size={15} aria-hidden="true" /> {label}
-      </a>
-    ) : (
-      <a href={download.href} target="_blank" rel="noopener noreferrer" className={className} aria-describedby={describedBy}>
-        <Download size={15} aria-hidden="true" /> {label}
-        <ExternalLink size={12} aria-hidden="true" />
       </a>
     );
   }

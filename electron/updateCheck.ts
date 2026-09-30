@@ -14,7 +14,10 @@ import type { UpdateCheckResult } from '../shared/ipc.js';
 import { isSafeExternalUrl } from './security.js';
 
 export const RELEASES_API_URL = 'https://api.github.com/repos/juanrobin09-stack/magistra-2/releases/latest';
-/** Seules pages de version que l'application accepte d'ouvrir. */
+/**
+ * Seules pages de version que l'application accepte d'ouvrir. Propriétaire et dépôt sont comparés sans tenir compte de
+ * la casse, comme le fait GitHub : l'API renvoie le nom exact du dépôt (« Magistra-2 »).
+ */
 export const RELEASES_PAGE_PREFIX = 'https://github.com/juanrobin09-stack/magistra-2/releases/';
 const API_ORIGIN = 'https://api.github.com';
 const TIMEOUT_MS = 10_000;
@@ -79,7 +82,8 @@ export function releasePageUrl(value: unknown): string | null {
   try {
     const u = new URL(value);
     // Forme normalisée (« .. », « %2e%2e » résolus) : le préfixe est vérifié sur l'adresse réellement ouverte.
-    if (u.origin !== 'https://github.com' || !u.href.startsWith(RELEASES_PAGE_PREFIX) || u.href.length <= RELEASES_PAGE_PREFIX.length) return null;
+    const prefix = u.href.slice(0, RELEASES_PAGE_PREFIX.length);
+    if (u.origin !== 'https://github.com' || prefix.toLowerCase() !== RELEASES_PAGE_PREFIX || u.href.length <= RELEASES_PAGE_PREFIX.length) return null;
     return u.href;
   } catch {
     return null;

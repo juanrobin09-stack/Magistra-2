@@ -317,16 +317,31 @@ describe('Carte « Passez à la vraie IA » (démonstration)', () => {
     expect(downloadOf(card).getAttribute('aria-describedby')).toBe(facts.id);
   });
 
-  it('version inconnue (hébergement sans API, erreur réseau) : page officielle des versions, dans un nouvel onglet', async () => {
+  it('version inconnue (hébergement sans API, erreur réseau) : téléchargement direct de la dernière version (fichier, même onglet)', async () => {
     stubReleaseFetch(new TypeError('Failed to fetch'));
     const { container } = await mount(<DashboardPage />, 'demo', READY);
     // Taille inconnue : la configuration requise seule, jamais une taille inventée.
     expect(cardOf(container).querySelector('[data-testid="windows-installer-facts"]')?.textContent).toBe('Windows 10 ou 11 (64 bits)');
     const download = downloadOf(cardOf(container));
     expect(download.getAttribute('href')).toBe(WINDOWS_DOWNLOAD_URL);
-    expect(WINDOWS_DOWNLOAD_URL).toBe('https://github.com/juanrobin09-stack/magistra-2/releases/latest');
-    expect(download.target).toBe('_blank');
+    expect(WINDOWS_DOWNLOAD_URL).toBe('https://github.com/juanrobin09-stack/magistra-2/releases/latest/download/Magistra-Setup.exe');
+    expect(download.target).toBe('');
     expect(download.rel).toContain('noopener');
+  });
+
+  it('aucune version publiée : le bouton est inactif et le dit, aucun renvoi vers GitHub (la carte reste utile : « Ouvrir Magistra »)', async () => {
+    stubReleaseFetch({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases' });
+    const { container } = await mount(<DashboardPage />, 'demo', READY);
+    const card = cardOf(container);
+    const inactive = card.querySelector<HTMLElement>('[data-testid="windows-download-unavailable"]')!;
+    expect(inactive.textContent).toContain('Télécharger Magistra pour Windows');
+    expect(inactive.getAttribute('aria-disabled')).toBe('true');
+    expect(card.querySelector('[data-testid="windows-installer-facts"]')?.textContent)
+      .toBe('Pas encore disponible : la première version de Magistra pour Windows n’est pas encore publiée. Le téléchargement s’activera ici dès sa publication.');
+    expect(card.querySelector('[data-testid="open-installed-app"] a')?.getAttribute('href')).toBe('magistra://open');
+    // Seul le mode d'emploi administrateur (README) peut mener à GitHub ; jamais pour télécharger.
+    const githubLinks = Array.from(card.querySelectorAll('a')).filter(a => a.href.startsWith('https://github.com'));
+    expect(githubLinks.every(a => !/releases/.test(a.href))).toBe(true);
   });
 
   it('« Déjà installée ? Ouvrir Magistra » (magistra://open) ; une ligne discrète pour l’administrateur du site', async () => {

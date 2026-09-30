@@ -110,7 +110,7 @@ jobs:
           retention-days: 14
 
   windows-package:
-    name: Empaquetage Windows (sans installeur)
+    name: Installateur Windows (NSIS, comme une version publiée)
     runs-on: windows-latest
     needs: checks
     timeout-minutes: 30
@@ -127,7 +127,16 @@ jobs:
       # MAGISTRA_* (electron/devOptions.ts), aucune exception n'est prévue pour elle.
       - name: Test de démarrage sous Windows
         run: node scripts/electron-smoke.mjs
-      - name: Empaquetage (dossier, sans NSIS)
-        run: npx electron-builder --win --x64 --dir
+      # Mêmes options que release.yml : chaque envoi vérifie que la publication d'une version construira bien
+      # l'installateur. Le fichier est gardé 14 jours dans l'exécution (Artifacts), pour l'essayer avant de publier.
+      - name: Installateur NSIS et archive zip (mêmes options que release.yml)
+        run: npx electron-builder --win nsis zip --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Installateur à essayer
+        uses: actions/upload-artifact@v4
+        with:
+          name: magistra-installateur-windows
+          path: release/Magistra-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 14

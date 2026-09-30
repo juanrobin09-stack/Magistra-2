@@ -91,14 +91,25 @@ describe('Carte Magistra locale — jamais appairée', () => {
     expect(stepsOf()).toHaveLength(3);
   });
 
-  it('version inconnue (serveur injoignable) : le téléchargement mène à la page officielle des versions, dans un nouvel onglet', async () => {
+  it('version inconnue (serveur injoignable) : le bouton télécharge quand même la dernière version (fichier, même onglet)', async () => {
     stubReleaseFetch(new TypeError('Failed to fetch'));
     const engine = new FakeEngine(engineState('not-found'));
     const { card } = await mountCard(engine);
     const download = Array.from(card().querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra pour Windows'))!;
     expect(download.getAttribute('href')).toBe(WINDOWS_DOWNLOAD_URL);
-    expect(download.target).toBe('_blank');
+    expect(download.target).toBe('');
     expect(download.rel).toContain('noopener');
+  });
+
+  it('aucune version publiée : bouton inactif qui dit pourquoi, jamais un renvoi vers GitHub', async () => {
+    stubReleaseFetch({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases' });
+    const engine = new FakeEngine(engineState('not-found'));
+    const { card } = await mountCard(engine);
+    expect(Array.from(card().querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra'))).toBeUndefined();
+    const inactive = card().querySelector<HTMLElement>('[data-testid="windows-download-unavailable"]')!;
+    expect(inactive.getAttribute('aria-disabled')).toBe('true');
+    expect(inactive.getAttribute('title')).toContain('Pas encore disponible');
+    expect(Array.from(card().querySelectorAll('a')).filter(a => a.href.startsWith('https://github.com'))).toEqual([]);
   });
 
   it('autorisation du navigateur à demander : explication AVANT la demande, rien n’est sondé avant « Continuer »', async () => {

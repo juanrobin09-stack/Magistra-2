@@ -72,9 +72,14 @@ describe('numéros de version', () => {
 
   it('lien de version : uniquement le dépôt officiel sur github.com', () => {
     expect(releasePageUrl(PAGE)).toBe(PAGE);
+    // Nom exact renvoyé par l'API GitHub (« Magistra-2 ») : propriétaire et dépôt sont insensibles à la casse.
+    const canonical = 'https://github.com/juanrobin09-stack/Magistra-2/releases/tag/v2.1.0';
+    expect(releasePageUrl(canonical)).toBe(canonical);
+    expect(releasePageUrl('https://github.com/JuanRobin09-Stack/MAGISTRA-2/releases/tag/v2.1.0')).not.toBeNull();
     for (const bad of [
       'https://github.com/juanrobin09-stack/autre-depot/releases/tag/v2.1.0',
       'https://github.com/pirate/magistra-2/releases/tag/v2.1.0',
+      'https://github.com/juanrobin09-stack/Magistra-3/releases/tag/v2.1.0',
       'https://evil.example/juanrobin09-stack/magistra-2/releases/tag/v2.1.0',
       'http://github.com/juanrobin09-stack/magistra-2/releases/tag/v2.1.0',
       'https://github.com.evil.example/juanrobin09-stack/magistra-2/releases/',
