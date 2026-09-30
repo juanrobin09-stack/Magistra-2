@@ -9,7 +9,7 @@ import type { WindowsReleaseResponse } from '../../shared/apiContract.js';
 import { loadConfig } from '../../server/config.js';
 import {
   checksumFor, createWindowsReleaseCache, DEFAULT_RELEASES_REPO, fetchLatestWindowsRelease, parseReleasesRepo, STABLE_INSTALLER_NAME,
-  verifiedDownloadUrl, WINDOWS_RELEASE_CACHE_CONTROL, WINDOWS_RELEASE_LIMITS, WINDOWS_RELEASE_UNAVAILABLE_CACHE_CONTROL,
+  verifiedDownloadUrl, WINDOWS_RELEASE_CACHE_CONTROL, WINDOWS_RELEASE_LIMITS, WINDOWS_RELEASE_SHORT_CACHE_CONTROL,
   WINDOWS_REQUIREMENTS, type WindowsReleaseOptions,
 } from '../../server/windowsRelease.js';
 import { DOWNLOAD_PATH, routeFromPath } from '../../server/handlers.js';
@@ -472,6 +472,24 @@ describe('fetchLatestWindowsRelease — cache mémoire', () => {
     expect(await run(fetch, opts)).toEqual(good);
   });
 
+  it('release publiée dont l’installateur n’est pas encore joint : redemandée au bout d’une minute, puis proposée', async () => {
+    // Cas réel : « Publish release » sur GitHub, puis release.yml joint l'installateur une dizaine de minutes plus tard.
+    let t = 0;
+    let attached = false;
+    const cache = createWindowsReleaseCache();
+    const fetch = fakeGitHub({ [API]: () => jsonResponse(attached ? release() : release({ assets: [] })) });
+    const opts = { cache, now: () => t };
+    expect(await run(fetch, opts)).toEqual(NONE);
+    attached = true;
+    t += WINDOWS_RELEASE_LIMITS.noneTtlMs - 1;
+    expect(await run(fetch, opts)).toEqual(NONE);
+    expect(fetch.calls).toHaveLength(1);
+    t += 1;
+    expect(await run(fetch, opts)).toMatchObject({ available: true, fileName: EXE });
+    expect(fetch.calls).toHaveLength(2);
+    expect(WINDOWS_RELEASE_LIMITS.noneTtlMs).toBeLessThanOrEqual(60_000);
+  });
+
   it('indisponible sans réponse antérieure : mis en cache une minute seulement', async () => {
     let t = 0;
     const cache = createWindowsReleaseCache();
@@ -558,16 +576,23 @@ describe('GET /api/windows-release (route publique)', () => {
     server = await startApi(testDeps({ overrides: { releasesFetch: fetch } }));
     const res = await globalThis.fetch(`${server.url}/api/windows-release/`);
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe(WINDOWS_RELEASE_UNAVAILABLE_CACHE_CONTROL);
+    expect(res.headers.get('cache-control')).toBe(WINDOWS_RELEASE_SHORT_CACHE_CONTROL);
     expect(await res.json()).toEqual(UNAVAILABLE);
   });
 
-  it('aucune version stable : 200, « none », cache HTTP normal', async () => {
-    const fetch = fakeGitHub({ [API]: () => jsonResponse({ message: 'Not Found' }, 404) });
-    server = await startApi(testDeps({ overrides: { releasesFetch: fetch } }));
-    const res = await globalThis.fetch(`${server.url}/api/windows-release`);
-    expect(res.headers.get('cache-control')).toBe(WINDOWS_RELEASE_CACHE_CONTROL);
-    expect(await res.json()).toEqual(NONE);
+  it('aucune version téléchargeable : 200, « none », cache HTTP court (une minute, jamais de réponse périmée resservie)', async () => {
+    // Sinon, juste après la publication d'une version, le bouton resterait grisé jusqu'à 25 minutes (serveur, CDN,
+    // navigateur) alors que l'installateur est déjà joint.
+    for (const respond of [() => jsonResponse({ message: 'Not Found' }, 404), () => jsonResponse(release({ assets: [] }))]) {
+      const fetch = fakeGitHub({ [API]: respond });
+      server = await startApi(testDeps({ overrides: { releasesFetch: fetch } }));
+      const res = await globalThis.fetch(`${server.url}/api/windows-release`);
+      expect(res.headers.get('cache-control')).toBe(WINDOWS_RELEASE_SHORT_CACHE_CONTROL);
+      expect(await res.json()).toEqual(NONE);
+      await server.close();
+      server = undefined;
+    }
+    expect(WINDOWS_RELEASE_SHORT_CACHE_CONTROL).toBe('public, max-age=60, s-maxage=60');
   });
 
   it('dépôt configuré (MAGISTRA_RELEASES_REPO) utilisé pour l’API et le repli', async () => {

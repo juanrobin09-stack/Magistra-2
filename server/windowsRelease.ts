@@ -48,8 +48,14 @@ export const STABLE_INSTALLER_NAME = 'Magistra-Setup.exe';
 export const WINDOWS_RELEASE_LIMITS = {
   /** Délai total (API GitHub, puis SHA256SUMS.txt si nécessaire). */
   timeoutMs: 8_000,
-  /** Durée de vie d'une réponse en cache (version trouvée ou aucune version stable). */
+  /** Durée de vie d'une version trouvée en cache. */
   cacheTtlMs: 10 * 60_000,
+  /**
+   * Aucune version téléchargeable (rien de publié, ou release publiée dont l'installateur est encore en construction ou
+   * en cours d'envoi) : nouvel essai au bout d'une minute, pour que le bouton « Télécharger » s'active dès que
+   * l'installateur est joint (et non 10 minutes plus tard).
+   */
+  noneTtlMs: 60_000,
   /** Après une réponse « indisponible » : nouvel essai au bout d'une minute (sans marteler GitHub). */
   failureTtlMs: 60_000,
   /** Ancienneté maximale de la dernière réponse valide resservie quand GitHub ne répond pas. */
@@ -62,10 +68,13 @@ export const WINDOWS_RELEASE_LIMITS = {
   maxInstallerBytes: 2 * 1024 ** 3,
 } as const;
 
-/** En-tête Cache-Control d'une réponse valide (version trouvée ou aucune version stable). */
+/** En-tête Cache-Control d'une version trouvée. */
 export const WINDOWS_RELEASE_CACHE_CONTROL = 'public, max-age=300, s-maxage=600, stale-while-revalidate=86400';
-/** GitHub indisponible : cache HTTP court, pour que le prochain visiteur obtienne la version dès le retour de GitHub. */
-export const WINDOWS_RELEASE_UNAVAILABLE_CACHE_CONTROL = 'public, max-age=60, s-maxage=60';
+/**
+ * Aucune version téléchargeable, ou GitHub indisponible : cache HTTP court (navigateur et CDN), sans réponse périmée
+ * resservie, pour que le prochain visiteur obtienne l'installateur dès qu'il est joint (ou dès le retour de GitHub).
+ */
+export const WINDOWS_RELEASE_SHORT_CACHE_CONTROL = 'public, max-age=60, s-maxage=60';
 
 const API_ORIGIN = 'https://api.github.com';
 const USER_AGENT = 'Magistra-web (outil pedagogique open source)';
@@ -437,7 +446,9 @@ export async function fetchLatestWindowsRelease(options: WindowsReleaseOptions):
     const at = now();
     if (value.available || value.reason === 'none') {
       cache.lastGood = { repo, at, value };
-      cache.entry = { repo, at, ttl: WINDOWS_RELEASE_LIMITS.cacheTtlMs, value };
+      // Rien à télécharger : état passager (installateur en cours d'ajout), redemandé au bout d'une minute.
+      const ttl = value.available ? WINDOWS_RELEASE_LIMITS.cacheTtlMs : WINDOWS_RELEASE_LIMITS.noneTtlMs;
+      cache.entry = { repo, at, ttl, value };
       return value;
     }
     // GitHub indisponible : dernière réponse valide si elle est assez récente ; nouvel essai dans une minute.
@@ -452,9 +463,7 @@ export async function fetchLatestWindowsRelease(options: WindowsReleaseOptions):
   return promise;
 }
 
-/** En-tête Cache-Control de la réponse HTTP (cache court quand GitHub n'a pas pu être interrogé). */
+/** En-tête Cache-Control de la réponse HTTP (cache court tant qu'aucun installateur n'est proposé). */
 export function windowsReleaseCacheControl(response: WindowsReleaseResponse): string {
-  return !response.available && response.reason === 'unavailable'
-    ? WINDOWS_RELEASE_UNAVAILABLE_CACHE_CONTROL
-    : WINDOWS_RELEASE_CACHE_CONTROL;
+  return response.available ? WINDOWS_RELEASE_CACHE_CONTROL : WINDOWS_RELEASE_SHORT_CACHE_CONTROL;
 }
