@@ -1,6 +1,7 @@
 // PDF sur deux colonnes : un article dont le flux écrit les deux colonnes ligne par ligne était lu en traversant la page
 // (une ligne de gauche collée à la ligne voisine de droite). Il est lu colonne de gauche, puis colonne de droite ;
-// tableau, table des matières, formulaire, une colonne, texte en retrait et page presque vide ne bougent pas.
+// tableau, table des matières, formulaire, une colonne, texte en retrait et page presque vide ne bougent pas. Seul le flux
+// d'origine décide : un flux déjà colonne par colonne (article bien produit) ou cellule par cellule (tableau) est rendu tel quel.
 
 import { describe, expect, it } from 'vitest';
 import * as pdfjsLegacy from 'pdfjs-dist/legacy/build/pdf.mjs';
@@ -90,15 +91,29 @@ describe('PDF : deux colonnes (lecture colonne de gauche, puis colonne de droite
     expect(read(items)).toBe([...LEFT, ...RIGHT].join('\n'));
   });
 
-  it('flux déjà colonne par colonne (LaTeX) : lecture identique', () => {
+  it('flux déjà colonne par colonne (LaTeX) : lecture identique, entrée rendue telle quelle', () => {
     const items = columnByColumn(column(LEFT, X_LEFT), column(RIGHT, X_RIGHT));
+    expect(readingOrder(items)).toBe(items);
     expect(read(items)).toBe([...LEFT, ...RIGHT].join('\n'));
     expect(read(items)).toBe(pdfItemsToText(items).trimEnd());
+  });
+
+  it('flux balayé : l’article est réordonné (nouveau tableau, aucun élément perdu)', () => {
+    const items = rowByRow(column(LEFT, X_LEFT), column(RIGHT, X_RIGHT));
+    const ordered = readingOrder(items);
+    expect(ordered).not.toBe(items);
+    expect(ordered).toHaveLength(items.length);
   });
 
   it('colonne de droite plus courte que celle de gauche, ou plus longue : même ordre', () => {
     expect(read(rowByRow(column(LEFT, X_LEFT), column(RIGHT.slice(0, 9), X_RIGHT)))).toBe([...LEFT, ...RIGHT.slice(0, 9)].join('\n'));
     expect(read(rowByRow(column(LEFT.slice(0, 10), X_LEFT), column(RIGHT, X_RIGHT)))).toBe([...LEFT.slice(0, 10), ...RIGHT].join('\n'));
+  });
+
+  it('une ligne isolée sans vis-à-vis dans la colonne de droite (ligne perdue, légende) : le flux balayé est toujours réordonné', () => {
+    const right = column(RIGHT, X_RIGHT).filter((_, i) => i !== 7);
+    const items = [...column(LEFT, X_LEFT), ...right].sort((a, b) => b.transform[5] - a.transform[5] || a.transform[4] - b.transform[4]);
+    expect(read(items)).toBe([...LEFT, ...right.map(i => i.str)].join('\n'));
   });
 
   it('titre pleine largeur : lu en premier, puis la colonne de gauche, puis celle de droite', () => {
@@ -313,6 +328,99 @@ describe('PDF : mises en page qui ne sont pas deux colonnes de texte (ordre du f
   });
 });
 
+// Tableau à grille de deux colonnes de 250 pt (texte à 50 et 310 pt) dont les cellules sont des paragraphes : une rangée suit
+// la précédente à un interligne plus la marge de cellule, sans saut d'interligne net, et les cellules d'une même rangée n'ont
+// pas le même nombre de lignes. Seul le flux d'origine dit si la page est lue en traversant les colonnes.
+type TableRow = [string[], string[]];
+type TableCells = { left: TextItem[]; right: TextItem[] }[];
+const TABLE_TEXT = wrap(SVT_COURSE_PAGES.join(' '));
+
+/** Rangées dont les cellules ont `[lignes à gauche, lignes à droite]` (le motif se répète jusqu'à `count` rangées), prises dans la suite du texte. */
+function rowsOf(sizes: [number, number][], count = sizes.length): TableRow[] {
+  let at = 0;
+  const take = (n: number) => Array.from({ length: n }, () => TABLE_TEXT[at++ % TABLE_TEXT.length]);
+  return Array.from({ length: count }, (_, r) => {
+    const [a, b] = sizes[r % sizes.length];
+    return [take(a), take(b)];
+  });
+}
+
+/** Éléments de chaque cellule : une rangée commence à la hauteur de la précédente moins sa cellule la plus haute et la marge. */
+function gridTable(rows: TableRow[], margin = 1, top = TOP): TableCells {
+  let y = top;
+  return rows.map(([left, right]) => {
+    const cells = { left: column(left, X_LEFT, y), right: column(right, X_RIGHT, y) };
+    y -= Math.max(left.length, right.length) * LEADING + margin;
+    return cells;
+  });
+}
+
+/** Flux d'un tableau écrit cellule par cellule (Word, LibreOffice, reportlab, LaTeX) : la cellule de gauche en entier, puis celle de droite, rangée après rangée. */
+const cellByCellFlow = (cells: TableCells): TextItem[] => cells.flatMap(c => [...c.left, ...c.right]).map(i => ({ ...i, hasEOL: true }));
+/** Flux d'un tableau lu ligne visuelle par ligne visuelle (balayage) : chaque ligne de la cellule de gauche est suivie de la ligne voisine de la cellule de droite. */
+const sweptFlow = (cells: TableCells): TextItem[] => cells.flatMap(c => rowByRow(c.left, c.right));
+
+const cellReading = (rows: TableRow[]) => rows.flatMap(([left, right]) => [...left, ...right]).join('\n');
+const sweptReading = (rows: TableRow[]) =>
+  rows.flatMap(([left, right]) => Array.from({ length: Math.max(left.length, right.length) }, (_, k) => (left[k] && right[k] ? `${left[k]} ${right[k]}` : left[k] ?? right[k]))).join('\n');
+
+describe('PDF : tableau de cellules en paragraphes (rangées conservées)', () => {
+  const UNEVEN: Record<string, [number, number][]> = {
+    'cellules tantôt plus longues à gauche, tantôt à droite': [[4, 2], [2, 4], [5, 3], [3, 5], [4, 2]],
+    'cellule de gauche toujours plus longue': [[5, 3], [4, 2], [6, 4], [3, 2], [5, 3]],
+    'cellule de droite toujours plus longue': [[2, 4], [3, 5], [2, 4], [3, 6], [2, 5]],
+  };
+  const MARGINS = [0, 1, 4];
+
+  for (const [name, sizes] of Object.entries(UNEVEN)) {
+    for (const margin of MARGINS) {
+      it(`${name}, marge de ${margin} pt, écrit cellule par cellule : lu rangée par rangée, entrée rendue telle quelle`, () => {
+        const rows = rowsOf(sizes);
+        const items = cellByCellFlow(gridTable(rows, margin));
+        expect(readingOrder(items)).toBe(items);
+        expect(read(items)).toBe(cellReading(rows));
+      });
+
+      it(`${name}, marge de ${margin} pt, écrit ligne par ligne : « cellule gauche | cellule droite » par rangée, entrée rendue telle quelle`, () => {
+        const rows = rowsOf(sizes);
+        const items = sweptFlow(gridTable(rows, margin));
+        expect(readingOrder(items)).toBe(items);
+        expect(read(items)).toBe(sweptReading(rows));
+      });
+    }
+  }
+
+  it('cellules de même longueur dans chaque rangée, écrites cellule par cellule : rendu tel quel', () => {
+    const rows = rowsOf([[3, 3], [4, 4], [3, 3], [4, 4], [3, 3]]);
+    for (const margin of MARGINS) {
+      const items = cellByCellFlow(gridTable(rows, margin));
+      expect(readingOrder(items)).toBe(items);
+      expect(read(items)).toBe(cellReading(rows));
+    }
+  });
+
+  it('tableau en flux pdf.js (espaces entre blocs, fins de ligne, marqueurs vides), cellules inégales : rendu tel quel', () => {
+    const rows = rowsOf(UNEVEN['cellules tantôt plus longues à gauche, tantôt à droite']);
+    const cells = gridTable(rows);
+    const marker = (at: TextItem) => ({ ...item('', 0, at.transform[5]), width: 0, height: 0, hasEOL: true });
+    const swept = cells.flatMap(c => rowByRow(c.left, c.right, true));
+    expect(readingOrder(swept)).toBe(swept);
+    const byCell = cells.flatMap(c => [...c.left, ...c.right]).flatMap(i => [{ ...i, hasEOL: false }, marker(i)]);
+    expect(readingOrder(byCell)).toBe(byCell);
+  });
+
+  it('article balayé suivi, sous un intertitre pleine largeur, d’un tableau écrit cellule par cellule : l’article est réordonné, le tableau garde ses rangées', () => {
+    const left = TABLE_TEXT.slice(0, 28);
+    const right = TABLE_TEXT.slice(28, 56);
+    const heading = item('3. Doses apportées selon les besoins', 190, TOP - 28 * LEADING - 6, 12);
+    const rows = rowsOf([[3, 2], [2, 4], [4, 3], [3, 3]]).map(([l, r]): TableRow => [l.map(s => s.toUpperCase()), r.map(s => s.toUpperCase())]);
+    const items = [...rowByRow(column(left, X_LEFT), column(right, X_RIGHT), true), heading, ...cellByCellFlow(gridTable(rows, 1, TOP - 28 * LEADING - 30))];
+    const ordered = readingOrder(items);
+    expect(ordered).not.toBe(items);
+    expect(pdfItemsToText(ordered).trimEnd()).toBe([...left, ...right, heading.str, cellReading(rows)].join('\n'));
+  });
+});
+
 describe('PDF : lecture en colonnes, jamais de texte perdu', () => {
   it('pages aléatoires (colonnes décalées, titres, éléments vides, valeurs absurdes) : aucune erreur, tout le texte conservé une seule fois', () => {
     let seed = 20_260_501;
@@ -323,16 +431,19 @@ describe('PDF : lecture en colonnes, jamais de texte perdu', () => {
     for (let page = 0; page < 300; page++) {
       const items: unknown[] = [];
       const rows = between(4, 24);
-      const jitter = rnd() < 0.5 ? 0 : between(1, 9);
+      // Balayage régulier (colonnes pleines, sans trou, lignes alignées : réordonné) ou colonnes décalées, courtes, privées de lignes au hasard
+      // (trous comme les cellules inégales d'un tableau : ordre conservé).
+      const complete = rnd() < 0.5;
+      const jitter = complete || rnd() < 0.5 ? 0 : between(1, 9);
       const cut = (line: string, n: number) => line.slice(0, n);
       const [leftX, rightX] = [between(30, 80), between(280, 340)];
       for (let r = 0; r < rows; r++) {
-        const n = between(rnd() < 0.3 ? 8 : 30, 44);
+        const n = complete ? between(38, 44) : between(rnd() < 0.3 ? 8 : 30, 44);
         const left = item(cut(ARTICLE[r % ARTICLE.length], n) + (rnd() < 0.1 ? ' ' : ''), leftX, TOP - r * LEADING + (jitter ? between(-jitter, jitter) : 0));
         const right = item(cut(ARTICLE[(r * 3 + 1) % ARTICLE.length], rnd() < 0.8 ? n : between(5, 44)), rightX, TOP - r * LEADING + (jitter ? between(-jitter, jitter) : 0));
         items.push(left);
         if (rnd() < 0.2) items.push({ type: 'beginMarkedContent' });
-        if (rnd() < 0.8) items.push(right);
+        if (complete || rnd() < 0.8) items.push(right);
         if (rnd() < 0.3) items.push({ ...item(' ', 0, 0), width: between(0, 40) });
         if (rnd() < 0.5) items.push({ ...item('', 0, 0), hasEOL: true });
       }
@@ -389,6 +500,28 @@ describe('PDF : lecture en colonnes, temps borné', () => {
     expect(ordered.slice(0, firstRight).every(i => i.transform[4] < X_RIGHT)).toBe(true);
     expect(ordered.slice(firstRight).every(i => i.transform[4] >= X_RIGHT)).toBe(true);
     expect(firstRight).toBe(items.filter(i => i.transform[4] < X_RIGHT).length);
+  });
+
+  it('60 000 lignes écrites colonne par colonne : rendues telles quelles, en temps borné', () => {
+    const rows = 30_000;
+    const left = Array.from({ length: rows }, (_, i) => item(ARTICLE[i % ARTICLE.length], X_LEFT, 9_000_000 - i * LEADING));
+    const right = Array.from({ length: rows }, (_, i) => item(ARTICLE[(i + 7) % ARTICLE.length], X_RIGHT, 9_000_000 - i * LEADING));
+    const items = columnByColumn(left, right);
+    const t0 = performance.now();
+    const ordered = readingOrder(items);
+    expect(performance.now() - t0).toBeLessThan(BOUND_MS);
+    expect(ordered).toBe(items);
+  });
+
+  it('tableau de 20 000 rangées (plus de 130 000 éléments) à cellules inégales, écrit cellule par cellule ou ligne par ligne : rendu tel quel, en temps borné', () => {
+    const cells = gridTable(rowsOf([[4, 2], [2, 4], [5, 3], [3, 5], [4, 2]], 20_000));
+    for (const items of [cellByCellFlow(cells), sweptFlow(cells)]) {
+      expect(items.length).toBeGreaterThan(130_000);
+      const t0 = performance.now();
+      const ordered = readingOrder(items);
+      expect(performance.now() - t0).toBeLessThan(BOUND_MS);
+      expect(ordered).toBe(items);
+    }
   });
 
   it('pages piégées (200 000 éléments sur une ligne, sur des lignes toutes différentes, tous au même point, grille de 400 colonnes) : temps borné, ordre conservé', () => {
@@ -448,6 +581,30 @@ describe('PDF : extraction réelle (pdf.js) d’un article sur deux colonnes', (
     expect(doc.units[0].text).toBe(rows.map(row => row.join(' ')).join('\n'));
     expect(doc.units[1].text.split('\n')[0]).toBe(`Chapitre 1 La photosynthèse ${'.'.repeat(40)} 3`);
     expect(doc.units[1].text.split('\n')).toHaveLength(7);
+  });
+
+  it('tableau à cellules de longueurs différentes, sans interligne entre rangées, écrit cellule par cellule ou ligne par ligne : lu rangée par rangée', async () => {
+    let at = 0;
+    const rows = ([[4, 2], [2, 4], [5, 3], [3, 5], [4, 2]] as const).map(([a, b]): [string[], string[]] => {
+      const row: [string[], string[]] = [lines.slice(at, at + a), lines.slice(at + a, at + a + b)];
+      at += a + b;
+      return row;
+    });
+    const placedTable = (flow: 'cells' | 'lines'): PdfPlaced[] => {
+      let top = 110;
+      return rows.flatMap(([l, r]) => {
+        const lp = l.map((text, k) => ({ text, x: 50, y: top + k * 14 }));
+        const rp = r.map((text, k) => ({ text, x: 310, y: top + k * 14 }));
+        top += Math.max(l.length, r.length) * 14 + 1;
+        if (flow === 'cells') return [...lp, ...rp];
+        return Array.from({ length: Math.max(l.length, r.length) }, (_, k) => [...(lp[k] ? [lp[k]] : []), ...(rp[k] ? [rp[k]] : [])]).flat();
+      });
+    };
+    const byCell = await extractPdf({ id: 'p', name: 'tableau.pdf', bytes: makePdfPlaced([placedTable('cells')]) }, pdfjs);
+    expect(byCell.units[0].text).toBe(rows.flatMap(([l, r]) => [...l, ...r]).join('\n'));
+    const byLine = await extractPdf({ id: 'p', name: 'tableau.pdf', bytes: makePdfPlaced([placedTable('lines')]) }, pdfjs);
+    const expected = rows.flatMap(([l, r]) => Array.from({ length: Math.max(l.length, r.length) }, (_, k) => [l[k], r[k]].filter(Boolean).join(' '))).join('\n');
+    expect(byLine.units[0].text).toBe(expected);
   });
 
   it('césure entre le bas de la colonne de gauche et le haut de celle de droite : le mot est reconstitué', async () => {

@@ -7,6 +7,11 @@
 // d'origine est rendu tel quel (une colonne, texte en retrait, tableau, table des matières, formulaire, page presque
 // vide, texte tourné : rien ne change).
 //
+// Le flux d'origine décide d'abord : on ne réordonne que ce qui est écrit EN TRAVERSANT la page (critère 5). Un flux déjà
+// colonne par colonne (article bien produit) se lit correctement tel quel ; un tableau écrit cellule par cellule (Word,
+// LibreOffice, reportlab) ne doit surtout pas être réordonné : toutes les cellules de gauche, puis toutes celles de droite,
+// feraient perdre la correspondance rangée par rangée.
+//
 // Critères, tous nécessaires (les seuils sont volontairement exigeants) :
 //  1. Gouttière : une seule bande verticale vide, large d'au moins un corps de texte et d'au plus 30 % de la largeur du
 //     texte, que 15 % des lignes au plus traversent (légende, intertitre centré). Les lignes d'un seul bloc de texte de
@@ -22,6 +27,12 @@
 //  3. Pas un tableau : si des sauts d'interligne marqués (changement de rangée) tombent à la même hauteur dans les deux
 //     colonnes, ce sont les rangées d'un tableau dont les cellules sont des paragraphes, pas deux colonnes d'article.
 //  4. Une grande partie de la page : les bandes à deux colonnes regroupent au moins 60 % des lignes.
+//  5. Le flux traverse la page : dans la bande, le flux d'origine passe de la colonne de gauche à la ligne voisine de la
+//     colonne de droite (même ligne visuelle, côtés opposés) sur la plupart des lignes, sans trou dans une colonne (deux
+//     colonnes dont les lignes de base diffèrent de plus de 70 % du corps ne partagent pas de ligne visuelle : pas de balayage).
+//     Prioritaire sur les autres : une bande dont le flux est colonne par colonne ou cellule par cellule reste telle quelle,
+//     même si elle ressemble à deux colonnes de texte et n'a aucun saut d'interligne net (cellules sans marge, rangées à
+//     cellules de nombres de lignes différents).
 //
 // Une ligne pleine largeur sépare deux bandes : lue après la bande qui la précède et avant celle qui la suit. Dans une
 // bande à deux colonnes, la colonne de gauche est lue en entier avant celle de droite, chacune dans l'ordre du flux ; le
@@ -46,6 +57,19 @@ const WIDE_RUN = 0.7;
 const MAX_GUTTER_SHARE = 0.3;
 const MAX_GUTTER_CANDIDATES = 3;
 const MIN_BAND_SHARE = 0.6;
+/**
+ * Lignes d'une bande où le flux passe d'une colonne à sa voisine sans quitter la ligne visuelle : au moins autant qu'une
+ * colonne de texte en exige, pour que quelques cellules d'une ligne dans un tableau ne passent pas pour un balayage.
+ */
+const MIN_SWEPT_LINES = MIN_COLUMN_LINES;
+/**
+ * Part de ces lignes dans la plus grande de deux étendues : celle où le flux alterne (de la première à la dernière
+ * alternance) et la colonne la plus courte. Un article écrit ligne par ligne alterne sur toutes les lignes de la colonne la
+ * plus courte (la fin de l'autre colonne n'a plus de vis-à-vis, hors de l'étendue) ; les rangées d'un tableau écrit ligne par
+ * ligne laissent un trou dans la colonne de la cellule la plus courte, au milieu de l'étendue. 90 % tolère une ligne isolée
+ * mal alignée, pas un tableau dont les cellules diffèrent d'une ligne ou plus dans plusieurs rangées.
+ */
+const MIN_SWEPT_SHARE = 0.9;
 /** Deux éléments sont sur la même ligne si leurs lignes de base diffèrent de moins de cette part du plus petit corps (exposants, indices). */
 const LINE_TOLERANCE = 0.7;
 /** Écart horizontal (en corps de texte) sous lequel deux éléments voisins d'une ligne forment un même bloc de texte. */
@@ -96,6 +120,9 @@ interface Geometry {
   real: number[];
 }
 
+/** Côté de la gouttière d'un élément : 0 à gauche, 1 à droite (d'après son centre). */
+const sideOf = (g: Geometry, i: number, center: number) => ((g.x0[i] + g.x1[i]) / 2 < center ? 0 : 1);
+
 /** Géométrie des éléments de texte, ou null si la page ne permet pas de décider (texte tourné, élément illisible). */
 function readGeometry(items: unknown[]): Geometry | null {
   const n = items.length;
@@ -134,6 +161,8 @@ interface PageLines {
   /** Blocs de texte de chaque ligne : séquences d'éléments séparées de moins d'un petit écart. */
   runA: number[];
   runB: number[];
+  /** Ligne visuelle de chaque élément, indexée comme `items` (-1 : élément sans texte). */
+  lineOf: Int32Array;
 }
 
 /** Regroupe les éléments en lignes visuelles (haut en bas) et chaque ligne en blocs de texte. */
@@ -144,6 +173,7 @@ function buildLines(g: Geometry, body: number): PageLines {
   const lines: Line[] = [];
   const runA: number[] = [];
   const runB: number[] = [];
+  const lineOf = new Int32Array(g.x0.length).fill(-1);
   const closeLine = (from: number, to: number) => {
     const part = order.slice(from, to).sort((p, q) => x0[p] - x0[q]);
     const runs = runA.length;
@@ -163,6 +193,7 @@ function buildLines(g: Geometry, body: number): PageLines {
     }
     runA.push(a);
     runB.push(b);
+    for (let k = from; k < to; k++) lineOf[order[k]] = lines.length;
     lines.push({ from, to, runs, runsEnd: runA.length });
   };
   let start = 0;
@@ -175,7 +206,7 @@ function buildLines(g: Geometry, body: number): PageLines {
     }
   }
   closeLine(start, order.length);
-  return { order, lines, runA, runB };
+  return { order, lines, runA, runB, lineOf };
 }
 
 /**
@@ -298,7 +329,7 @@ function isTextColumns(g: Geometry, page: PageLines, from: number, to: number, c
     const y = [0, 0];
     for (let k = line.from; k < line.to; k++) {
       const i = page.order[k];
-      const s = (g.x0[i] + g.x1[i]) / 2 < center ? 0 : 1;
+      const s = sideOf(g, i, center);
       // Hauteur propre à chaque colonne : deux colonnes dont les lignes de base diffèrent un peu partagent une même ligne visuelle.
       if (min[s] === Infinity) y[s] = g.y[i];
       min[s] = Math.min(min[s], g.x0[i]);
@@ -330,6 +361,53 @@ function isTextColumns(g: Geometry, page: PageLines, from: number, to: number, c
   return !sameRowBreaks(sides[0].ys, sides[1].ys, ROW_TOLERANCE * body);
 }
 
+/**
+ * Bandes (suites de lignes qu'aucune ligne pleine largeur n'interrompt) dont le flux d'origine TRAVERSE la page : sur la
+ * plupart de leurs lignes, l'élément qui suit celui de la colonne de gauche dans le flux (parmi ceux de la bande) est sur la
+ * même ligne visuelle, côté droit, ou l'inverse. C'est le cas d'un article dont le PDF stocke les lignes dans l'ordre de
+ * balayage. Un flux colonne par colonne, ou cellule par cellule (tableau), ne passe d'un côté à l'autre qu'en changeant de
+ * ligne : aucune alternance, la bande n'est pas réordonnée. Voir `MIN_SWEPT_LINES` et `MIN_SWEPT_SHARE` pour les seuils.
+ * Une valeur par bande, dans l'ordre des bandes.
+ */
+function sweptBands(g: Geometry, page: PageLines, center: number, bandOfLine: Int32Array, bandCount: number): Uint8Array {
+  const { lines, lineOf } = page;
+  /** 1 : le flux passe d'un côté à l'autre sur cette ligne ; bit 0 / bit 1 de `sides` : il y a du texte à gauche / à droite. */
+  const crossed = new Uint8Array(lines.length);
+  const sides = new Uint8Array(lines.length);
+  const previous = new Int32Array(bandCount).fill(-1);
+  for (const i of g.real) {
+    const l = lineOf[i];
+    const band = bandOfLine[l];
+    if (band === -1) continue;
+    const s = sideOf(g, i, center);
+    sides[l] |= 1 << s;
+    const p = previous[band];
+    if (p !== -1 && lineOf[p] === l && sideOf(g, p, center) !== s) crossed[l] = 1;
+    previous[band] = i;
+  }
+  const count = new Int32Array(bandCount);
+  const first = new Int32Array(bandCount).fill(-1);
+  const last = new Int32Array(bandCount).fill(-1);
+  const left = new Int32Array(bandCount);
+  const right = new Int32Array(bandCount);
+  for (let l = 0; l < lines.length; l++) {
+    const band = bandOfLine[l];
+    if (band === -1) continue;
+    left[band] += sides[l] & 1;
+    right[band] += sides[l] >> 1;
+    if (!crossed[l]) continue;
+    count[band]++;
+    if (first[band] === -1) first[band] = l;
+    last[band] = l;
+  }
+  const swept = new Uint8Array(bandCount);
+  for (let band = 0; band < bandCount; band++) {
+    const extent = Math.max(last[band] - first[band] + 1, Math.min(left[band], right[band]));
+    swept[band] = count[band] >= MIN_SWEPT_LINES && count[band] >= MIN_SWEPT_SHARE * extent ? 1 : 0;
+  }
+  return swept;
+}
+
 /** Répartition des lignes en groupes de lecture : une suite de groupes, chacun lu en entier avant le suivant. */
 interface Layout {
   /** Groupe de chaque ligne ; pour une ligne de bande à deux colonnes, groupe de la colonne de gauche (celle de droite : +1). */
@@ -346,13 +424,23 @@ function layoutFor(g: Geometry, page: PageLines, center: number, body: number): 
     for (let r = line.runs; r < line.runsEnd; r++) if (runA[r] < center && center < runB[r]) return true;
     return false;
   });
+  const bandOfLine = new Int32Array(lines.length).fill(-1);
+  let bands = 0;
+  for (let l = 0; l < lines.length; ) {
+    if (crossing[l]) l++;
+    else {
+      while (l < lines.length && !crossing[l]) bandOfLine[l++] = bands;
+      bands++;
+    }
+  }
+  const swept = sweptBands(g, page, center, bandOfLine, bands);
   const layout: Layout = { groupOfLine: new Int32Array(lines.length), inColumns: new Uint8Array(lines.length), groups: 0, columnGroups: new Set() };
   let plain = -1;
   let columnLines = 0;
   for (let l = 0; l < lines.length; ) {
     let end = l;
     if (!crossing[l]) while (end < lines.length && !crossing[end]) end++;
-    if (end > l && isTextColumns(g, page, l, end, center, body)) {
+    if (end > l && swept[bandOfLine[l]] && isTextColumns(g, page, l, end, center, body)) {
       const left = layout.groups;
       layout.groups += 2;
       layout.columnGroups.add(left).add(left + 1);
@@ -363,7 +451,7 @@ function layoutFor(g: Geometry, page: PageLines, center: number, body: number): 
       columnLines += end - l;
       plain = -1;
     } else {
-      // Ligne pleine largeur ou bande qui n'est pas en colonnes : ordre du flux, groupe commun avec les lignes voisines du même genre.
+      // Ligne pleine largeur ou bande qui n'est pas en colonnes (ou dont le flux ne traverse pas la page) : ordre du flux, groupe commun avec les lignes voisines du même genre.
       if (plain === -1) plain = layout.groups++;
       end = Math.max(end, l + 1);
       for (let k = l; k < end; k++) layout.groupOfLine[k] = plain;
@@ -381,13 +469,12 @@ function layoutFor(g: Geometry, page: PageLines, center: number, body: number): 
  */
 function assemble(items: unknown[], g: Geometry, page: PageLines, layout: Layout, center: number): unknown[] {
   const n = items.length;
+  const { lineOf } = page;
   const groupOf = new Int32Array(n).fill(-1);
-  const lineOf = new Int32Array(n).fill(-1);
   page.lines.forEach((line, l) => {
     for (let k = line.from; k < line.to; k++) {
       const i = page.order[k];
-      lineOf[i] = l;
-      groupOf[i] = layout.groupOfLine[l] + (layout.inColumns[l] && (g.x0[i] + g.x1[i]) / 2 >= center ? 1 : 0);
+      groupOf[i] = layout.groupOfLine[l] + (layout.inColumns[l] ? sideOf(g, i, center) : 0);
     }
   });
   // Un élément sans texte suit celui qui le précède dans le flux.
@@ -421,7 +508,7 @@ function assemble(items: unknown[], g: Geometry, page: PageLines, layout: Layout
 
 /**
  * Éléments de texte de la page dans l'ordre de lecture. Renvoie `items` lui-même (même référence) quand la page n'est
- * pas sûrement sur deux colonnes.
+ * pas sûrement sur deux colonnes ou que son flux ne traverse pas la page (déjà colonne par colonne, tableau cellule par cellule).
  */
 export function readingOrder(items: unknown[]): unknown[] {
   if (items.length < 2 * MIN_COLUMN_LINES) return items;
