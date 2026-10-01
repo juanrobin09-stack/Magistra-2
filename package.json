@@ -2,7 +2,7 @@
   "name": "magistra",
   "productName": "Magistra",
   "private": true,
-  "version": "2.0.3",
+  "version": "2.0.4",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
