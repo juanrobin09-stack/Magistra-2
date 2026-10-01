@@ -549,10 +549,12 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
           </div>
         </div>
 
-        {/* Avant de créer son espace : où lire comment les données sont traitées (pages publiques, ouvertes dans l'application) */}
+        {/* Avant de créer son espace : où lire comment les données sont traitées (pages publiques). Nouvel onglet : le profil
+            en cours de saisie n'est pas conservé si l'assistant est quitté. Application Windows : pas d'onglet, les pages
+            s'ouvrent dans l'application. */}
         {!editing && (
           <p className="text-center text-xs text-mg-300 mt-5">
-            En continuant, vous pouvez consulter : <LegalLinks />
+            En continuant, vous pouvez consulter : <LegalLinks newTab={runtime.mode !== 'local'} />
           </p>
         )}
 

@@ -110,6 +110,12 @@ export default function DashboardPage() {
   const allIdeas = useMemo(() => (matiere && niveau ? getSujetSuggestions(matiere, niveau) : []), [matiere, niveau]);
   const ideas = useSuggestionDeck(allIdeas, 4, `${niveau ?? ''}|${matiere ?? ''}`);
   const suggestions = ideas.shown;
+  // Nombre de renouvellements : annonce aux lecteurs d'écran, qui ne voient pas les idées changer (le focus reste sur le bouton).
+  const [shuffles, setShuffles] = useState(0);
+  const shuffleIdeas = () => {
+    ideas.shuffle();
+    setShuffles(n => n + 1);
+  };
 
   const displayName = profile?.displayName || user?.firstName || '';
   const dateStr = now.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -262,14 +268,19 @@ export default function DashboardPage() {
                   {niveau ? ` · ${getNiveauLabel(niveau)}` : ''}
                 </h2>
                 {ideas.canShuffle && (
-                  <button
-                    type="button"
-                    onClick={ideas.shuffle}
-                    title="Proposer d'autres idées de sujets"
-                    className="shrink-0 inline-flex items-center gap-1.5 text-xs text-accent hover:text-white transition-colors rounded focus-visible:outline-2 focus-visible:outline-accent"
-                  >
-                    <Shuffle size={12} aria-hidden="true" /> Autres idées
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={shuffleIdeas}
+                      title="Proposer d'autres idées de sujets"
+                      className="shrink-0 inline-flex items-center gap-1.5 text-xs text-accent hover:text-white transition-colors rounded focus-visible:outline-2 focus-visible:outline-accent"
+                    >
+                      <Shuffle size={12} aria-hidden="true" /> Autres idées
+                    </button>
+                    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                      {shuffles > 0 && <span key={shuffles}>{suggestions.length} nouvelles idées affichées</span>}
+                    </span>
+                  </>
                 )}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">

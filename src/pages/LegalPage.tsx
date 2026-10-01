@@ -6,8 +6,8 @@
 // que le serveur annonce (GET /api/mode) : la page reste vraie quand AI_PRESET change.
 // Ces textes sont un PROJET à faire valider : l'avis en tête de page le dit.
 
-import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import type { MouseEvent, ReactNode } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, GraduationCap } from 'lucide-react';
 import type { ProviderInfo } from '@shared/types';
 import LegalLinks from '@/components/LegalLinks';
@@ -75,14 +75,21 @@ function ContactField({ info }: { info: LegalInfo }) {
   );
 }
 
+/**
+ * Hébergeur et base de données : seul le site web a un hébergeur et une base Supabase. En mode personnel les données
+ * sont dans le stockage fichier du serveur local, en démonstration dans le navigateur, dans l'application Windows sur
+ * l'ordinateur. Une seule règle pour le texte et pour la liste « à compléter » : ils ne peuvent pas diverger.
+ */
+const hasHosting = (mode: RuntimeMode): boolean => mode === 'web';
+
 /** Informations que chaque page affiche vraiment : seules celles-là sont listées « à compléter ». */
 function relevantFields(page: LegalPageKind, mode: RuntimeMode): LegalField[] {
   if (page === 'cgu') return ['contact'];
-  const web = mode === 'web';
+  const hosting = hasHosting(mode);
   if (page === 'mentions') {
-    return web ? ['publisher', 'director', 'address', 'contact', 'host', 'dataRegion'] : ['publisher', 'director', 'address', 'contact'];
+    return hosting ? ['publisher', 'director', 'address', 'contact', 'host', 'dataRegion'] : ['publisher', 'director', 'address', 'contact'];
   }
-  return web ? ['publisher', 'address', 'contact', 'host', 'dataRegion'] : ['publisher', 'contact'];
+  return hosting ? ['publisher', 'address', 'contact', 'host', 'dataRegion'] : ['publisher', 'contact'];
 }
 
 function DraftNotice({ info, fields }: { info: LegalInfo; fields: LegalField[] }) {
@@ -133,7 +140,7 @@ function Mentions({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
         Directeur ou directrice de la publication : <Field info={info} name="director" />.
       </p>
 
-      {mode !== 'local' && (
+      {hasHosting(mode) && (
         <>
           <h2>Hébergement</h2>
           <p>
@@ -507,12 +514,20 @@ function Terms({ info }: { info: LegalInfo }) {
 
 // ─── Page ──────────────────────────────────────────────────────────────────
 
-
 export default function LegalPage({ page }: { page: LegalPageKind }) {
   useDocumentTitle(LEGAL_TITLES[page]);
   const config = getRuntimeConfig();
   const info = readLegalInfo(undefined, config.adminContact);
   const mode = config.mode;
+  const navigate = useNavigate();
+  // La première entrée de l'historique porte la clé « default » : sinon l'utilisateur vient d'une page de l'application.
+  const cameFromApp = useLocation().key !== 'default';
+  /** « Retour » ramène à la page d'origine (Réglages, assistant d'accueil…) ; arrivé directement sur la page : à l'accueil. */
+  const goBack = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!cameFromApp || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigate(-1);
+  };
   return (
     <div className="min-h-screen bg-mg-900">
       <header className="border-b border-white/5">
@@ -525,7 +540,7 @@ export default function LegalPage({ page }: { page: LegalPageKind }) {
               Magistra<span className="text-accent">.</span>
             </span>
           </Link>
-          <Link to="/" className="inline-flex items-center gap-1.5 text-sm text-mg-200 hover:text-white">
+          <Link to="/" onClick={goBack} className="inline-flex items-center gap-1.5 text-sm text-mg-200 hover:text-white">
             <ArrowLeft size={14} aria-hidden="true" /> Retour
           </Link>
         </div>

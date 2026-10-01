@@ -3,7 +3,7 @@
 // Ordre : niveau et matière, puis le choix principal de l'outil (format normé : « Type d'exercice », « Format de
 // l'épreuve »…), les champs propres à l'outil, une grille compacte de réglages, enfin objectifs et consignes.
 
-import { useMemo, type ReactElement } from 'react';
+import { useMemo, useState, type ReactElement } from 'react';
 import { Clock, Shuffle } from 'lucide-react';
 import {
   DIFFICULTES, FORMATS_SEANCE, getMatieresForNiveau, PROFILS_DIFFERENCIATION, PROFILS_ELEVE,
@@ -132,6 +132,12 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
   const allIdeas = useMemo(() => getSujetSuggestions(form.matiere, form.niveau), [form.matiere, form.niveau]);
   const ideas = useSuggestionDeck(allIdeas, SUGGESTION_COUNT, `${form.niveau}|${form.matiere}`);
   const suggestions = has('sujet') && CONTENT_TOOLS.includes(tool) && !form.sujet.trim() ? ideas.shown : [];
+  // Nombre de renouvellements : annonce aux lecteurs d'écran, qui ne voient pas les idées changer (le focus reste sur le bouton).
+  const [shuffles, setShuffles] = useState(0);
+  const shuffleIdeas = () => {
+    ideas.shuffle();
+    setShuffles(n => n + 1);
+  };
   const sujet = sujetText(tool, sup);
   const consignes = consignesText(tool, sup);
   const learner = sup ? "l'étudiant" : "l'élève";
@@ -505,14 +511,19 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
                 </button>
               ))}
               {ideas.canShuffle && (
-                <button
-                  type="button"
-                  onClick={ideas.shuffle}
-                  title="Proposer d'autres idées de sujets"
-                  className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg text-accent hover:bg-accent/10 border border-accent/20 transition-colors ${FOCUS_RING}`}
-                >
-                  <Shuffle size={12} aria-hidden="true" /> Autres idées
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={shuffleIdeas}
+                    title="Proposer d'autres idées de sujets"
+                    className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg text-accent hover:bg-accent/10 border border-accent/20 transition-colors ${FOCUS_RING}`}
+                  >
+                    <Shuffle size={12} aria-hidden="true" /> Autres idées
+                  </button>
+                  <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                    {shuffles > 0 && <span key={shuffles}>{suggestions.length} nouvelles idées affichées</span>}
+                  </span>
+                </>
               )}
             </div>
           )}
