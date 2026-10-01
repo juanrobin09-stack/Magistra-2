@@ -118,8 +118,11 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
   const [editing] = useState(() => explicitEdit || runtime.profile !== null);
   const [canCancel] = useState(() => runtime.profile !== null);
   const owner = runtime.user?.id ?? null;
-  // Nouveau profil : brouillon laissé en quittant l'assistant (page légale lue dans l'application Windows).
-  const [restored] = useState(() => (editing ? null : loadOnboardingDraft(owner, LAST_STEP)));
+  // Nouveau profil : brouillon laissé en quittant l'assistant (page légale lue dans l'application Windows). Il n'existe
+  // que dans l'application Windows (mode local : aucun compte, pages légales ouvertes dans la même fenêtre) ; sur le
+  // site, rien n'est écrit dans l'onglet et un éventuel reste est effacé.
+  const keepDraft = runtime.mode === 'local';
+  const [restored] = useState(() => (editing || !keepDraft ? null : loadOnboardingDraft(owner, LAST_STEP)));
   const [draft, setDraft] = useState<ProfileDraft>(() => restored?.draft ?? draftFromProfile(runtime.profile, runtime.user?.firstName ?? ''));
   const [step, setStep] = useState(() => {
     if (editing) return 1;
@@ -132,8 +135,11 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
   // Chaque modification est gardée ; plus rien n'est écrit une fois le profil enregistré ou l'assistant abandonné.
   const discarded = useRef(false);
   useEffect(() => {
-    if (!editing && !discarded.current) saveOnboardingDraft(owner, draft, step);
-  }, [editing, owner, draft, step]);
+    if (!keepDraft) clearOnboardingDraft();
+  }, [keepDraft]);
+  useEffect(() => {
+    if (keepDraft && !editing && !discarded.current) saveOnboardingDraft(owner, draft, step);
+  }, [keepDraft, editing, owner, draft, step]);
   const discardDraft = () => {
     discarded.current = true;
     clearOnboardingDraft();

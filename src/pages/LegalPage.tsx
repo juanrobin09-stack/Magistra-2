@@ -320,8 +320,8 @@ function PrivacyWeb({ info, provider }: { info: LegalInfo; provider: ProviderInf
       <ProviderBlock provider={provider} />
       <p>
         Certains de ces prestataires sont établis hors de l'Union européenne : les transferts sont alors encadrés par les
-        garanties qu'ils annoncent (clauses contractuelles types, cadre de protection des données UE–États-Unis). Ces
-        garanties sont à vérifier par l'éditeur avant publication.
+        garanties qu'ils annoncent (clauses contractuelles types, cadre de protection des données UE–États-Unis).
+        {!info.validated && " Ces garanties sont à vérifier par l'éditeur avant publication."}
       </p>
 
       <h2>5. Combien de temps ?</h2>

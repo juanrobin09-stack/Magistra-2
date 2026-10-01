@@ -21,9 +21,10 @@
 // Usage : node scripts/verify-package.mjs [dossier]   (défaut : release/win-unpacked)
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from './mainModule.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -209,22 +210,7 @@ export async function verifyPackage(dir) {
   return errors;
 }
 
-/**
- * Vrai si ce fichier est le script lancé par `node`. Les chemins réels sont comparés : Node résout le module principal
- * (lien symbolique, jonction), alors que process.argv[1] garde le chemin saisi ; une comparaison brute serait fausse et
- * le script sortirait en code 0 sans rien vérifier.
- */
-function isMainModule() {
-  const self = fileURLToPath(import.meta.url);
-  if (!process.argv[1]) return false;
-  try {
-    return realpathSync.native(process.argv[1]) === realpathSync.native(self);
-  } catch {
-    return path.resolve(process.argv[1]) === path.resolve(self);
-  }
-}
-
-if (isMainModule()) {
+if (isMainModule(import.meta.url)) {
   const dir = path.resolve(process.argv[2] ?? path.join(root, 'release', 'win-unpacked'));
   let errors;
   try {

@@ -10,6 +10,7 @@ interface ImportMetaEnv {
   readonly VITE_LEGAL_CONTACT?: string;
   readonly VITE_LEGAL_HOST?: string;
   readonly VITE_LEGAL_DATA_REGION?: string;
+  readonly VITE_LEGAL_VALIDATED?: string;
 }
 
 interface ImportMeta {

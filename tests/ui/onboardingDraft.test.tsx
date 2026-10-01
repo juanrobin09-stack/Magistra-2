@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Assistant d'accueil : le profil en cours de saisie et l'étape courante survivent à la lecture d'une page légale dans
 // l'application Windows (où les nouveaux onglets sont refusés, donc où l'assistant est quitté). Le brouillon vit dans
-// le sessionStorage de l'onglet, est revalidé à la relecture et disparaît à la validation, à l'abandon, au changement
-// de compte.
+// le sessionStorage de l'onglet, uniquement dans l'application Windows (mode local), est revalidé à la relecture et
+// disparaît à la validation et à l'abandon ; sur le site (compte), il n'est jamais écrit et un reste est effacé.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -160,7 +160,7 @@ describe('Assistant d\'accueil — page légale lue dans l\'application Windows'
   });
 });
 
-describe('Assistant d\'accueil — site web (nouvel onglet) et changement de compte', () => {
+describe('Assistant d\'accueil — site web : nouvel onglet, aucun brouillon conservé', () => {
   it('site web : les liens s\'ouvrent toujours dans un nouvel onglet, l\'assistant reste en place', async () => {
     const { container } = await mount({ mode: 'web', user: { id: 'user_1' } });
     await click(button(container, /Continuer/));
@@ -172,32 +172,36 @@ describe('Assistant d\'accueil — site web (nouvel onglet) et changement de com
     expect(field(container, 'onb-etablissement').value).toBe('Collège Test');
   });
 
-  it('même compte : le brouillon est restitué à la réouverture (étape et champs)', async () => {
-    const { container } = await mount({ mode: 'web', user: { id: 'user_1' } });
+  it.each<RuntimeMode>(['web', 'personal', 'demo'])('%s : aucun brouillon n\'est écrit ni restitué (données personnelles hors de l\'onglet)', async mode => {
+    const user = mode === 'web' ? { id: 'user_1' } : null;
+    const { container } = await mount({ mode, user });
     await click(button(container, /Continuer/));
     await typeInto(field(container, 'onb-etablissement'), 'Collège Test');
+    await typeInto(field(container, 'onb-nom'), 'Mme Dupont');
     await click(button(container, /Continuer/));
-    await click(button(container, /Supérieur/));
-    const again = await reopen({ mode: 'web', user: { id: 'user_1' } });
-    expect(heading(again.container)).toContain('Vos niveaux');
-    expect(pressed(again.container, 'Supérieur')).toBe(true);
-    await click(button(again.container, /Retour/));
-    expect(field(again.container, 'onb-etablissement').value).toBe('Collège Test');
+    expect(stored()).toBeNull();
+    const again = await reopen({ mode, user });
+    expect(heading(again.container)).toContain('Bienvenue');
+    await click(button(again.container, /Continuer/));
+    expect(field(again.container, 'onb-etablissement').value).toBe('');
+    expect(field(again.container, 'onb-nom').value).toBe('');
+    expect(stored()).toBeNull();
   });
 
-  it('autre compte sur le même onglet : le brouillon n\'est jamais restitué et il est effacé', async () => {
-    const { container } = await mount({ mode: 'web', user: { id: 'user_1' } });
+  it('un reste de brouillon (poste partagé, autre usage de l\'onglet) est effacé à l\'ouverture de l\'assistant sur le site', async () => {
+    sessionStorage.setItem(ONBOARDING_DRAFT_KEY, JSON.stringify({ owner: 'user_1', step: 1, displayName: 'Mme Dupont', etablissement: 'Collège de la collègue' }));
+    const { container } = await mount({ mode: 'web', user: { id: 'user_2' } });
+    expect(stored()).toBeNull();
     await click(button(container, /Continuer/));
-    await typeInto(field(container, 'onb-etablissement'), 'Collège de la collègue');
-    await typeInto(field(container, 'onb-nom'), 'Mme Dupont');
-    const other = await reopen({ mode: 'web', user: { id: 'user_2' } });
-    expect(heading(other.container)).toContain('Bienvenue');
-    await click(button(other.container, /Continuer/));
-    expect(field(other.container, 'onb-etablissement').value).toBe('');
-    expect(field(other.container, 'onb-nom').value).toBe('');
-    expect(stored()).not.toContain('collègue');
-    expect(stored()).not.toContain('Dupont');
-    expect(storedDraft().owner).toBe('user_2');
+    expect(field(container, 'onb-etablissement').value).toBe('');
+    expect(field(container, 'onb-nom').value).toBe('');
+  });
+
+  it('un compte qui se reconnecte sur le site ne retrouve pas non plus de brouillon', async () => {
+    sessionStorage.setItem(ONBOARDING_DRAFT_KEY, JSON.stringify({ owner: 'user_1', step: 1, displayName: 'Mme Dupont', etablissement: 'Collège Test' }));
+    const { container } = await mount({ mode: 'web', user: { id: 'user_1' } });
+    expect(stored()).toBeNull();
+    expect(heading(container)).toContain('Bienvenue');
   });
 });
 

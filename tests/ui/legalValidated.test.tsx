@@ -73,8 +73,20 @@ describe('Avis « projet de texte » selon VITE_LEGAL_VALIDATED', () => {
       expect(note(container), page).toBeNull();
       expect(container.textContent, page).not.toContain('Projet de texte');
       expect(container.textContent, page).not.toContain('à faire valider');
+      expect(container.textContent, page).not.toContain("à vérifier par l'éditeur");
       expect(container.querySelector('[data-legal-todo]'), page).toBeNull();
     }
+  });
+
+  it("la consigne destinée à l'éditeur (garanties des transferts hors UE) n'est dans le texte public que tant que les textes ne sont pas validés", async () => {
+    stub(ALL_VARS);
+    const draft = await mount('confidentialite');
+    expect(draft.container.textContent).toContain("Ces garanties sont à vérifier par l'éditeur avant publication.");
+    cleanup();
+    stub({ VITE_LEGAL_VALIDATED: 'true' });
+    const validated = await mount('confidentialite');
+    expect(validated.container.textContent).not.toContain("à vérifier par l'éditeur");
+    expect(validated.container.textContent).toContain('clauses contractuelles types');
   });
 
   it('validé mais incomplet : la liste « Informations à compléter » seule, sans la phrase « projet de texte »', async () => {

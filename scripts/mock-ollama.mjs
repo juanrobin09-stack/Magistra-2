@@ -18,8 +18,7 @@
 // server.state.chats : corps des /api/chat reçus (modèle, think, nombre de messages…), pour les vérifications.
 
 import http from 'node:http';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from './mainModule.mjs';
 
 /** Version annoncée par défaut : récente (≥ 0.13.1, minimum des modèles Magistra). */
 export const MOCK_DEFAULT_VERSION = '0.34.4-mock';
@@ -299,7 +298,7 @@ function parseArgs(argv) {
   return opts;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (isMainModule(import.meta.url)) {
   const server = await startMockOllama(parseArgs(process.argv.slice(2)));
   // Première ligne lisible par les scripts de test : l'adresse effective (utile avec --port 0).
   console.log(`MOCK_OLLAMA_URL ${server.url}`);
