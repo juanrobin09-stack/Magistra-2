@@ -28,8 +28,9 @@
 //     colonnes, ce sont les rangées d'un tableau dont les cellules sont des paragraphes, pas deux colonnes d'article.
 //  4. Une grande partie de la page : les bandes à deux colonnes regroupent au moins 60 % des lignes.
 //  5. Le flux traverse la page : dans la bande, le flux d'origine passe de la colonne de gauche à la ligne voisine de la
-//     colonne de droite (même ligne visuelle, côtés opposés) sur la plupart des lignes, sans trou dans une colonne (deux
-//     colonnes dont les lignes de base diffèrent de plus de 70 % du corps ne partagent pas de ligne visuelle : pas de balayage).
+//     colonne de droite (même ligne visuelle, côtés opposés) sur la plupart des lignes, sans trou dans une colonne (une
+//     ligne sans vis-à-vis à moins de 70 % du corps compte comme un trou, par exemple après un saut de paragraphe qui
+//     décale la phase des lignes de base d'une colonne : l'article n'est alors pas réordonné).
 //     Prioritaire sur les autres : une bande dont le flux est colonne par colonne ou cellule par cellule reste telle quelle,
 //     même si elle ressemble à deux colonnes de texte et n'a aucun saut d'interligne net (cellules sans marge, rangées à
 //     cellules de nombres de lignes différents).
@@ -67,7 +68,10 @@ const MIN_SWEPT_LINES = MIN_COLUMN_LINES;
  * alternance) et la colonne la plus courte. Un article écrit ligne par ligne alterne sur toutes les lignes de la colonne la
  * plus courte (la fin de l'autre colonne n'a plus de vis-à-vis, hors de l'étendue) ; les rangées d'un tableau écrit ligne par
  * ligne laissent un trou dans la colonne de la cellule la plus courte, au milieu de l'étendue. 90 % tolère une ligne isolée
- * mal alignée, pas un tableau dont les cellules diffèrent d'une ligne ou plus dans plusieurs rangées.
+ * mal alignée. Compromis assumé, au profit du tableau : un tableau écrit ligne par ligne dont les cellules ne diffèrent que
+ * d'une ligne peut encore passer pour un article, et un article écrit ligne par ligne dont les paragraphes sont espacés
+ * (la phase des lignes de base dérive d'une colonne à l'autre) garde son ordre d'origine ; un tableau n'est jamais réordonné
+ * quand son flux est écrit cellule par cellule.
  */
 const MIN_SWEPT_SHARE = 0.9;
 /** Deux éléments sont sur la même ligne si leurs lignes de base diffèrent de moins de cette part du plus petit corps (exposants, indices). */

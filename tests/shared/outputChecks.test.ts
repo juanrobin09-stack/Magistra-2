@@ -538,6 +538,10 @@ describe('checkCopyQuotes — citations de la copie (outil « corriger »)', () 
       const headers = [
         'Avant correction', 'Avant corrections', 'AVANT CORRECTION', 'Correction avant relecture', 'Sans correction', 'Texte à corriger',
         'Version initiale', 'Non corrigé', 'Non corrigée', 'Non corrigés', 'Texte original', 'Proposition originale', 'Texte initial corrigé',
+        'Avant reformulation', 'Texte avant reformulation', 'Avant la reformulation', 'Avant réécriture', 'Avant rectification', 'Avant amélioration',
+        'Avant suggestion', 'Avant remplacement', 'Avant toute correction', 'Sans reformulation', 'Sans réécriture', 'Sans amélioration',
+        'Sans rectification', 'Non rectifié', 'Non amélioré', 'Non réécrit', 'Phrase non correcte', 'Forme non correcte', 'Réponse non correcte',
+        'Forme pas correcte',
       ];
       for (const header of headers) {
         expect(checkCopyQuotes(table(`| ${header} | Après correction |`, `| « ${INVENTED} » | « ${FIXED} » |`), copy), header).toHaveLength(1);

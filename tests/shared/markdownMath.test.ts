@@ -71,7 +71,7 @@ describe('normalizeMathDelimiters — inégalités, blancs, pourcentages, citati
   it('inégalité « \\(a<b\\) » : toujours une formule, jamais du texte lu comme une balise HTML « <b et b> »', () => {
     expect(normalizeMathDelimiters('Si \\(a<b\\) et \\(b>0\\) alors \\(a<c\\).')).toBe('Si $$a<b$$ et $$b>0$$ alors $$a<c$$.');
     expect(normalizeMathDelimiters('On a \\( x > 2 \\) donc c > 0.')).toBe('On a $$x > 2$$ donc c > 0.');
-    // Sans inégalité : texte simple, comme avant.
+    // Sans inégalité : texte simple conservé.
     expect(normalizeMathDelimiters('On a \\( x ≤ 3,5 \\).')).toBe('On a x ≤ 3,5.');
   });
 
@@ -115,7 +115,7 @@ describe('normalizeMathDelimiters — inégalités, blancs, pourcentages, citati
     // Une recherche cubique dépasserait la seconde dès 2 000 espaces ; seuil absolu très large pour une machine chargée.
     const BOUND_MS = 3000;
     expect(time(`Prix : 5 $${' '.repeat(20_000)}|`)).toBeLessThan(BOUND_MS);
-    // Même résultat qu'avant : espaces de tête ou de fin retirés d'une formule, montants inchangés.
+    // Espaces de tête ou de fin retirés d'une formule, montants inchangés.
     expect(normalizeMathDelimiters('Soit $ \\frac{1}{2} $ et 5 $ et 10 $.')).toBe('Soit $\\frac{1}{2}$ et 5 $ et 10 $.');
     expect(normalizeMathDelimiters('$\\alpha $ et $ \\beta$ et $\\gamma$')).toBe('$\\alpha$ et $\\beta$ et $\\gamma$');
     expect(normalizeMathDelimiters('Total : 12 $\t\t| 5 $')).toBe('Total : 12 $\t\t| 5 $');

@@ -439,8 +439,8 @@ const MAX_TABLE_PREAMBLE = 3;
 const MAX_HEADER_CHARS = 60;
 /** Mot d'un en-tête de colonne qui annonce une correction proposée (texte déjà passé par `quoteForm`) : « Correction proposée », « Version corrigée », « Forme correcte », « Bonne réponse », « Version améliorée », « Réécrit », « Rectifié », « À écrire », « Remplacement »… */
 const CORRECTION_HEADER_RE = /(?:^| )(?:corrections?|corrig(?:e|ee)s?|correctes?|propos(?:e|ee)s?|propositions?|reformulations?|reecrit(?:ures?|es?|s)?|rectifi(?:e|ee|cation)s?|amelior(?:e|ee|ation)s?|suggestions?|sugger(?:e|ee)s?|attendue?s?|ecrire|remplac[a-z]*|bonnes? reponses?|nouvelles? versions?)(?: |$)/;
-/** Forme d'en-tête qui désigne la copie malgré le mot « correction » : « Avant correction », « Avant relecture », « Sans correction », « Non corrigé », « Version originale », « Texte initial », « À corriger ». Un « avant », « sans » ou « non » seul n'en est pas un (« Corrigé (sans fautes) »). */
-const ORIGINAL_HEADER_RE = /(?:^| )(?:avant (?:(?:la|les|sa|ses) )?(?:corrections?|relectures?)|sans corrections?|non corrigee?s?|a corriger|(?:origina|initia)(?:ux|ls?|les?))(?: |$)/;
+/** Forme d'en-tête qui désigne la copie malgré un mot de correction : « Avant correction », « Avant la reformulation », « Sans relecture », « Non corrigé », « Non rectifié », « Pas correct », « Version originale », « Texte initial », « À corriger ». Un « avant », « sans », « non » ou « pas » seul n'en est pas un (« Corrigé (sans fautes) », « Correction (non exhaustive) »). */
+const ORIGINAL_HEADER_RE = /(?:^| )(?:(?:avant|sans) (?:(?:la|les|sa|ses|toute|toutes) )?(?:corrections?|relectures?|reformulations?|reecritures?|rectifications?|ameliorations?|revisions?|remplacements?|suggestions?|propositions?)|(?:non|pas) (?:corrige|rectifie|ameliore|reecrit|reformule|correct)(?:e|ee|es|s)?|a corriger|(?:origina|initia)(?:ux|ls?|les?))(?: |$)/;
 /** Mot qui désigne la copie : un en-tête mixte (« Erreur et correction », « Phrase de l'élève (corrigée) ») garde le passage de la copie dans sa colonne, qui reste vérifiée. */
 const COPY_HEADER_RE = /(?:^| )(?:passages?|extraits?|citations?|copies?|erreurs?|eleves?)(?: |$)/;
 

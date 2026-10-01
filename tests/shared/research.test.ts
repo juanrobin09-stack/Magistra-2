@@ -215,7 +215,7 @@ describe('stripTags — temps linéaire et fidélité', () => {
     expect(stripTags(html)).toBe('Programme du cycle 3\nLes fractions\nsimples & décimales.\n\nSi a < b alors a < b et c > d.');
   });
 
-  it('<nav> imbriqués et </navbar> : même résultat que l’ancienne expression, sans blocage', () => {
+  it('<nav> imbriqués et </navbar> : résultat attendu, sans blocage', () => {
     expect(stripTags('<nav>a<nav>b</nav>c</nav>Texte')).toBe('c Texte');
     expect(stripTags('<nav>menu</navbar> suite</nav>Texte')).toBe('Texte');
     expect(stripTags('<svg/>Visible')).toBe('Visible');

@@ -818,7 +818,7 @@ describe('temps de construction : longues suites d’espaces et de crochets', ()
   it('lignes d’espaces ou de tabulations (modèle qui boucle) : temps borné, quelle que soit la forme', () => {
     const base = 'Le [[chat]] dort.\n';
     // 190 espaces : sous le seuil de repli de buildCloze, c'est le motif lui-même qui est mis à l'épreuve
-    // (plusieurs secondes par ligne avant correction).
+    // (un motif quadratique mettrait plusieurs secondes par ligne).
     const inputs = [
       `${base}${`${' '.repeat(190)}\n`.repeat(12)}Fin`,
       `${base}${`${'\t'.repeat(190)}x\n`.repeat(12)}Fin`,

@@ -180,7 +180,7 @@ describe('PDF : deux colonnes (lecture colonne de gauche, puis colonne de droite
 });
 
 describe('PDF : mises en page qui ne sont pas deux colonnes de texte (ordre du flux conservé)', () => {
-  /** L'ordre n'est pas touché : même tableau rendu, donc exactement le texte d'avant. */
+  /** L'ordre n'est pas touché : même tableau rendu, donc exactement le texte d'origine. */
   function expectUntouched(items: unknown[]) {
     const ordered = readingOrder(items);
     expect(ordered).toBe(items);

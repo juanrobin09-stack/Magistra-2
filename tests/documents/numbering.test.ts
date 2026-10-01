@@ -263,7 +263,7 @@ describe('DOCX : numérotation héritée d’un style', () => {
   });
 });
 
-describe('DOCX : numérotation absente ou invalide (lecture comme avant)', () => {
+describe('DOCX : numérotation absente ou invalide (lecture inchangée)', () => {
   const plain = body(docxParagraph('Étape un'), docxParagraph('Étape deux'));
   const listBody = [item('Étape un', 1), item('Étape deux', 1)].join('');
   const asBefore = 'Étape un\n\nÉtape deux';
