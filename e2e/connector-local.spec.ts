@@ -966,15 +966,17 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
       });
       // Le texte est arrivé progressivement : plusieurs affichages successifs pendant le flux (la mise en forme
       // Markdown peut raccourcir un instant le texte visible, par exemple quand « **gras** » se referme).
+      // Pas de seuil de croissance fixe : sur une machine chargée, le premier relevé peut tomber tard dans le flux.
       expect(lengths.length, `longueurs successives : ${lengths.join(', ')}`).toBeGreaterThanOrEqual(3);
-      expect(Math.max(...lengths)).toBeGreaterThan(lengths[0] * 3);
+      expect(Math.max(...lengths), `longueurs successives : ${lengths.join(', ')}`).toBeGreaterThan(lengths[0]);
       await expect(result(page).getByRole('heading', { name: 'Cours : La photosynthèse' })).toBeVisible();
       expect(mock!.state.chats.length).toBeGreaterThan(chatsBefore);
       const { drafts, serverGenerations } = await probe(page);
       expect(serverGenerations).toBe(0);
       expect(drafts).toHaveLength(1);
       expect(drafts[0]).toMatchObject({ type: 'cours', niveau: '6eme', matiere: 'francais', sujet: 'La photosynthèse' });
-      expect(drafts[0].contenu).toContain('# Cours : La photosynthèse');
+      // Typographie française : espace insécable avant « : » dans le document final (shared/typography.ts).
+      expect(drafts[0].contenu.replaceAll('\u00a0', ' ')).toContain('# Cours : La photosynthèse');
       expect(drafts[0]).not.toHaveProperty('id');
       // Le site n'a rien demandé au serveur en ligne : ni génération, ni enregistrement direct.
       expect(site.apiRequests.filter(r => !r.endsWith('/api/windows-release'))).toEqual([]);
