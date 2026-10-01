@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // Pages légales ouvertes depuis l'application : « Retour » ramène à la page d'origine ; depuis l'assistant d'accueil
-// (profil en cours de saisie, non conservé), les liens s'ouvrent dans un nouvel onglet.
+// (profil en cours de saisie), les liens s'ouvrent dans un nouvel onglet sur le site web ; dans l'application Windows,
+// ils s'ouvrent dans l'application et le brouillon du profil est restitué au retour (voir onboardingDraft.test.tsx).
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -15,6 +16,7 @@ import { button, byText, cleanup, click, fakeRuntime, flush, MemoryStore, render
 afterEach(() => {
   cleanup();
   setRuntimeConfig(null);
+  sessionStorage.clear();
 });
 
 function routes() {

@@ -3,7 +3,8 @@
 // Aucune identité n'est écrite dans le code : elle vient de variables du BUILD (VITE_LEGAL_*, publiques par nature,
 // affichées sur le site) — et, pour le contact, du MAGISTRA_ADMIN_CONTACT du serveur (GET /api/mode) à défaut.
 // Une information absente reste visible comme « à compléter » dans les pages : un déploiement ne peut pas passer
-// pour complet sans l'être.
+// pour complet sans l'être. Les textes sont un projet à faire valider : l'éditeur qui les a relus (et fait relire)
+// le déclare avec VITE_LEGAL_VALIDATED, ce qui retire l'avis « projet de texte » (jamais les marques « à compléter »).
 
 export type LegalField = 'publisher' | 'director' | 'address' | 'contact' | 'host' | 'dataRegion';
 
@@ -32,6 +33,8 @@ export const LEGAL_FIELDS = Object.keys(LEGAL_ENV_NAMES) as LegalField[];
 export type LegalInfo = Record<LegalField, string | undefined> & {
   /** Informations non renseignées. */
   missing: LegalField[];
+  /** Textes déclarés relus et validés par l'éditeur (VITE_LEGAL_VALIDATED). */
+  validated: boolean;
 };
 
 const MAX_LENGTH = 300;
@@ -42,6 +45,13 @@ function clean(value: unknown): string | undefined {
   const text = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!text) return undefined;
   return text.length > MAX_LENGTH ? `${text.slice(0, MAX_LENGTH - 1)}…` : text;
+}
+
+const VALIDATED_VALUES = new Set(['true', '1', 'oui', 'yes']);
+
+/** « true », « 1 », « oui » ou « yes » (casse et espaces ignorés) : toute autre valeur, ou l'absence, laisse l'avis. */
+function isValidated(value: unknown): boolean {
+  return VALIDATED_VALUES.has(clean(value)?.toLowerCase() ?? '');
 }
 
 /**
@@ -61,6 +71,7 @@ export function readLegalInfo(
     dataRegion: clean(env.VITE_LEGAL_DATA_REGION),
   } as LegalInfo;
   info.missing = LEGAL_FIELDS.filter(field => !info[field]);
+  info.validated = isValidated(env.VITE_LEGAL_VALIDATED);
   return info;
 }
 

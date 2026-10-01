@@ -4,7 +4,8 @@
 // stockage local) ; l'identité de l'éditeur, son contact, son hébergeur viennent des variables VITE_LEGAL_* (voir
 // src/lib/legal.ts) et restent visibles comme « à compléter » tant qu'elles manquent. Le prestataire d'IA est celui
 // que le serveur annonce (GET /api/mode) : la page reste vraie quand AI_PRESET change.
-// Ces textes sont un PROJET à faire valider : l'avis en tête de page le dit.
+// Ces textes sont un PROJET à faire valider : l'avis en tête de page le dit, jusqu'à ce que l'éditeur les déclare
+// validés (VITE_LEGAL_VALIDATED). Une information manquante reste signalée (liste en tête, marque dans le texte).
 
 import type { MouseEvent, ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -94,19 +95,25 @@ function relevantFields(page: LegalPageKind, mode: RuntimeMode): LegalField[] {
 
 function DraftNotice({ info, fields }: { info: LegalInfo; fields: LegalField[] }) {
   const missing = fields.filter(field => info.missing.includes(field));
+  // Textes validés et complets : plus d'avis. Validés mais incomplets : la liste seule, sans la phrase « projet de texte ».
+  if (info.validated && missing.length === 0) return null;
   return (
     <div role="note" className="mb-8 rounded-xl border border-warning/30 bg-warning/10 p-4 text-sm text-mg-50">
-      <p className="flex items-start gap-2 font-semibold text-warning">
-        <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-        <span>Projet de texte, à faire valider avant mise en ligne</span>
-      </p>
-      <p className="mt-1.5">
-        Ce texte a été rédigé à partir du fonctionnement réel de Magistra. Il s'agit d'un modèle de départ : il doit être
-        relu et validé par l'éditeur du site (et, au besoin, par un conseil juridique) avant d'être considéré comme
-        définitif.
-      </p>
+      {!info.validated && (
+        <>
+          <p className="flex items-start gap-2 font-semibold text-warning">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span>Projet de texte, à faire valider avant mise en ligne</span>
+          </p>
+          <p className="mt-1.5">
+            Ce texte a été rédigé à partir du fonctionnement réel de Magistra. Il s'agit d'un modèle de départ : il doit
+            être relu et validé par l'éditeur du site (et, au besoin, par un conseil juridique) avant d'être considéré
+            comme définitif.
+          </p>
+        </>
+      )}
       {missing.length > 0 && (
-        <div className="mt-2" data-legal-missing>
+        <div className={info.validated ? undefined : 'mt-2'} data-legal-missing>
           <p className="font-semibold">Informations à compléter par l'éditeur du site :</p>
           <ul className="mt-1 list-disc pl-5">
             {missing.map(field => (

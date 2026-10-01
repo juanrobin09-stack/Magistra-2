@@ -3,12 +3,15 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BookOpen, Check, ChevronRight, GraduationCap, Loader2, School, Sparkles, Users } from 'lucide-react';
 import { defaultMatiereFor, getMatiereEmoji, getMatiereLabel, getMatieresForNiveau, isMatiereAvailableFor, type Matiere } from '@shared/catalog';
 import { toMagistraError } from '@shared/errors';
-import { ALL_NIVEAUX, NIVEAUX, getNiveauLabel, isNiveau, isSuperieur, type NiveauScolaire } from '@shared/levels';
+import { NIVEAUX, getNiveauLabel, isNiveau, isSuperieur, type NiveauScolaire } from '@shared/levels';
 import type { TeacherProfile } from '@shared/types';
 import { FullPageSpinner } from '@/components/guards';
 import { PersonalAccessScreen } from '@/components/PersonalAccess';
 import LegalLinks from '@/components/LegalLinks';
 import SelectField from '@/components/ui/SelectField';
+import {
+  clearOnboardingDraft, cycleOf, DRAFT_LIMITS, loadOnboardingDraft, saveOnboardingDraft, sortNiveaux, type ProfileDraft,
+} from '@/lib/onboardingDraft';
 import { useOptionalRuntime } from '@/lib/runtime/context';
 import type { RuntimeValue } from '@/lib/runtime/types';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -27,28 +30,11 @@ const LAST_STEP = STEPS.length - 1;
 /** Étapes facultatives : elles seules peuvent être passées. */
 const SKIPPABLE_STEPS = new Set([1, 3]);
 
-interface Draft {
-  displayName: string;
-  etablissement: string;
-  cycle: string;
-  niveaux: NiveauScolaire[];
-  /** Matière choisie explicitement (null : matière par défaut du niveau). */
-  matiereChoisie: Matiere | null;
-  matiereSecondaire: Matiere | null;
-  discipline: string;
-}
+/** Les étapes suivant « Niveaux » exigent au moins une classe. */
+const NIVEAUX_STEP = 2;
+const canReachStep = (target: number, draft: ProfileDraft) => target <= NIVEAUX_STEP || draft.niveaux.length > 0;
 
-function cycleOf(niveau: NiveauScolaire | undefined): string {
-  if (!niveau) return '';
-  return Object.entries(NIVEAUX).find(([, g]) => g.niveaux.some(n => n.value === niveau))?.[0] ?? '';
-}
-
-/** Niveaux dans l'ordre officiel (le premier sert de référence pour les matières). */
-function sortNiveaux(niveaux: NiveauScolaire[]): NiveauScolaire[] {
-  return [...new Set(niveaux)].sort((a, b) => ALL_NIVEAUX.indexOf(a) - ALL_NIVEAUX.indexOf(b));
-}
-
-function draftFromProfile(profile: TeacherProfile | null, fallbackName: string): Draft {
+function draftFromProfile(profile: TeacherProfile | null, fallbackName: string): ProfileDraft {
   if (!profile) {
     return { displayName: fallbackName, etablissement: '', cycle: '', niveaux: [], matiereChoisie: null, matiereSecondaire: null, discipline: '' };
   }
@@ -66,20 +52,20 @@ function draftFromProfile(profile: TeacherProfile | null, fallbackName: string):
 }
 
 /** Matière principale effective : toujours disponible pour le premier niveau choisi. */
-function effectiveMatiere(draft: Draft): Matiere | null {
+function effectiveMatiere(draft: ProfileDraft): Matiere | null {
   const first = draft.niveaux[0];
   if (!first) return null;
   return defaultMatiereFor(first, draft.matiereChoisie ?? undefined);
 }
 
-function effectiveSecondaire(draft: Draft, principale: Matiere | null): Matiere | undefined {
+function effectiveSecondaire(draft: ProfileDraft, principale: Matiere | null): Matiere | undefined {
   const first = draft.niveaux[0];
   const sec = draft.matiereSecondaire;
   if (!first || !sec || sec === principale || !isMatiereAvailableFor(sec, first)) return undefined;
   return sec;
 }
 
-function buildProfile(draft: Draft): TeacherProfile | null {
+function buildProfile(draft: ProfileDraft): TeacherProfile | null {
   const principale = effectiveMatiere(draft);
   if (!principale || draft.niveaux.length === 0) return null;
   const secondaire = effectiveSecondaire(draft, principale);
@@ -131,10 +117,27 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
   // Un profil existant n'est jamais écrasé sans « Enregistrer » explicite : on passe en mode édition.
   const [editing] = useState(() => explicitEdit || runtime.profile !== null);
   const [canCancel] = useState(() => runtime.profile !== null);
-  const [draft, setDraft] = useState<Draft>(() => draftFromProfile(runtime.profile, runtime.user?.firstName ?? ''));
-  const [step, setStep] = useState(() => (editing ? 1 : 0));
+  const owner = runtime.user?.id ?? null;
+  // Nouveau profil : brouillon laissé en quittant l'assistant (page légale lue dans l'application Windows).
+  const [restored] = useState(() => (editing ? null : loadOnboardingDraft(owner, LAST_STEP)));
+  const [draft, setDraft] = useState<ProfileDraft>(() => restored?.draft ?? draftFromProfile(runtime.profile, runtime.user?.firstName ?? ''));
+  const [step, setStep] = useState(() => {
+    if (editing) return 1;
+    if (!restored) return 0;
+    return canReachStep(restored.step, restored.draft) ? restored.step : NIVEAUX_STEP;
+  });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Chaque modification est gardée ; plus rien n'est écrit une fois le profil enregistré ou l'assistant abandonné.
+  const discarded = useRef(false);
+  useEffect(() => {
+    if (!editing && !discarded.current) saveOnboardingDraft(owner, draft, step);
+  }, [editing, owner, draft, step]);
+  const discardDraft = () => {
+    discarded.current = true;
+    clearOnboardingDraft();
+  };
 
   const headingRef = useRef<HTMLHeadingElement>(null);
   const previousStep = useRef(step);
@@ -153,8 +156,8 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
   const superieur = firstNiveau ? isSuperieur(firstNiveau) : draft.cycle === 'superieur';
   const niveauxValid = draft.niveaux.length > 0;
 
-  const canReach = (target: number) => target <= 2 || niveauxValid;
-  const canNext = step === 2 ? niveauxValid : true;
+  const canReach = (target: number) => canReachStep(target, draft);
+  const canNext = step === NIVEAUX_STEP ? niveauxValid : true;
   const cancelTarget = explicitEdit ? '/app/settings' : '/app';
 
   const goTo = (target: number) => {
@@ -175,13 +178,14 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
   const handleSave = async () => {
     const profile = buildProfile(draft);
     if (!profile) {
-      setStep(2);
+      setStep(NIVEAUX_STEP);
       return;
     }
     setSaving(true);
     setSaveError(null);
     try {
       await runtime.saveProfile(profile);
+      discardDraft();
       navigate('/app', { replace: true });
     } catch (err) {
       setSaveError(`Enregistrement impossible : ${toMagistraError(err).message}`);
@@ -203,7 +207,14 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm text-mg-200">Modification de votre profil</p>
             {canCancel && (
-              <button type="button" className="btn-ghost text-sm py-1.5 px-3" onClick={() => navigate(cancelTarget)}>
+              <button
+                type="button"
+                className="btn-ghost text-sm py-1.5 px-3"
+                onClick={() => {
+                  discardDraft();
+                  navigate(cancelTarget);
+                }}
+              >
                 Annuler
               </button>
             )}
@@ -290,7 +301,7 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
                     onChange={e => setDraft(d => ({ ...d, etablissement: e.target.value }))}
                     placeholder="Ex : Université de Bordeaux, Collège Victor Hugo…"
                     className="input-field text-base"
-                    maxLength={160}
+                    maxLength={DRAFT_LIMITS.etablissement}
                     autoComplete="organization"
                   />
                 </div>
@@ -305,7 +316,7 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
                     onChange={e => setDraft(d => ({ ...d, displayName: e.target.value }))}
                     placeholder="Ex : Mme Dupont, M. Martin…"
                     className="input-field"
-                    maxLength={80}
+                    maxLength={DRAFT_LIMITS.displayName}
                     autoComplete="name"
                   />
                 </div>
@@ -314,7 +325,7 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
           )}
 
           {/* === Étape 2 : Cycle et niveaux (obligatoire) === */}
-          {step === 2 && (
+          {step === NIVEAUX_STEP && (
             <div className="animate-fade-in">
               <div className="flex items-center gap-2 mb-1">
                 <Users size={20} className="text-accent" aria-hidden="true" />
@@ -443,7 +454,7 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
                     onChange={e => setDraft(d => ({ ...d, discipline: e.target.value }))}
                     placeholder={superieur ? 'Ex : Systèmes d’information, Droit public, Microbiologie…' : 'Ex : Lettres modernes, Section européenne…'}
                     className="input-field"
-                    maxLength={120}
+                    maxLength={DRAFT_LIMITS.discipline}
                     aria-describedby="onb-discipline-help"
                   />
                   <p id="onb-discipline-help" className="text-xs text-mg-300 mt-1.5">
@@ -527,7 +538,7 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
             ) : runtime.mode === 'local' && !canCancel ? (
               // Application Windows, premier lancement : ni barre d'adresse ni bouton « précédent » — la présentation
               // de Magistra (page d'accueil tant qu'aucun profil n'existe) reste à un clic, jamais une impasse.
-              <Link to="/" className="btn-ghost text-sm">← Présentation</Link>
+              <Link to="/" onClick={discardDraft} className="btn-ghost text-sm">← Présentation</Link>
             ) : <div />}
 
             {step < LAST_STEP ? (
@@ -535,7 +546,7 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
                 type="button"
                 onClick={() => goTo(step + 1)}
                 disabled={!canNext}
-                aria-describedby={step === 2 && !canNext ? 'onb-niveaux-hint' : undefined}
+                aria-describedby={step === NIVEAUX_STEP && !canNext ? 'onb-niveaux-hint' : undefined}
                 className="btn-primary text-sm py-2.5 px-6"
               >
                 Continuer <ChevronRight size={14} aria-hidden="true" />
@@ -549,9 +560,9 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
           </div>
         </div>
 
-        {/* Avant de créer son espace : où lire comment les données sont traitées (pages publiques). Nouvel onglet : le profil
-            en cours de saisie n'est pas conservé si l'assistant est quitté. Application Windows : pas d'onglet, les pages
-            s'ouvrent dans l'application. */}
+        {/* Avant de créer son espace : où lire comment les données sont traitées (pages publiques). Site web : nouvel
+            onglet, l'assistant reste en place. Application Windows : pas d'onglet, les pages s'ouvrent dans l'application
+            et le brouillon (onboardingDraft) rend le profil saisi et l'étape au retour. */}
         {!editing && (
           <p className="text-center text-xs text-mg-300 mt-5">
             En continuant, vous pouvez consulter : <LegalLinks newTab={runtime.mode !== 'local'} />
