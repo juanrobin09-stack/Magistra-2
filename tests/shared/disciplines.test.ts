@@ -138,18 +138,16 @@ describe('disciplines : cohérence entre le niveau et la règle', () => {
     }
   });
 
-  it('EVARS au collège : variante prudente, sans contraception ni IST de la 6e à la 3e', () => {
+  it('EVARS au collège : variante bornée par niveau, contraception et IST réservées à la 4e-3e', () => {
     const college = DISCIPLINES.evars.groups?.college ?? '';
     expect(college).not.toBe('');
     expect(college).not.toBe(DISCIPLINES.evars.default);
-    expect(college).not.toMatch(/contraception|\bIST\b|\bVIH\b/i);
-    for (const word of ['puberté', 'respect', 'consentement', 'égalité']) expect(college.toLowerCase(), word).toContain(word);
-    // Le contenu du cycle 4 n'est abordé que « selon le programme ».
-    expect(college).toMatch(/cycle 4.*selon le programme/);
+    for (const word of ['puberté', 'respect', 'consentement', 'égalité', 'neutres', 'sans jugement moral']) expect(college.toLowerCase(), word).toContain(word);
+    // Les contenus les plus sensibles ne sont cités qu'avec leur borne de niveau et leur renvoi au programme.
+    expect(college).toMatch(/[Cc]ontraception et IST seulement en 4e-3e, selon le programme/);
+    expect(college).toMatch(/en 6e, rien d'explicite/);
     for (const niveau of ['6eme', '5eme', '4eme', '3eme'] as NiveauScolaire[]) {
-      const prompt = sys({ type: 'cours', niveau, matiere: 'evars' });
-      expect(prompt, niveau).toContain(`DISCIPLINE : ${college}`);
-      expect(prompt, niveau).not.toMatch(/contraception|\bIST\b/);
+      expect(sys({ type: 'cours', niveau, matiere: 'evars' }), niveau).toContain(`DISCIPLINE : ${college}`);
     }
     // Le lycée garde la règle générale.
     expect(disciplineRule('evars', 'lycee')).toBe(DISCIPLINES.evars.default);

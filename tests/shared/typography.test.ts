@@ -74,7 +74,7 @@ describe('normalizeFrenchTypography : sortie dégénérée', () => {
   };
 
   // Un modèle qui boucle peut sortir des dizaines de milliers de blancs ou de débuts de balise sans fin : le temps doit
-  // rester linéaire (plusieurs secondes avec les anciens motifs, quelques millisecondes ensuite ; seuil très large).
+  // rester linéaire (quelques millisecondes ; seuil très large).
   const degenerate: Array<[string, string]> = [
     ['ligne d’espaces', `Corrigé : B\n${' '.repeat(100_000)}\nFin`],
     ['ligne de tabulations', `${'\t'.repeat(100_000)}x`],
@@ -85,12 +85,22 @@ describe('normalizeFrenchTypography : sortie dégénérée', () => {
     ['« <br » répété sans « > »', '<br'.repeat(40_000)],
     ['« \\( » jamais fermé', '\\('.repeat(100_000)],
     ['« \\[ » jamais fermé', '\\['.repeat(100_000)],
+    ['« \\\\[ » (saut de ligne LaTeX) répété', '\\\\['.repeat(60_000)],
+    ['« \\[ » suivi de « \\\\ » répétés', `\\[${'\\\\'.repeat(60_000)}`],
     ['« ]( » jamais fermé', ']('.repeat(100_000)],
   ];
 
   it.each(degenerate)('%s : temps borné', (_name, input) => {
     expect(input.length).toBeGreaterThanOrEqual(100_000);
     expect(elapsed(() => fr(input))).toBeLessThan(1000);
+  });
+
+  it('un saut de ligne LaTeX « \\\\[2pt] » ou « \\\\(b) » ne ferme ni n’ouvre une formule : elle reste protégée en entier', () => {
+    const display = '\\[ f : x \\mapsto y \\\\[2pt] g : y \\mapsto z \\]';
+    const inline = 'Soit \\( f : x \\mapsto y \\\\(b) g : y \\mapsto z \\) ici : fin';
+    expect(fr(display)).toBe(display);
+    expect(fr(inline)).toBe(`Soit \\( f : x \\mapsto y \\\\(b) g : y \\mapsto z \\) ici${NB}: fin`);
+    expect(fr(`Voici : ${display} Fin : ok`)).toBe(`Voici${NB}: ${display} Fin${NB}: ok`);
   });
 
   it('une ligne d’espaces ne gêne pas le reste du texte', () => {

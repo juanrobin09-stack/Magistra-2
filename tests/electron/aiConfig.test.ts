@@ -213,6 +213,23 @@ describe('fichier existant illisible au démarrage : jamais écrasé en silence'
     expect(JSON.parse(readFileSync(path.join(dir, copies[0]), 'utf8'))).toEqual(existing);
   });
 
+  it('illisible ET copie impossible : rien n’est écrit, le fichier reste intact ; une fois le verrou levé, son contenu est adopté', async () => {
+    const state = { denied: true };
+    denyConfigReads(state, 'EPERM');
+    const copyFile = vi.spyOn(fsp, 'copyFile').mockRejectedValue(Object.assign(new Error('EPERM: fichier verrouillé'), { code: 'EPERM' }));
+    const store = await loadWhileLocked(state);
+    await expect(store.adoptInstalledTier('leger')).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    await expect(store.update({ ollamaUrl: 'http://127.0.0.1:23456' })).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    await expect(store.update({ tier: 'leger' })).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(existing);
+    expect(readdirSync(dir)).toEqual(['ai-config.json']);
+    state.denied = false;
+    copyFile.mockRestore();
+    await expect(store.update({ ollamaUrl: 'http://127.0.0.1:23456' })).resolves.toMatchObject({ mode: 'remote', customModel: 'qwen3:8b', remote: { hasApiKey: true } });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ mode: 'remote', remote: existing.remote });
+    expect(readdirSync(dir)).toEqual(['ai-config.json']);
+  });
+
   it('des écritures simultanées ne font qu’une copie', async () => {
     const state = { denied: true };
     denyConfigReads(state);

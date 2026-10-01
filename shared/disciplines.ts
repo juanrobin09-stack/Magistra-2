@@ -205,7 +205,7 @@ export const DISCIPLINES: Record<Matiere, DisciplineRule> = {
   evars: {
     default: "Champs : biologique, psycho-émotionnel, juridique et social. Informations exactes (anatomie, puberté, contraception, IST, consentement, droit), neutres, sans jugement moral. Égalité, prévention des violences et du harcèlement ; aucun récit intime demandé.",
     groups: {
-      college: "Puberté et changements du corps (vocabulaire exact), émotions, respect de soi et d'autrui, consentement, égalité filles-garçons, prévention des violences et du harcèlement. En 6e, rien d'explicite ; contenus du cycle 4 (5e-3e) seulement selon le programme ; aucun récit intime demandé.",
+      college: "Puberté et corps (vocabulaire exact), émotions, respect, consentement, égalité filles-garçons, prévention des violences et du harcèlement. Informations exactes, neutres, sans jugement moral. Contraception et IST seulement en 4e-3e, selon le programme ; en 6e, rien d'explicite. Aucun récit intime.",
     },
   }, // sources : https://www.education.gouv.fr/bo/2025/Hebdo6/MENE2503064A ; https://www.ih2ef.gouv.fr/publication-des-programmes-deducation-la-vie-affective-et-relationnelle-et-la-sexualite-evars
   anglais: {

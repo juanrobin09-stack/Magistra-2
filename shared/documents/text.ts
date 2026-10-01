@@ -28,7 +28,7 @@ const PLURALS_IN_AU = new Set(['noyaux', 'tuyaux', 'boyaux', 'joyaux', 'materiau
  * Racinisation très légère : suffisante pour rapprocher « gouvernance » / « gouverner » / « gouvernances ».
  * Seuls pluriels irréguliers traités : -eaux → -eau (niveaux, réseaux, tableaux, bateaux) et les noms de
  * PLURALS_IN_AU (noyaux, tuyaux, matériaux) ; sinon -aux → -al (animaux / animal, journaux / journal,
- * chevaux / cheval). Les mots de 5 lettres ou moins (beaux, faux, eaux) restent tels quels. Aucune règle verbale ou
+ * chevaux / cheval). Les mots de 4 lettres ou moins (faux, eaux, taux) et les autres -aux de 5 lettres restent tels quels. Aucune règle verbale ou
  * dérivationnelle : elles rapprocheraient aussi des mots sans rapport et déplaceraient le classement de tous les
  * documents. Le mot est supposé déjà normalisé (minuscules, sans accents), comme le fait `tokenize`.
  */

@@ -18,11 +18,12 @@ const HOLD = '';
  * Motifs en temps linéaire, même sur une sortie dégénérée (lignes de milliers d'espaces, « <a » ou « \( » répétés et
  * jamais fermés) : un corps de balise, de formule ou de lien ne contient pas de nouvelle ouverture, et deux blocs
  * d'espaces ne se suivent pas sans caractère entre eux, sinon chaque début possible reparcourt toute la suite.
+ * Dans une formule, « \\ » (saut de ligne LaTeX, « \\[2pt] » compris) est une unité : il ne ferme ni n'ouvre rien.
  */
 const PROTECTED: readonly RegExp[] = [
   /\$\$[\s\S]*?\$\$/g,
-  /\\\((?:(?!\\\()[\s\S])*?\\\)/g,
-  /\\\[(?:(?!\\\[)[\s\S])*?\\\]/g,
+  /(?<!\\)\\\((?:\\\\|\\(?![\\()])|[^\\])*\\\)/g,
+  /(?<!\\)\\\[(?:\\\\|\\(?![\\[\]])|[^\\])*\\\]/g,
   /\$[^$\n]+\$/g,
   /<\/?[A-Za-z][^<>\n]*>/g,
   /\b(?:https?:\/\/|www\.)[^\s<>"'[\]()]*/gi,

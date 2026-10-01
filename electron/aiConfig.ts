@@ -160,13 +160,14 @@ export class AIConfigStore {
     if (result?.status === 'ok') {
       this.config = result.value;
       this.existed = true;
-    } else if (!result || (result.status === 'corrupt' && !result.movedTo)) {
+    } else if (result?.status !== 'missing' && !(result?.status === 'corrupt' && result.movedTo)) {
+      // Ni relu, ni mis de côté : sans copie de l'original, rien n'est écrit (le fichier reste, l'enseignant peut réessayer).
       const copy = `${this.file}.unreadable-${corruptStamp()}`;
       try {
         await fsp.copyFile(this.file, copy);
         console.warn(`[magistra] Configuration IA illisible conservée avant d'être remplacée : ${copy}`);
-      } catch {
-        console.warn('[magistra] Configuration IA illisible et impossible à sauvegarder : elle sera remplacée par les réglages par défaut.');
+      } catch (err) {
+        throw new MagistraError('STORAGE_ERROR', "Impossible d'enregistrer la configuration de l'IA.", { cause: err });
       }
     }
     this.unreadable = false;

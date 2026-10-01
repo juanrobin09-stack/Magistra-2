@@ -1219,3 +1219,38 @@ Après les corrections, cinq relectures adversariales indépendantes (sécurité
 | Conformité | Nom technique du modèle dans le détail de l'historique | nom Magistra (Léger, Standard, Qualité) | `src/components/history/GenerationDetail.tsx` |
 
 **Signalé mais non modifié** (décision de sécurité de la session) : deux retouches de tests Electron (`tests/electron/security.test.ts`, `tests/electron/preload.test.ts`) et une retouche cosmétique de `src/components/UpdateCheck.tsx` ont été refusées par le contrôle de permissions ; les comportements concernés sont couverts par `tests/electron/updateCheck.test.ts`. La migration SQL qui réécrirait les anciennes lignes de `generations` en clés (n° 87) a été refusée pour la même raison ; l'affichage et les statistiques n'en ont plus besoin.
+
+---
+
+## Durcissement avant production
+
+Audit en lecture seule du site et de l'application Windows par dimensions (serveur, Electron, connecteur local, documents, pipeline IA, interface, chaîne de livraison), puis attaque de chaque constat par des vérificateurs indépendants : **54 constats confirmés, 42 réfutés**. Les constats réels sont corrigés ; une seconde revue, portant sur les correctifs eux-mêmes, a confirmé **22 constats** (cinq majeurs) tous traités ci-dessous, et deux correctifs ont encore été repris après relecture.
+
+**Vérifié sans défaut** : `AI_API_KEY` et la clé « service role » absentes du navigateur, du bundle et du renderer ; protection SSRF du proxy IA ; signatures des webhooks ; RLS Supabase ; CSP ; Origin/Host stricts et boucle locale seulement pour le connecteur ; aucun accès Ollama générique ; jamais de repli silencieux de l'IA locale vers un tiers.
+
+| Domaine | Constat | Correction | Preuve |
+|---|---|---|---|
+| Sécurité web | Un compte pouvait stocker sans limite | plafond de 5 000 contenus et 100 Mo par compte (déclencheur SQL, erreur 409 sans détail) | `tests/server/storageCap.test.ts` |
+| Sécurité web | Identifiants de clé Clerk inconnus : un appel à Clerk par jeton forgé en l'absence de `CLERK_JWT_KEY` (la raison réellement émise est `jwk-kid-mismatch`) | verrou d'une minute sur les deux raisons ; un jeton valide d'une clé connue n'est jamais refusé | `tests/server/clerk.test.ts` (vrai `verifyToken`, JWKS simulé), `tests/server/clerkColdStart.test.ts` |
+| Sécurité Electron | Plusieurs prédicats de « boucle locale » | un seul (`shared/ai/loopback.ts`), strict | `tests/electron/loopback.test.ts` |
+| Sécurité Electron | Un programme local pouvait verrouiller l'appairage | blocage 429 par navigateur appairé et routes signées seulement | `tests/electron/connectorServer.test.ts` |
+| Sécurité Electron | `aiConfig.json` verrouillé au démarrage (antivirus) : plantage, puis écrasement par les valeurs par défaut | démarrage avec les défauts en mémoire ; avant toute écriture : relecture (contenu adopté) ou copie `.unreadable-<date>`, sinon aucune écriture | `tests/electron/aiConfig.test.ts` |
+| Livraison | Paquet Windows non inspecté | `scripts/verify-package.mjs` : fusibles, intégrité de l'asar, contenu, secrets (noms, `sb_secret_`, JWT `service_role` décodé), chemins natifs sous Windows, lancement par lien symbolique | `tests/ci/verifyPackage.test.ts` |
+| Livraison | Mises à jour de dépendances manuelles | Dependabot : mineures et correctifs groupés, majeures groupées, Electron à part ; `SECURITY.md`, `CODEOWNERS` | `tests/ci/repoSecurity.test.ts` |
+| Documents | Extraction XML quadratique (40 000 blocs vides ≈ 19 s), balayage non borné | recherche bornée à la fenêtre du bloc ; décompression bornée | `tests/documents/robustness.test.ts` |
+| Documents | En-têtes courants : un énoncé avec fraction (« 3/4 ») supprimé dès la page 2 | seul le numéro de page est neutralisé | `tests/documents/quality.test.ts` |
+| Documents | Plusieurs dépôts successifs : plus de deux analyses simultanées | limiteur unique par formulaire | `tests/documents/queue.test.tsx` |
+| Documents | « noyaux », « niveaux », « matériaux » non rapprochés du singulier | -eaux → -eau ; noyaux/tuyaux/boyaux/joyaux/matériaux → -au (« travaux » → « travail » reste non géré) | `tests/documents/quality.test.ts` |
+| IA | Texte à trous, typographie : expressions à retour arrière (60 000 espaces ≈ 2 s) | motifs linéaires, `\\` LaTeX traité comme une unité | `tests/shared/cloze.test.ts`, `tests/shared/typography.test.ts` |
+| IA | Titre de section d'un document injecté (lien, saut de ligne) dans « Sources utilisées » et le prompt | titre toujours sur une ligne, neutralisé | `tests/shared/citations.test.ts`, `tests/shared/prompts.test.ts` |
+| IA | Correction proposée entre guillemets prise pour une citation inventée | marqueurs de correction, sources comptées comme référence ; citation inventée alerte toujours | `tests/shared/outputChecks.test.ts` |
+| IA | Typographie sautée pour les appréciations d'une classe de langue | condition unique `targetLanguageOf`, partagée avec la règle de langue | `tests/shared/pipeline.test.ts` |
+| IA | Règles de matière non bornées par niveau (6e en « cycle 4 », EVARS) | règles bornées, variante collège d'EVARS, test de cohérence | `tests/shared/disciplines.test.ts` |
+| IA | Peu de précision par matière ; fautes d'accord ; énoncés répétitifs | règle par matière (63), consigne d'orthographe, consigne « Variété », températures 0,2 / 0,3 / 0,45, espaces insécables | `tests/shared/disciplines.test.ts`, `tests/shared/formats.test.ts` |
+| IA | Sujets proposés peu variés | 4 506 idées par classe, tirage aléatoire, « Autres idées » | `tests/shared/suggestions.test.ts` |
+| Interface | Mentions légales : hébergeur et base Supabase affirmés en mode personnel et démonstration | affichés en mode web seulement ; bandeau « à compléter » aligné | `tests/ui/legalMentionsModes.test.tsx` |
+| Interface | Échec de chargement d'un module après mise à jour : boucle ou erreur avalée | un rechargement par minute, jamais hors ligne, l'erreur d'origine remonte sinon | `tests/ui/preloadRecovery.test.ts` |
+| Interface | Liens légaux de l'assistant d'accueil : profil en cours de saisie perdu | nouvel onglet ; « Retour » par l'historique | `tests/ui/legalOrigin.test.tsx` |
+| Interface | « Autres idées » non annoncé aux lecteurs d'écran | région `role="status"` | `tests/ui/ideasAnnouncement.test.tsx` |
+
+**Limites connues** : la vérification des programmes (règles par matière, idées de sujets) est partielle faute d'accès aux sites officiels depuis l'environnement de développement ; un petit modèle local fait encore des erreurs de grammaire ou de fait ; PDF à colonnes et numérotation DOCX non traités ; installeur Windows non signé ; pages légales : projet à faire valider par l'éditeur.
