@@ -237,6 +237,15 @@ describe('historique', () => {
     expect(excerptOf('[lien](https://x.fr) et `code`')).toBe('lien et code');
   });
 
+  it('extrait d’un contenu démesuré (100 000 crochets) : immédiat, et identique pour un contenu ordinaire', () => {
+    const t0 = Date.now();
+    excerptOf('['.repeat(100_000));
+    excerptOf(`${'Texte utile. '.repeat(10)}${'[]('.repeat(60_000)}`);
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(excerptOf('# Titre\n\nUn paragraphe **important**.')).toBe(excerptOf('# Titre\n\nUn paragraphe **important**.'.slice(0, 4_000)));
+    expect(excerptOf('# Titre\n\nUn paragraphe **important**.').startsWith('Titre Un paragraphe important')).toBe(true);
+  });
+
   it('favoris, lecture, suppression', async () => {
     const store = makeStore();
     await store.init();

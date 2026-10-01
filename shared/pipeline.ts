@@ -145,6 +145,18 @@ function rankingQueryText(req: GenerationRequest): string {
     .trim();
 }
 
+/**
+ * Requête de classement des passages des documents (local, jamais envoyée) : celle ci-dessus et les consignes ; pour la
+ * différenciation et la correction, dont le sujet est facultatif, le début du texte à adapter ou de la copie la complète
+ * quand le sujet et les objectifs tiennent en moins de 40 caractères (sinon la requête se réduirait à « SVT »).
+ */
+function passageQueryText(req: GenerationRequest): string {
+  const base = `${rankingQueryText(req)} ${req.consignes ?? ''}`.replace(/\s+/g, ' ').trim();
+  if (`${req.sujet ?? ''} ${req.objectifs ?? ''}`.trim().length >= 40) return base;
+  const excerpt = (req.contenuSource ?? req.texteEleve ?? '').slice(0, 1_200).replace(/\s+/g, ' ').trim().slice(0, 300);
+  return excerpt ? `${base} ${excerpt}`.trim() : base;
+}
+
 /** Coût (en caractères) d'un passage dans le prompt : texte + ligne de description + délimiteurs. */
 function passageCost(p: DocumentPassage): number {
   return p.text.length + p.docName.length + 90;
@@ -314,7 +326,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     const docs = modeUsesDocuments(req.researchMode) ? req.documents ?? [] : [];
     if (docs.length > 0) yield { type: 'status', stage: 'context', message: 'Sélection des passages utiles de vos documents…' };
     const docBudget = wantsResearch && deps.research ? Math.floor(budgets.sourcesChars * 0.6) : budgets.sourcesChars;
-    const fitted = fitPassages(docs, `${rankingQueryText(req)} ${req.consignes ?? ''}`, docBudget);
+    const fitted = fitPassages(docs, passageQueryText(req), docBudget);
     let docsWarned = false;
     if (docs.length > 0 && fitted.reduced) {
       docsWarned = true;

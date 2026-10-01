@@ -43,7 +43,7 @@ import { useCapabilities, useGeneration } from '@/hooks/useGeneration';
 import { activationBlocker } from '@/lib/ai-ui/activation';
 import { selectPassages } from '@/lib/documents';
 import {
-  buildGenerationRequest, buildPassageQuery, createInitialForm, DEFAULT_DOCUMENT_BUDGET, validateForm, withNiveau,
+  buildGenerationRequest, buildWeightedPassageQuery, createInitialForm, DEFAULT_DOCUMENT_BUDGET, validateForm, withNiveau,
   type GenerateForm,
 } from '@/lib/generation/request';
 import {
@@ -363,7 +363,7 @@ export default function GeneratePage() {
     let passages: DocumentPassage[] | undefined;
     try {
       passages = modeUsesDocuments(researchMode) && sources.readyDocs.length > 0
-        ? selectPassages(sources.readyDocs, buildPassageQuery(form, form.type), {
+        ? selectPassages(sources.readyDocs, buildWeightedPassageQuery(form, form.type), {
           budgetChars: caps?.maxDocumentChars ?? DEFAULT_DOCUMENT_BUDGET,
         })
         : undefined;

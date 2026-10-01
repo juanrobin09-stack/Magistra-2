@@ -512,6 +512,20 @@ describe('runGeneration — budget de contexte', () => {
     expect(last(events).type).toBe('done');
   });
 
+  it('différenciation et correction sans sujet : le début du texte à adapter ou de la copie sert à choisir les passages', async () => {
+    const docs = Array.from({ length: 8 }, (_, i) => passage(`chapitre-${i}.pdf`, i * 10 + 1, i * 10 + 9,
+      `${i === 3 ? 'Les stomates des feuilles permettent les échanges gazeux de la plante. ' : 'Chapitre sans rapport : histoire de l’informatique. '}${'Texte de remplissage. '.repeat(90)}`));
+    for (const extra of [
+      { type: 'differenciation' as const, contenuSource: 'Exercice : expliquer le rôle des stomates dans les échanges gazeux de la plante.' },
+      { type: 'corrige' as const, texteEleve: 'Les stomates servent aux échanges gazeux de la plante, par les feuilles.' },
+    ]) {
+      const provider = new MockProvider({ reply: 'Texte [S1].', contextTokens: 4_096 });
+      const events = await collect(runGeneration(request({ matiere: 'svt', niveau: '5eme', sujet: '', objectifs: undefined, consignes: undefined, documents: docs, ...extra }), { provider }));
+      const sources = ofType(events, 'sources')[0].sources;
+      expect(sources[0].docName, extra.type).toBe('chapitre-3.pdf');
+    }
+  });
+
   it('un seul document trop long : le début du passage est gardé (tronqué) plutôt que rien', async () => {
     const huge = [passage('these.pdf', 1, 60, `La gouvernance des SI. ${'Phrase longue du document de thèse. '.repeat(400)}`)];
     const provider = new MockProvider({ reply: 'ok', contextTokens: 4_096 });

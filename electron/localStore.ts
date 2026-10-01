@@ -20,6 +20,8 @@ import { cleanupTempFiles, readJsonFile, withFileLock, writeJsonAtomic } from '.
 import { isSafeId, parseStoredPreferences, parseStoredProfile, sanitizeStoredDocument, type ListQuery } from './validate.js';
 
 export const EXCERPT_LENGTH = 240;
+/** Début du contenu analysé pour fabriquer l'extrait (largement plus que les 240 caractères conservés). */
+const EXCERPT_SOURCE_CHARS = 4_000;
 
 export interface LocalStoreOptions {
   now?: () => Date;
@@ -34,7 +36,9 @@ interface IndexEntry {
 
 /** Extrait lisible (~240 caractères) d'un contenu Markdown, pour la liste de l'historique. */
 export function excerptOf(markdown: string, max = EXCERPT_LENGTH): string {
+  // Seul le début compte : borner l'entrée évite tout traitement coûteux sur un très long contenu (listes de crochets…).
   const text = markdown
+    .slice(0, EXCERPT_SOURCE_CHARS)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')

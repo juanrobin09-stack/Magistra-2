@@ -117,7 +117,17 @@ export class AIConfigStore {
   }
 
   async load(): Promise<void> {
-    const result = await readJsonFile(this.file, raw => parseStored(raw, this.defaults));
+    let result: Awaited<ReturnType<typeof readJsonFile<StoredAIConfig>>>;
+    try {
+      result = await readJsonFile(this.file, raw => parseStored(raw, this.defaults));
+    } catch (err) {
+      // Fichier verrouillé ou refusé (antivirus, droits : EBUSY, EPERM…) : jamais d'échec au démarrage ; réglages par
+      // défaut pour cette session, sans toucher au fichier.
+      console.warn(`[magistra] Configuration IA impossible à lire (${(err as NodeJS.ErrnoException).code ?? 'erreur'}) : réglages par défaut pour cette session.`);
+      this.existed = true;
+      this.config = { ...this.defaults };
+      return;
+    }
     if (result.status === 'corrupt') console.warn(`[magistra] Configuration IA illisible mise de côté : ${result.movedTo ?? this.file}`);
     this.existed = result.status === 'ok';
     this.config = result.status === 'ok' ? result.value : { ...this.defaults };

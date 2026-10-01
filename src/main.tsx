@@ -20,6 +20,29 @@ import { captureAccessFromUrl } from '@/lib/runtime/personal';
 const container = document.getElementById('root')!;
 
 /**
+ * Nouvelle version déployée pendant que la page est ouverte : un fichier de l'ancienne version (nom à empreinte) n'existe
+ * plus et le chargement d'une page échoue. Un seul rechargement automatique (drapeau de session, effacé après 10 s de
+ * fonctionnement normal) ; au-delà, l'erreur est affichée normalement : jamais de boucle de rechargement.
+ */
+window.addEventListener('vite:preloadError', event => {
+  event.preventDefault();
+  try {
+    if (sessionStorage.getItem('magistra_preload_reload')) return;
+    sessionStorage.setItem('magistra_preload_reload', '1');
+  } catch {
+    return;
+  }
+  window.location.reload();
+});
+window.setTimeout(() => {
+  try {
+    sessionStorage.removeItem('magistra_preload_reload');
+  } catch {
+    // Stockage indisponible : sans conséquence.
+  }
+}, 10_000);
+
+/**
  * Signale à l'application Windows que l'interface est affichée (test de démarrage automatisé) :
  * dès que React a inséré le premier rendu dans #root, puis après l'affichage de l'image suivante.
  */

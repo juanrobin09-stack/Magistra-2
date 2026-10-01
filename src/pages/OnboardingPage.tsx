@@ -7,6 +7,7 @@ import { ALL_NIVEAUX, NIVEAUX, getNiveauLabel, isNiveau, isSuperieur, type Nivea
 import type { TeacherProfile } from '@shared/types';
 import { FullPageSpinner } from '@/components/guards';
 import { PersonalAccessScreen } from '@/components/PersonalAccess';
+import LegalLinks from '@/components/LegalLinks';
 import SelectField from '@/components/ui/SelectField';
 import { useOptionalRuntime } from '@/lib/runtime/context';
 import type { RuntimeValue } from '@/lib/runtime/types';
@@ -547,6 +548,13 @@ function OnboardingWizard({ runtime, explicitEdit }: { runtime: RuntimeValue; ex
             )}
           </div>
         </div>
+
+        {/* Avant de créer son espace : où lire comment les données sont traitées (pages publiques, ouvertes dans l'application) */}
+        {!editing && (
+          <p className="text-center text-xs text-mg-300 mt-5">
+            En continuant, vous pouvez consulter : <LegalLinks />
+          </p>
+        )}
 
         {/* Seules les étapes facultatives peuvent être passées */}
         {SKIPPABLE_STEPS.has(step) && (

@@ -1,6 +1,6 @@
 // Configuration de l'IA : la clé API n'est JAMAIS renvoyée à la fenêtre ni écrite en clair.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -120,5 +120,17 @@ describe('niveau et fichier de configuration', () => {
     expect(safeStorageCipher({ ...base, getSelectedStorageBackend: () => 'gnome_libsecret' }, 'linux').isAvailable()).toBe(true);
     expect(safeStorageCipher(base, 'win32').isAvailable()).toBe(true);
     expect(safeStorageCipher({ ...base, isEncryptionAvailable: () => false }, 'win32').isAvailable()).toBe(false);
+  });
+});
+
+describe('lecture de la configuration', () => {
+  it('fichier illisible (EISDIR, comme EBUSY ou EPERM sous Windows) : réglages par défaut, jamais d’échec au démarrage, fichier intact', async () => {
+    // Un dossier à la place du fichier : la lecture échoue avec un code autre que ENOENT.
+    mkdirSync(file);
+    writeFileSync(path.join(file, 'x'), 'garde');
+    const store = new AIConfigStore(file, fakeCipher());
+    await expect(store.load()).resolves.toBeUndefined();
+    expect(store.get().mode).toBe('local');
+    expect(readFileSync(path.join(file, 'x'), 'utf8')).toBe('garde');
   });
 });
