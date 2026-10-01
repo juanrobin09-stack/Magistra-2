@@ -311,7 +311,7 @@ describe('checkOutputStructure — corrigé intercalé, numéros incertains (jam
       checkOutputStructure(r, text);
       return performance.now() - start;
     };
-    // Recherche quadratique avant correction : plusieurs dixièmes de seconde dès 5 000 espaces, plusieurs dizaines de secondes pour 60 000.
+    // Une recherche quadratique dépasserait la seconde dès 5 000 espaces ; seuil absolu très large pour une machine chargée.
     expect(time(vf(5), `Corrigé${' '.repeat(60_000)}x`)).toBeLessThan(BOUND_MS);
     const n = 100_000;
     const sp = ' '.repeat(n);
@@ -535,9 +535,55 @@ describe('checkCopyQuotes — citations de la copie (outil « corriger »)', () 
     });
 
     it('intitulés qui désignent la copie malgré le mot « correction » : colonne vérifiée', () => {
-      for (const header of ['Avant correction', 'Texte à corriger', 'Version initiale', 'Non corrigé', 'Texte original']) {
+      const headers = [
+        'Avant correction', 'Avant corrections', 'AVANT CORRECTION', 'Correction avant relecture', 'Sans correction', 'Texte à corriger',
+        'Version initiale', 'Non corrigé', 'Non corrigée', 'Non corrigés', 'Texte original', 'Proposition originale', 'Texte initial corrigé',
+      ];
+      for (const header of headers) {
         expect(checkCopyQuotes(table(`| ${header} | Après correction |`, `| « ${INVENTED} » | « ${FIXED} » |`), copy), header).toHaveLength(1);
         expect(checkCopyQuotes(table(`| ${header} | Après correction |`, `| « ${WRONG} » | « ${FIXED} » |`), copy), header).toEqual([]);
+      }
+    });
+
+    it('« avant », « sans », « non » dans un intitulé qui ne désigne pas la copie : la colonne reste une correction', () => {
+      const headers = ['Phrase corrigée (sans fautes)', 'Correction (non exhaustive)', 'Corrigé : à écrire avant la fin', 'Correction sans faute', 'Version corrigée, non définitive'];
+      for (const header of headers) {
+        expect(checkCopyQuotes(table(`| Passage | ${header} |`, `| « ${WRONG} » | « ${FIXED} » |`), copy), header).toEqual([]);
+        expect(checkCopyQuotes(table(`| Passage | ${header} |`, `| « ${INVENTED} » | « ${FIXED} » |`), copy), header).toHaveLength(1);
+        expect(checkCopyQuotes(table(`| ${header} | Passage |`, `| « ${FIXED} » | « ${INVENTED} » |`), copy), header).toHaveLength(1);
+      }
+    });
+
+    it('autres intitulés d’une correction : « Forme correcte », « Bonne réponse », « Version améliorée », « Réécrit », « Rectifié »…', () => {
+      const headers = [
+        'Forme correcte', 'Formes correctes', 'Réponse correcte', 'Formulation correcte', 'Bonne réponse', 'Version améliorée', 'Phrase améliorée',
+        'Nouvelle version', 'Réécrit', 'Réécriture', 'Phrase réécrite', 'Rectifié', 'Phrase rectifiée', 'FORME CORRECTE', 'Forme correcte (à retenir)',
+      ];
+      for (const header of headers) {
+        expect(checkCopyQuotes(table(`| Passage | ${header} |`, `| « ${WRONG} » | « ${FIXED} » |`), copy), header).toEqual([]);
+        expect(checkCopyQuotes(table(`| Passage | ${header} |`, `| « ${INVENTED} » | « ${FIXED} » |`), copy), header).toHaveLength(1);
+        expect(checkCopyQuotes(table(`| ${header} | Passage |`, `| « ${FIXED} » | « ${INVENTED} » |`), copy), header).toHaveLength(1);
+        expect(checkCopyQuotes(table(`| ${header} | Passage |`, `| « ${FIXED} » | « ${WRONG} » |`), copy), header).toEqual([]);
+      }
+    });
+
+    it('intitulés qui ne sont pas une correction : « Forme incorrecte », « À améliorer », « À rectifier », « À réécrire »', () => {
+      for (const header of ['Forme incorrecte', 'Formes incorrectes', 'À améliorer', 'À rectifier', 'À réécrire']) {
+        expect(checkCopyQuotes(table(`| N° | ${header} |`, `| 1 | « ${INVENTED} » |`), copy), header).toHaveLength(1);
+      }
+    });
+
+    it('intitulé mixte (mot de la copie et mot de correction) : la colonne reste vérifiée', () => {
+      const headers = [
+        'Erreur et correction', 'Erreur → correction', 'Phrase de l’élève (corrigée)', 'Passage corrigé', 'Extrait et proposition', 'Citation corrigée',
+        'Copie corrigée', 'Élève : correction', 'Original / réécriture', 'Texte de l’élève et reformulation', 'ERREUR ET CORRECTION',
+      ];
+      for (const header of headers) {
+        expect(checkCopyQuotes(table(`| N° | ${header} |`, `| 1 | « ${INVENTED} » |`), copy), header).toHaveLength(1);
+        expect(checkCopyQuotes(table(`| N° | ${header} |`, `| 1 | « ${WRONG} » |`), copy), header).toEqual([]);
+        // L'autre colonne, qui annonce seule une correction, reste ignorée.
+        expect(checkCopyQuotes(table(`| ${header} | Correction proposée |`, `| « ${WRONG} » | « ${FIXED} » |`), copy), header).toEqual([]);
+        expect(checkCopyQuotes(table(`| ${header} | Correction proposée |`, `| « ${INVENTED} » | « ${FIXED} » |`), copy), header).toHaveLength(1);
       }
     });
 
@@ -573,6 +619,31 @@ describe('checkCopyQuotes — citations de la copie (outil « corriger »)', () 
       const wide = (n: number) => `| Passage | Correction proposée |\n|---|---|\n| ${`« ${WRONG} » | `.repeat(n)}« ${FIXED} » |`;
       expect(checkCopyQuotes(wide(20_000), copy)).toEqual([]);
       expectLinear(wide, text => void checkCopyQuotes(text, copy), 10_000);
+    });
+
+    it('ligne démesurée de barres suivie de nombreuses citations inventées : le rang des colonnes ne coûte pas une lecture de la ligne par citation', () => {
+      const quotes = Array.from({ length: 70 }, (_, i) => `« ${INVENTED} ${i} »`).join(' ');
+      const text = `| Passage | Correction proposée |\n|---|---|\n${'|'.repeat(2_000_000)} ${quotes}`;
+      const start = performance.now();
+      const warnings = checkCopyQuotes(text, copy);
+      expect(performance.now() - start).toBeLessThan(BOUND_MS);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/^60 citations/);
+    });
+
+    it('tableau très large : le rang de la colonne reste exact (barres de bord facultatives, barres échappées)', () => {
+      const columns = (n: number) => Array.from({ length: n }, (_, i) => `c${i}`);
+      const head = [...columns(150), 'Passage', 'Correction proposée', ...columns(50)];
+      const cells = (passage: string, fixed: string) => [...columns(150).map(() => 'x \\| y'), passage, fixed, ...columns(50).map(() => '')];
+      const build = (passage: string, fixed: string, edges: boolean) => {
+        const row = (list: string[]) => (edges ? `| ${list.join(' | ')} |` : list.join(' | '));
+        return [row(head), row(head.map(() => '---')), row(cells(passage, fixed))].join('\n');
+      };
+      for (const edges of [true, false]) {
+        expect(checkCopyQuotes(build(`« ${WRONG} »`, `« ${FIXED} »`, edges), copy), String(edges)).toEqual([]);
+        expect(checkCopyQuotes(build(`« ${INVENTED} »`, `« ${FIXED} »`, edges), copy), String(edges)).toHaveLength(1);
+        expect(checkCopyQuotes(build(`« ${WRONG} »`, `« ${INVENTED} »`, edges), copy), String(edges)).toEqual([]);
+      }
     });
   });
 });

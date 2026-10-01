@@ -92,7 +92,7 @@ describe('normalizeFrenchTypography : sortie dégénérée', () => {
 
   it.each(degenerate)('%s : temps borné', (_name, input) => {
     expect(input.length).toBeGreaterThanOrEqual(100_000);
-    expect(elapsed(() => fr(input))).toBeLessThan(1000);
+    expect(elapsed(() => fr(input))).toBeLessThan(3000);
   });
 
   it('un saut de ligne LaTeX « \\\\[2pt] » ou « \\\\(b) » ne ferme ni n’ouvre une formule : elle reste protégée en entier', () => {

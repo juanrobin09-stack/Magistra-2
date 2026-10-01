@@ -98,8 +98,7 @@ describe('normalizeExerciseLayout — jamais de bloc de code créé', () => {
       normalizeExerciseLayout(text);
       return performance.now() - start;
     };
-    // Borne très large (machine chargée) : la recherche quadratique d'avant la correction dépassait la seconde dès 40 000
-    // espaces, soit plus de 25 secondes pour 200 000.
+    // Une recherche quadratique dépasserait la seconde dès 40 000 espaces ; seuil absolu très large pour une machine chargée.
     const BOUND_MS = 3000;
     expect(time(`${' '.repeat(200_000)}x\n**Question 1.** Suite`)).toBeLessThan(BOUND_MS);
     const n = 100_000;

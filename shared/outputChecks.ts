@@ -431,18 +431,18 @@ function wordsOf(form: string): number {
 const INLINE_CODE_RE = /(`+[^`\n]*?`+)/;
 /** Barre verticale de tableau Markdown (« \| » est un « | » ordinaire dans une cellule). */
 const PIPE_RE = /(?<!\\)\|/;
-/** Même barre, pour les compter. */
-const PIPES_RE = /(?<!\\)\|/g;
 /** Cellule de la ligne de séparation d'un tableau : « --- », « :--- », « :---: ». */
 const SEPARATOR_CELL_RE = /^:?-+:?$/;
 /** Lignes parcourues à partir de la première d'un tableau pour trouver sa ligne de séparation. */
 const MAX_TABLE_PREAMBLE = 3;
 /** Texte d'en-tête de colonne plus long : une cellule ordinaire (première ligne d'un tableau sans séparateur), pas un intitulé. */
 const MAX_HEADER_CHARS = 60;
-/** Mot d'un en-tête de colonne qui annonce une correction proposée (texte déjà passé par `quoteForm`) : « Correction proposée », « Version corrigée », « À écrire », « Remplacement »… */
-const CORRECTION_HEADER_RE = /(?:^| )(?:corrections?|corrig(?:e|ee)s?|propos(?:e|ee)s?|propositions?|reformulations?|reecritures?|suggestions?|sugger(?:e|ee)s?|attendue?s?|ecrire|remplac[a-z]*)(?: |$)/;
-/** « Texte avant correction », « Version initiale », « Non corrigé »… : la colonne de la copie malgré le mot « correction ». */
-const ORIGINAL_HEADER_RE = /(?:^| )(?:avant|sans|non|original\w*|initia\w*)(?: |$)/;
+/** Mot d'un en-tête de colonne qui annonce une correction proposée (texte déjà passé par `quoteForm`) : « Correction proposée », « Version corrigée », « Forme correcte », « Bonne réponse », « Version améliorée », « Réécrit », « Rectifié », « À écrire », « Remplacement »… */
+const CORRECTION_HEADER_RE = /(?:^| )(?:corrections?|corrig(?:e|ee)s?|correctes?|propos(?:e|ee)s?|propositions?|reformulations?|reecrit(?:ures?|es?|s)?|rectifi(?:e|ee|cation)s?|amelior(?:e|ee|ation)s?|suggestions?|sugger(?:e|ee)s?|attendue?s?|ecrire|remplac[a-z]*|bonnes? reponses?|nouvelles? versions?)(?: |$)/;
+/** Forme d'en-tête qui désigne la copie malgré le mot « correction » : « Avant correction », « Avant relecture », « Sans correction », « Non corrigé », « Version originale », « Texte initial », « À corriger ». Un « avant », « sans » ou « non » seul n'en est pas un (« Corrigé (sans fautes) »). */
+const ORIGINAL_HEADER_RE = /(?:^| )(?:avant (?:(?:la|les|sa|ses) )?(?:corrections?|relectures?)|sans corrections?|non corrigee?s?|a corriger|(?:origina|initia)(?:ux|ls?|les?))(?: |$)/;
+/** Mot qui désigne la copie : un en-tête mixte (« Erreur et correction », « Phrase de l'élève (corrigée) ») garde le passage de la copie dans sa colonne, qui reste vérifiée. */
+const COPY_HEADER_RE = /(?:^| )(?:passages?|extraits?|citations?|copies?|erreurs?|eleves?)(?: |$)/;
 
 /** Citation d'un texte, avec un peu du texte qui la précède et la suit sur sa ligne. */
 interface QuotedSegment {
@@ -488,9 +488,42 @@ function tableHeaderAt(lines: (string | null)[], start: number): TableHeader | u
   return typeof next === 'string' && PIPE_RE.test(next) ? { row: start, cells: tableCells(first) } : undefined;
 }
 
-/** Rang de la cellule où tombe la position `at` de la ligne de tableau (les barres de bord ne comptent pas). */
-function cellIndex(line: string, at: number): number {
-  return (line.slice(0, at).match(PIPES_RE)?.length ?? 0) - (/^\s*\|/.test(line) ? 1 : 0);
+/** Positions, croissantes, des barres de tableau d'une ligne (« \| » exclu). */
+function pipePositions(line: string): number[] {
+  const positions: number[] = [];
+  for (let at = line.indexOf('|'); at !== -1; at = line.indexOf('|', at + 1)) {
+    if (line[at - 1] !== '\\') positions.push(at);
+  }
+  return positions;
+}
+
+/** Nombre d'éléments de la liste croissante `sorted` strictement inférieurs à `limit` (recherche dichotomique). */
+function countBelow(sorted: readonly number[], limit: number): number {
+  let low = 0;
+  let high = sorted.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (sorted[middle] < limit) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+/**
+ * Rang de la cellule où tombe une position de la ligne de tableau (les barres de bord ne comptent pas). Les barres de la
+ * ligne ne sont repérées qu'à la première demande, une seule fois : le coût d'une ligne de millions de barres ne se
+ * paie pas à chaque citation.
+ */
+function cellLocator(line: string): (at: number) => number {
+  let pipes: number[] | undefined;
+  let edge = 0;
+  return at => {
+    if (!pipes) {
+      pipes = pipePositions(line);
+      edge = /^\s*\|/.test(line) ? 1 : 0;
+    }
+    return countBelow(pipes, at) - edge;
+  };
 }
 
 /**
@@ -514,6 +547,7 @@ function quotedSegments(content: string, limit: number): QuotedSegment[] {
     }
     if (line === null) continue;
     const columns = header && i > header.row ? header.cells : undefined;
+    const cellOf = cellLocator(line);
     let offset = 0;
     line.split(INLINE_CODE_RE).forEach((part, k) => {
       const base = offset;
@@ -526,7 +560,7 @@ function quotedSegments(content: string, limit: number): QuotedSegment[] {
           text: m[1],
           before: part.slice(Math.max(0, start - QUOTE_CONTEXT_CHARS), start),
           after: part.slice(start + m[0].length, start + m[0].length + QUOTE_CONTEXT_CHARS),
-          column: columns?.[cellIndex(line, base + start)],
+          column: columns?.[cellOf(base + start)],
         });
       };
       for (const re of [FRENCH_QUOTE_RE, CURLY_QUOTE_RE]) {
@@ -540,11 +574,15 @@ function quotedSegments(content: string, limit: number): QuotedSegment[] {
   return found;
 }
 
-/** Vrai quand l'en-tête d'une colonne de tableau annonce une correction proposée (« Correction proposée », « Corrigé », « Remplacement »…), pas un extrait de la copie. */
+/**
+ * Vrai quand l'en-tête d'une colonne de tableau annonce une correction proposée (« Correction proposée », « Corrigé »,
+ * « Forme correcte », « Remplacement »…), pas un extrait de la copie : un intitulé qui désigne aussi la copie (« Avant
+ * correction », « Erreur et correction ») n'en est pas un.
+ */
 function isCorrectionHeader(header: string | undefined): boolean {
   if (header === undefined || header.length > MAX_HEADER_CHARS) return false;
   const form = quoteForm(header);
-  return CORRECTION_HEADER_RE.test(form) && !ORIGINAL_HEADER_RE.test(form);
+  return CORRECTION_HEADER_RE.test(form) && !ORIGINAL_HEADER_RE.test(form) && !COPY_HEADER_RE.test(form);
 }
 
 /** Vrai quand la citation est la correction proposée (après une flèche ou « correction : », avant « au lieu de », dans une colonne « Correction »…), pas un extrait de la copie. */
@@ -559,8 +597,9 @@ function isProposedCorrection({ before, after, column }: QuotedSegment): boolean
  * 3 mots est cherché), texte déjà présent dans `reference` (consignes, sujet de la demande, textes des sources fournies),
  * correction proposée entre guillemets (après « → », « correction proposée : », « on attend », « plutôt »…, suivie de
  * « au lieu de », ou seule dans la colonne d'un tableau dont l'en-tête annonce une correction : « Correction proposée »,
- * « Corrigé », « Reformulation », « Remplacement », « Attendu », « À écrire » ; les colonnes « Passage », « Extrait »,
- * « Citation », « Copie » restent vérifiées), blocs de code ignorés.
+ * « Corrigé », « Forme correcte », « Version améliorée », « Reformulation », « Remplacement », « Attendu », « À écrire » ;
+ * les colonnes « Passage », « Extrait », « Citation », « Copie » restent vérifiées, comme un intitulé mixte : « Erreur et
+ * correction »), blocs de code ignorés.
  * Jamais bloquant, ne modifie pas le contenu ; accents, majuscules, apostrophes et ponctuation sont indifférents.
  */
 export function checkCopyQuotes(content: string, copy: string, reference: readonly (string | undefined)[] = []): string[] {

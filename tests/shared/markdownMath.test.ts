@@ -112,7 +112,7 @@ describe('normalizeMathDelimiters — inégalités, blancs, pourcentages, citati
       normalizeMathDelimiters(text);
       return performance.now() - start;
     };
-    // Borne très large (machine chargée) : la recherche cubique d'avant la correction dépassait la seconde dès 2 000 espaces.
+    // Une recherche cubique dépasserait la seconde dès 2 000 espaces ; seuil absolu très large pour une machine chargée.
     const BOUND_MS = 3000;
     expect(time(`Prix : 5 $${' '.repeat(20_000)}|`)).toBeLessThan(BOUND_MS);
     // Même résultat qu'avant : espaces de tête ou de fin retirés d'une formule, montants inchangés.

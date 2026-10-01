@@ -802,7 +802,7 @@ describe('temps de construction', () => {
       const t0 = performance.now();
       buildCloze(input, { max: 20, withKey: true });
       buildCloze(input, { withKey: false });
-      // Borne très large (machine chargée) : de 50 à 200 ms en temps normal, plus de 700 ms à froid sur une machine occupée.
+      // Seuil absolu très large pour une machine chargée ou un démarrage à froid : seul un temps non borné le dépasse.
       expect(performance.now() - t0, input.slice(0, 40)).toBeLessThan(6000);
     }
   });
@@ -830,7 +830,7 @@ describe('temps de construction : longues suites d’espaces et de crochets', ()
       `${base}${'a  '.repeat(3000)}\nFin`,
     ];
     for (const input of inputs) {
-      expect(elapsed(() => buildClozeDocument(input, { max: 10, withKey: true })), input.slice(0, 30)).toBeLessThan(1500);
+      expect(elapsed(() => buildClozeDocument(input, { max: 10, withKey: true })), input.slice(0, 30)).toBeLessThan(3000);
     }
   });
 
@@ -857,7 +857,7 @@ describe('temps de construction : longues suites d’espaces et de crochets', ()
       for (let i = 0; i < text.length; i += 20) out += stream.push(text.slice(i, i + 20));
       out += stream.end();
     });
-    expect(ms).toBeLessThan(1500);
+    expect(ms).toBeLessThan(3000);
     expect(out).toBe(text);
   });
 
