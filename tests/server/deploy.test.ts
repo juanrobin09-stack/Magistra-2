@@ -28,11 +28,15 @@ describe('déploiement', () => {
   it('vercel.json : réécriture SPA hors /api et durée longue pour la génération', () => {
     expect(vercel.rewrites).toEqual([
       { source: '/telecharger', destination: '/api/download' },
-      { source: '/((?!api/).*)', destination: '/index.html' },
+      { source: '/((?!api/|assets/).*)', destination: '/index.html' },
     ]);
     const spa = new RegExp(`^${spaRule().source}$`);
     expect(spa.test('/app/generate')).toBe(true);
     expect(spa.test('/api/generate')).toBe(false);
+    // Un fichier de /assets/ qui n'existe plus (ancien hash après un déploiement) donne un vrai 404, pas index.html
+    // en 200 « immutable » (comme le serveur autonome).
+    expect(spa.test('/assets/index-ancienhash.js')).toBe(false);
+    expect(spa.test('/assets-publics')).toBe(true);
     expect(vercel.functions['api/generate.ts'].maxDuration).toBe(300);
     for (const file of Object.keys(vercel.functions)) expect(existsSync(path.join(root, file)), file).toBe(true);
   });

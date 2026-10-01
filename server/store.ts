@@ -85,6 +85,48 @@ export interface GenerationStore {
 export const HISTORY_LIMITS = { default: 50, max: 200 } as const;
 const WEEK_MS = 7 * 86_400_000;
 
+/**
+ * Plafond de stockage PAR UTILISATEUR (protection technique contre le remplissage de la base, pas un quota produit :
+ * il est très au-dessus d'un usage normal — des milliers de contenus). Mêmes valeurs dans supabase-schema.sql
+ * (déclencheur magistra_check_storage_cap, appliqué sous un verrou par utilisateur : deux enregistrements simultanés
+ * ne peuvent pas dépasser ensemble le plafond). Supprimer un contenu libère de la place.
+ */
+export interface StorageLimits {
+  /** Nombre maximal de contenus enregistrés. */
+  maxRecords: number;
+  /** Volume maximal des textes (`contenu`), en octets UTF-8. */
+  maxBytes: number;
+}
+export const STORAGE_LIMITS: StorageLimits = { maxRecords: 5_000, maxBytes: 100 * 1024 * 1024 };
+
+export const STORAGE_FULL_MESSAGE = "Votre historique est plein : supprimez d'anciens contenus pour en enregistrer de nouveaux.";
+
+/** Historique plein : refus clair, non réessayable tant que l'enseignant n'a pas supprimé de contenu (jamais STORAGE_ERROR). */
+export class StorageFullError extends MagistraError {
+  constructor(options?: { cause?: unknown }) {
+    super('INVALID_REQUEST', STORAGE_FULL_MESSAGE, options);
+    (this as { status: number }).status = 409;
+  }
+}
+
+export function isStorageFullError(err: unknown): err is MagistraError {
+  return err instanceof StorageFullError;
+}
+
+/** Vrai si l'ajout d'un contenu de `addBytes` octets dépasserait le plafond (même règle que le déclencheur SQL). */
+export function exceedsStorage(limits: StorageLimits, count: number, bytes: number, addBytes: number): boolean {
+  return count >= limits.maxRecords || bytes + addBytes > limits.maxBytes;
+}
+
+/** Volume d'un contenu pour le plafond (octets UTF-8, comme octet_length en SQL). */
+export function contentBytes(contenu: string | null | undefined): number {
+  return Buffer.byteLength(contenu ?? '', 'utf8');
+}
+
+/** Code SQLSTATE et message levés par le déclencheur SQL quand le plafond est atteint. */
+const STORAGE_FULL_SQLSTATE = 'MG001';
+const STORAGE_FULL_SQL_MESSAGE = 'magistra_storage_full';
+
 // ─── Outils communs ─────────────────────────────────────────────────────────
 
 /** Extrait lisible d'un contenu Markdown (même règle que l'interface). */
@@ -166,9 +208,11 @@ export class MemoryStore implements GenerationStore {
   /** Générations en cours : utilisateur → (place → début, en ms). */
   private readonly active = new Map<string, Map<string, number>>();
   private readonly now: () => Date;
+  private readonly storageLimits: StorageLimits;
 
-  constructor(options: { now?: () => Date } = {}) {
+  constructor(options: { now?: () => Date; storageLimits?: StorageLimits } = {}) {
     this.now = options.now ?? (() => new Date());
+    this.storageLimits = options.storageLimits ?? STORAGE_LIMITS;
   }
 
   /** Propriétaire d'un contenu (utilisé par les tests). */
@@ -238,6 +282,15 @@ export class MemoryStore implements GenerationStore {
 
   async saveGeneration(userId: string, record: NewGenerationRecord): Promise<{ id: string }> {
     const uid = requireUserId(userId);
+    // Plafond par utilisateur (synchrone : aucun enregistrement simultané ne peut s'intercaler).
+    let count = 0;
+    let bytes = 0;
+    for (const e of this.generations.values()) {
+      if (e.userId !== uid) continue;
+      count++;
+      bytes += contentBytes(e.record.contenu);
+    }
+    if (exceedsStorage(this.storageLimits, count, bytes, contentBytes(record.contenu))) throw new StorageFullError();
     const id = randomUUID();
     const full: GenerationRecord = {
       ...structuredClone(record),
@@ -514,6 +567,10 @@ export class SupabaseStore implements GenerationStore {
       .select('id')
       .single();
     const id = (data as { id?: unknown } | null)?.id;
+    // Plafond atteint (déclencheur SQL, atomique) : refus clair, jamais un STORAGE_ERROR générique.
+    if (error && (error.code === STORAGE_FULL_SQLSTATE || String(error.message ?? '').includes(STORAGE_FULL_SQL_MESSAGE))) {
+      throw new StorageFullError({ cause: error });
+    }
     if (error || typeof id !== 'string') throw writeError(error);
     return { id };
   }

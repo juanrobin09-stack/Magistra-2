@@ -19,7 +19,7 @@
   },
   "rewrites": [
     { "source": "/telecharger", "destination": "/api/download" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/((?!api/|assets/).*)", "destination": "/index.html" }
   ],
   "headers": [
     {

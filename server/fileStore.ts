@@ -24,8 +24,8 @@ import type { GenerationRecord, GenerationSummary, HistoryPage, TeacherProfile, 
 import { isUuid, requireUserId, requireUuid } from './ids.js';
 import { sanitizeProfile } from './profile.js';
 import {
-  decodeCursor, encodeCursor, excerptOf, HISTORY_LIMITS, MemoryStore, type GenerationAdmission, type GenerationLimits,
-  type GenerationStore, type HistoryQuery,
+  contentBytes, decodeCursor, encodeCursor, excerptOf, exceedsStorage, HISTORY_LIMITS, MemoryStore, STORAGE_LIMITS, StorageFullError,
+  type GenerationAdmission, type GenerationLimits, type GenerationStore, type HistoryQuery, type StorageLimits,
 } from './store.js';
 import { startOfDayInZone } from './time.js';
 
@@ -155,6 +155,8 @@ export interface FileStoreOptions {
   now?: () => Date;
   /** Journal des fichiers mis de côté (jamais de contenu). */
   warn?: (message: string) => void;
+  /** Plafond de stockage par utilisateur (défaut : STORAGE_LIMITS, comme la base Supabase). */
+  storageLimits?: StorageLimits;
 }
 
 export class FileStore implements GenerationStore {
@@ -166,11 +168,15 @@ export class FileStore implements GenerationStore {
   private readonly limiter: MemoryStore;
   /** Index de l'historique par utilisateur (résumés), reconstruit depuis les fichiers au premier accès. */
   private readonly indexes = new Map<string, Promise<Map<string, GenerationSummary>>>();
+  /** Volume (octets du contenu) de chaque génération, par utilisateur : alimenté avec l'index, pour le plafond. */
+  private readonly sizes = new Map<string, Map<string, number>>();
+  private readonly storageLimits: StorageLimits;
 
   constructor(root: string, options: FileStoreOptions = {}) {
     this.root = path.resolve(root);
     this.now = options.now ?? (() => new Date());
     this.warn = options.warn ?? (() => undefined);
+    this.storageLimits = options.storageLimits ?? STORAGE_LIMITS;
     this.limiter = new MemoryStore({ now: this.now });
   }
 
@@ -211,12 +217,17 @@ export class FileStore implements GenerationStore {
     // Écritures interrompues (coupure de courant…) : fichiers temporaires supprimés.
     await Promise.all(names.filter(n => n.endsWith('.tmp')).map(n => fsp.rm(path.join(dir, n), { force: true }).catch(() => undefined)));
     const index = new Map<string, GenerationSummary>();
+    const sizes = new Map<string, number>();
+    this.sizes.set(uid, sizes);
     for (const name of names) {
       if (!name.endsWith('.json')) continue;
       const id = name.slice(0, -'.json'.length);
       if (!isUuid(id)) continue;
       const result = await readJson(path.join(dir, name), raw => parseStoredGeneration(raw, id), this.warn);
-      if (result.status === 'ok') index.set(id, summarize(result.value));
+      if (result.status === 'ok') {
+        index.set(id, summarize(result.value));
+        sizes.set(id, contentBytes(result.value.contenu));
+      }
     }
     return index;
   }
@@ -232,6 +243,7 @@ export class FileStore implements GenerationStore {
     }
     if (result.status !== 'ok') {
       index.delete(id);
+      this.sizes.get(uid)?.delete(id);
       throw new MagistraError('NOT_FOUND');
     }
     return result.value;
@@ -283,21 +295,33 @@ export class FileStore implements GenerationStore {
         throw writeError(err, 'Impossible de supprimer ce contenu.');
       }
       index.delete(gid);
+      this.sizes.get(uid)?.delete(gid);
     });
   }
 
   async saveGeneration(userId: string, record: NewGenerationRecord): Promise<{ id: string }> {
     const uid = requireUserId(userId);
-    const index = await this.index(uid);
-    const id = randomUUID();
-    const full: GenerationRecord = { ...structuredClone(record), id, createdAt: this.now().toISOString(), isFavorite: false };
-    try {
-      await writeJsonAtomic(this.recordFile(uid, id), full);
-    } catch (err) {
-      throw writeError(err);
-    }
-    index.set(id, summarize(full));
-    return { id };
+    // Contrôle du plafond et enregistrement dans la même section critique : deux enregistrements simultanés
+    // ne peuvent pas dépasser ensemble le plafond.
+    return withLock(`quota:${uid}`, async () => {
+      const index = await this.index(uid);
+      const sizes = this.sizes.get(uid) ?? new Map<string, number>();
+      let bytes = 0;
+      for (const n of sizes.values()) bytes += n;
+      const addBytes = contentBytes(record.contenu);
+      if (exceedsStorage(this.storageLimits, index.size, bytes, addBytes)) throw new StorageFullError();
+      const id = randomUUID();
+      const full: GenerationRecord = { ...structuredClone(record), id, createdAt: this.now().toISOString(), isFavorite: false };
+      try {
+        await writeJsonAtomic(this.recordFile(uid, id), full);
+      } catch (err) {
+        throw writeError(err);
+      }
+      index.set(id, summarize(full));
+      sizes.set(id, addBytes);
+      this.sizes.set(uid, sizes);
+      return { id };
+    });
   }
 
   async getStats(userId: string, timeZone: string): Promise<UsageStats> {
@@ -352,6 +376,7 @@ export class FileStore implements GenerationStore {
       throw new MagistraError('STORAGE_ERROR', 'La suppression des données a échoué. Réessayez.', { cause: err });
     }
     this.indexes.delete(uid);
+    this.sizes.delete(uid);
     await this.limiter.deleteAccount(uid);
   }
 

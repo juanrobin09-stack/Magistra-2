@@ -69,18 +69,45 @@ export function createClerkVerifier(config: ClerkConfig, deps: ClerkVerifierDeps
   const now = deps.now ?? (() => Date.now());
   // Protection contre l'amplification : sans clé publique locale (CLERK_JWT_KEY), chaque identifiant
   // de clé inconnu provoquerait un appel à l'API Clerk. On ne l'autorise qu'une fois par minute.
+  // Le créneau n'est consommé que pour un identifiant que Clerk ne connaît pas (« jwk-failed-to-resolve ») : un
+  // jeton valide n'est jamais refusé à cause d'un autre jeton (démarrage à froid avec plusieurs requêtes
+  // simultanées, jeton expiré ou panne passagère de l'API Clerk juste avant).
   const knownKids = new Set<string>();
   let lastUnknownKidLookup = Number.NEGATIVE_INFINITY;
+  /** Vérification en cours par identifiant de clé : les autres demandes du même identifiant l'attendent. */
+  const inflight = new Map<string, Promise<void>>();
 
   return async token => {
     const header = readJwtHeader(token);
     if (!header || !header.alg || !ALLOWED_ALGS.has(header.alg)) throw new MagistraError('UNAUTHENTICATED');
     const remote = !config.jwtKey;
+    /** Libère le créneau pris pour un identifiant inconnu (keepLock : il reste consommé jusqu'à la prochaine minute). */
+    let settle: ((keepLock: boolean) => void) | undefined;
     if (remote) {
-      if (!header.kid || !CLERK_KID.test(header.kid)) throw new MagistraError('UNAUTHENTICATED');
-      if (!knownKids.has(header.kid)) {
+      const kid = header.kid;
+      if (!kid || !CLERK_KID.test(kid)) throw new MagistraError('UNAUTHENTICATED');
+      for (;;) {
+        if (knownKids.has(kid)) break;
+        const other = inflight.get(kid);
+        if (other) {
+          // Même identifiant déjà en cours de vérification : on attend son résultat (aucun appel Clerk de plus).
+          await other;
+          continue;
+        }
         if (now() - lastUnknownKidLookup < UNKNOWN_KID_INTERVAL_MS) throw new MagistraError('UNAUTHENTICATED');
+        const previous = lastUnknownKidLookup;
         lastUnknownKidLookup = now();
+        let done!: () => void;
+        const pending = new Promise<void>(resolve => {
+          done = resolve;
+        });
+        inflight.set(kid, pending);
+        settle = keepLock => {
+          if (!keepLock) lastUnknownKidLookup = previous;
+          if (inflight.get(kid) === pending) inflight.delete(kid);
+          done();
+        };
+        break;
       }
     }
     let payload: Record<string, unknown>;
@@ -90,8 +117,12 @@ export function createClerkVerifier(config: ClerkConfig, deps: ClerkVerifierDeps
         jwtKey: config.jwtKey,
         authorizedParties: config.authorizedParties,
       })) as Record<string, unknown>;
+      if (remote && header.kid) knownKids.add(header.kid);
+      settle?.(true);
     } catch (err) {
       const reason = (err as { reason?: unknown } | null)?.reason;
+      // Jeton expiré, signature invalide, panne passagère de l'API Clerk : la vraie clé ne doit pas être verrouillée.
+      settle?.(reason === 'jwk-failed-to-resolve');
       if (typeof reason === 'string' && SERVER_SIDE_REASONS.has(reason)) {
         if (reason === 'jwk-remote-failed-to-load') {
           throw new MagistraError('INTERNAL', 'Vérification de la session momentanément impossible. Réessayez.', { cause: err });
@@ -101,7 +132,6 @@ export function createClerkVerifier(config: ClerkConfig, deps: ClerkVerifierDeps
       }
       throw new MagistraError('UNAUTHENTICATED', undefined, { cause: err });
     }
-    if (remote && header.kid) knownKids.add(header.kid);
     // Session en attente (tâche Clerk non terminée) : considérée comme non connectée.
     if (payload.sts !== undefined && payload.sts !== 'active') throw new MagistraError('UNAUTHENTICATED');
     if (!isValidUserId(payload.sub)) throw new MagistraError('UNAUTHENTICATED');

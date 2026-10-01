@@ -413,7 +413,7 @@ function loadResearch(env: Env, problems: string[]): ResearchConfig {
   };
 }
 
-function loadClerk(env: Env, problems: string[]): ClerkConfig | null {
+function loadClerk(env: Env, problems: string[], production: boolean): ClerkConfig | null {
   const secretKey = clean(env.CLERK_SECRET_KEY);
   // Clé PEM : les hébergeurs stockent souvent les retours à la ligne sous la forme « \n ».
   const jwtKey = clean(env.CLERK_JWT_KEY)?.replace(/\\n/g, '\n');
@@ -425,6 +425,11 @@ function loadClerk(env: Env, problems: string[]): ClerkConfig | null {
     ?.split(/[\s,]+/)
     .map(p => p.trim().replace(/\/+$/, ''))
     .filter(Boolean);
+  // Sans origines autorisées, Clerk ne contrôle pas l'origine (azp) des jetons : simple avertissement, aucune valeur
+  // par défaut déduite (elle pourrait bloquer des enseignants : domaine personnalisé, préproduction) et le serveur démarre.
+  if (production && !(parties && parties.length)) {
+    problems.push("CLERK_AUTHORIZED_PARTIES est vide : l'origine (azp) des jetons de session n'est pas vérifiée. Renseignez les origines du site (ex. https://magistra-2.vercel.app).");
+  }
   return { secretKey, jwtKey, authorizedParties: parties && parties.length ? parties : undefined };
 }
 
@@ -535,7 +540,7 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): ServerCon
   if (tzRaw && !normalizeTimeZone(tzRaw)) problems.push('DEFAULT_TIMEZONE inconnu : Europe/Paris utilisé.');
   const ai = loadAI(env, problems, defaultTimeZone);
   const research = loadResearch(env, problems);
-  const clerk = loadClerk(env, problems);
+  const clerk = loadClerk(env, problems, env.NODE_ENV === 'production' || env.VERCEL === '1');
   const clerkWebhookKey = loadClerkWebhook(env, clerk, problems);
   const { store, storeExplicit } = loadStore(env, problems);
   const supabase = store === 'supabase' ? loadSupabase(env, problems) : null;

@@ -74,10 +74,14 @@ Les faits de ce tableau sont ceux que chaque prestataire **annonce** ; ils sont 
 1. **Fusionnez la PR** de cette version dans `master` (sans cela, l'ancien code reste en ligne).
 2. Dans Vercel → *Settings* → *Environment Variables* (environnement **Production**), renseignez :
    - `VITE_CLERK_PUBLISHABLE_KEY` et `CLERK_SECRET_KEY` (même instance Clerk ; une clé `pk_live_…` exige votre propre domaine, une instance de développement `pk_test_…` fonctionne sur `*.vercel.app` — [Clerk](https://clerk.com/docs/guides/development/deployment/vercel)) ;
+   - recommandé : `CLERK_JWT_KEY` (Clerk Dashboard → *API keys* → « JWT public key ») : les jetons sont alors vérifiés sans appel réseau à Clerk, ce qui évite toute erreur de session au démarrage à froid d'une fonction Vercel ;
+   - recommandé : `CLERK_AUTHORIZED_PARTIES`, les origines du site séparées par des virgules (ex. `https://magistra-2.vercel.app`). Vide, le serveur démarre mais l'origine (`azp`) des jetons n'est pas vérifiée, et le journal de démarrage le signale ;
    - `SUPABASE_URL` et `SUPABASE_SERVICE_ROLE_KEY` ;
    - `AI_PRESET=ovhcloud` (et, si vous en avez une, `AI_API_KEY`) ;
    - recommandé : `GITHUB_TOKEN`, jeton GitHub « fine-grained » en lecture seule, **sans aucune permission** (dépôts publics). Sur Vercel, les fonctions sortent par des adresses IP partagées avec d'autres clients : sans jeton, la limite de l'API GitHub (60 requêtes par heure et par adresse) peut être déjà atteinte : « Télécharger Magistra pour Windows » télécharge alors toujours la dernière version, mais sans afficher ni sa version, ni sa taille, ni son empreinte ;
    - facultatif : `MAGISTRA_ADMIN_CONTACT` (adresse affichée aux enseignants si l'IA ne répond pas).
+
+   **Clé `pk_live_…` et domaine Clerk personnalisé** : ajoutez `https://clerk.<votre-domaine>` aux directives `script-src`, `connect-src`, `img-src` et `frame-src` de l'en-tête `Content-Security-Policy` de `vercel.json` **avant** le déploiement (le domaine exact est celui affiché par Clerk Dashboard → *Domains*). Sinon le navigateur bloque la connexion (« Le service de connexion est indisponible ») et la cause n'apparaît que dans la console. Avec `pk_test_…` sur `*.vercel.app`, rien à modifier. Sur le serveur autonome, la variable `CSP_EXTRA_ORIGINS` joue ce rôle (voir [`.env.example`](.env.example)).
 
    L'IA seule ne suffit pas : sans les clés Clerk, le site reste en **démonstration** (aucune IA n'est utilisée) ; sans Supabase, il affiche une erreur de configuration. Supprimez la clé d'API commerciale de l'ancienne version si elle figure encore dans les variables : elle n'est plus utilisée. Révoquez-la aussi chez son fournisseur.
 3. Dans Supabase → *SQL Editor*, exécutez **`supabase-schema.sql`** (réexécutable, sans perte de données).
@@ -310,7 +314,7 @@ Toutes les variables sont documentées dans [`.env.example`](.env.example). Les 
 | Variable | Rôle |
 |---|---|
 | `VITE_CLERK_PUBLISHABLE_KEY` | seule variable publique (navigateur) |
-| `CLERK_SECRET_KEY`, `CLERK_AUTHORIZED_PARTIES` | vérification des jetons côté serveur |
+| `CLERK_SECRET_KEY`, `CLERK_JWT_KEY`, `CLERK_AUTHORIZED_PARTIES` | vérification des jetons côté serveur. `CLERK_JWT_KEY` (recommandée en production) évite tout appel réseau à Clerk ; `CLERK_AUTHORIZED_PARTIES` vide en production : le serveur démarre, mais l'origine (`azp`) des jetons n'est pas vérifiée et un avertissement est journalisé |
 | `CLERK_WEBHOOK_SECRET` | webhook Clerk : effacement des données d'un compte supprimé chez Clerk (voir ci-dessous) |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | base de données, **serveur uniquement** |
 | `AI_PRESET` | préréglage du service d'IA : `ovhcloud` (gratuit, sans clé), `mistral`, `albert`, `scaleway`, `ollama` |
@@ -318,6 +322,8 @@ Toutes les variables sont documentées dans [`.env.example`](.env.example). Les 
 | `MAGISTRA_AUTH`, `MAGISTRA_ADMIN_CONTACT` | mode d'accès (`auto`, `clerk`, `personal`) et contact affiché aux enseignants quand l'IA ne répond pas |
 | `SEARXNG_URL`, `CROSSREF_MAILTO` | recherche (facultatif) |
 | `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_GLOBAL_PER_MINUTE`, `MAX_CONCURRENT_GENERATIONS_PER_USER`, `MAX_CONCURRENT_GENERATIONS` | protection technique : demandes par minute par utilisateur (10) et pour tout le déploiement (120), générations simultanées par utilisateur (2) et par instance du serveur (8) ; 0 = sans limite |
+
+**Plafond de stockage par compte** : pour qu'un seul compte ne puisse pas remplir la base, chaque enseignant peut conserver au plus **5 000 contenus** et **100 Mo** de texte dans son historique (très au-dessus d'un usage normal). Le contrôle est fait par la base elle-même (déclencheur de `supabase-schema.sql`, sous verrou par utilisateur : deux enregistrements simultanés ne peuvent pas le dépasser) et reproduit à l'identique par le stockage en fichiers. Au-delà, l'enseignant lit « Votre historique est plein : supprimez d'anciens contenus pour en enregistrer de nouveaux. » ; un contenu qui vient d'être généré reste affiché avec cet avertissement, et supprimer un contenu libère de la place. Ce n'est pas un quota d'utilisation : aucune génération n'est comptée.
 
 Après une mise à jour de Magistra, réexécutez `supabase-schema.sql` : il ajoute les tables et fonctions nouvelles sans toucher aux données.
 

@@ -18,7 +18,7 @@ import type { ActiveAI, ServerDeps } from './deps.js';
 import { isValidUserId, requireUuid } from './ids.js';
 import { personalUnauthenticated } from './personal.js';
 import { sanitizeProfile } from './profile.js';
-import { HISTORY_LIMITS, type GenerationAdmission, type GenerationStore } from './store.js';
+import { HISTORY_LIMITS, isStorageFullError, STORAGE_FULL_MESSAGE, type GenerationAdmission, type GenerationStore } from './store.js';
 import { normalizeTimeZone } from './time.js';
 import { fetchLatestWindowsRelease, STABLE_INSTALLER_NAME, windowsReleaseCacheControl } from './windowsRelease.js';
 
@@ -326,12 +326,21 @@ async function generate(userId: string, req: ApiRequest, deps: ServerDeps): Prom
   const signal = AbortSignal.any([clientSignal, timeout]);
 
   async function* events(): AsyncGenerator<GenerationEvent> {
+    // Historique plein : le contenu généré est quand même renvoyé, avec un avertissement précis (pas le message générique).
+    let storageFull = false;
     try {
       const pipeline = runGeneration(request, {
         provider,
         research: deps.research,
         // Enregistrement TOUJOURS sous l'utilisateur du jeton vérifié.
-        save: record => store.saveGeneration(userId, record),
+        save: async record => {
+          try {
+            return await store.saveGeneration(userId, record);
+          } catch (err) {
+            if (isStorageFullError(err)) storageFull = true;
+            throw err;
+          }
+        },
         signal,
         maxOutputTokens: deps.config.ai.maxOutputTokens,
         // Les nouveaux essais ont lieu dans ce flux : la place de génération reste tenue jusqu'à la fin.
@@ -351,7 +360,7 @@ async function generate(userId: string, req: ApiRequest, deps: ServerDeps): Prom
           logGenerationFailure(deps, active, event.code);
           deps.onGenerationError(event.code);
         }
-        yield event;
+        yield storageFull && event.type === 'warning' && event.code === 'STORAGE_ERROR' ? { ...event, message: `Le contenu est affiché mais n'a pas été enregistré. ${STORAGE_FULL_MESSAGE}` } : event;
       }
     } finally {
       // Succès, erreur, annulation ou déconnexion du client : la place est libérée AVANT la fin de
