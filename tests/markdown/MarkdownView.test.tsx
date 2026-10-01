@@ -144,13 +144,15 @@ describe('découpage progressif', () => {
 
   it('découpe rapidement un long document (streaming)', () => {
     const section = '## Partie\n\nUn paragraphe avec **gras** et $x^2$.\n\n- point un\n- point deux\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n';
-    const doc = section.repeat(200);
+    const sections = 2000;
+    const doc = section.repeat(sections);
     const t = performance.now();
     const blocks = splitMarkdownBlocks(doc);
     const elapsed = performance.now() - t;
     expect(blocks.join('')).toBe(doc);
-    expect(blocks.length).toBeGreaterThan(400);
-    expect(elapsed).toBeLessThan(50);
+    expect(blocks.length).toBeGreaterThan(2 * sections);
+    // Borne très large (machine chargée) : quelques dizaines de millisecondes en temps normal.
+    expect(elapsed).toBeLessThan(2000);
   });
 
   it('supporte un contenu vide ou en cours de génération', () => {

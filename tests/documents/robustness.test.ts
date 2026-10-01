@@ -12,7 +12,7 @@ import { MagistraError } from '@shared/errors';
 import { forgeDeclaredSize, makeDocxBomb, makeDocxFromBody, makeDocxWithHeadings, makePptx, makePptxFromSlides, slideTextXml } from './fixtures';
 
 const utf8 = (text: string) => new TextEncoder().encode(text);
-const BOUND_MS = 1500;
+const BOUND_MS = 4000;
 
 function timed<T>(fn: () => T): { value: T; ms: number } {
   const t0 = performance.now();

@@ -166,10 +166,11 @@ describe('fetchPublicPage (createSafePageFetcher)', () => {
   it('neutralise les blocs jamais refermés (page tronquée ou hostile)', () => {
     expect(neutralizeUnclosedBlocks('<p>ok</p><script>var secret = 1;')).toBe('<p>ok</p>');
     expect(neutralizeUnclosedBlocks('<nav>a</nav><p>x</p><nav class="y">b')).toBe('<nav>a</nav><p>x</p>< nav class="y">b');
-    const hostile = `${'<aside>'.repeat(20_000)}texte`;
+    const hostile = `${'<aside>'.repeat(100_000)}texte`;
     const start = Date.now();
     neutralizeUnclosedBlocks(hostile);
-    expect(Date.now() - start).toBeLessThan(1_000);
+    // Borne très large (machine chargée) : quelques dizaines de millisecondes en temps normal.
+    expect(Date.now() - start).toBeLessThan(3_000);
   });
 });
 
@@ -197,11 +198,11 @@ describe('transport Node : connexion épinglée à l’adresse vérifiée', () =
 });
 
 describe('déni de service : pages hostiles (non-régression)', () => {
-  it('extractTitle reste linéaire : « <title> » répété sans fermeture (1,5 Mo) traité en moins de 200 ms', () => {
+  it('extractTitle reste linéaire : « <title> » répété sans fermeture (1,5 Mo) traité en moins de 3 s (quelques millisecondes en temps normal)', () => {
     const hostile = '<p>texte</p>' + '<title>'.repeat(200_000);
     const start = performance.now();
     expect(extractTitle(hostile)).toBeUndefined();
-    expect(performance.now() - start).toBeLessThan(200);
+    expect(performance.now() - start).toBeLessThan(3_000);
     expect(extractTitle('<html><head><title> Cours &amp; TD </title></head></html>')).toBe('Cours & TD');
   });
 

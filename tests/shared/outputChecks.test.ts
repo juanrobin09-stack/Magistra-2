@@ -22,6 +22,34 @@ function exercises(n: number): string {
   return Array.from({ length: n }, (_, i) => `### Exercice ${i + 1}\n\nCalcule ${i} + 1.`).join('\n\n');
 }
 
+/** Borne absolue très large des tests de temps (machine chargée, CI lente) : un balayage quadratique la dépasse de loin. */
+const BOUND_MS = 3000;
+
+/** Plus courte durée (ms) de `runs` exécutions : un pic de charge de la machine ne fausse pas la mesure. */
+function fastest(run: () => void, runs = 3): number {
+  let best = Infinity;
+  for (let i = 0; i < runs; i++) {
+    const start = performance.now();
+    run();
+    best = Math.min(best, performance.now() - start);
+  }
+  return best;
+}
+
+/**
+ * Temps linéaire : avec 4 fois plus de données, le temps est multiplié par 4 (par 16 pour un balayage quadratique) ; il
+ * ne doit pas dépasser 8 fois celui de la taille de base (plancher de 50 ms : en dessous, la mesure ne dit rien), ni
+ * BOUND_MS. Les textes sont construits hors mesure.
+ */
+function expectLinear(build: (n: number) => string, run: (input: string) => void, n: number): void {
+  const small = build(n);
+  const large = build(4 * n);
+  const base = fastest(() => run(small));
+  const scaled = fastest(() => run(large));
+  expect(scaled).toBeLessThan(8 * Math.max(base, 50));
+  expect(scaled).toBeLessThan(BOUND_MS);
+}
+
 describe('checkOutputStructure — exercices, questions, affirmations', () => {
   it('7 questions sur 10 demandées : avertissement clair', () => {
     const doc = `${questions(7)}\n\n## Corrigé\n\n${Array.from({ length: 10 }, (_, i) => `- Question ${i + 1} : B`).join('\n')}`;
@@ -283,13 +311,13 @@ describe('checkOutputStructure — corrigé intercalé, numéros incertains (jam
       checkOutputStructure(r, text);
       return performance.now() - start;
     };
-    // Recherche quadratique avant correction : plusieurs dixièmes de seconde dès 5 000 espaces.
-    expect(time(vf(5), `Corrigé${' '.repeat(5000)}x`)).toBeLessThan(100);
+    // Recherche quadratique avant correction : plusieurs dixièmes de seconde dès 5 000 espaces, plusieurs dizaines de secondes pour 60 000.
+    expect(time(vf(5), `Corrigé${' '.repeat(60_000)}x`)).toBeLessThan(BOUND_MS);
     const n = 100_000;
     const sp = ' '.repeat(n);
     const requests = [vf(5), req({ modalite: 'qcm', nombreExercices: 5 }), req({ type: 'sequence', nombreSeances: 5 }), req({ type: 'appreciations' })];
     for (const text of [`Corrigé${sp}x`, `☐${sp}x`, `**a**${sp}x`, `${sp}x`, `### Exercice${sp}x`, `**1.**${sp}x ☐ Vrai`, '1.\n'.repeat(n / 3)]) {
-      for (const r of requests) expect(time(r, text)).toBeLessThan(250);
+      for (const r of requests) expect(time(r, text)).toBeLessThan(BOUND_MS);
     }
   });
 });
@@ -381,10 +409,10 @@ describe('checkCopyQuotes — citations de la copie (outil « corriger »)', () 
   });
 
   it('temps linéaire sur un texte démesuré', () => {
-    const big = `${'« la plante respire par ses racines et ses fleurs » '.repeat(20_000)}\n${'"'.repeat(50_001)}`;
-    const t0 = performance.now();
-    expect(checkCopyQuotes(big, COPY.repeat(500))).toHaveLength(1);
-    expect(performance.now() - t0).toBeLessThan(1500);
+    const copy = COPY.repeat(500);
+    const build = (n: number) => `${'« la plante respire par ses racines et ses fleurs » '.repeat(n)}\n${'"'.repeat(2 * n + 1)}`;
+    expect(checkCopyQuotes(build(20_000), copy)).toHaveLength(1);
+    expectLinear(build, text => void checkCopyQuotes(text, copy), 20_000);
   });
 
   describe('correction proposée entre guillemets', () => {
@@ -437,6 +465,116 @@ describe('checkCopyQuotes — citations de la copie (outil « corriger »)', () 
       expect(checkCopyQuotes(content, COPY, [undefined, support])).toEqual([]);
     });
   });
+
+  describe('correction proposée seule dans la cellule d’un tableau « Passage | Correction proposée »', () => {
+    const WRONG = 'La plante respire par ses feuilles grâce aux stomates et les racines respirent à boire de l’eau';
+    const FIXED = 'La plante respire par ses feuilles grâce aux stomates et les racines boivent de l’eau';
+    const INVENTED = 'la plante respire par ses racines et ses fleurs';
+    const copy = `${WRONG}.`;
+    /** Tableau à deux lignes de données : en-tête, séparation, puis les lignes. */
+    const table = (header: string, ...rows: string[]) => [header, '|---|---|', ...rows].join('\n');
+
+    it('en-tête qui annonce une correction : la citation de cette colonne n’est pas cherchée dans la copie', () => {
+      const headers = [
+        'Correction proposée', 'Corrigé', 'Proposition', 'Reformulation', 'Remplacement', 'Remplacer par', 'Attendu', 'Réponse attendue',
+        'Version corrigée', 'À écrire', 'Texte corrigé', '**Correction proposée**', 'CORRECTION PROPOSÉE', 'Correction proposee',
+      ];
+      for (const header of headers) {
+        expect(checkCopyQuotes(table(`| Passage | ${header} |`, `| « ${WRONG} » | « ${FIXED} » |`), copy), header).toEqual([]);
+      }
+    });
+
+    it('colonnes « Passage », « Extrait », « Citation », « Copie » : toujours vérifiées', () => {
+      for (const header of ['Passage', 'Extrait', 'Citation', 'Copie', 'Passage de la copie', 'Phrase de l’élève']) {
+        const head = `| ${header} | Correction proposée |`;
+        expect(checkCopyQuotes(table(head, `| « ${WRONG} » | « ${FIXED} » |`), copy), header).toEqual([]);
+        expect(checkCopyQuotes(table(head, `| « ${INVENTED} » | « ${FIXED} » |`), copy), header).toHaveLength(1);
+      }
+    });
+
+    it('une citation inventée dans la colonne de la correction n’excuse pas celle de la copie, et inversement', () => {
+      const head = '| Passage | Correction proposée |';
+      expect(checkCopyQuotes(table(head, `| « ${INVENTED} » | « ${INVENTED} » |`), copy)).toHaveLength(1);
+      expect(checkCopyQuotes(table(head, `| « ${WRONG} » | « ${FIXED} » |`, `| « ${INVENTED} » | « ${FIXED} » |`), copy)).toHaveLength(1);
+    });
+
+    it('colonne repérée par son rang : correction en première colonne, colonnes supplémentaires, barres de bord facultatives', () => {
+      const first = '| Correction proposée | Passage |';
+      expect(checkCopyQuotes(table(first, `| « ${FIXED} » | « ${WRONG} » |`), copy)).toEqual([]);
+      expect(checkCopyQuotes(table(first, `| « ${FIXED} » | « ${INVENTED} » |`), copy)).toHaveLength(1);
+      const three = '| N° | Passage | Correction proposée |';
+      expect(checkCopyQuotes(table(three, `| 1 | « ${WRONG} » | « ${FIXED} » |`), copy)).toEqual([]);
+      expect(checkCopyQuotes(table(three, `| 1 | « ${INVENTED} » | « ${FIXED} » |`), copy)).toHaveLength(1);
+      const bare = (separator: string, row: string) => `Passage | Correction proposée\n${separator}\n${row}`;
+      expect(checkCopyQuotes(bare('--- | ---', `« ${WRONG} » | « ${FIXED} »`), copy)).toEqual([]);
+      expect(checkCopyQuotes(bare(':--- | ---:', `« ${INVENTED} » | « ${FIXED} »`), copy)).toHaveLength(1);
+      expect(checkCopyQuotes(`| Passage | Correction proposée\n|:---:|---:\n| « ${WRONG} » | « ${FIXED} »`, copy)).toEqual([]);
+    });
+
+    it('colonne sans intitulé, ligne plus longue que l’en-tête : la citation reste vérifiée', () => {
+      expect(checkCopyQuotes(table('| Passage | |', `| « ${WRONG} » | « ${FIXED} » |`), copy)).toHaveLength(1);
+      expect(checkCopyQuotes(table('| Passage | Correction proposée |', `| « ${WRONG} » | | « ${FIXED} » |`), copy)).toHaveLength(1);
+    });
+
+    it('cellules vides : le rang des colonnes est conservé', () => {
+      const head = '| Passage | Correction proposée |';
+      expect(checkCopyQuotes(table(head, `| | « ${FIXED} » |`), copy)).toEqual([]);
+      expect(checkCopyQuotes(table(head, `| « ${WRONG} » | |`, '| | |'), copy)).toEqual([]);
+      expect(checkCopyQuotes(table('| | Correction proposée |', `| | « ${FIXED} » |`), copy)).toEqual([]);
+      expect(checkCopyQuotes(table(head, `| « ${INVENTED} » | |`), copy)).toHaveLength(1);
+    });
+
+    it('tableau sans ligne de séparation : la première ligne est l’en-tête', () => {
+      const head = '| Passage | Correction proposée |';
+      expect(checkCopyQuotes(`${head}\n| « ${WRONG} » | « ${FIXED} » |`, copy)).toEqual([]);
+      expect(checkCopyQuotes(`${head}\n| « ${INVENTED} » | « ${FIXED} » |`, copy)).toHaveLength(1);
+      // Ligne isolée : aucun en-tête connu, la citation reste vérifiée.
+      expect(checkCopyQuotes(`| « ${WRONG} » | « ${FIXED} » |`, copy)).toHaveLength(1);
+      // Première ligne qui n'est pas un intitulé (cellule longue) : pas une colonne de correction.
+      expect(checkCopyQuotes(`| La correction de la copie est faite à la main par l’enseignant | Autre |\n| « ${INVENTED} » | |`, copy)).toHaveLength(1);
+    });
+
+    it('intitulés qui désignent la copie malgré le mot « correction » : colonne vérifiée', () => {
+      for (const header of ['Avant correction', 'Texte à corriger', 'Version initiale', 'Non corrigé', 'Texte original']) {
+        expect(checkCopyQuotes(table(`| ${header} | Après correction |`, `| « ${INVENTED} » | « ${FIXED} » |`), copy), header).toHaveLength(1);
+        expect(checkCopyQuotes(table(`| ${header} | Après correction |`, `| « ${WRONG} » | « ${FIXED} » |`), copy), header).toEqual([]);
+      }
+    });
+
+    it('chaque tableau a son en-tête ; hors tableau (ligne vide, bloc de code), la correction n’est plus reconnue', () => {
+      const first = table('| Passage | Correction proposée |', `| « ${WRONG} » | « ${FIXED} » |`);
+      const second = table('| Correction proposée | Passage |', `| « ${FIXED} » | « ${WRONG} » |`);
+      expect(checkCopyQuotes(`${first}\n\n${second}`, copy)).toEqual([]);
+      expect(checkCopyQuotes(`${first}\n\n${second.replace(`« ${WRONG} »`, `« ${INVENTED} »`)}`, copy)).toHaveLength(1);
+      expect(checkCopyQuotes(`${first}\n\nVoir aussi « ${FIXED} ».`, copy)).toHaveLength(1);
+      // Le bloc de code coupe le tableau : la ligne qui suit n'a plus d'en-tête.
+      expect(checkCopyQuotes(`${first}\n\`\`\`\n| a | b |\n\`\`\`\n| « ${WRONG} » | « ${FIXED} » |`, copy)).toEqual([
+        'Une citation de la copie n’a pas été retrouvée telle quelle dans le travail fourni : vérifiez-la avant de transmettre la correction.',
+      ]);
+    });
+
+    it('barre échappée (« \\| ») et code en ligne dans la ligne : le rang de la colonne ne se décale pas', () => {
+      const piped = 'La plante respire par ses feuilles | grâce aux stomates et les racines respirent à boire de l’eau';
+      const head = '| Passage | Correction proposée |';
+      expect(checkCopyQuotes(table(head, `| « ${piped.replace('|', '\\|')} » | « ${FIXED} » |`), piped)).toEqual([]);
+      expect(checkCopyQuotes(table(head, `| \`x\` « ${WRONG} » | « ${FIXED} » |`), copy)).toEqual([]);
+    });
+
+    it('très gros tableau : l’en-tête vaut pour toutes les lignes, à n’importe quelle distance, en temps linéaire', () => {
+      const big = (n: number) => [
+        '| N° | Passage | Correction proposée |', '|---|---|---|',
+        ...Array.from({ length: n }, (_, i) => `| ${i} | mot | mot |`),
+        `| ${n} | « ${WRONG} » | « ${FIXED} » |`,
+      ].join('\n');
+      expect(checkCopyQuotes(big(20_000), copy)).toEqual([]);
+      expect(checkCopyQuotes(big(20_000).replace(`« ${WRONG} »`, `« ${INVENTED} »`), copy)).toHaveLength(1);
+      expectLinear(big, text => void checkCopyQuotes(text, copy), 10_000);
+      // Une seule ligne démesurée : le rang de la colonne n'est calculé que pour les citations réellement vérifiées.
+      const wide = (n: number) => `| Passage | Correction proposée |\n|---|---|\n| ${`« ${WRONG} » | `.repeat(n)}« ${FIXED} » |`;
+      expect(checkCopyQuotes(wide(20_000), copy)).toEqual([]);
+      expectLinear(wide, text => void checkCopyQuotes(text, copy), 10_000);
+    });
+  });
 });
 
 describe('pipeline — outil « corriger » : citations de la copie', () => {
@@ -460,6 +598,14 @@ describe('pipeline — outil « corriger » : citations de la copie', () => {
     const proposed = 'Erreur : « la plante respire par ses feuilles » → « la plante respire grâce à ses feuilles vertes ».\nCorrection proposée : « l’eau monte par les racines jusqu’en haut du tronc ».';
     expect(contentChecks(await collect(runGeneration(corrige(), { provider: new MockProvider({ reply: proposed }) })))).toEqual([]);
     const invented = 'Erreur : « la plante respire par ses racines et ses fleurs » → « la plante respire par ses feuilles vertes ».';
+    expect(contentChecks(await collect(runGeneration(corrige(), { provider: new MockProvider({ reply: invented }) })))).toHaveLength(1);
+  });
+
+  it('correction proposée seule dans la cellule d’un tableau : aucun avertissement, citation inventée toujours signalée', async () => {
+    const head = '| Passage | Correction proposée |\n|---|---|\n';
+    const proposed = `${head}| « la plante respire par ses feuilles » | « la plante respire grâce à ses feuilles vertes » |`;
+    expect(contentChecks(await collect(runGeneration(corrige(), { provider: new MockProvider({ reply: proposed }) })))).toEqual([]);
+    const invented = `${head}| « la plante respire par ses racines et ses fleurs » | « la plante respire grâce à ses feuilles vertes » |`;
     expect(contentChecks(await collect(runGeneration(corrige(), { provider: new MockProvider({ reply: invented }) })))).toHaveLength(1);
   });
 

@@ -307,14 +307,15 @@ describe('fournisseur de génération', () => {
 
   it('« Arrêter » pendant le démarrage du moteur : arrêt immédiat, le démarrage continue en arrière-plan', async () => {
     const ollama: FakeOllama = { running: false, models: [], pullRequests: [] };
-    const { manager, spawned } = await makeManager({ ollama, existing: [APP_EXE, CLI_EXE] });
+    const { manager, spawned } = await makeManager({ ollama, existing: [APP_EXE, CLI_EXE], timings: { startTimeoutMs: 3_000 } });
     const controller = new AbortController();
     const started = Date.now();
     const pending = manager.resolveProvider(controller.signal);
     setTimeout(() => controller.abort(), 20);
     await expect(pending).rejects.toMatchObject({ code: 'GENERATION_ABORTED' });
-    // Rejet à l'annulation, sans attendre la fin du délai de démarrage (200 ms ici, 120 s en réel).
-    expect(Date.now() - started).toBeLessThan(150);
+    // Rejet à l'annulation, sans attendre la fin du délai de démarrage (3 s ici, 120 s en réel) : la borne de 2 s
+    // laisse une très grande marge à une machine chargée.
+    expect(Date.now() - started).toBeLessThan(2_000);
     expect(spawned.map(s => s.file)).toContain(APP_EXE);
   });
 

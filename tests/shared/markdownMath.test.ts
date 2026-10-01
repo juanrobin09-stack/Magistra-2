@@ -112,8 +112,9 @@ describe('normalizeMathDelimiters — inégalités, blancs, pourcentages, citati
       normalizeMathDelimiters(text);
       return performance.now() - start;
     };
-    // Recherche cubique avant correction : plus d'une seconde dès 2 000 espaces.
-    expect(time(`Prix : 5 $${' '.repeat(2000)}|`)).toBeLessThan(100);
+    // Borne très large (machine chargée) : la recherche cubique d'avant la correction dépassait la seconde dès 2 000 espaces.
+    const BOUND_MS = 3000;
+    expect(time(`Prix : 5 $${' '.repeat(20_000)}|`)).toBeLessThan(BOUND_MS);
     // Même résultat qu'avant : espaces de tête ou de fin retirés d'une formule, montants inchangés.
     expect(normalizeMathDelimiters('Soit $ \\frac{1}{2} $ et 5 $ et 10 $.')).toBe('Soit $\\frac{1}{2}$ et 5 $ et 10 $.');
     expect(normalizeMathDelimiters('$\\alpha $ et $ \\beta$ et $\\gamma$')).toBe('$\\alpha$ et $\\beta$ et $\\gamma$');
@@ -128,7 +129,7 @@ describe('normalizeMathDelimiters — inégalités, blancs, pourcentages, citati
       `\\[${'a '.repeat(n / 2)}`,
       `> \\[${'\n>'.repeat(n / 2)}`,
     ]) {
-      expect(time(text)).toBeLessThan(250);
+      expect(time(text)).toBeLessThan(BOUND_MS);
     }
   });
 });

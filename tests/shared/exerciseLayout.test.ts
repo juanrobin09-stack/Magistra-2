@@ -98,8 +98,10 @@ describe('normalizeExerciseLayout — jamais de bloc de code créé', () => {
       normalizeExerciseLayout(text);
       return performance.now() - start;
     };
-    // Recherche quadratique avant correction : plus d'une seconde pour 40 000 espaces.
-    expect(time(`${' '.repeat(40_000)}x\n**Question 1.** Suite`)).toBeLessThan(150);
+    // Borne très large (machine chargée) : la recherche quadratique d'avant la correction dépassait la seconde dès 40 000
+    // espaces, soit plus de 25 secondes pour 200 000.
+    const BOUND_MS = 3000;
+    expect(time(`${' '.repeat(200_000)}x\n**Question 1.** Suite`)).toBeLessThan(BOUND_MS);
     const n = 100_000;
     for (const text of [
       `${' '.repeat(n)}x\n**Question 1.** Suite`,
@@ -108,7 +110,7 @@ describe('normalizeExerciseLayout — jamais de bloc de code créé', () => {
       `-${'\t'.repeat(n)}x\n**Question 1.** Suite`,
       'A) 1\n'.repeat(n / 5),
     ]) {
-      expect(time(text)).toBeLessThan(250);
+      expect(time(text)).toBeLessThan(BOUND_MS);
     }
   });
 });

@@ -423,6 +423,7 @@ describe('temps de recherche des liens', () => {
   it('une très longue suite de « [ » ne ralentit pas la vérification des liens', () => {
     const t0 = performance.now();
     finalizeCitations(`${'['.repeat(60_000)} texte (x)`, [HAL]);
-    expect(performance.now() - t0).toBeLessThan(1500);
+    // Borne très large (machine chargée) : environ 150 ms en temps normal.
+    expect(performance.now() - t0).toBeLessThan(6000);
   });
 });

@@ -155,36 +155,55 @@ describe('connecteurs — parsing', () => {
 });
 
 describe('stripTags — temps linéaire et fidélité', () => {
-  const timed = (html: string) => {
-    const started = performance.now();
-    const text = stripTags(html);
-    return { text, ms: performance.now() - started };
+  /** Borne absolue très large (machine chargée) : un balayage quadratique la dépasse de loin sur ces entrées. */
+  const BOUND_MS = 3000;
+
+  /** Plus courte durée (ms) de 3 exécutions : un pic de charge de la machine ne fausse pas la mesure. */
+  const fastest = (html: string) => {
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const started = performance.now();
+      stripTags(html);
+      best = Math.min(best, performance.now() - started);
+    }
+    return best;
   };
 
-  it('20 000 balises <nav> jamais refermées sont traitées en moins de 200 ms', () => {
-    const { text, ms } = timed(`${'<nav>menu '.repeat(20_000)}Contenu utile`);
-    expect(ms).toBeLessThan(200);
-    expect(text).toContain('Contenu utile');
+  /**
+   * Temps linéaire : avec 4 fois plus de balises, le temps est multiplié par 4 (par 16 pour un balayage quadratique) ; il
+   * ne doit pas dépasser 8 fois celui de la taille de base (plancher de 50 ms : en dessous, la mesure ne dit rien), ni
+   * BOUND_MS. Les entrées sont construites hors mesure.
+   */
+  const expectLinear = (build: (n: number) => string, n: number) => {
+    const base = fastest(build(n));
+    const scaled = fastest(build(4 * n));
+    expect(scaled).toBeLessThan(8 * Math.max(base, 50));
+    expect(scaled).toBeLessThan(BOUND_MS);
+  };
+
+  it('des milliers de balises <nav> jamais refermées : temps linéaire, texte utile conservé', () => {
+    const build = (n: number) => `${'<nav>menu '.repeat(n)}Contenu utile`;
+    expect(stripTags(build(20_000))).toContain('Contenu utile');
+    expectLinear(build, 10_000);
   });
 
   it('autres entrées piégées : <script>/<aside> ouverts, chevrons sans fin, commentaires ouverts, blancs massifs', () => {
-    const traps = [
-      `${'<script>x'.repeat(20_000)}fin`,
-      `${'<aside a="1" '.repeat(20_000)}`,
-      `${'<'.repeat(100_000)}texte`,
-      `${'<!--'.repeat(20_000)}`,
-      `${'\n '.repeat(100_000)}x`,
-      `${'<nav>'.repeat(10_000)}${'</navbar>'.repeat(10_000)}`,
+    const traps: Array<[(n: number) => string, number]> = [
+      [n => `${'<script>x'.repeat(n)}fin`, 10_000],
+      [n => '<aside a="1" '.repeat(n), 20_000],
+      [n => `${'<'.repeat(n)}texte`, 100_000],
+      [n => '<!--'.repeat(n), 20_000],
+      [n => `${'\n '.repeat(n)}x`, 100_000],
+      [n => `${'<nav>'.repeat(n)}${'</navbar>'.repeat(n)}`, 5_000],
     ];
-    for (const html of traps) expect(timed(html).ms).toBeLessThan(200);
+    for (const [build, n] of traps) expectLinear(build, n);
     // Chevrons isolés = texte ; « <texte » sans « > » en fin de document = balise tronquée, écartée.
     expect(stripTags(`${'<'.repeat(1_000)} texte`)).toBe(`${'<'.repeat(1_000)} texte`);
     expect(stripTags('début <balise-tronquee')).toBe('début');
   });
 
   it('entrée démesurée plafonnée', () => {
-    const { ms } = timed('a'.repeat(5_000_000));
-    expect(ms).toBeLessThan(500);
+    expect(fastest('a'.repeat(5_000_000))).toBeLessThan(BOUND_MS);
     expect(stripTags('a'.repeat(5_000_000))).toHaveLength(2_000_000);
   });
 

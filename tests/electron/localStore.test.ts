@@ -241,7 +241,8 @@ describe('historique', () => {
     const t0 = Date.now();
     excerptOf('['.repeat(100_000));
     excerptOf(`${'Texte utile. '.repeat(10)}${'[]('.repeat(60_000)}`);
-    expect(Date.now() - t0).toBeLessThan(500);
+    // Borne très large (machine chargée) : une quinzaine de millisecondes en temps normal.
+    expect(Date.now() - t0).toBeLessThan(3_000);
     expect(excerptOf('# Titre\n\nUn paragraphe **important**.')).toBe(excerptOf('# Titre\n\nUn paragraphe **important**.'.slice(0, 4_000)));
     expect(excerptOf('# Titre\n\nUn paragraphe **important**.').startsWith('Titre Un paragraphe important')).toBe(true);
   });

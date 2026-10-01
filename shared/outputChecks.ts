@@ -21,7 +21,6 @@
 // Temps linéaire, même sur une sortie dégénérée (lignes de milliers d'espaces) : jamais deux « \s* » à la suite dans
 // une expression régulière.
 
-import { mapProse } from './citations.js';
 import { CLOZE_BLANK, isClozeRequest } from './cloze.js';
 import { countText, countUnit } from './formats.js';
 import { getLevelGroup, SUPERIEUR_GROUPS } from './levels.js';
@@ -111,21 +110,26 @@ function numberedLine(words: string): (line: string) => LineNumbers {
   };
 }
 
-/** Lignes du document hors blocs de code. */
-function proseLines(document: string): string[] {
-  const lines: string[] = [];
+/** Lignes du texte, null pour celles d'un bloc de code (marqueurs compris) : l'indice d'une ligne reste celui du texte. */
+function linesOutsideCode(text: string): (string | null)[] {
   let fence: string | null = null;
-  for (const line of document.split('\n')) {
+  return text.split('\n').map(line => {
     const marker = FENCE_RE.exec(line)?.[1];
     if (fence) {
       if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
-    } else if (marker) {
-      fence = marker;
-    } else {
-      lines.push(line);
+      return null;
     }
-  }
-  return lines;
+    if (marker) {
+      fence = marker;
+      return null;
+    }
+    return line;
+  });
+}
+
+/** Lignes du document hors blocs de code. */
+function proseLines(document: string): string[] {
+  return linesOutsideCode(document).filter((line): line is string => line !== null);
 }
 
 /** Texte d'une ligne-titre (titre « # » ou ligne tout en gras), sinon undefined. */
@@ -423,41 +427,129 @@ function wordsOf(form: string): number {
   return form ? form.split(' ').length : 0;
 }
 
+/** Code en ligne (`…`), avec ses accents graves : jamais une citation de la copie. */
+const INLINE_CODE_RE = /(`+[^`\n]*?`+)/;
+/** Barre verticale de tableau Markdown (« \| » est un « | » ordinaire dans une cellule). */
+const PIPE_RE = /(?<!\\)\|/;
+/** Même barre, pour les compter. */
+const PIPES_RE = /(?<!\\)\|/g;
+/** Cellule de la ligne de séparation d'un tableau : « --- », « :--- », « :---: ». */
+const SEPARATOR_CELL_RE = /^:?-+:?$/;
+/** Lignes parcourues à partir de la première d'un tableau pour trouver sa ligne de séparation. */
+const MAX_TABLE_PREAMBLE = 3;
+/** Texte d'en-tête de colonne plus long : une cellule ordinaire (première ligne d'un tableau sans séparateur), pas un intitulé. */
+const MAX_HEADER_CHARS = 60;
+/** Mot d'un en-tête de colonne qui annonce une correction proposée (texte déjà passé par `quoteForm`) : « Correction proposée », « Version corrigée », « À écrire », « Remplacement »… */
+const CORRECTION_HEADER_RE = /(?:^| )(?:corrections?|corrig(?:e|ee)s?|propos(?:e|ee)s?|propositions?|reformulations?|reecritures?|suggestions?|sugger(?:e|ee)s?|attendue?s?|ecrire|remplac[a-z]*)(?: |$)/;
+/** « Texte avant correction », « Version initiale », « Non corrigé »… : la colonne de la copie malgré le mot « correction ». */
+const ORIGINAL_HEADER_RE = /(?:^| )(?:avant|sans|non|original\w*|initia\w*)(?: |$)/;
+
 /** Citation d'un texte, avec un peu du texte qui la précède et la suit sur sa ligne. */
 interface QuotedSegment {
   text: string;
   before: string;
   after: string;
+  /** Intitulé de la colonne du tableau où se trouve la citation, quand il est connu. */
+  column?: string;
 }
 
-/** Citations (entre « », “ ” ou " ") d'un texte hors blocs de code ; une ligne aux guillemets droits dépareillés est ignorée. */
-function quotedSegments(content: string): QuotedSegment[] {
+/** En-tête d'un tableau : ses cellules et l'indice de sa ligne dans le texte (les lignes qui suivent sont des données). */
+interface TableHeader {
+  row: number;
+  cells: string[];
+}
+
+/** Cellules d'une ligne de tableau, sans les barres de bord. */
+function tableCells(row: string): string[] {
+  return row.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(PIPE_RE).map(cell => cell.trim());
+}
+
+/** Ligne de séparation d'un tableau (« |---|:---:| »). */
+function isSeparatorRow(row: string): boolean {
+  return PIPE_RE.test(row) && tableCells(row).every(cell => SEPARATOR_CELL_RE.test(cell));
+}
+
+/**
+ * En-tête du tableau dont la première ligne à barres verticales est `start` : la ligne qui précède la ligne de
+ * séparation, cherchée sur quelques lignes seulement ; sans séparateur (sortie d'un petit modèle), la première ligne si
+ * une autre ligne à barres la suit. undefined pour une ligne isolée.
+ */
+function tableHeaderAt(lines: (string | null)[], start: number): TableHeader | undefined {
+  const first = lines[start];
+  if (typeof first !== 'string') return undefined;
+  let previous = first;
+  for (let k = start + 1; k <= start + MAX_TABLE_PREAMBLE; k++) {
+    const line = lines[k];
+    if (typeof line !== 'string' || !PIPE_RE.test(line)) break;
+    if (isSeparatorRow(line)) return { row: k - 1, cells: tableCells(previous) };
+    previous = line;
+  }
+  const next = lines[start + 1];
+  return typeof next === 'string' && PIPE_RE.test(next) ? { row: start, cells: tableCells(first) } : undefined;
+}
+
+/** Rang de la cellule où tombe la position `at` de la ligne de tableau (les barres de bord ne comptent pas). */
+function cellIndex(line: string, at: number): number {
+  return (line.slice(0, at).match(PIPES_RE)?.length ?? 0) - (/^\s*\|/.test(line) ? 1 : 0);
+}
+
+/**
+ * Citations (entre « », “ ” ou " ") d'un texte hors blocs de code, les `limit` premières ; une ligne aux guillemets droits
+ * dépareillés est ignorée. Une citation d'un tableau Markdown garde l'intitulé de sa colonne : l'en-tête est lu une fois
+ * par tableau, pas par citation (temps linéaire, même pour un tableau de milliers de lignes).
+ */
+function quotedSegments(content: string, limit: number): QuotedSegment[] {
   const found: QuotedSegment[] = [];
-  const collect = (line: string, m: RegExpMatchArray) => {
-    const start = m.index ?? 0;
-    found.push({
-      text: m[1],
-      before: line.slice(Math.max(0, start - QUOTE_CONTEXT_CHARS), start),
-      after: line.slice(start + m[0].length, start + m[0].length + QUOTE_CONTEXT_CHARS),
-    });
-  };
-  mapProse(content, prose => {
-    for (const line of prose.split('\n')) {
-      for (const re of [FRENCH_QUOTE_RE, CURLY_QUOTE_RE]) {
-        for (const m of line.matchAll(re)) collect(line, m);
-      }
-      if ((line.match(/"/g)?.length ?? 0) % 2 === 0) {
-        for (const m of line.matchAll(STRAIGHT_QUOTE_RE)) collect(line, m);
-      }
+  const lines = linesOutsideCode(content);
+  let inTable = false;
+  let header: TableHeader | undefined;
+  for (let i = 0; i < lines.length && found.length < limit; i++) {
+    const line = lines[i];
+    if (line === null || !PIPE_RE.test(line)) {
+      inTable = false;
+      header = undefined;
+    } else if (!inTable) {
+      inTable = true;
+      header = tableHeaderAt(lines, i);
     }
-    return prose;
-  });
-  return found.filter(q => q.text.length <= MAX_QUOTE_CHARS);
+    if (line === null) continue;
+    const columns = header && i > header.row ? header.cells : undefined;
+    let offset = 0;
+    line.split(INLINE_CODE_RE).forEach((part, k) => {
+      const base = offset;
+      offset += part.length;
+      if (k % 2 === 1) return;
+      const collect = (m: RegExpMatchArray) => {
+        if (found.length >= limit || m[1].length > MAX_QUOTE_CHARS) return;
+        const start = m.index ?? 0;
+        found.push({
+          text: m[1],
+          before: part.slice(Math.max(0, start - QUOTE_CONTEXT_CHARS), start),
+          after: part.slice(start + m[0].length, start + m[0].length + QUOTE_CONTEXT_CHARS),
+          column: columns?.[cellIndex(line, base + start)],
+        });
+      };
+      for (const re of [FRENCH_QUOTE_RE, CURLY_QUOTE_RE]) {
+        for (const m of part.matchAll(re)) collect(m);
+      }
+      if ((part.match(/"/g)?.length ?? 0) % 2 === 0) {
+        for (const m of part.matchAll(STRAIGHT_QUOTE_RE)) collect(m);
+      }
+    });
+  }
+  return found;
 }
 
-/** Vrai quand la citation est la correction proposée (après une flèche ou « correction : », avant « au lieu de »…), pas un extrait de la copie. */
-function isProposedCorrection({ before, after }: QuotedSegment): boolean {
-  return ARROW_BEFORE_RE.test(before) || PROPOSAL_BEFORE_RE.test(quoteForm(before)) || REPLACED_AFTER_RE.test(after);
+/** Vrai quand l'en-tête d'une colonne de tableau annonce une correction proposée (« Correction proposée », « Corrigé », « Remplacement »…), pas un extrait de la copie. */
+function isCorrectionHeader(header: string | undefined): boolean {
+  if (header === undefined || header.length > MAX_HEADER_CHARS) return false;
+  const form = quoteForm(header);
+  return CORRECTION_HEADER_RE.test(form) && !ORIGINAL_HEADER_RE.test(form);
+}
+
+/** Vrai quand la citation est la correction proposée (après une flèche ou « correction : », avant « au lieu de », dans une colonne « Correction »…), pas un extrait de la copie. */
+function isProposedCorrection({ before, after, column }: QuotedSegment): boolean {
+  return ARROW_BEFORE_RE.test(before) || PROPOSAL_BEFORE_RE.test(quoteForm(before)) || REPLACED_AFTER_RE.test(after) || isCorrectionHeader(column);
 }
 
 /**
@@ -465,8 +557,10 @@ function isProposedCorrection({ before, after }: QuotedSegment): boolean {
  * pas TELS QUELS dans le travail fourni (`copy`) : un petit modèle reformule ou invente l'extrait qu'il annote. [] si
  * tout est retrouvé ou en cas de doute : citation de moins de 5 mots, extrait coupé par « […] » (chaque morceau d'au moins
  * 3 mots est cherché), texte déjà présent dans `reference` (consignes, sujet de la demande, textes des sources fournies),
- * correction proposée entre guillemets (après « → », « correction proposée : », « on attend », « plutôt »…, ou suivie
- * de « au lieu de »), blocs de code ignorés.
+ * correction proposée entre guillemets (après « → », « correction proposée : », « on attend », « plutôt »…, suivie de
+ * « au lieu de », ou seule dans la colonne d'un tableau dont l'en-tête annonce une correction : « Correction proposée »,
+ * « Corrigé », « Reformulation », « Remplacement », « Attendu », « À écrire » ; les colonnes « Passage », « Extrait »,
+ * « Citation », « Copie » restent vérifiées), blocs de code ignorés.
  * Jamais bloquant, ne modifie pas le contenu ; accents, majuscules, apostrophes et ponctuation sont indifférents.
  */
 export function checkCopyQuotes(content: string, copy: string, reference: readonly (string | undefined)[] = []): string[] {
@@ -478,7 +572,7 @@ export function checkCopyQuotes(content: string, copy: string, reference: readon
     const knownTexts = () => known ??= reference.filter((r): r is string => typeof r === 'string' && r.trim() !== '').map(r => ` ${quoteForm(r)} `);
     const present = (form: string, text: string) => text.includes(` ${form} `);
     let missing = 0;
-    for (const segment of quotedSegments(content).slice(0, MAX_QUOTES_CHECKED)) {
+    for (const segment of quotedSegments(content, MAX_QUOTES_CHECKED)) {
       const whole = quoteForm(segment.text);
       if (wordsOf(whole) < MIN_QUOTE_WORDS) continue;
       const fragments = segment.text.split(ELLIPSIS_RE).map(quoteForm).filter(f => wordsOf(f) >= MIN_FRAGMENT_WORDS);
