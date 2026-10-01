@@ -24,6 +24,7 @@ type Mod = {
   checkAsarEntries(entries: string[]): string[];
   checkNoSecrets(files: { name: string; text: string }[]): string[];
   checkAsarIntegrity(exe: Buffer, header: string): string[];
+  nativeEntryPath(entry: string, sep?: string): string;
 };
 const mod = (await import(pathToFileURL(script).href)) as Mod;
 
@@ -113,6 +114,16 @@ describe('verify-package : contenu de l’asar', () => {
   });
 });
 
+describe('verify-package : chemins d’entrée de l’asar', () => {
+  it('séparateurs du système : « \\ » sous Windows (@electron/asar découpe avec path.sep), « / » ailleurs', () => {
+    expect(mod.nativeEntryPath('dist/assets/x.js', '\\')).toBe('dist\\assets\\x.js');
+    expect(mod.nativeEntryPath('/dist/assets/x.js', '\\')).toBe('dist\\assets\\x.js');
+    expect(mod.nativeEntryPath('\\dist\\assets\\x.js', '\\')).toBe('dist\\assets\\x.js');
+    expect(mod.nativeEntryPath('dist/assets/x.js', '/')).toBe('dist/assets/x.js');
+    expect(mod.nativeEntryPath('package.json', '\\')).toBe('package.json');
+  });
+});
+
 describe('verify-package : intégrité de l’asar', () => {
   const header = '{"files":{}}';
   const hash = createHash('sha256').update(header).digest('hex');
@@ -143,6 +154,8 @@ describe('verify-package : paquet complet (ligne de commande)', () => {
       'dist-electron/main.js': 'console.log("main")',
       'dist-electron/preload.cjs': 'require("electron")',
       'dist/index.html': '<!doctype html>',
+      // Dossier imbriqué (comme dist/assets/*.js du vrai paquet) : sous Windows, il n'est lisible que par un chemin natif.
+      'dist/assets/app.js': 'export {}',
       ...tweak.files,
     };
     for (const [file, text] of Object.entries(files)) {

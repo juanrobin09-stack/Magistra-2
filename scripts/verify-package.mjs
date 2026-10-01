@@ -71,6 +71,15 @@ function normalizeEntry(entry) {
 }
 
 /**
+ * Chemin d'entrée avec les séparateurs du système : @electron/asar découpe les chemins avec `path.sep`, donc sous
+ * Windows « dist/assets/x.js » n'est trouvé que sous la forme « dist\assets\x.js » (les fichiers de premier niveau
+ * se lisent dans les deux formes, d'où un défaut qui ne touche que les dossiers imbriqués).
+ */
+export function nativeEntryPath(entry, sep = path.sep) {
+  return normalizeEntry(entry).split('/').join(sep);
+}
+
+/**
  * Compare les fusibles lus dans l'exécutable (`wire` : position → état) aux valeurs attendues.
  * Retourne la liste des écarts (vide si tout est conforme).
  */
@@ -171,7 +180,7 @@ export async function verifyPackage(dir) {
   const texts = [];
   for (const entry of entries.map(normalizeEntry).filter(e => TEXT_EXTENSIONS.test(e))) {
     try {
-      texts.push({ name: entry, text: asar.extractFile(asarFile, entry).toString('utf8') });
+      texts.push({ name: entry, text: asar.extractFile(asarFile, nativeEntryPath(entry)).toString('utf8') });
     } catch {
       errors.push(`app.asar : « ${entry} » illisible`);
     }
