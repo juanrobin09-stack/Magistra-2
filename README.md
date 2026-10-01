@@ -452,6 +452,14 @@ Les polices sont auto-hébergées : aucune requête vers Google.
 
 ---
 
+## Sécurité
+
+Une faille à signaler ? **Pas d'issue publique** : suivez [SECURITY.md](SECURITY.md) (signalement privé GitHub, périmètre, délais de réponse).
+
+Pour les mainteneurs : la CI vérifie le paquet Windows construit (`scripts/verify-package.mjs` : fusibles Electron, intégrité et contenu de l'asar) ; [Dependabot](.github/dependabot.yml) propose chaque semaine les mises à jour, Electron dans une demande à part. Avant chaque publication, vérifiez qu'Electron est au dernier correctif de sa branche (`npm view electron versions`) : l'application n'a pas de mise à jour automatique, ses utilisateurs gardent le Chromium livré avec leur version.
+
+---
+
 ## Licence
 
 [MIT](LICENSE). Toutes les dépendances d'exécution sont sous licence libre compatible :

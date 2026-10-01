@@ -133,6 +133,11 @@ jobs:
         run: npx electron-builder --win nsis zip --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      # Le paquet n'est jamais lancé (voir plus haut) : on lit donc son résultat final. Fusibles d'Electron,
+      # intégrité d'app.asar, fichiers indispensables (main, preload, index.html), ni node_modules ni secret serveur.
+      # Lecture seule des fichiers de release/win-unpacked (@electron/fuses et @electron/asar, déjà installés).
+      - name: Inspection du paquet (fusibles, intégrité et contenu de l'asar)
+        run: node scripts/verify-package.mjs
       - name: Installateur à essayer
         uses: actions/upload-artifact@v4
         with:

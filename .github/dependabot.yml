@@ -1,0 +1,52 @@
+# Mises à jour automatiques des dépendances (Dependabot) : une demande de fusion par semaine et par groupe, jamais de
+# fusion automatique ; la CI (tests, E2E Electron, installateur Windows) valide chacune avant relecture.
+#
+# Electron est livré aux enseignants (Chromium + Node.js embarqués) et l'application n'a pas de mise à jour
+# automatique : ses correctifs de sécurité arrivent donc dans une demande SÉPARÉE (hors du groupe « minor/patch »),
+# pour être relus, testés et publiés sans attendre le reste des dépendances.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: Europe/Paris
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      # Mises à jour mineures et correctifs de tout le reste (Electron exclu : demande à part).
+      minor-and-patch:
+        patterns: ['*']
+        exclude-patterns: ['electron']
+        update-types: [minor, patch]
+    ignore:
+      # Versions majeures du socle de l'interface : migrations à décider à la main, pas au fil de l'eau.
+      - dependency-name: react
+        update-types: ['version-update:semver-major']
+      - dependency-name: react-dom
+        update-types: ['version-update:semver-major']
+      - dependency-name: vite
+        update-types: ['version-update:semver-major']
+      - dependency-name: tailwindcss
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@tailwindcss/vite'
+        update-types: ['version-update:semver-major']
+
+  # Actions GitHub : release.yml et real-ai.yml sont épinglées par SHA de commit (Dependabot met à jour le SHA et le
+  # commentaire « # vX.Y.Z »), ci.yml utilise des étiquettes flottantes (@v4).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: Europe/Paris
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore(ci)'
+    groups:
+      github-actions:
+        patterns: ['*']
