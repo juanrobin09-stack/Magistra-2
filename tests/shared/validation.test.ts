@@ -370,3 +370,14 @@ describe('validateGenerationRecordDraft — refus explicites', () => {
     expect(refused(withParams({ contenuSource: 'c'.repeat(REQUEST_LIMITS.contenuSource + 1) })).message).toMatch(/contenu à adapter.*trop long/);
   });
 });
+
+describe('appréciations : livret scolaire du bac', () => {
+  it('appréciations annuelles : le trimestre envoyé par un client plus ancien est ignoré', () => {
+    const base = { type: 'appreciations', niveau: 'terminale_gen', matiere: 'mathematiques', sujet: '', trimestre: '2' };
+    const livret = validateGenerationRequest({ ...base, modalite: 'livret_bac' });
+    expect(livret.modalite).toBe('livret_bac');
+    expect(livret).not.toHaveProperty('trimestre');
+    expect(validateGenerationRequest({ ...base, modalite: 'conseil_classe' }).trimestre).toBe('2');
+    expect(validateGenerationRequest(base).trimestre).toBe('2');
+  });
+});

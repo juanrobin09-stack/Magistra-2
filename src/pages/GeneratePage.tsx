@@ -1,6 +1,7 @@
 // Page « Générer » : 11 outils, formulaire propre à chaque outil, sources (documents + recherche),
 // confidentialité honnête, génération en flux avec arrêt / reprise.
-// Mise en page : sélecteur d'outils en haut (onglets défilants) sous `lg`, barre latérale au-dessus.
+// L'outil se choisit dans la barre latérale (« Outils pédagogiques », AppLayout) : l'adresse /app/generate?type=… fait
+// foi, et la page le présente en grand (« Changer d'outil » rouvre la liste). Une colonne, resserrée.
 //
 // Site web : la génération est faite par Magistra locale (IA de l'ordinateur de l'enseignant, via l'application
 // Windows) OU par le serveur en ligne, selon le choix de l'enseignant. Le bandeau dit TOUJOURS lequel avant l'envoi ;
@@ -15,8 +16,8 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
-import { Info, Loader2, Settings2, Sparkles } from 'lucide-react';
-import { getToolInfo, type TypeContenu } from '@shared/catalog';
+import { Info, LayoutGrid, Loader2, Settings2, Sparkles } from 'lucide-react';
+import { getToolInfo, isTypeContenu, TOOL_GROUPS } from '@shared/catalog';
 import { toMagistraError } from '@shared/errors';
 import type { NiveauScolaire } from '@shared/levels';
 import {
@@ -34,9 +35,9 @@ import PrivacyNotice from '@/components/generate/PrivacyNotice';
 import ResearchModePicker from '@/components/generate/ResearchModePicker';
 import ResultPanel from '@/components/generate/ResultPanel';
 import SourcesPanel from '@/components/generate/SourcesPanel';
-import ToolPicker from '@/components/generate/ToolPicker';
 import { useLocalPreferences, useSourceDocuments } from '@/components/generate/useSourceDocuments';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
+import { useAppShell } from '@/components/layout/shell';
 import { useAIStatus } from '@/hooks/useAIStatus';
 import { useCapabilities, useGeneration } from '@/hooks/useGeneration';
 import { activationBlocker } from '@/lib/ai-ui/activation';
@@ -55,6 +56,7 @@ import { adminContact, configuredProvider, useRuntime } from '@/lib/runtime/cont
 import { ExampleGenerationClient } from '@/lib/runtime/demo';
 import { HybridGenerationClient, type EngineRoute } from '@/lib/runtime/hybrid';
 import { usesServerApi } from '@/lib/runtime/types';
+import { TOOL_ICONS, TOOL_STYLE } from '@/lib/toolIcons';
 
 /** Magistra locale attend l'accord du navigateur : la génération ne doit pas faire apparaître sa demande sans explication. */
 export const LOCAL_PERMISSION_NOTICE =
@@ -81,7 +83,8 @@ const FIELD_IDS: Record<string, string> = {
 
 export default function GeneratePage() {
   const { mode, client, store, profile } = useRuntime();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const shell = useAppShell();
   // « Reprendre cette demande » (historique) : formulaire prérempli avec les paramètres enregistrés.
   const location = useLocation();
   const [reused] = useState(() => {
@@ -109,7 +112,56 @@ export default function GeneratePage() {
   const [shown, setShown] = useState<'generation' | 'example'>('generation');
 
   const tool = getToolInfo(form.type, form.niveau);
+  const ToolIcon = TOOL_ICONS[form.type];
+  const toolGroup = TOOL_GROUPS.find(g => g.tools.includes(form.type));
   const problems = useMemo(() => validateForm(form), [form]);
+
+  // Outil choisi dans la barre latérale (lien /app/generate?type=…) : le formulaire suit l'adresse, sans perdre la
+  // saisie (sujet, niveau, options restent pour l'outil suivant).
+  // (État ajusté pendant le rendu quand l'adresse change, comme le recommande React, plutôt que dans un effet.)
+  const urlType = searchParams.get('type');
+  const [lastUrlType, setLastUrlType] = useState(urlType);
+  if (lastUrlType !== urlType) {
+    setLastUrlType(urlType);
+    if (isTypeContenu(urlType) && urlType !== form.type) {
+      setForm(f => ({ ...f, type: urlType }));
+      setShowErrors(false);
+      setSubmitNotice(null);
+    }
+  }
+  // Adresse sans outil (« Générer », reprise depuis l'historique) ou outil inconnu : l'outil affiché y est inscrit,
+  // pour que la barre latérale le signale et que l'adresse puisse être partagée ou rechargée.
+  useEffect(() => {
+    if (isTypeContenu(urlType)) return;
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('type', form.type);
+      return next;
+    }, { replace: true });
+  }, [urlType, form.type, setSearchParams]);
+
+  // Autre outil choisi (barre latérale, tiroir mobile, retour arrière) : la page revient en haut, sur le nouvel outil,
+  // et son titre reçoit le focus (annoncé par les lecteurs d'écran ; jamais laissé sur un lien du tiroir refermé).
+  // Sinon la vue restait sur le résultat de l'outil précédent, comme si le clic n'avait rien fait. Pas au premier
+  // affichage.
+  const pageRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const shownType = useRef(form.type);
+  useEffect(() => {
+    if (shownType.current === form.type) return;
+    shownType.current = form.type;
+    pageRef.current?.scrollIntoView?.({ block: 'start' });
+    headingRef.current?.focus({ preventScroll: true });
+  }, [form.type]);
+
+  // Libellés des outils de la barre latérale au niveau du formulaire (« TD / Exercices » en Licence…), comme cette
+  // page ; rendus au niveau du profil quand la page est quittée.
+  const setToolNiveau = shell?.setToolNiveau;
+  useEffect(() => {
+    if (!setToolNiveau) return;
+    setToolNiveau(form.niveau);
+    return () => setToolNiveau(null);
+  }, [setToolNiveau, form.niveau]);
 
   // Site web : Magistra locale ou serveur en ligne (client hybride + contrôleur de Magistra locale) ; sinon null.
   const localEngine = useLocalEngine();
@@ -221,11 +273,6 @@ export default function GeneratePage() {
 
   const update = (patch: Partial<GenerateForm>) => {
     setForm(f => ({ ...f, ...patch }));
-    setSubmitNotice(null);
-  };
-  const changeTool = (type: TypeContenu) => {
-    setForm(f => ({ ...f, type }));
-    setShowErrors(false);
     setSubmitNotice(null);
   };
   const changeNiveau = (niveau: NiveauScolaire) => {
@@ -340,24 +387,48 @@ export default function GeneratePage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 py-6 lg:py-8 lg:grid lg:grid-cols-[13.5rem_minmax(0,1fr)] lg:gap-8 xl:gap-10">
-      <ToolPicker value={form.type} niveau={form.niveau} onChange={changeTool} />
-
-      <div className="min-w-0 max-w-3xl">
-        {/* En-tête */}
-        <header className="mb-6">
-          <div className="badge badge-accent mb-3">
-            <Sparkles size={12} aria-hidden="true" /> Génération IA
+    <div ref={pageRef} className="mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8 py-5 lg:py-7">
+      <div className="min-w-0">
+        {/* En-tête : l'outil choisi, en grand */}
+        <header className="mb-5 flex items-start gap-3.5 sm:gap-4">
+          <div
+            aria-hidden="true"
+            className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl ${TOOL_STYLE[form.type].iconBg} border border-white/8 flex items-center justify-center shrink-0 shadow-[0_8px_30px_rgba(0,0,0,0.25)]`}
+          >
+            <ToolIcon size={24} className={TOOL_STYLE[form.type].iconColor} />
           </div>
-          <h1 className="text-2xl sm:text-3xl text-white" style={{ fontFamily: 'var(--font-display)' }}>
-            {profile?.displayName
-              ? <>{profile.displayName}, que souhaitez-vous <em className="text-accent not-italic">créer</em> ?</>
-              : <>Que souhaitez-vous <em className="text-accent not-italic">créer</em> ?</>}
-          </h1>
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold text-accent/85 uppercase tracking-widest">
+              <Sparkles size={11} aria-hidden="true" />
+              {toolGroup ? toolGroup.label : 'Génération IA'}
+            </p>
+            <h1
+              ref={headingRef}
+              tabIndex={-1}
+              className="mt-0.5 text-2xl sm:text-[1.75rem] leading-tight text-white focus:outline-none"
+              style={{ fontFamily: 'var(--font-display)' }}
+            >
+              {tool.label}
+            </h1>
+            <p className="mt-1 text-sm text-mg-200 leading-relaxed">{tool.description}</p>
+          </div>
+          {shell && (
+            <button
+              type="button"
+              onClick={shell.openTools}
+              className={`btn-secondary shrink-0 text-xs py-2 px-3 ${FOCUS_RING}`}
+            >
+              <LayoutGrid size={14} aria-hidden="true" />
+              <span className="hidden sm:inline">Changer d'outil</span>
+              <span className="sm:hidden">Outils</span>
+            </button>
+          )}
         </header>
 
-        {reused && (
-          <div role="note" className="mb-6 p-4 rounded-xl bg-white/[0.03] border border-white/10 text-sm text-mg-100">
+        {/* Reprise depuis l'historique : rappel tant que l'outil repris est affiché (ses remarques, comme « collez à
+            nouveau le travail corrigé », ne valent pas pour un autre outil). */}
+        {reused && form.type === reused.form.type && (
+          <div role="note" className="mb-5 p-4 rounded-xl bg-white/[0.03] border border-white/10 text-sm text-mg-100">
             <p className="text-white font-medium">Demande reprise depuis l’historique : vérifiez les paramètres avant de générer.</p>
             {reused.notes.length > 0 && (
               <ul className="mt-1.5 list-disc pl-5 space-y-0.5 text-mg-200 [overflow-wrap:anywhere]">
@@ -367,18 +438,7 @@ export default function GeneratePage() {
           </div>
         )}
 
-        {/* Outil choisi */}
-        <div className="mb-6 flex items-center gap-3.5 p-4 rounded-xl bg-accent/5 border border-accent/15">
-          <div aria-hidden="true" className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/15 flex items-center justify-center text-xl shrink-0 select-none">
-            {tool.icon}
-          </div>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-white leading-tight">{tool.label}</p>
-            <p className="text-xs text-mg-200 mt-0.5 leading-relaxed">{tool.description}</p>
-          </div>
-        </div>
-
-        <div className="space-y-6">
+        <div className="space-y-5">
           {engine && (
             <EngineBanner
               route={route}
@@ -430,9 +490,9 @@ export default function GeneratePage() {
 
           {mode === 'demo' && <ConnectRealAICard />}
 
-          <form onSubmit={handleSubmit} noValidate aria-label="Demande de génération" className="space-y-6">
-            <section aria-labelledby="gen-params-title" className="card p-5 sm:p-6">
-              <div className="flex items-center gap-2 mb-5 pb-4 border-b border-white/6">
+          <form onSubmit={handleSubmit} noValidate aria-label="Demande de génération" className="space-y-5">
+            <section aria-labelledby="gen-params-title" className="card p-4 sm:p-5">
+              <div className="flex items-center gap-2 mb-4 pb-3 border-b border-white/6">
                 <Settings2 size={14} className="text-mg-200" aria-hidden="true" />
                 <h2 id="gen-params-title" className="text-xs font-semibold text-mg-200 uppercase tracking-widest">
                   Paramètres de génération

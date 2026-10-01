@@ -4,7 +4,7 @@ import type { NiveauScolaire } from '@shared/levels';
 import type { DocumentPassage, GenerationRequest, ResearchMode, TeacherProfile } from '@shared/types';
 import { REQUEST_LIMITS, validateGenerationRequest } from '@shared/validation';
 import {
-  appreciationCount, appreciationSummary, buildGenerationRequest, buildPassageQuery, createInitialForm, defaultTrimestre,
+  appreciationCount, appreciationSummary, buildGenerationRequest, buildPassageQuery, chosenCount, createInitialForm, defaultTrimestre,
   fitPassagesToLimits, normalizeAppreciationInput, resolveInitialSujet, resolveInitialType, validateForm, visibleFields,
   withNiveau, type GenerateForm,
 } from '@/lib/generation/request';
@@ -42,6 +42,14 @@ function fullForm(type: TypeContenu, niveau: NiveauScolaire): GenerateForm {
     contenuSource: 'Exercice 1 : calculer 3/4 + 1/2',
     typeLettre: 'reunion',
     texteEleve: 'La révolution a commencer en 1789.',
+    modalite: 'qcm',
+    typeEvaluation: 'formative',
+    bareme: 'sur10',
+    sansCorrige: true,
+    nombreExercices: 5,
+    nombreSeances: 6,
+    ton: 'exigeant',
+    besoins: ['dys', 'allophone'],
   };
 }
 
@@ -101,6 +109,30 @@ describe('buildGenerationRequest — aucun paramètre fantôme', () => {
     expect(extraKeys(req)).toEqual([]);
   });
 
+  it('travail d’un seul tenant (dictée, dissertation) : aucun nombre d’exercices transmis ; QCM : nombre gardé', () => {
+    const form: GenerateForm = { ...fullForm('exercices', '6eme'), matiere: 'francais', modalite: 'dictee', nombreExercices: 5 };
+    const dictee = buildGenerationRequest(form, 'exercices', PROFILE, [], 'documents');
+    expect(dictee.modalite).toBe('dictee');
+    expect(dictee).not.toHaveProperty('nombreExercices');
+    expect(visibleFields('exercices', '6eme', 'francais', 'dictee').has('nombreExercices')).toBe(false);
+    expect(buildGenerationRequest({ ...form, modalite: 'qcm' }, 'exercices', PROFILE, [], 'documents').nombreExercices).toBe(5);
+    // Format gardé d'un autre contexte (dissertation en 6e) : ni transmis, ni pris en compte pour le nombre.
+    const stale = buildGenerationRequest({ ...form, modalite: 'dissertation' }, 'exercices', PROFILE, [], 'documents');
+    expect(stale).not.toHaveProperty('modalite');
+    expect(stale.nombreExercices).toBe(5);
+    // Même règle que la validation partagée (serveur et application Windows).
+    expect(validateGenerationRequest(dictee)).not.toHaveProperty('nombreExercices');
+  });
+
+  it('nombre gardé d’un autre format et non proposé pour celui-ci (12 questions → problèmes) : « Auto », rien transmis', () => {
+    const form: GenerateForm = { ...fullForm('exercices', '4eme'), matiere: 'mathematiques', modalite: 'probleme', nombreExercices: 12 };
+    expect(buildGenerationRequest(form, 'exercices', PROFILE, [], 'documents')).not.toHaveProperty('nombreExercices');
+    expect(buildGenerationRequest({ ...form, nombreExercices: 3 }, 'exercices', PROFILE, [], 'documents').nombreExercices).toBe(3);
+    expect(chosenCount(12, { one: 'problème', many: 'problèmes', options: [1, 2, 3, 4] })).toBe('');
+    expect(chosenCount(2, { one: 'problème', many: 'problèmes', options: [1, 2, 3, 4] })).toBe(2);
+    expect(chosenCount('', { one: 'problème', many: 'problèmes', options: [1, 2, 3, 4] })).toBe('');
+  });
+
   it('matière absente au niveau : remplacée par une matière valide', () => {
     const form: GenerateForm = { ...fullForm('cours', 'cp'), matiere: 'philosophie' };
     const req = buildGenerationRequest(form, 'cours', PROFILE, [], 'documents');
@@ -117,6 +149,35 @@ describe('appréciations', () => {
     const req = buildGenerationRequest({ ...form, nombreAppreciations: '7' }, 'appreciations', PROFILE, [], 'documents');
     expect(req.trimestre).toBe('2');
     expect(req.profilEleve).toBe('fragile');
+  });
+
+  it('livret scolaire (bac) : appréciation annuelle, ni trimestre affiché ni transmis ; la matière reste', () => {
+    expect(visibleFields('appreciations', 'terminale_gen', 'mathematiques', 'livret_bac').has('trimestre')).toBe(false);
+    expect(visibleFields('appreciations', 'terminale_gen', 'mathematiques', 'livret_bac').has('modalite')).toBe(true);
+    const form: GenerateForm = { ...fullForm('appreciations', 'terminale_gen'), matiere: 'mathematiques', modalite: 'livret_bac', trimestre: '1' };
+    const req = buildGenerationRequest(form, 'appreciations', PROFILE, [], 'documents');
+    expect(req.modalite).toBe('livret_bac');
+    expect(req).not.toHaveProperty('trimestre');
+    expect(req.matiere).toBe('mathematiques');
+    expect(req.profilEleve).toBe('fragile');
+    expect(validateGenerationRequest(JSON.parse(JSON.stringify(req))).trimestre).toBeUndefined();
+    // Retour au bulletin : le trimestre saisi réapparaît et repart.
+    expect(buildGenerationRequest({ ...form, modalite: '' }, 'appreciations', PROFILE, [], 'documents').trimestre).toBe('1');
+  });
+
+  it('conseil de classe : trimestre et matière gardés ; livret gardé d’un autre niveau : le trimestre reste', () => {
+    const conseil: GenerateForm = { ...fullForm('appreciations', '4eme'), matiere: 'mathematiques', modalite: 'conseil_classe' };
+    const req = buildGenerationRequest(conseil, 'appreciations', PROFILE, [], 'documents');
+    expect(req.modalite).toBe('conseil_classe');
+    expect(req.trimestre).toBe('2');
+    expect(req.matiere).toBe('mathematiques');
+    // Le livret scolaire n'existe pas en 4e : format ignoré, rien n'est masqué.
+    expect(visibleFields('appreciations', '4eme', 'mathematiques', 'livret_bac').has('trimestre')).toBe(true);
+    const stale = buildGenerationRequest({ ...conseil, modalite: 'livret_bac' }, 'appreciations', PROFILE, [], 'documents');
+    expect(stale).not.toHaveProperty('modalite');
+    expect(stale.trimestre).toBe('2');
+    // Sans matière connue, le format n'est pas vérifiable : rien n'est masqué.
+    expect(visibleFields('appreciations', 'terminale_gen', undefined, 'livret_bac').has('trimestre')).toBe(true);
   });
 
   it('le champ peut être vidé sans revenir à 10', () => {

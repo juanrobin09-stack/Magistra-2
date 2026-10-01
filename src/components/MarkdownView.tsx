@@ -2,6 +2,8 @@
 // mathématiques KaTeX, liens sûrs, HTML brut neutralisé.
 // Rendu progressif : le texte est découpé en blocs de premier niveau mémoïsés, si bien que
 // pendant la génération seul le dernier bloc (celui qui s'allonge) est recalculé.
+// Avant le découpage, prepareMarkdown convertit les formules « \( \) » / « \[ \] » et met en page les choix de QCM
+// (même traitement que l'export PDF), y compris pendant la rédaction et pour l'historique ancien.
 
 import { memo, useMemo, type MouseEvent, type ReactNode } from 'react';
 import Markdown, { defaultUrlTransform, type Components } from 'react-markdown';
@@ -12,7 +14,7 @@ import remarkMath from 'remark-math';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import { getBridge } from '@/lib/runtime/local';
-import { remarkSafeMarkdown, splitMarkdownBlocks } from '@/lib/export/markdown';
+import { prepareMarkdown, remarkSafeMarkdown, splitMarkdownBlocks } from '@/lib/export/markdown';
 
 // Remarque : les formules sont rendues avec le paquet `katex` de l'application (même version que
 // la feuille de style importée ci-dessus). rehype-katex embarque sa propre copie de KaTeX 0.16,
@@ -179,7 +181,7 @@ const MarkdownBlock = memo(function MarkdownBlock({ source }: { source: string }
 });
 
 export default function MarkdownView({ content, className }: { content: string; className?: string }) {
-  const blocks = useMemo(() => splitMarkdownBlocks(typeof content === 'string' ? content : ''), [content]);
+  const blocks = useMemo(() => splitMarkdownBlocks(prepareMarkdown(typeof content === 'string' ? content : '')), [content]);
   return (
     <div className={className ? `prose-content ${className}` : 'prose-content'}>
       {blocks.map((block, index) => (

@@ -5,7 +5,11 @@ import {
   DIFFICULTES, FORMATS_SEANCE, isMatiere, isTypeContenu, PROFILS_DIFFERENCIATION, PROFILS_ELEVE, TYPES_LETTRE,
   type DifficulteExercice, type FormatSeance, type ProfilDifferenciation, type ProfilEleve, type TypeLettre,
 } from '@shared/catalog';
-import { isNiveau } from '@shared/levels';
+import {
+  BAREMES, BESOINS_PARTICULIERS, countLabel, countUnit, getModalite, LIMITES_NOMBRES, modaliteFieldLabel, TONS, TYPES_EVALUATION,
+  type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
+} from '@shared/formats';
+import { getLevelGroup, isNiveau, isSuperieur } from '@shared/levels';
 import { REQUEST_LIMITS } from '@shared/validation';
 import { RESEARCH_MODES, type GenerationRecord, type ResearchMode, type TeacherProfile } from '@shared/types';
 import { createInitialForm, pickMatiere, type GenerateForm, type Trimestre } from './request';
@@ -36,6 +40,11 @@ function isTrimestre(value: unknown): value is Trimestre {
   return value === '1' || value === '2' || value === '3';
 }
 
+/** Entier enregistré dans les bornes, sinon '' (« automatique »). */
+function countOf(value: unknown, bounds: { min: number; max: number }): number | '' {
+  return typeof value === 'number' && Number.isInteger(value) && value >= bounds.min && value <= bounds.max ? value : '';
+}
+
 /** Paramètres enregistrés, lisibles (seulement ceux qui existent). */
 export function describeRecordParams(record: ReusableRecord): { label: string; value: string }[] {
   const p = record.params ?? {};
@@ -56,6 +65,21 @@ export function describeRecordParams(record: ReusableRecord): { label: string; v
     add('Profils', p.profilsDifferenciation.map(v => labelOf(v, PROFILS_DIFFERENCIATION)).filter(Boolean).join(', '));
   }
   add('Type de courrier', labelOf(p.typeLettre, TYPES_LETTRE));
+  if (isTypeContenu(record.type)) {
+    const sup = isNiveau(record.niveau) && isSuperieur(record.niveau);
+    add(modaliteFieldLabel(record.type, sup), typeof p.modalite === 'string' ? getModalite(p.modalite)?.label : undefined);
+  }
+  add('Objectif', labelOf(p.typeEvaluation, TYPES_EVALUATION));
+  add('Notation', labelOf(p.bareme, BAREMES));
+  add('Corrigé', p.sansCorrige === true ? 'non (version élève seule)' : undefined);
+  // « Nombre de questions » pour un QCM… ; rien pour un travail d'un seul tenant (dissertation, dictée…).
+  const unit = countUnit(typeof p.modalite === 'string' ? p.modalite : undefined, isNiveau(record.niveau) ? getLevelGroup(record.niveau) : undefined);
+  if (unit) add(countLabel(unit), countOf(p.nombreExercices, LIMITES_NOMBRES.exercices) ? String(p.nombreExercices) : undefined);
+  add('Nombre de séances', countOf(p.nombreSeances, LIMITES_NOMBRES.seances) ? String(p.nombreSeances) : undefined);
+  add('Ton', labelOf(p.ton, TONS));
+  if (Array.isArray(p.besoins)) {
+    add('Besoins particuliers', p.besoins.map(v => labelOf(v, BESOINS_PARTICULIERS)).filter(Boolean).join(', '));
+  }
   const source = text(p.contenuSource, REQUEST_LIMITS.contenuSource);
   add('Contenu adapté', source.length > 300 ? `${source.slice(0, 299)}…` : source);
   if (typeof p.texteEleveLength === 'number') {
@@ -89,6 +113,17 @@ export function formFromRecord(record: ReusableRecord, profile: TeacherProfile |
     contenuSource: text(p.contenuSource, REQUEST_LIMITS.contenuSource),
     typeLettre: oneOf<TypeLettre>(p.typeLettre, TYPES_LETTRE) ?? base.typeLettre,
     texteEleve: '',
+    // Format inconnu (application plus récente) : ignoré ; format hors de propos : ignoré à l'envoi (request.ts).
+    modalite: typeof p.modalite === 'string' && getModalite(p.modalite) ? p.modalite : '',
+    typeEvaluation: oneOf<TypeEvaluation>(p.typeEvaluation, TYPES_EVALUATION) ?? '',
+    bareme: oneOf<Bareme>(p.bareme, BAREMES) ?? '',
+    sansCorrige: p.sansCorrige === true,
+    nombreExercices: countOf(p.nombreExercices, LIMITES_NOMBRES.exercices),
+    nombreSeances: countOf(p.nombreSeances, LIMITES_NOMBRES.seances),
+    ton: oneOf<TonRedaction>(p.ton, TONS) ?? '',
+    besoins: Array.isArray(p.besoins)
+      ? BESOINS_PARTICULIERS.map(b => b.value).filter((v: BesoinParticulier) => (p.besoins as unknown[]).includes(v))
+      : [],
   };
   if (form.profilsDifferenciation.length === 0) form.profilsDifferenciation = base.profilsDifferenciation;
 

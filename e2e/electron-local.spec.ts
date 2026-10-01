@@ -889,7 +889,8 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     await setupReadyApp(page);
 
     await openNav(page, 'Générer');
-    await expect(page.getByRole('heading', { name: /Mme Durand, que souhaitez-vous/ })).toBeVisible();
+    // Page Générer : l'outil en cours en titre (« Cours » par défaut), choisi dans « Outils pédagogiques ».
+    await expect(page.getByRole('heading', { level: 1, name: 'Cours' })).toBeVisible();
     await page.locator('input[type="file"]').setInputFiles({
       name: 'notes-photosynthese.docx',
       mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -1039,7 +1040,7 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
 
     // Ctrl+R (ou redémarrage automatique de l'affichage) au milieu de la rédaction.
     await page.reload();
-    await expect(page.getByRole('heading', { name: /que souhaitez-vous/ })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Cours' })).toBeVisible();
     mock.options.chatDelayMs = 5;
     await submitCours(page, 'Les pourcentages');
     const result = resultSection(page);

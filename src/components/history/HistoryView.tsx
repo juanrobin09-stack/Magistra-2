@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { FileText, Heart, History, Loader2, Search, Sparkles } from 'lucide-react';
 import type { GenerationRecord } from '@shared/types';
+import { isDrawerLayout } from '@/components/layout/shell';
 import { useRuntime } from '@/lib/runtime/context';
 import { matchesSearch } from '@/lib/runtime/history';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -20,10 +21,6 @@ const SEARCH_SCAN_LIMIT = 500;
 interface HistoryViewProps {
   /** Favoris : uniquement les contenus marqués comme favoris. */
   favoritesOnly: boolean;
-}
-
-function isMobileLayout(): boolean {
-  return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1023px)').matches;
 }
 
 /** Historique et Favoris : liste paginée + détail, avec recherche, actions et erreurs visibles. */
@@ -86,7 +83,8 @@ export default function HistoryView({ favoritesOnly }: HistoryViewProps) {
   }, [selectedId]);
 
   const onOpen = useCallback((id: string) => {
-    if (id !== selectedId && isMobileLayout()) focusDetailOnLoad.current = true;
+    // Mise en page étroite (même seuil que le CSS) : le détail remplace la liste, le focus va à son titre.
+    if (id !== selectedId && isDrawerLayout()) focusDetailOnLoad.current = true;
   }, [selectedId]);
 
   const clearSelection = useCallback((viaHistory: boolean) => {

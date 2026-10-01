@@ -3,6 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_ROUTES } from '@shared/apiContract';
+import { getMatiereLabel } from '@shared/catalog';
 import { MagistraError } from '@shared/errors';
 import { CONNECTOR_PORTS, CONNECTOR_ROUTES, LOCAL_ENGINE_SITE_MESSAGES } from '@shared/localConnector';
 import type { Capabilities, GenerationEvent, GenerationRecordDraft, GenerationRequest } from '@shared/types';
@@ -12,8 +13,9 @@ import { resetEngineChoiceMemory, setEngineChoice } from '@/lib/localConnector/e
 import { MemoryPairingStore } from '@/lib/localConnector/pairingStore';
 import type { LoopbackPermission } from '@/lib/localConnector/permission';
 import {
-  HybridGenerationClient, LOCAL_NEEDS_PERMISSION_MESSAGE, LOCAL_NOT_CONNECTED_MESSAGE, LOCAL_PRIVACY_MESSAGE, LOCAL_SAVE_FAILED_MESSAGE,
-  localCapabilities,
+  appSupportsToolOptions, HybridGenerationClient, ignoredToolOptions, ignoredToolOptionsMessage, localAppTooOldMessage,
+  LOCAL_NEEDS_PERMISSION_MESSAGE, LOCAL_NOT_CONNECTED_MESSAGE, LOCAL_PRIVACY_MESSAGE, LOCAL_SAVE_FAILED_MESSAGE, localCapabilities,
+  recentMatiere, requestedToolOptions, substitutedRequestMessage, TOOL_OPTIONS_MIN_APP_VERSION,
 } from '@/lib/runtime/hybrid';
 import type { GenerationClient } from '@/lib/runtime/types';
 import { ApiDataStore } from '@/lib/runtime/web';
@@ -328,6 +330,311 @@ describe('génération locale', () => {
       { type: 'error', code: 'GENERATION_BUSY', message: 'Une génération est déjà en cours dans Magistra.', retryable: true },
     ]);
     expect(ctx.serverCalls).toEqual([]);
+  });
+});
+
+describe('options des outils et version de l’application Windows (protocole inchangé)', () => {
+  /** Texte à trous de 10 mots, version élève seule : ignorés sans erreur par une application d'avant 2.0.3. */
+  const OPTIONS_REQUEST: GenerationRequest = {
+    type: 'exercices', niveau: '6eme', matiere: 'francais', sujet: 'Les accords', researchMode: 'documents',
+    modalite: 'texte_trous', nombreExercices: 10, sansCorrige: true,
+  };
+  const APPLIED = { researchMode: 'documents', modalite: 'texte_trous', nombreExercices: 10, sansCorrige: true };
+
+  /** Version annoncée par l'application (hello et état signé). */
+  function setAppVersion(connector: FakeConnector, version: string) {
+    connector.version = version;
+    connector.status = { ...structuredClone(READY_STATUS), version };
+  }
+
+  /**
+   * Génération à enregistrer telle que l'application la renvoie : outil, niveau et matière de la demande qu'elle a
+   * traitée (par défaut, ceux de la demande envoyée), paramètres.
+   */
+  function recordParams(
+    connector: FakeConnector, params: Record<string, unknown>,
+    treated: Pick<GenerationRequest, 'type' | 'niveau' | 'matiere'> = OPTIONS_REQUEST,
+  ) {
+    const { type, niveau, matiere } = treated;
+    connector.events = DEFAULT_EVENTS.map(e => (e.type === 'done' ? { ...e, record: { ...RECORD, type, niveau, matiere, sources: [], params } } : e));
+  }
+
+  async function run(client: GenerationClient, request: GenerationRequest = OPTIONS_REQUEST): Promise<GenerationEvent[]> {
+    const events: GenerationEvent[] = [];
+    await client.generate(request, e => events.push(e), new AbortController().signal);
+    return events;
+  }
+
+  it('application 2.0.2 : demande refusée AVANT l’envoi (aucune génération, aucun corrigé), message de mise à jour', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', appVersion: '2.0.2' });
+    const events = await run(ctx.client);
+    const message = localAppTooOldMessage(['modalite', 'sansCorrige', 'nombreExercices']);
+    expect(events).toEqual([{ type: 'error', code: 'CONNECTOR_UNREACHABLE', message, retryable: true }]);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(0);
+    expect(ctx.saveDraft).not.toHaveBeenCalled();
+    expect(ctx.serverCalls).toEqual([]);
+    // Les choix de l'enseignant et la version nécessaire (réinstaller la même version ne suffit pas).
+    expect(message).toBe("Vos choix (format, version élève seule, nombre demandé) demandent Magistra pour Windows 2.0.3 ou plus récente, et l'application de cet ordinateur est plus ancienne : installez la dernière version (Réglages → « Magistra pour Windows »), puis réessayez, ou générez sans ces choix.");
+    expect(message).not.toMatch(/localhost|127\.0\.0\.1|ollama|47831/i);
+    // L'état affiché reste « connectée » : l'application sert toujours les demandes sans ces options.
+    expect(ctx.controller.getSnapshot().kind).toBe('connected');
+  });
+
+  it('application 2.0.2, demande sans ces options : envoyée comme avant (les anciennes applications restent utilisables)', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    const events = await collect(ctx.client);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: 'done', saved: true, id: 'gen-42' });
+    expect(events.filter(e => e.type === 'warning')).toEqual([]);
+  });
+
+  it('application 2.0.3 (et pré-version de 2.0.3) : envoyée, options appliquées, aucun avertissement', async () => {
+    for (const version of ['2.0.3', '2.0.3-beta.1', '2.1.0']) {
+      const ctx = setup();
+      setAppVersion(ctx.connector, version);
+      recordParams(ctx.connector, APPLIED);
+      await ctx.controller.connect();
+      const statusCalls = ctx.connector.calls(CONNECTOR_ROUTES.status).length;
+      const events = await run(ctx.client);
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+      expect(JSON.parse(ctx.connector.calls(CONNECTOR_ROUTES.generate)[0].body)).toMatchObject({ modalite: 'texte_trous', sansCorrige: true, nombreExercices: 10 });
+      // Version connue et suffisante : aucune relecture de l'état avant l'envoi.
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.status)).toHaveLength(statusCalls);
+      expect(events.filter(e => e.type === 'warning' || e.type === 'error')).toEqual([]);
+      expect(events.at(-1)).toMatchObject({ type: 'done', saved: true, id: 'gen-42' });
+    }
+  });
+
+  it('version affichée périmée (application mise à jour depuis) : relue avant de refuser, puis envoyée', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    // L'enseignant installe la mise à jour, puis clique sur « Réessayer » : l'état affiché dit encore 2.0.2.
+    setAppVersion(ctx.connector, '2.0.3');
+    recordParams(ctx.connector, APPLIED);
+    expect(ctx.controller.getSnapshot().appVersion).toBe('2.0.2');
+    const events = await run(ctx.client);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: 'done', saved: true });
+    expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', appVersion: '2.0.3' });
+  });
+
+  it('version pas encore lue (nouvelle page) : lue avant l’envoi ; 2.0.2 → refusée', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    const page = ctx.reload();
+    expect(page.local.getSnapshot().appVersion).toBeUndefined();
+    const events = await run(page.client);
+    expect(events).toEqual([
+      { type: 'error', code: 'CONNECTOR_UNREACHABLE', message: localAppTooOldMessage(['modalite', 'sansCorrige', 'nombreExercices']), retryable: true },
+    ]);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(0);
+  });
+
+  it('application fermée au moment de la relecture : jamais « mettez à jour » à tort, l’erreur de connexion est transmise', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    ctx.connector.setPort(P1, 'closed');
+    ctx.clock.advance(60_000);
+    const events = await run(ctx.client);
+    expect(events).toEqual([expect.objectContaining({ type: 'error', code: 'CONNECTOR_UNREACHABLE' })]);
+    expect(events[0]).not.toMatchObject({ message: localAppTooOldMessage(['modalite', 'sansCorrige', 'nombreExercices']) });
+    expect(events[0]).not.toMatchObject({ message: expect.stringContaining('plus récente') });
+  });
+
+  it('version illisible : envoyée ; options absentes des paramètres renvoyés → avertissement AVANT « done », contenu gardé', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, 'dev');
+    recordParams(ctx.connector, { researchMode: 'documents' });
+    await ctx.controller.connect();
+    const events = await run(ctx.client);
+    expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+    const message = ignoredToolOptionsMessage(['modalite', 'sansCorrige', 'nombreExercices']);
+    expect(events.slice(-2)).toEqual([
+      { type: 'warning', code: 'CONNECTOR_UNREACHABLE', message },
+      expect.objectContaining({ type: 'done', saved: true, id: 'gen-42', content: '# La fable\n\nTexte.' }),
+    ]);
+    expect(message).toContain('format, version élève seule, nombre demandé');
+    expect(message).toContain('peut contenir un corrigé');
+  });
+
+  it('options appliquées d’après les paramètres renvoyés, ou paramètres absents : aucun avertissement', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, 'dev');
+    await ctx.controller.connect();
+    recordParams(ctx.connector, APPLIED);
+    expect((await run(ctx.client)).filter(e => e.type === 'warning')).toEqual([]);
+    // Pas de génération à enregistrer : seul l'avertissement d'enregistrement (rien n'est affirmé sur les options).
+    ctx.connector.events = DEFAULT_EVENTS.map(e => (e.type === 'done' ? { ...e, record: undefined } : e));
+    expect((await run(ctx.client)).filter(e => e.type === 'warning')).toEqual([{ type: 'warning', code: 'STORAGE_ERROR', message: LOCAL_SAVE_FAILED_MESSAGE }]);
+  });
+
+  it('serveur en ligne choisi : options envoyées au serveur, aucune vérification de l’application', async () => {
+    const ctx = setup();
+    setAppVersion(ctx.connector, '2.0.2');
+    await ctx.controller.connect();
+    setEngineChoice('server');
+    ctx.connector.requests.length = 0;
+    expect(await run(ctx.client)).toEqual([expect.objectContaining({ type: 'done', id: 'srv-1' })]);
+    expect(ctx.connector.requests).toHaveLength(0);
+  });
+
+  it('application 2.0.2 : le refus nomme le choix de l’enseignant (ton, besoins particuliers…), jamais une liste fixe', async () => {
+    const cases: [Partial<GenerationRequest>, string][] = [
+      [{ type: 'appreciations', ton: 'exigeant' }, 'Votre choix (ton) demande Magistra pour Windows 2.0.3 ou plus récente'],
+      [{ type: 'differenciation', besoins: ['dys'] }, 'Votre choix (besoins particuliers) demande Magistra pour Windows 2.0.3 ou plus récente'],
+      [{ type: 'evaluation', typeEvaluation: 'sommative' }, "Votre choix (objectif de l'évaluation) demande"],
+      [{ type: 'sequence', nombreSeances: 5 }, 'Votre choix (nombre de séances) demande'],
+      [{ type: 'appreciations', ton: 'factuel', bareme: 'sur20' }, 'Vos choix (notation, ton) demandent Magistra pour Windows 2.0.3 ou plus récente'],
+    ];
+    for (const [fields, expected] of cases) {
+      const ctx = setup();
+      setAppVersion(ctx.connector, '2.0.2');
+      await ctx.controller.connect();
+      const request: GenerationRequest = { type: 'cours', niveau: '6eme', matiere: 'francais', sujet: 'Trimestre 1', researchMode: 'documents', ...fields };
+      const events = await run(ctx.client, request);
+      expect(events).toEqual([{ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: expect.stringContaining(expected), retryable: true }]);
+      const { message } = events[0] as Extract<GenerationEvent, { type: 'error' }>;
+      expect(message).not.toContain('format');
+      expect(message).toMatch(/ou générez sans ce(s)? choix\.$/);
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(0);
+    }
+  });
+
+  describe('matière récente « Se repérer dans le temps et l’espace » (inconnue avant 2.0.3)', () => {
+    const TEMPS_ESPACE: GenerationRequest = {
+      type: 'cours', niveau: 'maternelle_ms', matiere: 'temps_espace', sujet: 'Les jours de la semaine', researchMode: 'documents',
+    };
+    const REFUSAL =
+      "La matière « Se repérer dans le temps et l'espace » demande Magistra pour Windows 2.0.3 ou plus récente, et l'application de cet ordinateur est plus ancienne : installez la dernière version (Réglages → « Magistra pour Windows »), puis réessayez, ou choisissez le serveur en ligne.";
+
+    it('application 2.0.2, aucune option : refusée AVANT l’envoi (jamais rédigée pour « Mobiliser le langage — Oral »), la matière est nommée', async () => {
+      const ctx = setup();
+      setAppVersion(ctx.connector, '2.0.2');
+      await ctx.controller.connect();
+      expect(requestedToolOptions(TEMPS_ESPACE)).toEqual([]);
+      const events = await run(ctx.client, TEMPS_ESPACE);
+      expect(events).toEqual([{ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: REFUSAL, retryable: true }]);
+      expect(localAppTooOldMessage([], 'temps_espace')).toBe(REFUSAL);
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(0);
+      expect(ctx.saveDraft).not.toHaveBeenCalled();
+      expect(ctx.serverCalls).toEqual([]);
+    });
+
+    it('version pas encore lue (nouvelle page), fiche de préparation GS : lue avant l’envoi ; 2.0.2 → refusée', async () => {
+      const ctx = setup();
+      setAppVersion(ctx.connector, '2.0.2');
+      await ctx.controller.connect();
+      const page = ctx.reload();
+      const request: GenerationRequest = { ...TEMPS_ESPACE, type: 'fiche_prep', niveau: 'maternelle_gs' };
+      expect(await run(page.client, request)).toEqual([{ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: REFUSAL, retryable: true }]);
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(0);
+    });
+
+    it('matière récente et une option : les deux sont nommées', async () => {
+      const ctx = setup();
+      setAppVersion(ctx.connector, '2.0.2');
+      await ctx.controller.connect();
+      const events = await run(ctx.client, { ...TEMPS_ESPACE, modalite: 'atelier' });
+      expect(events).toEqual([{
+        type: 'error', code: 'CONNECTOR_UNREACHABLE', retryable: true,
+        message: expect.stringMatching(/^La matière « Se repérer dans le temps et l'espace » et votre choix \(format\) demandent Magistra pour Windows 2\.0\.3 ou plus récente/),
+      }]);
+    });
+
+    it('application 2.0.3 : envoyée, enregistrée sous la matière choisie, aucun avertissement', async () => {
+      const ctx = setup();
+      setAppVersion(ctx.connector, '2.0.3');
+      recordParams(ctx.connector, { researchMode: 'documents' }, TEMPS_ESPACE);
+      await ctx.controller.connect();
+      const events = await run(ctx.client, TEMPS_ESPACE);
+      expect(JSON.parse(ctx.connector.calls(CONNECTOR_ROUTES.generate)[0].body)).toMatchObject({ matiere: 'temps_espace' });
+      expect(events.filter(e => e.type === 'warning' || e.type === 'error')).toEqual([]);
+      expect(events.at(-1)).toMatchObject({ type: 'done', saved: true, id: 'gen-42' });
+      expect(ctx.saved).toEqual([expect.objectContaining({ matiere: 'temps_espace' })]);
+    });
+
+    it('version inconnue, matière remplacée par l’application : avertissement AVANT « done », JAMAIS enregistrée sous l’autre matière', async () => {
+      const ctx = setup();
+      setAppVersion(ctx.connector, 'dev');
+      // Application 2.0.2 : « temps_espace » inconnu → première matière du niveau, sans erreur.
+      recordParams(ctx.connector, { researchMode: 'documents' }, { ...TEMPS_ESPACE, matiere: 'langage_oral' });
+      await ctx.controller.connect();
+      const events = await run(ctx.client, TEMPS_ESPACE);
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+      const message = substitutedRequestMessage(TEMPS_ESPACE, { ...RECORD, type: 'cours', niveau: 'maternelle_ms', matiere: 'langage_oral' });
+      expect(message).toBe(
+        `La matière « ${getMatiereLabel('temps_espace')} » n'est pas connue de l'application Magistra de cet ordinateur, trop ancienne : le contenu a été rédigé pour « ${getMatiereLabel('langage_oral')} ». Il n'a pas été enregistré dans l'historique. Installez Magistra pour Windows 2.0.3 ou plus récente (Réglages → « Magistra pour Windows »), puis relancez la génération.`,
+      );
+      expect(events.slice(-2)).toEqual([
+        { type: 'warning', code: 'CONNECTOR_UNREACHABLE', message },
+        expect.objectContaining({ type: 'done', saved: false, id: undefined, content: '# La fable\n\nTexte.' }),
+      ]);
+      expect('record' in events.at(-1)!).toBe(false);
+      expect(ctx.saveDraft).not.toHaveBeenCalled();
+    });
+  });
+
+  it('matière, outil ou niveau remplacés, et matières récentes (fonctions pures)', () => {
+    expect(recentMatiere({ ...REQUEST, niveau: 'maternelle_gs', matiere: 'temps_espace' })).toBe('temps_espace');
+    expect(recentMatiere({ ...REQUEST, niveau: 'maternelle_gs', matiere: 'langage_oral' })).toBeNull();
+    expect(recentMatiere(REQUEST)).toBeNull();
+
+    expect(substitutedRequestMessage(REQUEST, RECORD)).toBeNull();
+    expect(substitutedRequestMessage(REQUEST, undefined)).toBeNull();
+    expect(substitutedRequestMessage(REQUEST, ['francais'])).toBeNull();
+    // Champ absent ou illisible : rien n'est affirmé.
+    expect(substitutedRequestMessage(REQUEST, { ...RECORD, matiere: undefined, niveau: 6 })).toBeNull();
+    // Matière inconnue du site : jamais recopiée telle quelle dans le message.
+    const unknown = substitutedRequestMessage(REQUEST, { ...RECORD, matiere: 'x<script>' });
+    expect(unknown).toContain('rédigé pour une autre matière');
+    expect(unknown).not.toContain('script');
+    expect(substitutedRequestMessage(REQUEST, { ...RECORD, type: 'exercices' })).toMatch(/ne correspond pas à l'outil ou au niveau demandés\. Il n'a pas été enregistré/);
+    expect(substitutedRequestMessage(REQUEST, { ...RECORD, niveau: '5eme' })).toMatch(/l'outil ou au niveau/);
+
+    expect(localAppTooOldMessage(['ton'])).toBe(
+      "Votre choix (ton) demande Magistra pour Windows 2.0.3 ou plus récente, et l'application de cet ordinateur est plus ancienne : installez la dernière version (Réglages → « Magistra pour Windows »), puis réessayez, ou générez sans ce choix.",
+    );
+    expect(localAppTooOldMessage(['besoins', 'modalite'])).toMatch(/^Vos choix \(format, besoins particuliers\) demandent .* ou générez sans ces choix\.$/);
+    expect(localAppTooOldMessage(['modalite', 'bareme'], 'temps_espace')).toMatch(/^La matière « Se repérer dans le temps et l'espace » et vos choix \(format, notation\) demandent .* ou choisissez le serveur en ligne\.$/);
+    for (const message of [localAppTooOldMessage(['sansCorrige']), localAppTooOldMessage([], 'temps_espace'), ignoredToolOptionsMessage(['ton'])]) {
+      expect(message).toContain(`Magistra pour Windows ${TOOL_OPTIONS_MIN_APP_VERSION} ou plus récente`);
+    }
+  });
+
+  it('options renseignées, versions et options non appliquées (fonctions pures)', () => {
+    expect(requestedToolOptions(REQUEST)).toEqual([]);
+    expect(requestedToolOptions({ ...REQUEST, sansCorrige: false, besoins: [], ton: undefined })).toEqual([]);
+    expect(requestedToolOptions({ ...REQUEST, bareme: 'sur20', besoins: ['dys'], typeEvaluation: 'sommative', ton: 'encourageant', nombreSeances: 5 }))
+      .toEqual(['nombreSeances', 'typeEvaluation', 'bareme', 'ton', 'besoins']);
+    expect(requestedToolOptions(OPTIONS_REQUEST)).toEqual(['modalite', 'sansCorrige', 'nombreExercices']);
+
+    expect(appSupportsToolOptions('2.0.2')).toBe(false);
+    expect(appSupportsToolOptions('1.9.9')).toBe(false);
+    expect(appSupportsToolOptions('2.0.2-rc.1')).toBe(false);
+    expect(appSupportsToolOptions('2.0.3')).toBe(true);
+    expect(appSupportsToolOptions('2.0.3-beta.1')).toBe(true);
+    expect(appSupportsToolOptions('10.0.0')).toBe(true);
+    expect(appSupportsToolOptions(undefined)).toBeNull();
+    expect(appSupportsToolOptions('dev')).toBeNull();
+
+    expect(ignoredToolOptions(OPTIONS_REQUEST, { researchMode: 'documents' })).toEqual(['modalite', 'sansCorrige', 'nombreExercices']);
+    expect(ignoredToolOptions(OPTIONS_REQUEST, APPLIED)).toEqual([]);
+    expect(ignoredToolOptions(OPTIONS_REQUEST, { ...APPLIED, sansCorrige: undefined })).toEqual(['sansCorrige']);
+    expect(ignoredToolOptions(OPTIONS_REQUEST, undefined)).toEqual([]);
+    expect(ignoredToolOptions(OPTIONS_REQUEST, ['modalite'])).toEqual([]);
+    expect(ignoredToolOptions(REQUEST, { researchMode: 'documents' })).toEqual([]);
+
+    expect(ignoredToolOptionsMessage(['bareme'])).toMatch(/^Votre choix \(notation\) n'a pas été appliqué : /);
+    expect(ignoredToolOptionsMessage(['bareme'])).not.toContain('corrigé');
+    expect(ignoredToolOptionsMessage(['besoins', 'modalite'])).toMatch(/^Vos choix \(format, besoins particuliers\) n'ont pas été appliqués : /);
   });
 });
 

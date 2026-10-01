@@ -645,8 +645,15 @@ test('robustesse : outil inconnu → « Cours », route inconnue → accueil, re
   await seedProfile(page, PROFILE_SUPERIEUR);
   await page.goto('/app/generate?type=inexistant');
   await expect(page.getByRole('button', { name: 'Générer : Cours' })).toBeVisible();
-  const tools = page.getByRole('navigation', { name: 'Outils de génération' }).filter({ visible: true });
-  await expect(tools.getByRole('button', { name: /Cours/ })).toHaveAttribute('aria-pressed', 'true');
+  // L'outil affiché est inscrit dans l'adresse et signalé dans « Outils pédagogiques » (barre latérale).
+  await expect(page).toHaveURL(/\/app\/generate\?type=cours$/);
+  const menu = page.getByRole('navigation', { name: 'Navigation principale' });
+  await menu.getByRole('button', { name: /Outils pédagogiques/ }).click();
+  await expect(menu.locator('a[data-tool="cours"]')).toHaveAttribute('aria-current', 'true');
+  // Choisir un outil dans la barre latérale ouvre la page Générer sur cet outil.
+  await menu.locator('a[data-tool="exercices"]').click();
+  await expect(page).toHaveURL(/\/app\/generate\?type=exercices$/);
+  await expect(page.getByRole('heading', { level: 1, name: 'TD / Exercices' })).toBeVisible();
 
   await page.goto('/app/generate?type=corrige');
   await expect(page.getByRole('button', { name: 'Générer : Correction de copie' })).toBeVisible();

@@ -8,8 +8,13 @@ import {
   type DifficulteExercice, type FormatSeance, type Matiere, type ProfilDifferenciation, type ProfilEleve, type TypeContenu,
   type TypeLettre,
 } from '@shared/catalog';
+import { isClozeRequest } from '@shared/cloze';
 import { rankChunks } from '@shared/documents/retrieve';
-import { isNiveau, isSuperieur, type NiveauScolaire } from '@shared/levels';
+import {
+  BESOINS_PARTICULIERS, countUnit, isModaliteAvailable, modalitesFor,
+  type Bareme, type BesoinParticulier, type CountUnit, type TonRedaction, type TypeEvaluation,
+} from '@shared/formats';
+import { getLevelGroup, isNiveau, isSuperieur, type NiveauScolaire } from '@shared/levels';
 import { modeUsesDocuments, type DocumentPassage, type GenerationRequest, type ResearchMode, type TeacherProfile } from '@shared/types';
 import { REQUEST_LIMITS } from '@shared/validation';
 
@@ -17,7 +22,8 @@ import { REQUEST_LIMITS } from '@shared/validation';
 export type FormField =
   | 'sujet' | 'discipline' | 'duree' | 'objectifs' | 'consignes' | 'difficulte' | 'format'
   | 'trimestre' | 'profilEleve' | 'nombreAppreciations' | 'profilsDifferenciation'
-  | 'contenuSource' | 'typeLettre' | 'texteEleve';
+  | 'contenuSource' | 'typeLettre' | 'texteEleve'
+  | 'modalite' | 'typeEvaluation' | 'bareme' | 'sansCorrige' | 'nombreExercices' | 'nombreSeances' | 'ton' | 'besoins';
 
 export type Trimestre = '1' | '2' | '3';
 
@@ -43,6 +49,17 @@ export interface GenerateForm {
   contenuSource: string;
   typeLettre: TypeLettre;
   texteEleve: string;
+  /** Format normé (shared/formats.ts) ; '' = au choix de Magistra. Transmis seulement s'il convient à l'outil, au niveau et à la matière. */
+  modalite: string;
+  /** '' = non précisé (rien n'est transmis), comme les autres choix facultatifs ci-dessous. */
+  typeEvaluation: TypeEvaluation | '';
+  bareme: Bareme | '';
+  /** Vrai : version élève seule, sans corrigé. */
+  sansCorrige: boolean;
+  nombreExercices: number | '';
+  nombreSeances: number | '';
+  ton: TonRedaction | '';
+  besoins: BesoinParticulier[];
 }
 
 export const DEFAULT_APPRECIATIONS = 10;
@@ -107,6 +124,14 @@ export function createInitialForm(
     contenuSource: '',
     typeLettre: 'information',
     texteEleve: '',
+    modalite: '',
+    typeEvaluation: '',
+    bareme: '',
+    sansCorrige: false,
+    nombreExercices: '',
+    nombreSeances: '',
+    ton: '',
+    besoins: [],
   };
 }
 
@@ -121,21 +146,53 @@ export function withNiveau(form: GenerateForm, niveau: NiveauScolaire, profile?:
 
 // ─── Champs visibles ────────────────────────────────────────────────────────
 
+/** Champs sans objet en maternelle : ni note, ni corrigé écrit, ni évaluation chiffrée. */
+const NOT_IN_MATERNELLE: ReadonlySet<string> = new Set(['bareme', 'typeEvaluation', 'sansCorrige']);
+
+/**
+ * Champs sans objet avec un format donné : masqués, donc jamais transmis.
+ * Livret scolaire (bac) : appréciation annuelle pour le jury, aucun trimestre ne s'y rapporte.
+ */
+const HIDDEN_BY_MODALITE: ReadonlyMap<string, readonly FormField[]> = new Map([
+  ['livret_bac', ['trimestre']],
+]);
+
 /**
  * Champs affichés (et donc transmis) pour un outil à un niveau donné.
  * - « Discipline / intitulé de l'UE » et « Format » (CM/TD/TP/séminaire) : supérieur uniquement ;
- * - « Trimestre » : pas de sens dans le supérieur.
+ * - « Trimestre » : pas de sens dans le supérieur, ni pour une appréciation annuelle (livret scolaire) choisie comme
+ *   format (`modalite`) ;
+ * - notation, objectif de l'évaluation, corrigé : pas en maternelle ;
+ * - format normé : seulement s'il en existe pour cet outil, ce niveau et cette matière (`matiere` fournie) ;
+ * - nombre d'exercices : pas pour un travail d'un seul tenant (dissertation, dictée…) choisi comme format (`modalite`).
+ * Un format gardé d'un autre outil, niveau ou matière ne masque rien (il n'est pas transmis).
  */
-export function visibleFields(tool: TypeContenu, niveau: NiveauScolaire): Set<FormField> {
+export function visibleFields(tool: TypeContenu, niveau: NiveauScolaire, matiere?: Matiere, modalite?: string): Set<FormField> {
   const sup = isSuperieur(niveau);
+  const maternelle = getLevelGroup(niveau) === 'maternelle';
+  const chosen = matiere && isModaliteAvailable(modalite, tool, niveau, matiere) ? modalite : undefined;
+  const single = !!chosen && countUnit(chosen) === null;
+  const hiddenByFormat = (chosen && HIDDEN_BY_MODALITE.get(chosen)) || [];
   const fields = new Set<FormField>();
   for (const f of TOOL_FIELDS[tool] as readonly string[]) {
     if (f === 'format' && !sup) continue;
     if (f === 'trimestre' && sup) continue;
+    if (maternelle && NOT_IN_MATERNELLE.has(f)) continue;
+    if (f === 'modalite' && matiere && modalitesFor(tool, niveau, matiere).length === 0) continue;
+    if (f === 'nombreExercices' && single) continue;
+    if (hiddenByFormat.includes(f as FormField)) continue;
     fields.add(f as FormField);
   }
   if (sup) fields.add('discipline');
   return fields;
+}
+
+/**
+ * Nombre choisi, s'il fait partie des nombres proposés pour ce qui se compte (un nombre gardé d'un autre format,
+ * « 12 » questions devenues des problèmes par exemple, revient à « Auto ») : ce qui est affiché est ce qui est transmis.
+ */
+export function chosenCount(value: number | '', unit: CountUnit): number | '' {
+  return typeof value === 'number' && unit.options.includes(value) ? value : '';
 }
 
 // ─── Nombre d'appréciations ─────────────────────────────────────────────────
@@ -189,7 +246,7 @@ export function fieldLimit(field: FormField): number | undefined {
 /** Tous les problèmes bloquants du formulaire pour l'outil courant (liste vide = prêt). */
 export function validateForm(form: GenerateForm): FormProblem[] {
   const tool = form.type;
-  const fields = visibleFields(tool, form.niveau);
+  const fields = visibleFields(tool, form.niveau, form.matiere);
   const problems: FormProblem[] = [];
   const text = (f: FormField) => String(form[f as keyof GenerateForm] ?? '').trim();
 
@@ -241,12 +298,13 @@ export function buildGenerationRequest(
   researchMode: ResearchMode,
 ): GenerationRequest {
   const niveau = form.niveau;
-  const fields = visibleFields(tool, niveau);
+  const matiere = isMatiereAvailableFor(form.matiere, niveau) ? form.matiere : defaultMatiereFor(niveau);
+  const fields = visibleFields(tool, niveau, matiere, form.modalite);
   const has = (f: FormField) => fields.has(f);
   const req: GenerationRequest = {
     type: tool,
     niveau,
-    matiere: isMatiereAvailableFor(form.matiere, niveau) ? form.matiere : defaultMatiereFor(niveau),
+    matiere,
     sujet: has('sujet') ? clean(form.sujet, REQUEST_LIMITS.sujet) ?? '' : '',
     researchMode,
   };
@@ -271,6 +329,21 @@ export function buildGenerationRequest(
   if (has('contenuSource')) set('contenuSource', clean(form.contenuSource, REQUEST_LIMITS.contenuSource));
   if (has('typeLettre')) set('typeLettre', form.typeLettre);
   if (has('texteEleve')) set('texteEleve', clean(form.texteEleve, REQUEST_LIMITS.texteEleve));
+  // Format gardé d'un autre outil, niveau ou matière : transmis seulement s'il convient à la demande actuelle.
+  if (has('modalite') && isModaliteAvailable(form.modalite, tool, niveau, matiere)) set('modalite', form.modalite);
+  if (has('typeEvaluation') && form.typeEvaluation) set('typeEvaluation', form.typeEvaluation);
+  if (has('bareme') && form.bareme) set('bareme', form.bareme);
+  if (has('sansCorrige') && form.sansCorrige) set('sansCorrige', true);
+  if (has('nombreExercices')) {
+    const unit = countUnit(req.modalite, getLevelGroup(niveau));
+    const count = unit ? chosenCount(form.nombreExercices, unit) : '';
+    if (count) set('nombreExercices', count);
+  }
+  if (has('nombreSeances') && form.nombreSeances) set('nombreSeances', form.nombreSeances);
+  if (has('ton') && form.ton) set('ton', form.ton);
+  // Formulaire d'une version antérieure (sans ce champ) : aucun besoin.
+  const besoins = form.besoins ?? [];
+  if (has('besoins') && besoins.length) set('besoins', BESOINS_PARTICULIERS.map(b => b.value).filter(v => besoins.includes(v)));
 
   if (modeUsesDocuments(researchMode) && documents && documents.length > 0) {
     req.documents = fitPassagesToLimits(documents, buildPassageQuery(form, tool));
@@ -279,12 +352,87 @@ export function buildGenerationRequest(
   return req;
 }
 
+// ─── Notation par défaut ────────────────────────────────────────────────────
+
+/**
+ * Sujets type examen national (brevet, baccalauréat, bac professionnel) : Magistra en reprend la structure et le
+ * barème (points des parties, maîtrise de la langue). Sans notation choisie, c'est ce barème qui s'applique, même pour
+ * une évaluation diagnostique : le format de l'épreuve prime sur l'objectif.
+ */
+export const FORMATS_BAREME_OFFICIEL: readonly string[] = ['sujet_brevet', 'sujet_bac', 'sujet_bac_pro'];
+
+/** Barèmes officiels qui ne tiennent pas en une note sur 20 (consigne du format : shared/formats.ts). */
+const BAREME_OFFICIEL_DETAIL: Readonly<Record<string, Partial<Record<Matiere, string>>>> = {
+  sujet_brevet: { histoire_geo: 'histoire-géographie sur 40, EMC sur 20' },
+};
+
+/** Notation que Magistra demandera si l'enseignant n'en choisit aucune. */
+export interface DefaultNotation {
+  /** Libellé du choix par défaut. */
+  label: string;
+  /** Cette notation en quelques mots (infobulle du choix par défaut). */
+  title: string;
+  /** Rappel affiché sous les choix : « Par défaut : … ». */
+  hint: string;
+}
+
+type NotationRequest = Pick<GenerationRequest, 'type' | 'niveau' | 'matiere' | 'modalite' | 'typeEvaluation' | 'sansCorrige'>;
+
+/**
+ * Notation par défaut d'une demande, telle que la consigne de l'outil la demande (shared/prompts/tools.ts) :
+ * - correction d'une copie : positionnement sans note à l'école primaire, note indicative sur 20 ailleurs ;
+ * - exercices : jamais de note sur 20 imposée. Barème indicatif dans le corrigé au collège et au lycée, critères de
+ *   réussite sans note à l'école primaire ; aucun barème imposé dans le supérieur (éléments de correction), pour une
+ *   version élève seule ou pour un texte à trous (corrigé établi par Magistra) ;
+ * - évaluation : positionnement sans note à l'école primaire ; barème de l'épreuve pour un sujet type examen
+ *   (FORMATS_BAREME_OFFICIEL), qui prime sur l'objectif ; sans note pour une évaluation diagnostique ; sur 20 sinon.
+ */
+export function defaultNotation(req: NotationRequest): DefaultNotation {
+  const group = getLevelGroup(req.niveau);
+  const primary = group === 'maternelle' || group === 'elementaire';
+  const byLevel = (title: string, hint: string): DefaultNotation => ({ label: 'Selon le niveau', title, hint: `Par défaut : ${hint}.` });
+  const positionnement = byLevel('Positionnement sans note', 'positionnement sans note');
+
+  if (req.type === 'corrige') return primary ? positionnement : byLevel('Note indicative sur 20', 'note indicative sur 20');
+
+  if (req.type === 'exercices') {
+    const withKey = !req.sansCorrige && !isClozeRequest(req);
+    if (withKey && primary) return byLevel('Sans note', 'sans note (critères de réussite dans le corrigé)');
+    if (withKey && !isSuperieur(req.niveau)) return byLevel('Barème indicatif', 'barème indicatif dans le corrigé');
+    return byLevel('Sans barème imposé', 'sans barème imposé');
+  }
+
+  if (primary) return positionnement;
+  if (req.modalite && FORMATS_BAREME_OFFICIEL.includes(req.modalite)) {
+    const detail = BAREME_OFFICIEL_DETAIL[req.modalite]?.[req.matiere];
+    const notation = detail ? `barème officiel de l’épreuve (${detail})` : 'note sur 20, sur le modèle de l’épreuve';
+    const objective = req.typeEvaluation === 'diagnostique' ? ' Le format de l’épreuve prime sur l’objectif diagnostique.' : '';
+    return {
+      label: 'Selon l’épreuve',
+      title: detail ? 'Barème officiel de l’épreuve' : 'Note sur 20 (modèle de l’épreuve)',
+      hint: `Par défaut : ${notation}.${objective}`,
+    };
+  }
+  if (req.typeEvaluation === 'diagnostique') {
+    return { label: 'Selon l’objectif', title: 'Sans note', hint: 'Par défaut : sans note (évaluation diagnostique).' };
+  }
+  return byLevel('Note sur 20', 'note sur 20');
+}
+
+/**
+ * Notation par défaut de la demande que le formulaire enverrait : seuls les champs transmis comptent (un objectif ou
+ * un format gardé d'un autre outil, niveau ou matière est ignoré). Documents et mode de recherche n'y changent rien.
+ */
+export function formDefaultNotation(form: GenerateForm): DefaultNotation {
+  return defaultNotation(buildGenerationRequest(form, form.type, null, null, 'internet'));
+}
+
 /**
  * Texte servant à choisir les passages utiles des documents :
  * sujet + discipline + objectifs + consignes (champs de l'outil uniquement).
  */
 export function buildPassageQuery(form: GenerateForm, tool: TypeContenu = form.type): string {
-  const fields = visibleFields(tool, form.niveau);
+  const fields = visibleFields(tool, form.niveau, form.matiere);
   const parts = (['sujet', 'discipline', 'objectifs', 'consignes'] as const)
     .filter(f => fields.has(f))
     .map(f => form[f].trim())

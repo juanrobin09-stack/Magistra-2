@@ -7,7 +7,7 @@ export const LEVEL_GUIDANCE: Record<LevelGroup, string> = {
 - Activités courtes (10 à 20 minutes), ludiques, sensorielles, fondées sur la manipulation, le jeu, le langage oral et le mouvement.
 - Organisation en regroupements et en ateliers ; consignes orales courtes et reformulées.
 - Aucun écrit complexe demandé aux élèves ; pas de note chiffrée : on parle de réussites et de progrès observés.
-- Référence : les cinq domaines d'apprentissage du programme de l'école maternelle.`,
+- Référence : le programme de l'école maternelle en vigueur depuis la rentrée 2026 et ses six domaines d'apprentissage : le développement et la structuration du langage oral et écrit ; agir, s'exprimer, comprendre à travers les activités physiques ; agir, s'exprimer, comprendre à travers les activités artistiques ; l'acquisition des premiers outils mathématiques ; se repérer dans le temps et l'espace ; découvrir le monde du vivant, de la matière et des objets.`,
 
   elementaire: `PUBLIC : élèves d'école élémentaire (cycle 2 : CP-CE2, cycle 3 : CM1-CM2).
 - Progressivité, manipulation, exemples concrets tirés du quotidien des élèves.

@@ -1,9 +1,14 @@
 // Construction des prompts : source unique de vérité pour le web, Windows et les tests.
 
 import type { ChatMessage } from '../ai/provider.js';
-import { getMatiereLabel, getToolInfo, TOOL_FIELDS, TYPES_LETTRE } from '../catalog.js';
+import { getMatiereLabel, getToolInfo, TOOL_FIELDS, TYPES_LETTRE, type TypeContenu } from '../catalog.js';
+import {
+  BAREMES, BESOINS_PARTICULIERS, countLabel, countUnit, getModalite, modaliteFieldLabel, TONS, TYPES_EVALUATION,
+} from '../formats.js';
 import { formatLocator } from '../citations.js';
-import { getLevelGroup, getNiveauLabel, isSuperieur, LEVEL_GROUP_LABELS } from '../levels.js';
+import { isClozeRequest } from '../cloze.js';
+import { targetLanguage } from '../languages.js';
+import { getCycle, getLevelGroup, getNiveauLabel, isSuperieur, LEVEL_GROUP_LABELS } from '../levels.js';
 import type { GenerationRequest, SourceRef } from '../types.js';
 import { LETTER_AUDIENCE, LEVEL_GUIDANCE, REFERENTIEL_SUPERIEUR_RULES, SCOLAIRE_RULES, SUPERIEUR_RULES } from './levels.js';
 import { toolInstructions } from './tools.js';
@@ -36,8 +41,111 @@ const WITHOUT_SOURCES = `SOURCES :
 const FORMAT_RULES = `FORMAT :
 - Réponds en français (sauf si la matière est une langue étrangère et que le contenu doit être dans cette langue).
 - Markdown propre : titres (#, ##, ###), listes, tableaux au format Markdown, citations (>).
-- Formules : notation simple en Unicode (x², H₂O, ≤, √, π) ; pour une formule complexe, LaTeX entre $…$.
+- Formules : notation simple en Unicode (x², H₂O, ≤, √, π) ; pour une formule complexe, LaTeX entre $…$ (jamais \\( … \\) ni \\[ … \\]).
 - Pas d'émojis. Contenu complet, structuré et directement utilisable par l'enseignant.`;
+
+/** Exigences de qualité communes : structure respectée, nombres exacts, langue soignée (y compris avec un petit modèle). */
+const QUALITY_RULES = `QUALITÉ ATTENDUE :
+- Suis exactement la structure et le format demandés, dans l'ordre, avec des titres explicites.
+- Respecte exactement les nombres demandés (exercices, séances, questions, points du barème) et vérifie-les avant de terminer.
+- Exactitude : refais chaque calcul et vérifie chaque réponse du corrigé avant de l'écrire ; en cas de doute sur une règle ou un fait, choisis un exemple plus simple que tu maîtrises plutôt que d'écrire une erreur.
+- Écris un français soigné et fluide : phrases complètes et claires, vocabulaire précis, aucune répétition, aucun remplissage.
+- Consignes destinées aux élèves : un verbe d'action, une tâche par consigne, adaptées à l'âge.
+- N'utilise des crochets [ … ] que pour une information que seul l'enseignant peut fournir.`;
+
+/** Texte à trous : les doubles crochets marquent les mots à trouver (Magistra pose les blancs, shared/cloze.ts). */
+const CLOZE_QUALITY_RULE = "- Crochets : des doubles crochets [[ … ]] autour de chaque mot à faire trouver ; des crochets simples [ … ] seulement pour une information que seul l'enseignant peut fournir.";
+
+/** Outils dont le contenu s'adresse d'abord aux élèves (textes, questions, trace écrite). */
+const STUDENT_CONTENT: readonly TypeContenu[] = ['exercices', 'evaluation', 'differenciation', 'cours'];
+
+/**
+ * Travail de traduction, où le français est l'une des deux langues : le format « Traduction » (version ou thème), et,
+ * en langue vivante, le sujet type bac de LLCER (partie 2 : traduction ou transposition en français).
+ */
+type Translation = 'traduction' | 'llcer' | null;
+
+function translationWork(req: GenerationRequest, kind: 'vivante' | 'ancienne'): Translation {
+  if (req.modalite === 'traduction') return 'traduction';
+  return kind === 'vivante' && req.type === 'evaluation' && req.modalite === 'sujet_bac_llcer' ? 'llcer' : null;
+}
+
+/** Sens d'une traduction : la langue d'arrivée n'est le français que pour une version. */
+const translationDirection = (name: string) =>
+  `la traduction se fait dans la langue d’arrivée (version : texte source en ${name}, traduction en français ; thème : texte source en français, traduction en ${name})`;
+
+/**
+ * Matière de langue (anglais, espagnol… latin, grec) : dans quelle langue écrire. Sans cette règle, un petit modèle
+ * écrit en français (règle « français soigné », exemples des formats en français, sujet saisi en français) : un texte
+ * à trous d'anglais en français est inutilisable. Les appréciations restent en français (bulletin, livret).
+ * La règle ne contredit jamais un format où le français a sa place : une traduction (version ou thème, partie 2 du
+ * sujet de LLCER), une copie rédigée en français (version, commentaire latin), la civilisation antique.
+ */
+function languageRule(req: GenerationRequest): string | null {
+  const lang = targetLanguage(req.matiere);
+  if (!lang || req.type === 'appreciations' || req.type === 'lettre_parents') return null;
+  const { name } = lang;
+  const vivante = lang.kind === 'vivante';
+  const translation = translationWork(req, lang.kind);
+  if (req.type === 'corrige') {
+    // Chaque correction dans la langue du passage corrigé : une version ou un commentaire se corrige en français.
+    const target = translation
+      ? `la langue d’arrivée de la traduction (français pour une version, ${name} pour un thème)`
+      : `la langue du passage corrigé : français soigné pour un passage écrit en français${vivante ? '' : ' (version, commentaire, réponse rédigée)'}, ${name} correct${vivante ? ' et naturel' : ' (graphie et morphologie exactes)'} pour un passage écrit en ${name}`;
+    return `- Langue : appréciations, explications et conseils en français soigné ; citations de la copie reproduites telles quelles ; chaque correction proposée dans ${target}.`;
+  }
+  if (!STUDENT_CONTENT.includes(req.type)) {
+    return vivante
+      ? `- Langue : document de préparation rédigé en français soigné ; exemples, lexique, consignes et supports destinés aux élèves en ${name}, au niveau du CECRL adapté à la classe.`
+      : `- Langue : document de préparation rédigé en français soigné ; textes, formes, exemples et lexique étudiés en ${name} (graphie et morphologie exactes) ; consignes et supports de civilisation en français.`;
+  }
+  const examples = 'Les exemples de présentation donnés en français ne montrent que la forme.';
+  if (translation === 'traduction') {
+    return vivante
+      ? `- Langue : ${translationDirection(name)} ; le reste (questions, autres textes) en ${name} correct et naturel, au niveau du CECRL adapté à la classe ; consignes en ${name} simple ou en français selon l'âge des élèves ; aides lexicales, explications destinées à l'enseignant et commentaires du corrigé en français soigné. ${examples}`
+      : `- Langue : ${translationDirection(name)} ; graphie et morphologie exactes pour tout ce qui est en ${name} ; consignes, aides lexicales et explications en français soigné. ${examples}`;
+  }
+  if (translation === 'llcer') {
+    return `- Langue : documents, questions et synthèse en ${name} correct et naturel, au niveau du CECRL adapté à la classe, sauf la partie 2 : passage source en ${name}, traduction ou transposition attendue en français. Explications destinées à l'enseignant et commentaires du corrigé en français soigné. ${examples}`;
+  }
+  // Cycle 2 (CP-CE2) : les élèves apprennent à lire en français ; la langue vivante se travaille surtout à l'oral.
+  if (vivante && getCycle(req.niveau) === 'cycle2') {
+    return `- Langue : cycle 2 (élèves qui apprennent à lire en français) : fiche, consignes et questions en français, lues par l'enseignant ; seuls des mots ou de très courtes expressions en ${name}, déjà travaillés à l'oral, sont à lire, choisir ou compléter, en ${name} correct ; corrigé en français. ${examples}`;
+  }
+  return vivante
+    ? `- Langue : tout le contenu destiné aux élèves (textes, phrases, questions, choix du QCM, affirmations, mots à trouver, trace écrite) est en ${name}, la langue cible, jamais en français : ${name} correct et naturel, au niveau du CECRL adapté à la classe. Consignes en ${name} simple ou en français selon l'âge des élèves ; explications destinées à l'enseignant et commentaires du corrigé en français soigné (les réponses elles-mêmes restent en ${name}). ${examples}`
+    // Langue ancienne : le latin pour la langue, le français pour la civilisation (comme le format « texte à trous »).
+    : `- Langue : quand le travail porte sur la langue (textes à lire ou à traduire, formes, lexique), les textes, phrases, formes et mots étudiés ou à trouver sont en ${name}, la langue étudiée (graphie et morphologie exactes) ; quand il porte sur la civilisation, l'histoire ou la mythologie, le contenu est en français soigné, avec seulement quelques termes cités en ${name}. Consignes, traductions et explications toujours en français soigné. ${examples}`;
+}
+
+/** Rappel en fin de demande (un petit modèle suit mieux la dernière consigne lue), cohérent avec languageRule. */
+function languageReminder(req: GenerationRequest): string | null {
+  const lang = targetLanguage(req.matiere);
+  if (!lang || !STUDENT_CONTENT.includes(req.type)) return null;
+  const { name } = lang;
+  switch (translationWork(req, lang.kind)) {
+    case 'traduction':
+      return `Langue : la traduction se fait dans la langue d’arrivée (français pour une version, ${name} pour un thème) ; explications en français.`;
+    case 'llcer':
+      return `Langue : documents, questions et synthèse en ${name} ; partie 2 (traduction ou transposition) en français.`;
+    default:
+      if (lang.kind === 'vivante' && getCycle(req.niveau) === 'cycle2') {
+        return `Langue : fiche et consignes en français ; seuls des mots ou de très courtes expressions en ${name}.`;
+      }
+      return lang.kind === 'vivante'
+        ? `Langue : tout ce qui est destiné aux élèves est en ${name}.`
+        : `Langue : formes, textes et mots étudiés en ${name} ; consignes, explications et civilisation en français.`;
+  }
+}
+
+/** Exigences de qualité adaptées à la demande (texte à trous, matière de langue). */
+function qualityRules(req: GenerationRequest): string {
+  let rules = QUALITY_RULES;
+  if (isClozeRequest(req)) rules = rules.replace(/^- N'utilise des crochets.*$/m, () => CLOZE_QUALITY_RULE);
+  const language = languageRule(req);
+  if (language) rules = rules.replace(/^- Écris un français soigné.*$/m, () => language);
+  return rules;
+}
 
 const LETTER_FORMAT_RULES = `FORMAT :
 - Réponds en français, dans un registre soutenu et bienveillant.
@@ -68,8 +176,54 @@ export function buildSystemPrompt(req: GenerationRequest, hasSources: boolean): 
     sup ? SUPERIEUR_RULES : SCOLAIRE_RULES,
     ...(group === 'bts_but' || group === 'cpge' ? [REFERENTIEL_SUPERIEUR_RULES] : []),
     toolInstructions(req, group),
+    qualityRules(req),
     FORMAT_RULES,
   ].join('\n\n');
+}
+
+/**
+ * Température de génération selon l'outil : basse pour les documents qui doivent être exacts et structurés
+ * (évaluations, corrigés, exercices, plans), un peu plus haute pour les textes rédigés (appréciations variées,
+ * courriers au ton naturel).
+ */
+export function generationTemperature(type: TypeContenu): number {
+  switch (type) {
+    case 'appreciations':
+    case 'lettre_parents':
+      return 0.6;
+    case 'cours':
+    case 'differenciation':
+      return 0.4;
+    default:
+      return 0.3;
+  }
+}
+
+/** Options choisies par l'enseignant, en clair, pour la demande (leurs consignes détaillées sont dans le système). */
+function optionLines(req: GenerationRequest, allowed: (field: string) => boolean): string[] {
+  const lines: string[] = [];
+  const modalite = allowed('modalite') ? getModalite(req.modalite) : undefined;
+  // Le type de travail corrigé (correction d'une copie) et la démarche d'une séquence ou d'une séance ne sont pas un
+  // format à produire : leur propre libellé, et aucun rappel « Respecte exactement le format ».
+  const asFormat = req.type !== 'corrige' && req.type !== 'sequence' && req.type !== 'fiche_prep';
+  if (modalite) {
+    lines.push(asFormat ? `- Format demandé : ${modalite.label}` : `- ${modaliteFieldLabel(req.type, isSuperieur(req.niveau))} : ${modalite.label}`);
+  }
+  const evaluation = allowed('typeEvaluation') ? TYPES_EVALUATION.find(t => t.value === req.typeEvaluation) : undefined;
+  if (evaluation) lines.push(`- Objectif de l'évaluation : ${evaluation.label.toLowerCase()}`);
+  // Travail d'un seul tenant (dissertation, dictée…) : aucun nombre ; sinon ce qui se compte (« Nombre de questions »).
+  const unit = countUnit(modalite?.value, getLevelGroup(req.niveau));
+  if (req.nombreExercices && allowed('nombreExercices') && unit) lines.push(`- ${countLabel(unit)} : ${req.nombreExercices}`);
+  if (req.nombreSeances && allowed('nombreSeances')) lines.push(`- Nombre de séances : ${req.nombreSeances}`);
+  const bareme = allowed('bareme') ? BAREMES.find(b => b.value === req.bareme) : undefined;
+  if (bareme) lines.push(`- Notation : ${bareme.label.toLowerCase()}`);
+  if (req.sansCorrige && allowed('sansCorrige')) lines.push('- Corrigé : non (version élève seule)');
+  const ton = allowed('ton') ? TONS.find(t => t.value === req.ton) : undefined;
+  if (ton) lines.push(`- Ton : ${ton.label.toLowerCase()}`);
+  if (req.besoins?.length && allowed('besoins')) {
+    lines.push(`- Besoins particuliers : ${BESOINS_PARTICULIERS.filter(b => req.besoins!.includes(b.value)).map(b => b.label).join(', ')}`);
+  }
+  return lines;
 }
 
 function profileContext(req: GenerationRequest): string | null {
@@ -131,17 +285,24 @@ export function buildUserPrompt(req: GenerationRequest, sources: PromptSource[])
   // Libellé seul : les consignes détaillées (adaptées au niveau) figurent dans le message système.
   lines.push(`DEMANDE : ${tool.label}.`);
   lines.push(`- Niveau : ${getNiveauLabel(req.niveau)}`);
-  // Un courrier aux familles ne porte pas sur une matière (le profil de l'enseignant suffit à le situer).
-  if (req.type !== 'lettre_parents') {
+  // Destination des appréciations (bulletin par défaut, livret scolaire, conseil de classe).
+  const destination = req.type === 'appreciations' && allowed('modalite') ? req.modalite : undefined;
+  // Un courrier aux familles ne porte pas sur une matière (le profil de l'enseignant suffit à le situer) ; l'avis du
+  // conseil de classe porte sur toutes les disciplines (la matière de l'enseignant orienterait les textes vers elle seule).
+  if (destination === 'conseil_classe') {
+    lines.push('- Matières : toutes les disciplines (appréciation générale du professeur principal)');
+  } else if (req.type !== 'lettre_parents') {
     lines.push(`- Matière : ${getMatiereLabel(req.matiere)}${req.discipline ? ` (${req.discipline})` : ''}`);
   }
   if (req.sujet && allowed('sujet')) lines.push(`- Sujet : ${req.sujet}`);
   if (req.duree && allowed('duree')) lines.push(`- Durée : ${req.duree}`);
   if (req.objectifs && allowed('objectifs')) lines.push(`- Objectifs de l'enseignant : ${req.objectifs}`);
-  if (req.trimestre && allowed('trimestre')) lines.push(`- Trimestre : ${req.trimestre}`);
+  // Le livret scolaire est annuel : aucun trimestre (même envoyé par une version plus ancienne du formulaire).
+  if (req.trimestre && allowed('trimestre') && destination !== 'livret_bac') lines.push(`- Trimestre : ${req.trimestre}`);
   if (req.typeLettre && allowed('typeLettre')) {
     lines.push(`- Type de courrier : ${TYPES_LETTRE.find(t => t.value === req.typeLettre)?.label ?? req.typeLettre}`);
   }
+  lines.push(...optionLines(req, allowed));
   if (req.consignes && allowed('consignes')) lines.push(`- Consignes de l'enseignant (à respecter en priorité) : ${req.consignes}`);
   const ctx = profileContext(req);
   if (ctx) lines.push(`- ${ctx}`);
@@ -152,6 +313,12 @@ export function buildUserPrompt(req: GenerationRequest, sources: PromptSource[])
   lines.push(sources.length
     ? '\nProduis maintenant le contenu complet en Markdown, en citant les sources fournies ([S1], [S2]…) à chaque idée qui en provient.'
     : '\nProduis maintenant le contenu complet en Markdown.');
+  const language = languageReminder(req);
+  if (language) lines.push(language);
+  // Format ou nombres imposés : rappelés en dernier (un petit modèle suit mieux la dernière consigne lue).
+  if (optionLines(req, allowed).some(l => /Format demandé|Nombre d|Corrigé : non/.test(l))) {
+    lines.push('Respecte exactement le format et les nombres demandés ci-dessus.');
+  }
   return lines.join('\n');
 }
 
