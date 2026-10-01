@@ -5,6 +5,7 @@ import AppIntro from '@/components/AppIntro';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { AuthUnavailable, FullPageSpinner, ProfileGuard } from '@/components/guards';
 import { PersonalAccessGate } from '@/components/PersonalAccess';
+import ProfileCacheCleaner from '@/components/ProfileCacheCleaner';
 import { useAIStatus } from '@/hooks/useAIStatus';
 import { useRuntime } from '@/lib/runtime/context';
 import { getRuntimeConfig, type RuntimeConfig } from '@/lib/runtime/mode';
@@ -23,6 +24,7 @@ const GeneratePage = lazy(() => import('@/pages/GeneratePage'));
 const HistoryPage = lazy(() => import('@/pages/HistoryPage'));
 const FavoritesPage = lazy(() => import('@/pages/FavoritesPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
+const LegalPage = lazy(() => import('@/pages/LegalPage'));
 
 function SignedInGate({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
@@ -88,6 +90,10 @@ function AppRoutes({ mode }: { mode: RuntimeMode }) {
         {/* Application Windows : la présentation de Magistra reste accessible (lien « Présentation » de la barre latérale). */}
         {mode === 'local' && <Route path="/presentation" element={<LandingPage />} />}
         {mode === 'local' && <Route path="/setup" element={<SetupPage />} />}
+        {/* Pages légales : publiques (aucune connexion), dans tous les modes. */}
+        <Route path="/mentions-legales" element={<LegalPage page="mentions" />} />
+        <Route path="/confidentialite" element={<LegalPage page="confidentialite" />} />
+        <Route path="/cgu" element={<LegalPage page="cgu" />} />
         <Route path="/onboarding" element={<Protected mode={mode}><OnboardingPage /></Protected>} />
         <Route
           path="/app"
@@ -171,6 +177,8 @@ export default function App({ config = getRuntimeConfig() }: { config?: RuntimeC
           },
         }}
       >
+        {/* Déconnexion (UserButton ou bouton) : la copie hors ligne du profil est effacée du navigateur. */}
+        <ProfileCacheCleaner />
         <WebRuntimeProvider>{routes}</WebRuntimeProvider>
       </ClerkProvider>
     </ErrorBoundary>

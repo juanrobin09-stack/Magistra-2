@@ -6,11 +6,11 @@
 // « Magistra pour Windows ». Application Windows : « Site web Magistra » (navigateurs autorisés à utiliser l'IA de
 // cet ordinateur). Jamais d'adresse, de port ni de nom de moteur local pour Magistra locale.
 
-import { useCallback, useEffect, useId, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useClerk } from '@clerk/react';
 import {
-  BookOpen, Cpu, FileText, Globe, Info, Loader2, Monitor, RefreshCw, Search, Settings, Shield, Trash2, User, UserCog, Wand2,
+  BookOpen, Cpu, Download, FileText, Globe, Info, Loader2, Monitor, RefreshCw, Search, Settings, Shield, Trash2, User, UserCog, Wand2,
   type LucideIcon,
 } from 'lucide-react';
 import { getMatiereLabel } from '@shared/catalog';
@@ -33,6 +33,8 @@ import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSect
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import UpdateCheck from '@/components/UpdateCheck';
 import { useAIStatus, useCapabilities, type AIController, type CapabilitiesState } from '@/hooks/useAIStatus';
+import LegalLinks from '@/components/LegalLinks';
+import { exportAccountData, ExportCancelled, EXPORT_ERROR_MESSAGE, type ExportProgress } from '@/lib/exportAccountData';
 import { activationPlan } from '@/lib/ai-ui/activation';
 import { providerPolicyUrl, serverAIView, type ServerMode } from '@/lib/ai-ui/server';
 import { aiPhase, engineHostIfRemote, engineOutdatedText, phaseInfo, phaseLine } from '@/lib/ai-ui/status';
@@ -206,6 +208,8 @@ export default function SettingsPage() {
 
       <Section id="settings-account" icon={UserCog} title="Compte et données">
         {mode === 'web' ? <WebAccountSettings /> : mode === 'personal' ? <PersonalAccountSettings /> : mode === 'local' ? (
+          <>
+          <ExportDataBlock />
           <DeleteDataBlock
             description="Efface l'historique, les favoris, votre profil enseignant et les documents conservés sur cet ordinateur. Le moteur IA et les modèles installés sont conservés."
             buttonLabel="Effacer toutes les données locales"
@@ -213,7 +217,10 @@ export default function SettingsPage() {
             confirmMessage="L'historique, les favoris, votre profil enseignant et les documents conservés seront définitivement effacés de cet ordinateur. Cette action est irréversible."
             confirmLabel="Tout effacer"
           />
+          </>
         ) : (
+          <>
+          <ExportDataBlock />
           <DeleteDataBlock
             description="Efface l'historique, les favoris et le profil enregistrés dans ce navigateur pour la démonstration."
             buttonLabel="Effacer les données de démonstration"
@@ -221,6 +228,7 @@ export default function SettingsPage() {
             confirmMessage="L'historique, les favoris et le profil de démonstration seront effacés de ce navigateur."
             confirmLabel="Effacer"
           />
+          </>
         )}
       </Section>
 
@@ -679,6 +687,76 @@ function DeleteDataBlock({ description, buttonLabel, confirmTitle, confirmMessag
   );
 }
 
+/**
+ * Droit d'accès et portabilité : télécharge en un fichier JSON le profil, tout l'historique et les favoris. Aucune
+ * confirmation (action sans risque) ; progression et bouton « Annuler » pendant la lecture des fiches.
+ */
+function ExportDataBlock() {
+  const runtime = useRuntime();
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<ExportProgress | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ count: number; unreadable: number } | null>(null);
+  const controller = useRef<AbortController | null>(null);
+
+  useEffect(() => () => controller.current?.abort(), []);
+
+  async function run() {
+    const abort = new AbortController();
+    controller.current = abort;
+    setRunning(true);
+    setError(null);
+    setResult(null);
+    setProgress(null);
+    try {
+      const data = await exportAccountData(runtime.store, { signal: abort.signal, onProgress: setProgress });
+      setResult({ count: data.generations.length, unreadable: data.unreadable.length });
+    } catch (err) {
+      // Annulation volontaire : aucun message d'erreur. Sinon, message générique (jamais de détail technique).
+      if (!(err instanceof ExportCancelled)) setError(EXPORT_ERROR_MESSAGE);
+    } finally {
+      setRunning(false);
+      controller.current = null;
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-mg-100">
+        Téléchargez une copie de vos données Magistra : profil enseignant, historique complet et favoris, dans un seul
+        fichier JSON.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn-secondary text-sm py-2 px-4" onClick={() => void run()} disabled={running}>
+          {running ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
+          {running ? 'Préparation…' : 'Télécharger toutes mes données (JSON)'}
+        </button>
+        {running && (
+          <button type="button" className="btn-secondary text-sm py-2 px-4" onClick={() => controller.current?.abort()}>
+            Annuler
+          </button>
+        )}
+      </div>
+      {running && (
+        <p className="text-xs text-mg-200" role="status">
+          {progress && progress.total > 0 ? `Lecture des fiches : ${progress.done} sur ${progress.total}…` : "Lecture de l'historique…"}
+        </p>
+      )}
+      {error && <ErrorBox title="L'export n'a pas abouti." message={error} />}
+      {result && (
+        <SuccessNote>
+          {result.count === 0 ? 'Fichier téléchargé (profil, aucune fiche).' : `Fichier téléchargé : ${result.count} fiche${result.count > 1 ? 's' : ''}.`}
+        </SuccessNote>
+      )}
+      {result && result.unreadable > 0 && (
+        <WarningNote>
+          {result.unreadable} fiche{result.unreadable > 1 ? 's' : ''} n'ont pas pu être lues (elles sont listées à la fin du fichier) : relancez l'export pour les retenter.
+        </WarningNote>
+      )}
+    </div>
+  );
+}
+
 /** Rendu uniquement en mode web (à l'intérieur de ClerkProvider). */
 function WebAccountSettings() {
   const clerk = useClerk();
@@ -694,6 +772,9 @@ function WebAccountSettings() {
           <UserCog size={15} aria-hidden="true" /> Gérer mon compte
         </button>
         <p className="text-xs text-mg-200 mt-1.5">Adresse e-mail, mot de passe et méthodes de connexion.</p>
+      </div>
+      <div className="border-t border-white/5 pt-4">
+        <ExportDataBlock />
       </div>
       <div className="border-t border-white/5 pt-4">
         <DeleteDataBlock
@@ -717,6 +798,7 @@ function PersonalAccountSettings() {
         Mode personnel : aucun compte. Magistra utilise le serveur démarré sur cet ordinateur ; l'accès est protégé par le
         code affiché dans le terminal au démarrage.
       </p>
+      <ExportDataBlock />
       <DeleteDataBlock
         description="Supprime définitivement votre historique, vos favoris et votre profil enseignant du serveur Magistra de cet ordinateur."
         buttonLabel="Supprimer toutes mes données Magistra"
@@ -740,12 +822,26 @@ function PersonalAccountSettings() {
 
 // ─── Confidentialité ───────────────────────────────────────────────────────
 
+/** Liens vers les pages légales (mentions légales, confidentialité, conditions d'utilisation). */
+function LegalNav() {
+  return (
+    <p className="text-sm text-mg-100">
+      Détail du traitement de vos données et exercice de vos droits : <LegalLinks />
+    </p>
+  );
+}
+
 function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: CapabilitiesState }) {
   const privacy = caps.capabilities?.privacy;
   if (!privacy) {
     return caps.loading
       ? <p className="text-sm text-mg-100" role="status">Chargement…</p>
-      : <p className="text-sm text-mg-100">Informations de confidentialité indisponibles pour le moment.</p>;
+      : (
+        <>
+          <p className="text-sm text-mg-100">Informations de confidentialité indisponibles pour le moment.</p>
+          <LegalNav />
+        </>
+      );
   }
   if (mode === 'local' && privacy.level === 'local') {
     return (
@@ -755,6 +851,7 @@ function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: Capabilities
           Aucun compte n'est nécessaire. Seule la recherche en ligne, si vous la choisissez, envoie le sujet et les
           mots-clés de votre demande.
         </p>
+        <LegalNav />
       </>
     );
   }
@@ -771,6 +868,7 @@ function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: Capabilities
         </p>
       )}
       {mode !== 'demo' && <p className="text-sm text-mg-100">{RESEARCH_PRIVACY}</p>}
+      <LegalNav />
     </>
   );
 }
@@ -804,6 +902,7 @@ function About({ mode }: { mode: RuntimeMode }) {
       {updateBridge && <UpdateCheck bridge={updateBridge} />}
       <p>Assistant pédagogique pour les enseignants, de la maternelle au doctorat.</p>
       <p>Code source publié sous licence MIT.</p>
+      <p><LegalLinks /></p>
       <p>
         Un projet <ExternalAnchor href="https://futurai.space">FutureAI</ExternalAnchor> · Bordeaux
       </p>

@@ -12,8 +12,11 @@ import type { Element, ElementContent } from 'hast';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import katex from 'katex';
+// Macros chimiques \ce{…} et \pu{…} (mhchem) : les équations de réaction s'affichent au lieu d'une erreur rouge.
+import 'katex/contrib/mhchem';
 import 'katex/dist/katex.min.css';
 import { getBridge } from '@/lib/runtime/local';
+import { protectDecimalCommas } from '@/lib/mathText';
 import { prepareMarkdown, remarkSafeMarkdown, splitMarkdownBlocks } from '@/lib/export/markdown';
 
 // Remarque : les formules sont rendues avec le paquet `katex` de l'application (même version que
@@ -31,15 +34,32 @@ const REMARK_REHYPE_OPTIONS = {
 const mathCache = new Map<string, string>();
 const MATH_CACHE_MAX = 400;
 
+/**
+ * Macros des paquets siunitx (\num, \SI, \si, \unit, \qty) que les modèles écrivent souvent : rendues en texte
+ * simple (« 1200 », « 3 m ») au lieu d'une erreur. Objet recréé à chaque appel (KaTeX peut le modifier).
+ */
+function mathMacros(): Record<string, string> {
+  return {
+    '\\num': '#1',
+    '\\SI': '#1\\,\\text{#2}',
+    '\\qty': '#1\\,\\text{#2}',
+    '\\si': '\\text{#1}',
+    '\\unit': '\\text{#1}',
+  };
+}
+
 function renderMath(tex: string, display: boolean): string {
   const key = `${display ? 'D' : 'I'}${tex}`;
   const cached = mathCache.get(key);
   if (cached !== undefined) return cached;
   let html: string;
   try {
-    html = katex.renderToString(tex, {
+    html = katex.renderToString(protectDecimalCommas(tex), {
       displayMode: display,
       throwOnError: false,
+      // Formule non prise en charge (\\begin{tabular}…) : la source reste lisible, sans le rouge d'une erreur.
+      errorColor: 'inherit',
+      macros: mathMacros(),
       strict: 'ignore',
       trust: false,
       output: 'htmlAndMathml',
@@ -108,7 +128,27 @@ function openExternal(event: MouseEvent<HTMLAnchorElement>, url: string): void {
 
 // ─── Composants ──────────────────────────────────────────────────────────────
 
+/**
+ * dir="auto" : la direction de chaque bloc se déduit de son premier caractère fort. Un paragraphe arabe s'aligne à droite
+ * avec sa ponctuation du bon côté ; le français n'est pas touché. L'attribut `node` (hast) n'est pas transmis au DOM ;
+ * les autres propriétés (alignement GFM des cellules…) le sont.
+ */
+const auto = {
+  p: ({ node: _node, ...props }) => <p dir="auto" {...props} />,
+  li: ({ node: _node, ...props }) => <li dir="auto" {...props} />,
+  h1: ({ node: _node, ...props }) => <h1 dir="auto" {...props} />,
+  h2: ({ node: _node, ...props }) => <h2 dir="auto" {...props} />,
+  h3: ({ node: _node, ...props }) => <h3 dir="auto" {...props} />,
+  h4: ({ node: _node, ...props }) => <h4 dir="auto" {...props} />,
+  h5: ({ node: _node, ...props }) => <h5 dir="auto" {...props} />,
+  h6: ({ node: _node, ...props }) => <h6 dir="auto" {...props} />,
+  blockquote: ({ node: _node, ...props }) => <blockquote dir="auto" {...props} />,
+  td: ({ node: _node, ...props }) => <td dir="auto" {...props} />,
+  th: ({ node: _node, ...props }) => <th dir="auto" {...props} />,
+} satisfies Components;
+
 const COMPONENTS: Components = {
+  ...auto,
   a({ href, title, children }) {
     const url = href ?? '';
     if (!url) return <span className="md-link-disabled" title={title}>{children}</span>;
@@ -132,7 +172,7 @@ const COMPONENTS: Components = {
   },
   table({ children }) {
     return (
-      <div className="table-wrap" role="region" aria-label="Tableau" tabIndex={0}>
+      <div className="table-wrap" role="region" aria-label="Tableau" tabIndex={0} dir="auto">
         <table>{children}</table>
       </div>
     );

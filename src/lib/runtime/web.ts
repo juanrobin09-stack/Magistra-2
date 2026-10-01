@@ -26,6 +26,42 @@ function adaptError(kind: ServerRuntimeKind, err: unknown): unknown {
   return err;
 }
 
+const PROFILE_CACHE_PREFIX = 'magistra_profile_';
+
+/**
+ * Efface la copie hors ligne du profil (nom, établissement, matières) de TOUS les comptes de ce navigateur.
+ * Appelée à la déconnexion : sur un poste partagé, le collègue suivant ne retrouve rien dans le stockage local.
+ * Les autres clés (choix du moteur, appairage…) ne sont pas touchées.
+ */
+export function clearProfileCache(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(PROFILE_CACHE_PREFIX)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {
+    // stockage local indisponible : rien à effacer
+  }
+}
+
+/**
+ * Efface seulement sur une vraie transition « utilisateur connecté → plus d'utilisateur ». Le chargement initial
+ * (utilisateur encore `undefined`) et une page ouverte sans session n'effacent rien.
+ */
+export function createSignOutWatcher(onSignOut: () => void): (resources: { user?: { id?: string } | null }) => void {
+  let previousUserId: string | null = null;
+  return ({ user }) => {
+    if (user) {
+      previousUserId = user.id ?? 'inconnu';
+    } else if (user === null && previousUserId !== null) {
+      previousUserId = null;
+      onSignOut();
+    }
+  };
+}
+
 export class ApiDataStore implements DataStore {
   readonly kind: ServerRuntimeKind;
   private readonly getToken: TokenGetter;
@@ -100,7 +136,7 @@ export class ApiDataStore implements DataStore {
   }
 
   private cacheKey(): string {
-    return `magistra_profile_${this.userId}`;
+    return `${PROFILE_CACHE_PREFIX}${this.userId}`;
   }
 
   async getProfile(): Promise<TeacherProfile | null> {

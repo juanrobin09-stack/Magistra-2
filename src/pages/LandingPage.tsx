@@ -7,6 +7,7 @@ import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSect
 import { useAIStatus, useCapabilities } from '@/hooks/useAIStatus';
 import { detectMode, useOptionalRuntime } from '@/lib/runtime/context';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import LegalLinks from '@/components/LegalLinks';
 
 // Chiffres réels, calculés à partir du référentiel (jamais saisis à la main).
 const NB_NIVEAUX = ALL_NIVEAUX.length;
@@ -413,6 +414,9 @@ export default function LandingPage() {
             <a href="https://futurai.space" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">FutureAI</a>
             {' '}· Bordeaux, France · Logiciel libre sous licence MIT
           </p>
+          <nav aria-label="Informations légales" className="text-xs text-mg-300 text-center">
+            <LegalLinks />
+          </nav>
         </div>
       </footer>
     </div>

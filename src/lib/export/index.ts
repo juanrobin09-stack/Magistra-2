@@ -47,7 +47,7 @@ export function safeFileName(title: string, ext: string): string {
 
 // ─── Téléchargement ──────────────────────────────────────────────────────────
 
-function downloadBlob(blob: Blob, fileName: string): void {
+export function downloadBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -64,8 +64,39 @@ function downloadBlob(blob: Blob, fileName: string): void {
   }
 }
 
+/**
+ * Écritures que le PDF de Magistra ne sait pas dessiner : idéogrammes (chinois, japonais, coréen), arabe et hébreu
+ * (ni liaison des lettres, ni sens de lecture), écritures indiennes, thaï, birman, khmer, éthiopien… Les polices
+ * intégrées (DejaVu) ne contiennent pas ces glyphes et en embarquer une coûterait plusieurs Mo : le PDF afficherait
+ * « � » ou des lettres isolées dans le mauvais sens. L'impression du navigateur, elle, les rend correctement.
+ */
+const BROWSER_PDF_SCRIPTS = new RegExp(
+  '[\\u0590-\\u08ff' // hébreu, arabe, syriaque, thaana, n'ko, samaritain, arabe étendu
+  + '\\u0900-\\u0dff' // devanagari … sinhala
+  + '\\u0e00-\\u0fff' // thaï, lao, tibétain
+  + '\\u1000-\\u109f\\u1200-\\u139f\\u1780-\\u17ff' // birman, éthiopien, khmer
+  + '\\u2e80-\\u2fdf\\u3000-\\u303f\\u3040-\\u30ff\\u3100-\\u31ff\\u3400-\\u4dbf\\u4e00-\\u9fff' // CJK, kana, bopomofo
+  + '\\uac00-\\ud7af' // hangul
+  + '\\ufb1d-\\ufdff\\ufe70-\\ufeff' // formes de présentation hébraïques et arabes
+  + '\\uff66-\\uffdc]', // kana et hangul demi-chasse
+);
+
+/** Vrai si le texte contient une écriture que le PDF ne peut pas rendre fidèlement (voir BROWSER_PDF_SCRIPTS). */
+export function needsBrowserPdf(text: string): boolean {
+  return BROWSER_PDF_SCRIPTS.test(String(text ?? ''));
+}
+
+export const PDF_UNSUPPORTED_SCRIPT_MESSAGE =
+  "Ce document contient du chinois, de l'arabe ou une autre écriture que le PDF ne sait pas reproduire fidèlement. "
+  + 'Utilisez « Imprimer » puis « Enregistrer au format PDF » pour un rendu correct, ou « Markdown » / « Copier » pour le reprendre dans Word.';
+
 /** Télécharge le document au format PDF (texte fidèle, polices Unicode intégrées). */
 export async function exportPdf(doc: ExportDoc): Promise<void> {
+  // Écriture non prise en charge : message clair plutôt qu'un PDF rempli de « � » (aucune police géante embarquée).
+  if (needsBrowserPdf(`${doc.title ?? ''}\n${doc.content ?? ''}`)) {
+    // Code autre qu'INTERNAL : les appelants (ResultPanel) n'affichent le message que pour les autres codes.
+    throw new MagistraError('DOCUMENT_UNSUPPORTED', PDF_UNSUPPORTED_SCRIPT_MESSAGE);
+  }
   try {
     const [pdfModule, fontModule] = await Promise.all([import('./pdf'), import('./fonts')]);
     const fonts = await fontModule.loadPdfFonts(pdfModule.requiredFonts(doc.content ?? ''));
