@@ -7,10 +7,11 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { describe, expect, it } from 'vitest';
 import {
-  ALL_MATIERES, getMatiereLabel, getMatieresForNiveau, getSujetSuggestions, isMatiere, resolveMatiere, type Matiere, type TypeContenu,
+  ALL_MATIERES, getMatiereLabel, getMatieresForNiveau, isMatiere, resolveMatiere, type Matiere, type TypeContenu,
 } from '../../shared/catalog.js';
 import { countUnit, isModaliteAvailable, MODALITES, modalitePrompt, modalitesFor } from '../../shared/formats.js';
 import { ALL_NIVEAUX, type NiveauScolaire } from '../../shared/levels.js';
+import { getSujetSuggestions } from '../../shared/suggestions.js';
 import { buildSystemPrompt } from '../../shared/prompts/index.js';
 import type { GenerationRequest } from '../../shared/types.js';
 import { validateGenerationRequest } from '../../shared/validation.js';

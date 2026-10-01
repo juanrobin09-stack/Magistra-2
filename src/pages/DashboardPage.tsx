@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, FileText, GraduationCap, Heart, Sparkles, Star, TrendingUp, Zap } from 'lucide-react';
-import { ALL_TYPES, getMatiereEmoji, getMatiereLabel, getSujetSuggestions, getToolInfo, type TypeContenu } from '@shared/catalog';
+import { ArrowRight, FileText, GraduationCap, Heart, Shuffle, Sparkles, Star, TrendingUp, Zap } from 'lucide-react';
+import { ALL_TYPES, getMatiereEmoji, getMatiereLabel, getToolInfo, type TypeContenu } from '@shared/catalog';
 import { getNiveauLabel, isNiveau, isSuperieur } from '@shared/levels';
+import { getSujetSuggestions } from '@shared/suggestions';
 import type { GenerationSummary, UsageStats } from '@shared/types';
 import { useLocalEngine } from '@/lib/localConnector/controller';
 import { useRuntime } from '@/lib/runtime/context';
+import { useSuggestionDeck } from '@/lib/useSuggestionDeck';
 import ErrorBanner from '@/components/ui/ErrorBanner';
 import ActivateAICard from '@/components/ai/ActivateAICard';
 import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
@@ -104,7 +106,10 @@ export default function DashboardPage() {
   const superieur = niveau ? isSuperieur(niveau) : false;
   const quickTools = superieur ? QUICK_TOOLS_SUPERIEUR : QUICK_TOOLS_SCOLAIRE;
   const matiere = profile?.matierePrincipale;
-  const suggestions = matiere && niveau ? getSujetSuggestions(matiere, niveau).slice(0, 3) : [];
+  // Idées de sujets : 4 tirées une fois par classe et matière, renouvelables par « Autres idées ».
+  const allIdeas = useMemo(() => (matiere && niveau ? getSujetSuggestions(matiere, niveau) : []), [matiere, niveau]);
+  const ideas = useSuggestionDeck(allIdeas, 4, `${niveau ?? ''}|${matiere ?? ''}`);
+  const suggestions = ideas.shown;
 
   const displayName = profile?.displayName || user?.firstName || '';
   const dateStr = now.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -251,11 +256,23 @@ export default function DashboardPage() {
           {/* Idées de sujets */}
           {matiere && suggestions.length > 0 && (
             <section aria-labelledby="ideas-title">
-              <h2 id="ideas-title" className="text-xs font-medium text-mg-200 uppercase tracking-wider mb-3">
-                Idées en {getMatiereLabel(matiere)}
-                {niveau ? ` · ${getNiveauLabel(niveau)}` : ''}
-              </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <h2 id="ideas-title" className="text-xs font-medium text-mg-200 uppercase tracking-wider">
+                  Idées en {getMatiereLabel(matiere)}
+                  {niveau ? ` · ${getNiveauLabel(niveau)}` : ''}
+                </h2>
+                {ideas.canShuffle && (
+                  <button
+                    type="button"
+                    onClick={ideas.shuffle}
+                    title="Proposer d'autres idées de sujets"
+                    className="shrink-0 inline-flex items-center gap-1.5 text-xs text-accent hover:text-white transition-colors rounded focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    <Shuffle size={12} aria-hidden="true" /> Autres idées
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
                 {suggestions.map(s => (
                   <Link
                     key={s}

@@ -3,10 +3,10 @@
 // Ordre : niveau et matière, puis le choix principal de l'outil (format normé : « Type d'exercice », « Format de
 // l'épreuve »…), les champs propres à l'outil, une grille compacte de réglages, enfin objectifs et consignes.
 
-import type { ReactElement } from 'react';
-import { Clock } from 'lucide-react';
+import { useMemo, type ReactElement } from 'react';
+import { Clock, Shuffle } from 'lucide-react';
 import {
-  DIFFICULTES, FORMATS_SEANCE, getMatieresForNiveau, getSujetSuggestions, PROFILS_DIFFERENCIATION, PROFILS_ELEVE,
+  DIFFICULTES, FORMATS_SEANCE, getMatieresForNiveau, PROFILS_DIFFERENCIATION, PROFILS_ELEVE,
   TOOL_FIELDS, TOOL_REQUIRES_SUJET, TYPES_LETTRE,
   type DifficulteExercice, type FormatSeance, type Matiere, type ProfilDifferenciation, type ProfilEleve, type TypeContenu,
 } from '@shared/catalog';
@@ -16,6 +16,7 @@ import {
   type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
 } from '@shared/formats';
 import { getLevelGroup, isNiveau, isSuperieur, NIVEAUX, type NiveauScolaire } from '@shared/levels';
+import { getSujetSuggestions } from '@shared/suggestions';
 import SelectField from '@/components/ui/SelectField';
 import {
   appreciationSummary, chosenCount, fieldLimit, formDefaultNotation, MAX_APPRECIATIONS, MIN_APPRECIATIONS, normalizeAppreciationInput, visibleFields,
@@ -23,6 +24,7 @@ import {
 } from '@/lib/generation/request';
 import { ChipGroup, ChoiceButton, Field, type ChipOption } from './fields';
 import { describedBy, FOCUS_RING, LABEL_CLASS } from './fieldUtils';
+import { useSuggestionDeck } from '@/lib/useSuggestionDeck';
 
 interface GenerateFormFieldsProps {
   form: GenerateForm;
@@ -41,6 +43,13 @@ const CONTENT_TOOLS: TypeContenu[] = ['cours', 'exercices', 'evaluation', 'seque
  */
 const CAPTIONED_TOOLS: TypeContenu[] = ['exercices', 'evaluation', 'corrige'];
 
+/** Nombre d'idées de sujets affichées (« Autres idées » en propose d'autres). */
+const SUGGESTION_COUNT = 6;
+
+/** À ne pas saisir : l'outil ne sert pas à nommer un élève, et le texte part chez le prestataire d'IA puis dans l'historique. */
+const NO_NAMES = (sup: boolean) =>
+  `N'indiquez ni nom, ni prénom, ni information permettant d'identifier ${sup ? 'un étudiant' : 'un élève'} (écrivez « ${sup ? 'un étudiant' : 'un élève'} », « ${sup ? 'Étudiant' : 'Élève'} A ») : ajoutez les noms vous-même dans le document final.`;
+
 const FORMAT_SHORT: Record<FormatSeance, string> = { cm: 'CM', td: 'TD', tp: 'TP', seminaire: 'Séminaire' };
 
 function sujetText(tool: TypeContenu, sup: boolean): { label: string; placeholder: string; hint?: string } {
@@ -51,7 +60,7 @@ function sujetText(tool: TypeContenu, sup: boolean): { label: string; placeholde
         placeholder: sup ? 'Ex : 12 semaines, 24 h de CM et 12 h de TD…' : 'Ex : inclure un projet théâtre au 2e trimestre…',
       };
     case 'appreciations':
-      return { label: 'Contexte', placeholder: 'Ex : chapitre sur les fractions, travail en groupe…' };
+      return { label: 'Contexte', placeholder: 'Ex : chapitre sur les fractions, travail en groupe…', hint: NO_NAMES(sup) };
     case 'differenciation':
       return {
         label: 'Sujet / notion',
@@ -78,7 +87,7 @@ function consignesText(tool: TypeContenu, sup: boolean): { label: string; placeh
         placeholder: sup
           ? 'Ex : changement de salle pour le TD du 12 mars, rendu du dossier repoussé…'
           : "Ex : l'élève a été absent 5 fois ce mois-ci sans justificatif…",
-        hint: "Magistra est invité à ne rien inventer et à laisser entre crochets ce qui manque ([Date], [Nom]…) : relisez chaque information avant envoi.",
+        hint: `Magistra est invité à ne rien inventer et à laisser entre crochets ce qui manque ([Date], [Nom]…) : relisez chaque information avant envoi. ${NO_NAMES(sup)}`,
         rows: 4,
       };
     case 'corrige':
@@ -119,9 +128,10 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
     options: g.niveaux.map(n => ({ value: n.value, label: n.label })),
   }));
   const matieres = getMatieresForNiveau(form.niveau).map(m => ({ value: m.value, label: m.label, prefix: m.emoji }));
-  const suggestions = has('sujet') && CONTENT_TOOLS.includes(tool) && !form.sujet.trim()
-    ? getSujetSuggestions(form.matiere, form.niveau).slice(0, 4)
-    : [];
+  // Idées de sujets : tirées une fois par classe et matière (stables pendant la saisie), renouvelables par « Autres idées ».
+  const allIdeas = useMemo(() => getSujetSuggestions(form.matiere, form.niveau), [form.matiere, form.niveau]);
+  const ideas = useSuggestionDeck(allIdeas, SUGGESTION_COUNT, `${form.niveau}|${form.matiere}`);
+  const suggestions = has('sujet') && CONTENT_TOOLS.includes(tool) && !form.sujet.trim() ? ideas.shown : [];
   const sujet = sujetText(tool, sup);
   const consignes = consignesText(tool, sup);
   const learner = sup ? "l'étudiant" : "l'élève";
@@ -494,6 +504,16 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
                   {s}
                 </button>
               ))}
+              {ideas.canShuffle && (
+                <button
+                  type="button"
+                  onClick={ideas.shuffle}
+                  title="Proposer d'autres idées de sujets"
+                  className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg text-accent hover:bg-accent/10 border border-accent/20 transition-colors ${FOCUS_RING}`}
+                >
+                  <Shuffle size={12} aria-hidden="true" /> Autres idées
+                </button>
+              )}
             </div>
           )}
         </Field>
@@ -569,7 +589,7 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
         <Field
           id="gen-copie"
           label="Travail à corriger"
-          hint={`Collez le texte de ${learner} (copie, rédaction, réponse). Il n'est pas enregistré tel quel dans l'historique, mais le corrigé enregistré peut en citer des passages.`}
+          hint={`Collez le texte de ${learner} (copie, rédaction, réponse) après avoir retiré son nom. Il n'est pas enregistré tel quel dans l'historique, mais le corrigé enregistré peut en citer des passages.`}
           error={errorOf('texteEleve')}
         >
           {textArea('texteEleve', 'gen-copie', {
