@@ -179,7 +179,7 @@ Fichier : `shared/citations.ts`.
 Fichier : `shared/research/`.
 
 ```
-question (sujet, discipline, objectifs — JAMAIS le texte des documents)
+question (sujet et discipline — JAMAIS les objectifs, les consignes ni le texte des documents)
   → recherche : HAL · Crossref · SearXNG (facultatif) · Wikipédia
   → récupération de vraies sources (métadonnées d'origine : auteurs, année, DOI, URL)
   → extraction (résumés, pages web nettoyées et recentrées sur la question)

@@ -593,7 +593,7 @@ Il n'y a plus de port 3721 ni de serveur local. La fenêtre charge app://magistr
 
 **FIXED** · ⚪ sécurité · signalé dans `package.json:38`
 
-Electron passe de 33 (fin de vie) à 44.4.5, avec une CSP stricte sur toutes les réponses app://, une session propre à la fenêtre qui bloque tout réseau (y compris depuis un SharedWorker) et des fusibles de sécurité. L'audit voit maintenant le binaire livré : la CI lance scripts/audit-electron.mjs, qui échoue sur tout avis « high » ou « critical » concernant electron lui-même (même en devDependencies, comme l'exige electron-builder), avertit pour la chaîne d'empaquetage et ignore les autres outils de développement. L'exécution réelle donne 0 vulnérabilité.
+Electron passe de 33 (fin de vie) à 44.4.5, avec une CSP stricte sur toutes les réponses app://, une session propre à la fenêtre qui bloque tout réseau (y compris depuis un SharedWorker) et des fusibles de sécurité. L'audit voit maintenant le binaire livré : la CI lance scripts/audit-electron.mjs, qui échoue sur tout avis « high » ou « critical » concernant electron lui-même (même en devDependencies, comme l'exige electron-builder), avertit pour la chaîne d'empaquetage et ignore les autres outils de développement. L'exécution réelle donne 0 vulnérabilité. *(Mise à jour : Electron 44.5.1 depuis le durcissement avant production.)*
 
 *Preuves :* package.json (electron 44) ; .github/workflows/ci.yml (étape d'audit Electron) ; scripts/audit-electron.mjs ; tests/electron/auditElectron.test.ts ; electron/windowSession.ts ; electron/protocol.ts
 
@@ -1046,7 +1046,7 @@ copyText ne rejette jamais. Il essaie navigator.clipboard (erreur interceptée, 
 
 Les suggestions de sujets sont filtrées par classe exacte, et non plus seulement par groupe de niveau : chaque suggestion propre à une partie du programme porte la liste des classes où elle est pertinente (« Le théorème de Pythagore » : 4e-3e ; « Les fonctions affines » : 3e ; « Les Gaulois » : CM1 ; « La dissertation » : 2de-1re ; philosophie : terminale). Des suggestions ont été ajoutées pour que chaque classe courante en ait au moins une.
 
-*Preuves :* shared/catalog.ts (SUGGESTIONS, getSujetSuggestions) ; tests/shared/catalog.test.ts (6e sans Pythagore ni fonctions affines, CP sans décimaux, aucune suggestion vide ou dupliquée)
+*Preuves :* shared/suggestions.ts (getSujetSuggestions) et shared/suggestionsData.ts (idées par classe, depuis le durcissement avant production) ; tests/shared/catalog.test.ts, tests/shared/suggestions.test.ts (6e sans Pythagore ni fonctions affines, CP sans décimaux, aucune suggestion vide ou dupliquée)
 
 *Remarque :* Indexer les suggestions au moins par cycle (cycle 2 CP-CE2, cycle 3 CM1-6e, cycle 4 5e-3e) ou par classe, ou associer à chaque suggestion la liste des niveaux où elle est pertinente, et filtrer sur le niveau exact.
 
