@@ -6,6 +6,8 @@ import JSZip from 'jszip';
 import { MagistraError } from '../errors.js';
 import { validateLocatorLabels } from '../validation.js';
 import type { DocKind, Locator } from '../types.js';
+import { createNumbering, type DocxNumbering } from './numbering.js';
+import { readingOrder } from './pdfColumns.js';
 import { cleanExtractedText, cleanPlainText, decodeText, decodeXmlEntities } from './text.js';
 import { DOCUMENT_LIMITS, type DocumentUnit, type ExtractedDocument } from './types.js';
 import { xmlBlocks, xmlOpenTags } from './xmlScan.js';
@@ -226,7 +228,7 @@ export async function extractPdf(input: ExtractInput, pdfjs: PdfJsLike): Promise
     for (let p = 1; p <= pages; p++) {
       const page = await pdf.getPage(p);
       const content = await page.getTextContent();
-      const text = cleanExtractedText(pdfItemsToText(content.items));
+      const text = cleanExtractedText(pdfItemsToText(readingOrder(content.items)));
       page.cleanup?.();
       if (!text) {
         emptyPages++;
@@ -315,7 +317,8 @@ function docxRunText(xml: string): string {
 
 const escapeXmlText = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function parseDocxParagraphs(documentXml: string): DocxParagraph[] {
+/** `numbering` : numérotation des listes du document (word/numbering.xml) ; sans elle, le texte des paragraphes est lu tel quel. */
+export function parseDocxParagraphs(documentXml: string, numbering?: DocxNumbering | null): DocxParagraph[] {
   // Les lignes de tableau deviennent un paragraphe « cellule | cellule | cellule ».
   let flattened = '';
   let pos = 0;
@@ -335,6 +338,8 @@ export function parseDocxParagraphs(documentXml: string): DocxParagraph[] {
     if (m.selfClosing) continue;
     const block = flattened.slice(m.start, m.end);
     const text = docxRunText(block).replace(/[ \t]+/g, ' ').trim();
+    // Lu avant le test du texte vide : un élément de liste vide occupe quand même son numéro.
+    const marker = numbering?.prefix(block) ?? '';
     if (!text) continue;
     const style = /<w:pStyle\s+w:val="([^"]+)"/.exec(block)?.[1] ?? '';
     const outline = /<w:outlineLvl\s+w:val="(\d)"/.exec(block)?.[1];
@@ -342,7 +347,7 @@ export function parseDocxParagraphs(documentXml: string): DocxParagraph[] {
     const hm = HEADING_STYLE.exec(style.replace(/[-_]/g, ''));
     if (hm) headingLevel = hm[2] ? parseInt(hm[2], 10) : 1;
     else if (outline !== undefined) headingLevel = parseInt(outline, 10) + 1;
-    paragraphs.push({ text, headingLevel });
+    paragraphs.push({ text: marker + text, headingLevel });
   }
   return paragraphs;
 }
@@ -500,11 +505,27 @@ async function readZipText(zip: JSZip, path: string, budget: ZipBudget): Promise
   return new TextDecoder('utf-8').decode(bytes);
 }
 
+/**
+ * Partie annexe d'un DOCX (numérotation, styles) : indisponible si elle est absente ou illisible, le document se lit
+ * alors sans elle. Les bornes de décompression, elles, restent impératives.
+ */
+async function readOptionalZipText(zip: JSZip, path: string, budget: ZipBudget): Promise<string | undefined> {
+  try {
+    return await readZipText(zip, path, budget);
+  } catch (err) {
+    if (err instanceof MagistraError) throw err;
+    return undefined;
+  }
+}
+
 export async function extractDocx(input: ExtractInput): Promise<ExtractedDocument> {
   const zip = await openZip(input);
-  const xml = await readZipText(zip, 'word/document.xml', { name: input.name, remaining: DOCUMENT_LIMITS.maxUncompressedBytes });
+  const budget: ZipBudget = { name: input.name, remaining: DOCUMENT_LIMITS.maxUncompressedBytes };
+  const xml = await readZipText(zip, 'word/document.xml', budget);
   if (xml === undefined) throw new MagistraError('DOCUMENT_UNREADABLE', `« ${input.name} » n'est pas un document Word valide.`);
-  const paragraphs = parseDocxParagraphs(xml);
+  const numberingXml = await readOptionalZipText(zip, 'word/numbering.xml', budget);
+  const stylesXml = numberingXml ? await readOptionalZipText(zip, 'word/styles.xml', budget) : undefined;
+  const paragraphs = parseDocxParagraphs(xml, numberingXml ? createNumbering(numberingXml, stylesXml) : null);
   const { units, sections } = paragraphsToUnits(paragraphs);
   return {
     id: input.id,

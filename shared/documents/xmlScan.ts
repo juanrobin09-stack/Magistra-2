@@ -60,6 +60,12 @@ export function* xmlBlocks(xml: string, name: string, from = 0, to = xml.length)
   }
 }
 
+/** Premier bloc `<nom …>…</nom>` de `xml`, ou undefined. */
+export function firstXmlBlock(xml: string, name: string): XmlBlock | undefined {
+  for (const block of xmlBlocks(xml, name)) return block;
+  return undefined;
+}
+
 /** Texte des balises ouvrantes `<nom …>` (sans leur contenu), par exemple `<Relationship …>`. */
 export function* xmlOpenTags(xml: string, name: string): Generator<string> {
   let pos = 0;

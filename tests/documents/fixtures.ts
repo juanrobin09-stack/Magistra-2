@@ -61,11 +61,12 @@ function docxParagraph(text: string, style?: string): string {
   return `<w:p w:rsidR="00A1">${pPr}<w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
-async function zipDocx(bodyXml: string): Promise<Uint8Array> {
+async function zipDocx(bodyXml: string, parts: Record<string, string | Uint8Array> = {}): Promise<Uint8Array> {
   const zip = new JSZip();
   zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
   zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
   zip.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W_NS}"><w:body>${bodyXml}<w:sectPr/></w:body></w:document>`);
+  for (const [name, content] of Object.entries(parts)) zip.file(name, content);
   return zip.generateAsync({ type: 'uint8array' });
 }
 
@@ -154,9 +155,64 @@ export function makePdfRuns(pages: PdfRun[][][]): Uint8Array {
   return new Uint8Array(doc.output('arraybuffer'));
 }
 
+/** Texte posé à une position précise de la page (pt, origine en haut à gauche), dans l'ordre d'écriture du flux du PDF. */
+export interface PdfPlaced {
+  text: string;
+  x: number;
+  y: number;
+  size?: number;
+}
+
+/** Document jsPDF A4 (points) avec la police DejaVu des fixtures. */
+function newTestPdf(): jsPDF {
+  const fonts = loadTestFonts();
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  let binary = '';
+  for (const b of fonts.regular as Uint8Array) binary += String.fromCharCode(b);
+  doc.addFileToVFS('DejaVuSans.ttf', binary);
+  doc.addFont('DejaVuSans.ttf', 'DejaVuSans', 'normal');
+  doc.setFont('DejaVuSans', 'normal');
+  return doc;
+}
+
+/** Découpe un texte en lignes qui tiennent dans `widthPt` points (police et corps de ces fixtures), comme une mise en page. */
+export function wrapToWidth(text: string, widthPt: number, size = 10): string[] {
+  const doc = newTestPdf();
+  doc.setFontSize(size);
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.split(' ')) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && doc.getTextWidth(candidate) > widthPt) {
+      lines.push(line);
+      line = word;
+    } else line = candidate;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/** PDF dont les textes sont posés aux positions données : mises en page sur colonnes, tableaux, tables des matières. */
+export function makePdfPlaced(pages: PdfPlaced[][]): Uint8Array {
+  const doc = newTestPdf();
+  pages.forEach((texts, index) => {
+    if (index > 0) doc.addPage();
+    for (const t of texts) {
+      doc.setFontSize(t.size ?? 10);
+      doc.text(t.text, t.x, t.y);
+    }
+  });
+  return new Uint8Array(doc.output('arraybuffer'));
+}
+
 /** DOCX construit à partir de paragraphes déjà en XML. */
 export function makeDocxFromBody(bodyXml: string): Promise<Uint8Array> {
   return zipDocx(bodyXml);
+}
+
+/** DOCX avec des parties supplémentaires (« word/numbering.xml », « word/styles.xml »…), en XML ou en octets. */
+export function makeDocxWithParts(bodyXml: string, parts: Record<string, string | Uint8Array>): Promise<Uint8Array> {
+  return zipDocx(bodyXml, parts);
 }
 
 export { docxParagraph };

@@ -24,17 +24,25 @@ const SUFFIXES = [
 /** Noms dont le pluriel en -yaux / -iaux se rattache à un singulier en -au (et non en -al comme « loyaux », « mondiaux »). */
 const PLURALS_IN_AU = new Set(['noyaux', 'tuyaux', 'boyaux', 'joyaux', 'materiaux']);
 
+/** Pluriels en -aux dont le singulier est en -ail : travaux / travail, vitraux / vitrail, « emaux » (émaux) / émail. */
+const PLURALS_IN_AIL = new Map([
+  ['travaux', 'travail'], ['vitraux', 'vitrail'], ['coraux', 'corail'], ['soupiraux', 'soupirail'], ['vantaux', 'vantail'], ['emaux', 'email'],
+]);
+
 /**
  * Racinisation très légère : suffisante pour rapprocher « gouvernance » / « gouverner » / « gouvernances ».
- * Seuls pluriels irréguliers traités : -eaux → -eau (niveaux, réseaux, tableaux, bateaux) et les noms de
- * PLURALS_IN_AU (noyaux, tuyaux, matériaux) ; sinon -aux → -al (animaux / animal, journaux / journal,
- * chevaux / cheval). Les mots de 4 lettres ou moins (faux, eaux, taux) et les autres -aux de 5 lettres restent tels quels. Aucune règle verbale ou
- * dérivationnelle : elles rapprocheraient aussi des mots sans rapport et déplaceraient le classement de tous les
- * documents. Le mot est supposé déjà normalisé (minuscules, sans accents), comme le fait `tokenize`.
+ * Seuls pluriels irréguliers traités : -eaux → -eau (niveaux, réseaux, tableaux, bateaux), les noms de PLURALS_IN_AU
+ * (noyaux, tuyaux, matériaux) et ceux de PLURALS_IN_AIL (travaux, vitraux, émaux) ; sinon -aux → -al (animaux / animal,
+ * journaux / journal, chevaux / cheval). Les mots de 4 lettres ou moins (faux, eaux, taux) et les autres -aux de
+ * 5 lettres restent tels quels. Aucune règle verbale ou dérivationnelle : elles rapprocheraient aussi des mots sans
+ * rapport et déplaceraient le classement de tous les documents. Le mot est supposé déjà normalisé (minuscules, sans
+ * accents), comme le fait `tokenize`.
  */
 export function stem(word: string): string {
   if (word.length <= 4) return word;
   if (word.endsWith('aux')) {
+    const singularInAil = PLURALS_IN_AIL.get(word);
+    if (singularInAil) return singularInAil;
     if (word.endsWith('eaux') || PLURALS_IN_AU.has(word)) return word.slice(0, -1);
     if (word.length > 5) return `${word.slice(0, -3)}al`;
   }

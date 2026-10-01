@@ -247,6 +247,26 @@ describe('racinisation : pluriels en -aux (constat 37)', () => {
     }
   });
 
+  it('travaux / travail, vitraux / vitrail, coraux / corail, soupiraux / soupirail, vantaux / vantail, émaux / émail', () => {
+    // AVANT : stem('travaux') = 'traval' (règle -aux → -al appliquée à tort) ≠ stem('travail') = 'travail'.
+    const norm = (w: string) => tokenize(w)[0];
+    for (const [pluriel, singulier] of [['travaux', 'travail'], ['vitraux', 'vitrail'], ['coraux', 'corail'], ['soupiraux', 'soupirail'], ['vantaux', 'vantail'], ['émaux', 'émail']]) {
+      expect(norm(pluriel), pluriel).toBe(norm(singulier));
+    }
+    expect(stem('travaux')).toBe('travail');
+    expect(stem('emaux')).toBe('email');
+    // Les autres -aux gardent leur règle : pas de rapprochement avec « -ail » (« travailler » reste à part).
+    expect(stem('journaux')).toBe('journal');
+    expect(stem('travailler')).not.toBe(stem('travail'));
+  });
+
+  it('un cours qui parle de « travail » est retrouvé par un sujet au pluriel (« travaux pratiques »)', () => {
+    const doc = pagedDoc('tp', 'TP.pdf', ['Le calendrier de la ferme suit les saisons et les récoltes du village.', 'Le travail en groupe se prépare avec soin avant la séance.', 'Les maisons du village bordent la rivière et le moulin.']);
+    const [best] = rankChunks(chunkDocument(doc), 'les travaux pratiques').sort((a, b) => b.score - a.score);
+    expect(best.score).toBeGreaterThan(0);
+    expect(best.locator.start).toBe(2);
+  });
+
   it('un cours qui écrit « noyaux » ou « réseaux » est retrouvé par un sujet au singulier', () => {
     const doc = pagedDoc('phys', 'Physique.pdf', ['Les noyaux contiennent des protons et des neutrons.', 'Le calendrier de la ferme suit les saisons et les récoltes du village.', 'Les réseaux distribuent le courant jusqu’aux maisons.']);
     const best = (query: string) => rankChunks(chunkDocument(doc), query).sort((a, b) => b.score - a.score)[0];

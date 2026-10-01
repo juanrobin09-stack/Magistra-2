@@ -44,5 +44,7 @@ export const DOCUMENT_LIMITS = {
   maxUncompressedBytes: 200 * 1024 * 1024,
   /** DOCX / PPTX : nombre d'entrées du zip (un vrai fichier Office en a quelques centaines). */
   maxZipEntries: 10_000,
+  /** DOCX : définitions de listes (numbering.xml) et styles de paragraphe (styles.xml) lus ; au-delà, ignorés. */
+  maxNumberingEntries: 10_000,
   maxSlides: 2_000,
 };
