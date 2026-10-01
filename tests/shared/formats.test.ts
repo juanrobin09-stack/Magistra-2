@@ -227,10 +227,13 @@ describe('consignes transmises au modèle', () => {
     expect(sys).toMatch(/QUALITÉ ATTENDUE/);
     expect(sys).toMatch(/Respecte exactement les nombres demandés/);
     expect(sys).toMatch(/français soigné et fluide/);
-    expect(generationTemperature('evaluation')).toBe(0.3);
-    expect(generationTemperature('corrige')).toBe(0.3);
-    expect(generationTemperature('appreciations')).toBe(0.6);
-    expect(generationTemperature('cours')).toBe(0.4);
+    expect(generationTemperature('evaluation')).toBe(0.2);
+    expect(generationTemperature('exercices')).toBe(0.2);
+    expect(generationTemperature('corrige')).toBe(0.2);
+    expect(generationTemperature('appreciations')).toBe(0.45);
+    expect(generationTemperature('lettre_parents')).toBe(0.45);
+    expect(generationTemperature('cours')).toBe(0.3);
+    expect(generationTemperature('differenciation')).toBe(0.3);
   });
 
   it('getModalite : format inconnu → rien', () => {

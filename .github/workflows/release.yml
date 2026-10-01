@@ -117,6 +117,11 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
+      # Même contrôle que la CI (fusibles Electron, intégrité et contenu de l'asar) sur le paquet qui va être publié :
+      # une version dont les protections ont régressé n'est jamais publiée. Lecture seule de release/win-unpacked.
+      - name: Inspection du paquet (fusibles, intégrité et contenu de l'asar)
+        run: node scripts/verify-package.mjs
+
       - name: Empreintes SHA-256
         shell: bash
         working-directory: release

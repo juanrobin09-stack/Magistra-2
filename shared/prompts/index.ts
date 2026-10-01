@@ -213,20 +213,22 @@ export function buildSystemPrompt(req: GenerationRequest, hasSources: boolean): 
 }
 
 /**
- * Température de génération selon l'outil : basse pour les documents qui doivent être exacts et structurés
- * (évaluations, corrigés, exercices, plans), un peu plus haute pour les textes rédigés (appréciations variées,
- * courriers au ton naturel).
+ * Température de génération selon l'outil. Mistral recommande environ 0,15 pour ses modèles « instruct » (Ministral 3,
+ * Mistral Small 3.2) : plus bas, moins de fautes d'accord, d'orthographe et de calcul. Documents qui doivent être
+ * exacts et structurés (évaluations, corrigés, exercices, plans) : 0,2 ; cours et différenciation : 0,3 ; textes
+ * rédigés dont les variantes doivent différer (appréciations, courriers) : 0,45. La variété des énoncés vient des
+ * consignes (voir DIVERSITY_RULE), pas du hasard de l'échantillonnage.
  */
 export function generationTemperature(type: TypeContenu): number {
   switch (type) {
     case 'appreciations':
     case 'lettre_parents':
-      return 0.6;
+      return 0.45;
     case 'cours':
     case 'differenciation':
-      return 0.4;
-    default:
       return 0.3;
+    default:
+      return 0.2;
   }
 }
 

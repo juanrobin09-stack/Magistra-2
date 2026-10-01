@@ -243,6 +243,11 @@ describe('ci.yml : installateur Windows construit à chaque envoi', () => {
     expect(win).toContain('runs-on: windows-latest');
     expect(win).toContain('npx electron-builder --win nsis zip --x64 --publish never');
     expect(job(release, 'build')).toContain('npx electron-builder --win nsis zip --x64 --publish never');
+    // Le paquet publié est inspecté comme celui de la CI (fusibles, asar), avant le calcul des empreintes.
+    const build = job(release, 'build');
+    expect(build).toContain('node scripts/verify-package.mjs');
+    expect(build.indexOf('node scripts/verify-package.mjs')).toBeLessThan(build.indexOf('sha256sum'));
+    expect(win).toContain('node scripts/verify-package.mjs');
     expect(win).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
     expect(win).not.toContain('--dir');
     expect(win).toContain('name: magistra-installateur-windows');
