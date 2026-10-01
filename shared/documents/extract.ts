@@ -151,20 +151,25 @@ export function pdfItemsToText(items: unknown[]): string {
   return out;
 }
 
+/** Numéro de page imprimé : « Page 3 », « p. 3 » (avec ou sans total : « Page 3/12 », « Page 3 sur 12 »). */
+const PAGE_LABEL = /\b(pages?\s*|p\.\s*)\d+/g;
+/** « 3/12 » seul au bout d'une ligne, après un séparateur : « Lycée Jean Moulin - SVT - 3/12 ». Une fraction dans une phrase n'en est pas un. */
+const TRAILING_PAGE_FRACTION = /(\s[-–—|·•]\s)\d+(?=\s*\/\s*\d+$)/;
+
 /**
  * Clé d'une ligne qui ressemble à un en-tête ou un pied de page courant (« Lycée Jean Moulin - SVT - Chapitre 3 »,
  * « Année 2025-2026 - Page 3/6 »), ou null. Volontairement étroit : il faut un numéro de page, un séparateur
  * (« - », « | ») ou une année ; sinon la ligne (« Exercice 3 », en-tête de tableau…) n'est jamais considérée.
- * Les chiffres ne sont neutralisés que pour une ligne portant un numéro de page.
+ * Seul le numéro de page est neutralisé, jamais les autres chiffres : « Exercice 2 - Calculer 2/5 + 3/10 » reste
+ * propre à sa page (énoncé), « Page 3/6 » et « Page 4/6 » donnent la même clé.
  */
 function runningLineKey(line: string): string | null {
   const t = line.trim();
   if (t.length < 12 || t.length > 120) return null;
-  const pageMarker = /\bpages?\s*\d+|\b\d+\s*\/\s*\d+\b|\bp\.\s*\d+/i.test(t);
-  const separator = /\s[-–—|·•]\s|©|\b(?:19|20)\d\d\b/.test(t);
-  if (!pageMarker && !separator) return null;
   const spaced = t.replace(/\s+/g, ' ').toLowerCase();
-  return pageMarker ? spaced.replace(/\d+/g, '#') : spaced;
+  const key = spaced.replace(PAGE_LABEL, '$1#').replace(TRAILING_PAGE_FRACTION, '$1#');
+  const separator = /\s[-–—|·•]\s|©|\b(?:19|20)\d\d\b/.test(t);
+  return separator || key !== spaced ? key : null;
 }
 
 const MIN_PAGES_FOR_RUNNING_LINES = 4;

@@ -7,6 +7,7 @@ import { extractDocument, extractMarkdown, extractPlainText, parseDocxParagraphs
 import { cleanExtractedText, cleanPlainText } from '@shared/documents/text';
 import { DOCUMENT_LIMITS } from '@shared/documents/types';
 import { decodeXmlEntities } from '@shared/documents/text';
+import { xmlBlocks } from '@shared/documents/xmlScan';
 import { MagistraError } from '@shared/errors';
 import { forgeDeclaredSize, makeDocxBomb, makeDocxFromBody, makeDocxWithHeadings, makePptx, makePptxFromSlides, slideTextXml } from './fixtures';
 
@@ -160,6 +161,58 @@ describe('ReDoS : XML DOCX / PPTX jamais refermé (constat 6)', () => {
       expect(performance.now() - t0).toBeLessThan(BOUND_MS);
       expect(doc.units.map(u => u.text)).toEqual(['Diapositive suivante']);
     }
+  });
+
+  // 40 000 blocs ≈ 1 Mo de XML, quelques Ko de fichier : l'ancien balayage y passait près de 20 s (quadratique).
+  const EMPTY_BLOCKS = 40_000;
+  const EMPTY_BLOCKS_BOUND_MS = 4000;
+
+  async function timedPptx(body: string, rest: string[] = []) {
+    const slide = `<p:sld xmlns:a="a" xmlns:p="p"><p:cSld><p:spTree>${body}</p:spTree></p:cSld></p:sld>`;
+    const bytes = await makePptxFromSlides([slide, ...rest]);
+    const t0 = performance.now();
+    const doc = await extractDocument({ id: 'p', name: 'vide.pptx', bytes });
+    return { doc, ms: performance.now() - t0 };
+  }
+
+  it('blocs refermés mais vides : 40 000 <a:p><a:endParaRPr/></a:p> dans une diapositive', async () => {
+    const { doc, ms } = await timedPptx(`${'<a:p><a:endParaRPr/></a:p>'.repeat(EMPTY_BLOCKS)}<a:p><a:r><a:t>Texte final</a:t></a:r></a:p>`);
+    expect(ms).toBeLessThan(EMPTY_BLOCKS_BOUND_MS);
+    expect(doc.units.map(u => u.text)).toEqual(['Texte final']);
+  });
+
+  it('blocs refermés mais vides : 40 000 <w:tr><w:trPr/></w:tr> dans un document Word', () => {
+    const xml = `<w:body>${'<w:tr><w:trPr/></w:tr>'.repeat(EMPTY_BLOCKS)}<w:p><w:r><w:t>Bonjour le monde</w:t></w:r></w:p></w:body>`;
+    const { value, ms } = timed(() => parseDocxParagraphs(xml));
+    expect(ms).toBeLessThan(EMPTY_BLOCKS_BOUND_MS);
+    expect(value.map(p => p.text)).toEqual(['Bonjour le monde']);
+  });
+
+  it('blocs refermés mais vides : 40 000 <a:tr><a:extLst/></a:tr> dans un tableau de diapositive', async () => {
+    const { doc, ms } = await timedPptx(`<a:tbl><a:tblPr/>${'<a:tr><a:extLst/></a:tr>'.repeat(EMPTY_BLOCKS)}</a:tbl><a:p><a:r><a:t>Après le tableau</a:t></a:r></a:p>`);
+    expect(ms).toBeLessThan(EMPTY_BLOCKS_BOUND_MS);
+    expect(doc.units.map(u => u.text)).toEqual(['Après le tableau']);
+  });
+
+  it('balise intérieure jamais refermée dans chaque bloc refermé : 40 000 <a:p><a:t>x</a:p>, <w:tr><w:tc></w:tr>', async () => {
+    const { doc, ms } = await timedPptx('<a:p><a:t>x</a:p>'.repeat(EMPTY_BLOCKS), [slideTextXml(['Suivante'])]);
+    expect(ms).toBeLessThan(EMPTY_BLOCKS_BOUND_MS);
+    expect(doc.units.map(u => u.text)).toEqual(['Suivante']);
+    const xml = `<w:body>${'<w:tr><w:tc></w:tr>'.repeat(EMPTY_BLOCKS)}<w:p><w:r><w:t>Fin</w:t></w:r></w:p></w:body>`;
+    const word = timed(() => parseDocxParagraphs(xml));
+    expect(word.ms).toBeLessThan(EMPTY_BLOCKS_BOUND_MS);
+    expect(word.value.map(p => p.text)).toEqual(['Fin']);
+  });
+
+  it('xmlBlocks ne lit que la fenêtre [from, to[ demandée, avec des positions absolues', () => {
+    const xml = '<a:p><a:t>un</a:t></a:p><a:p><a:t>deux</a:t><a:t>trois</a:t></a:p><a:t>hors</a:t>';
+    const [, second] = [...xmlBlocks(xml, 'a:p')];
+    const texts = [...xmlBlocks(xml, 'a:t', second.innerStart, second.innerEnd)].map(t => xml.slice(t.innerStart, t.innerEnd));
+    expect(texts).toEqual(['deux', 'trois']);
+    // Une fenêtre qui coupe un bloc ne le renvoie pas, et ne va pas chercher sa fin au-delà.
+    expect([...xmlBlocks(xml, 'a:t', second.innerStart, second.innerStart + 10)]).toEqual([]);
+    // Balise exacte : `<a:tcPr>` n'est pas `<a:tc>`.
+    expect([...xmlBlocks('<a:tcPr><a:tc>x</a:tc></a:tcPr>', 'a:tc')].map(b => b.start)).toEqual([8]);
   });
 
   it('même sortie que les anciennes expressions rationnelles sur des XML bien formés (comparaison à la référence)', async () => {

@@ -101,6 +101,43 @@ describe('PDF : en-têtes et pieds de page répétés, PDF scanné (constat 39)'
     expect(stripRunningLines(seule)[5]).toBe(HEADER);
   });
 
+  it('un énoncé qui contient des fractions ou des dates, répété à chaque page avec d’autres nombres, n’est pas un en-tête', () => {
+    const pages = (first: (n: number) => string, last: (n: number) => string, count = 6) =>
+      Array.from({ length: count }, (_, n) => `${first(n + 1)}\nOn rappelle qu’il faut un dénominateur commun.\n${last(n + 1)}`);
+    // AVANT : « 2/5 » était pris pour un numéro de page et tous les chiffres neutralisés : l'énoncé de chaque page
+    // (clé « exercice # - calculer #/# + #/# ») disparaissait dès la page 2.
+    const enonces = pages(n => `Exercice ${n} - Calculer ${n}/5 + 3/10`, n => `Réponse : x = ${n}/2 - à justifier`);
+    expect(stripRunningLines(enonces)).toEqual(enonces);
+    // Une date et des fractions en première et dernière ligne.
+    const dates = pages(n => `Devoir du 12/05/2024 - question ${n} sur 2/5`, n => `Résultat : ${n}/3 - arrondir à 0,1`);
+    expect(stripRunningLines(dates)).toEqual(dates);
+    // Fraction seule au bout de la ligne après un tiret : seul son numérateur pourrait être un numéro de page, et les
+    // dénominateurs (qui ne sont pas ceux d'un total de pages constant) diffèrent d'une page à l'autre.
+    const fractions = pages(n => `Simplifier - ${n}/${n + 2}`, n => `Exercice ${n} - Calculer ${n}/${n + 3} - ${n + 1}/${n + 4}`);
+    expect(stripRunningLines(fractions)).toEqual(fractions);
+  });
+
+  it('les vrais en-têtes et pieds de page, avec « Page 3/12 », « Page 3 », « p. 3 » ou « 3/12 », sont toujours retirés', () => {
+    const pagesOf = (head: (n: number) => string, foot: (n: number) => string) =>
+      Array.from({ length: 12 }, (_, i) => [head(i + 1), `Partie ${i + 1} : un contenu propre à cette page.`, 'La suite du cours.', foot(i + 1)].join('\n'));
+    const middle = (n: number) => `Partie ${n} : un contenu propre à cette page.\nLa suite du cours.`;
+    const header = () => 'Lycée Jean Moulin - SVT Seconde';
+    const cases: [(n: number) => string, (n: number) => string][] = [
+      [header, n => `Année 2025-2026 - Mme Durand - Page ${n}/12`],
+      [header, n => `Année 2025-2026 - Mme Durand - Page ${n} sur 12`],
+      [header, n => `Mme Durand | SVT Seconde | p. ${n}`],
+      [header, n => `Lycée Jean Moulin - SVT Seconde - ${n}/12`],
+      [header, n => `Lycée Jean Moulin   -   SVT Seconde   -   ${n} / 12`],
+      [n => `Lycée Jean Moulin - SVT Seconde - Page ${n}/12`, () => 'Mme Durand - Année 2025-2026'],
+    ];
+    for (const [head, foot] of cases) {
+      const pages = pagesOf(head, foot);
+      const out = stripRunningLines(pages);
+      expect(out[0], foot(1)).toBe(pages[0]);
+      for (let n = 2; n <= 12; n++) expect(out[n - 1], `${head(n)} / ${foot(n)}`).toBe(middle(n));
+    }
+  });
+
   it('couche de texte réduite à des numéros de page : refusée comme un scan (DOCUMENT_SCANNED)', async () => {
     // AVANT : acceptée (3 caractères, aucun avertissement) : l'enseignant croyait son cours analysé.
     await expect(extractDocument({ id: 's', name: 'scan.pdf', bytes: makePdf([['1'], ['2'], ['3']]) }, { pdfjs })).rejects.toMatchObject({ code: 'DOCUMENT_SCANNED' });
@@ -180,6 +217,44 @@ describe('racinisation : pluriels en -aux (constat 37)', () => {
       const norm = (w: string) => tokenize(w)[0];
       expect(norm(pluriel), pluriel).toBe(norm(singulier));
     }
+  });
+
+  it('noyaux / noyau, tuyaux / tuyau, préaux / préau, fléaux / fléau : les pluriels de 6 lettres rejoignent leur singulier', () => {
+    // Règle -aux → -al appliquée à tort : stem('noyaux') = 'noyal' ≠ stem('noyau') = 'noyau'.
+    const norm = (w: string) => tokenize(w)[0];
+    for (const [pluriel, singulier] of [['noyaux', 'noyau'], ['tuyaux', 'tuyau'], ['préaux', 'préau'], ['fléaux', 'fléau'], ['boyaux', 'boyau'], ['joyaux', 'joyau'], ['sceaux', 'sceau']]) {
+      expect(norm(pluriel), pluriel).toBe(norm(singulier));
+    }
+    expect(stem('noyaux')).toBe('noyau');
+  });
+
+  it('niveaux, réseaux, tableaux, matériaux, bateaux, oiseaux, gâteaux : pluriels en -eaux / -iaux rattachés à -eau / -iau', () => {
+    const norm = (w: string) => tokenize(w)[0];
+    for (const [pluriel, singulier] of [
+      ['niveaux', 'niveau'], ['réseaux', 'réseau'], ['tableaux', 'tableau'], ['matériaux', 'matériau'], ['bateaux', 'bateau'],
+      ['oiseaux', 'oiseau'], ['gâteaux', 'gâteau'], ['rideaux', 'rideau'], ['beaux', 'beau'],
+    ]) {
+      expect(norm(pluriel), pluriel).toBe(norm(singulier));
+    }
+    // « matériaux » ne devient pas le mot anglais « material ».
+    expect(stem('materiaux')).not.toBe('material');
+  });
+
+  it('les pluriels en -al restent rattachés à leur singulier (animaux, canaux, métaux, royaux, loyaux, sociaux, mondiaux)', () => {
+    const norm = (w: string) => tokenize(w)[0];
+    for (const [pluriel, singulier] of [['animaux', 'animal'], ['canaux', 'canal'], ['métaux', 'métal'], ['royaux', 'royal'], ['loyaux', 'loyal'], ['sociaux', 'social'], ['mondiaux', 'mondial'], ['signaux', 'signal']]) {
+      expect(norm(pluriel), pluriel).toBe(norm(singulier));
+    }
+  });
+
+  it('un cours qui écrit « noyaux » ou « réseaux » est retrouvé par un sujet au singulier', () => {
+    const doc = pagedDoc('phys', 'Physique.pdf', ['Les noyaux contiennent des protons et des neutrons.', 'Le calendrier de la ferme suit les saisons et les récoltes du village.', 'Les réseaux distribuent le courant jusqu’aux maisons.']);
+    const best = (query: string) => rankChunks(chunkDocument(doc), query).sort((a, b) => b.score - a.score)[0];
+    // AVANT : « noyaux » → « noyal » et « réseaux » → « reseal » ne rejoignaient ni « noyau » ni « réseau » (score nul).
+    expect(best('le noyau').score).toBeGreaterThan(0);
+    expect(best('le noyau').locator.start).toBe(1);
+    expect(best('un réseau').score).toBeGreaterThan(0);
+    expect(best('un réseau').locator.start).toBe(3);
   });
 
   it('mots courts et autres terminaisons inchangés', () => {

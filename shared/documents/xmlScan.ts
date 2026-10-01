@@ -1,7 +1,8 @@
 // Balayage linéaire du XML des DOCX / PPTX. Les expressions rationnelles paresseuses (`[\s\S]*?`)
 // reparcourent tout le reste du fichier à chaque balise jamais refermée : coût quadratique (fichier piégé).
-// Ici chaque position du texte n'est examinée qu'un nombre borné de fois : si une balise fermante
-// est introuvable à partir d'ici, elle l'est aussi pour toutes les suivantes, et l'on s'arrête.
+// Ici chaque recherche est bornée à la fenêtre `[from, to[` demandée : un bloc intérieur sans la balise cherchée
+// (`<a:p><a:endParaRPr/></a:p>` sans `<a:t>`) ou dont la balise n'est jamais refermée ne fait donc pas reparcourir
+// le reste du document, et chaque position n'est lue qu'un nombre borné de fois par niveau d'imbrication.
 
 /** Bloc `<nom …>…</nom>` (ou balise auto-fermante `<nom …/>`) trouvé dans le XML. */
 export interface XmlBlock {
@@ -33,24 +34,28 @@ export function indexOfOpenTag(xml: string, name: string, from: number): number 
 
 /**
  * Blocs `<nom …>…</nom>` successifs de `xml[from..to]`, sans chevauchement, dans l'ordre. Les balises
- * auto-fermantes sont signalées (`selfClosing`). Un bloc jamais refermé met fin au balayage.
+ * auto-fermantes sont signalées (`selfClosing`). Un bloc jamais refermé dans la fenêtre met fin au balayage.
  */
 export function* xmlBlocks(xml: string, name: string, from = 0, to = xml.length): Generator<XmlBlock> {
+  // Toutes les recherches (`indexOf` ne sait pas s'arrêter à `to`) se font dans la fenêtre extraite une seule fois :
+  // aucune ne peut lire au-delà, ni parcourir tout le reste du document pour rien.
+  const base = Math.max(0, from);
+  const text = base === 0 && to >= xml.length ? xml : xml.slice(base, to);
   const closeTag = `</${name}>`;
-  let pos = from;
-  while (pos < to) {
-    const start = indexOfOpenTag(xml, name, pos);
-    if (start === -1 || start >= to) return;
-    const gt = xml.indexOf('>', start);
-    if (gt === -1 || gt >= to) return;
-    if (xml.charCodeAt(gt - 1) === 47 /* / */) {
-      yield { start, end: gt + 1, innerStart: gt + 1, innerEnd: gt + 1, selfClosing: true };
+  let pos = 0;
+  while (pos < text.length) {
+    const start = indexOfOpenTag(text, name, pos);
+    if (start === -1) return;
+    const gt = text.indexOf('>', start);
+    if (gt === -1) return;
+    if (text.charCodeAt(gt - 1) === 47 /* / */) {
+      yield { start: base + start, end: base + gt + 1, innerStart: base + gt + 1, innerEnd: base + gt + 1, selfClosing: true };
       pos = gt + 1;
       continue;
     }
-    const close = xml.indexOf(closeTag, gt + 1);
-    if (close === -1 || close + closeTag.length > to) return;
-    yield { start, end: close + closeTag.length, innerStart: gt + 1, innerEnd: close, selfClosing: false };
+    const close = text.indexOf(closeTag, gt + 1);
+    if (close === -1) return;
+    yield { start: base + start, end: base + close + closeTag.length, innerStart: base + gt + 1, innerEnd: base + close, selfClosing: false };
     pos = close + closeTag.length;
   }
 }

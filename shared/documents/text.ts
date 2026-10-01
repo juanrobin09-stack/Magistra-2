@@ -21,15 +21,23 @@ const SUFFIXES = [
   'ismes', 'isme', 'istes', 'iste', 'iques', 'ique', 'ables', 'able', 'ibles', 'ible', 'es', 's', 'x', 'e',
 ];
 
+/** Noms dont le pluriel en -yaux / -iaux se rattache à un singulier en -au (et non en -al comme « loyaux », « mondiaux »). */
+const PLURALS_IN_AU = new Set(['noyaux', 'tuyaux', 'boyaux', 'joyaux', 'materiaux']);
+
 /**
  * Racinisation très légère : suffisante pour rapprocher « gouvernance » / « gouverner » / « gouvernances ».
- * Seul pluriel irrégulier traité : -aux → -al (animaux / animal, journaux / journal, chevaux / cheval) ; les mots de
- * 5 lettres ou moins (beaux, faux, eaux) restent tels quels. Aucune règle verbale ou dérivationnelle : elles
- * rapprocheraient aussi des mots sans rapport et déplaceraient le classement de tous les documents.
+ * Seuls pluriels irréguliers traités : -eaux → -eau (niveaux, réseaux, tableaux, bateaux) et les noms de
+ * PLURALS_IN_AU (noyaux, tuyaux, matériaux) ; sinon -aux → -al (animaux / animal, journaux / journal,
+ * chevaux / cheval). Les mots de 5 lettres ou moins (beaux, faux, eaux) restent tels quels. Aucune règle verbale ou
+ * dérivationnelle : elles rapprocheraient aussi des mots sans rapport et déplaceraient le classement de tous les
+ * documents. Le mot est supposé déjà normalisé (minuscules, sans accents), comme le fait `tokenize`.
  */
 export function stem(word: string): string {
   if (word.length <= 4) return word;
-  if (word.length > 5 && word.endsWith('aux')) return `${word.slice(0, -3)}al`;
+  if (word.endsWith('aux')) {
+    if (word.endsWith('eaux') || PLURALS_IN_AU.has(word)) return word.slice(0, -1);
+    if (word.length > 5) return `${word.slice(0, -3)}al`;
+  }
   for (const suffix of SUFFIXES) {
     if (word.length - suffix.length >= 4 && word.endsWith(suffix)) return word.slice(0, -suffix.length);
   }

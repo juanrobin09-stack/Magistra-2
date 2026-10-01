@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { defaultMessage, toMagistraError } from '@shared/errors';
 import type { LocalPreferences, StoredDocument } from '@shared/ipc';
 import { describeDocument, DOCUMENT_LIMITS, extractFile, type ExtractedDocument } from '@/lib/documents';
-import { EXTRACTION_CONCURRENCY, runLimited } from '@/lib/documents/queue';
+import { createLimiter, EXTRACTION_CONCURRENCY } from '@/lib/documents/queue';
 import { fromIpcError, getBridge } from '@/lib/runtime/local';
 import type { RuntimeMode } from '@/lib/runtime/types';
 
@@ -118,6 +118,8 @@ export function useSourceDocuments(mode: RuntimeMode, prefs: LocalPreferences | 
   const [storedVersion, setStoredVersion] = useState(0);
   const nextKey = useRef(0);
   const docsRef = useRef<SourceDoc[]>([]);
+  // Un seul limiteur pour tous les dépôts : des ajouts successifs ne cumulent jamais plus de 2 analyses simultanées.
+  const [limiter] = useState(() => createLimiter(EXTRACTION_CONCURRENCY));
   const maxDocuments = DOCUMENT_LIMITS.maxDocuments;
   const canKeep = mode === 'local' && Boolean(prefs?.keepDocuments) && getBridge() !== null;
 
@@ -185,24 +187,25 @@ export function useSourceDocuments(mode: RuntimeMode, prefs: LocalPreferences | 
     docsRef.current = [...current, ...added];
     setDocs(list => [...list, ...added]);
 
-    // Deux analyses à la fois (mémoire) ; un document retiré avant son tour n'est pas analysé.
-    const jobs = added.map((entry, i) => async () => {
-      if (!docsRef.current.some(d => d.key === entry.key)) return;
-      try {
-        const doc = await extractFile(kept[i]);
-        let description: string;
+    // Deux analyses à la fois (mémoire), tous dépôts confondus ; un document retiré avant son tour n'est pas analysé.
+    added.forEach((entry, i) => {
+      void limiter(async () => {
+        if (!docsRef.current.some(d => d.key === entry.key)) return;
         try {
-          description = describeDocument(doc);
-        } catch {
-          description = '';
+          const doc = await extractFile(kept[i]);
+          let description: string;
+          try {
+            description = describeDocument(doc);
+          } catch {
+            description = '';
+          }
+          update(entry.key, { status: 'ready', doc, description, warnings: doc.warnings ?? [] });
+        } catch (err) {
+          update(entry.key, { status: 'error', error: toMagistraError(err, 'DOCUMENT_UNREADABLE').message });
         }
-        update(entry.key, { status: 'ready', doc, description, warnings: doc.warnings ?? [] });
-      } catch (err) {
-        update(entry.key, { status: 'error', error: toMagistraError(err, 'DOCUMENT_UNREADABLE').message });
-      }
+      });
     });
-    void runLimited(jobs, EXTRACTION_CONCURRENCY);
-  }, [maxDocuments, update]);
+  }, [limiter, maxDocuments, update]);
 
   const remove = useCallback((key: string) => {
     docsRef.current = docsRef.current.filter(d => d.key !== key);
