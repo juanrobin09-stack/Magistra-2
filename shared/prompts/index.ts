@@ -7,8 +7,9 @@ import {
 } from '../formats.js';
 import { formatLocator } from '../citations.js';
 import { isClozeRequest } from '../cloze.js';
+import { disciplineRule } from '../disciplines.js';
 import { targetLanguage } from '../languages.js';
-import { getCycle, getLevelGroup, getNiveauLabel, isSuperieur, LEVEL_GROUP_LABELS } from '../levels.js';
+import { getCycle, getLevelGroup, getNiveauLabel, isSuperieur, LEVEL_GROUP_LABELS, type LevelGroup } from '../levels.js';
 import type { GenerationRequest, SourceRef } from '../types.js';
 import { LETTER_AUDIENCE, LEVEL_GUIDANCE, REFERENTIEL_SUPERIEUR_RULES, SCOLAIRE_RULES, SUPERIEUR_RULES } from './levels.js';
 import { toolInstructions } from './tools.js';
@@ -52,6 +53,15 @@ const QUALITY_RULES = `QUALITÉ ATTENDUE :
 - Écris un français soigné et fluide : phrases complètes et claires, vocabulaire précis, aucune répétition, aucun remplissage.
 - Consignes destinées aux élèves : un verbe d'action, une tâche par consigne, adaptées à l'âge.
 - N'utilise des crochets [ … ] que pour une information que seul l'enseignant peut fournir.`;
+
+/**
+ * Orthographe : les erreurs d'un petit modèle sont surtout grammaticales (accords, homophones, genre). Ligne séparée de
+ * « Écris un français soigné », que la règle de langue remplace pour le contenu en langue étrangère : elle disparaît alors.
+ */
+const ORTHOGRAPHY_RULE = "- Orthographe : accorde participes passés, adjectifs et verbes avec leur sujet ; vérifie le genre des noms ; distingue a/à, ce/se, on/ont, -é/-er ; relis chaque phrase.";
+
+/** Variété des énoncés des contenus élèves, sans jamais toucher à l'exactitude ni aux nombres demandés. */
+const DIVERSITY_RULE = "- Variété : change de situation, de support et de prénom d'un énoncé à l'autre ; évite l'exemple le plus classique. Jamais au détriment de l'exactitude, du sujet ni des nombres demandés.";
 
 /** Texte à trous : les doubles crochets marquent les mots à trouver (Magistra pose les blancs, shared/cloze.ts). */
 const CLOZE_QUALITY_RULE = "- Crochets : des doubles crochets [[ … ]] autour de chaque mot à faire trouver ; des crochets simples [ … ] seulement pour une information que seul l'enseignant peut fournir.";
@@ -144,7 +154,25 @@ function qualityRules(req: GenerationRequest): string {
   if (isClozeRequest(req)) rules = rules.replace(/^- N'utilise des crochets.*$/m, () => CLOZE_QUALITY_RULE);
   const language = languageRule(req);
   if (language) rules = rules.replace(/^- Écris un français soigné.*$/m, () => language);
+  // Sorties en français seulement : la règle de langue remplace la ligne « français soigné » pour une matière de langue.
+  else rules = rules.replace(/^- Écris un français soigné.*$/m, line => `${line}\n${ORTHOGRAPHY_RULE}`);
+  // Énoncés des élèves (jamais un corrigé, ni un texte à trous dont les blancs sont posés par Magistra).
+  if (STUDENT_CONTENT.includes(req.type) && !isClozeRequest(req)) {
+    rules = rules.replace(/^- Consignes destinées aux élèves.*$/m, line => `${line}\n${DIVERSITY_RULE}`);
+  }
   return rules;
+}
+
+/** Outils où les règles de la discipline aident : pas les courriers, appréciations ni cahier-journal. */
+const DISCIPLINE_TOOLS: readonly TypeContenu[] = [
+  'cours', 'exercices', 'evaluation', 'sequence', 'fiche_prep', 'progression', 'differenciation', 'corrige',
+];
+
+/** Règle de la matière, adaptée au niveau, en une ligne ; null si la matière n'en a pas ou si l'outil n'en profite pas. */
+function disciplineLine(req: GenerationRequest, group: LevelGroup): string | null {
+  if (!DISCIPLINE_TOOLS.includes(req.type)) return null;
+  const rule = disciplineRule(req.matiere, group);
+  return rule ? `DISCIPLINE : ${rule}` : null;
 }
 
 const LETTER_FORMAT_RULES = `FORMAT :
@@ -168,6 +196,7 @@ export function buildSystemPrompt(req: GenerationRequest, hasSources: boolean): 
       LETTER_FORMAT_RULES,
     ].join('\n\n');
   }
+  const discipline = disciplineLine(req, group);
   return [
     IDENTITY,
     HONESTY_RULES,
@@ -175,6 +204,8 @@ export function buildSystemPrompt(req: GenerationRequest, hasSources: boolean): 
     `NIVEAU : ${LEVEL_GROUP_LABELS[group]}.\n${LEVEL_GUIDANCE[group]}`,
     sup ? SUPERIEUR_RULES : SCOLAIRE_RULES,
     ...(group === 'bts_but' || group === 'cpge' ? [REFERENTIEL_SUPERIEUR_RULES] : []),
+    // Avant les consignes de l'outil : le format choisi (et sa propre norme) garde le dernier mot.
+    ...(discipline ? [discipline] : []),
     toolInstructions(req, group),
     qualityRules(req),
     FORMAT_RULES,
@@ -249,24 +280,29 @@ export function fenced(text: string): string {
   return `<<<TEXTE_${i}>>>\n${body}\n<<<FIN_TEXTE_${i}>>>`;
 }
 
+/** Métadonnée de source (titre, auteur, revue, nom de fichier : texte de tiers) sur une seule ligne du prompt. */
+function oneLine(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
 function describeSource(src: PromptSource): string {
   const r = src.ref;
   if (r.kind === 'document') {
-    return `[S${r.n}] Document de l'enseignant « ${r.docName ?? r.title} »${r.locator ? ` — ${formatLocator(r.locator)}` : ''}`;
+    return `[S${r.n}] Document de l'enseignant « ${oneLine(r.docName ?? r.title)} »${r.locator ? ` — ${formatLocator(r.locator)}` : ''}`;
   }
   const meta = [
-    r.authors?.length ? r.authors.slice(0, 5).join(', ') : null,
+    r.authors?.length ? r.authors.slice(0, 5).map(oneLine).join(', ') : null,
     r.year ? String(r.year) : null,
-    r.venue ?? null,
-    r.doi ? `DOI ${r.doi}` : null,
-    r.url && !r.doi ? r.url : null,
+    r.venue ? oneLine(r.venue) : null,
+    r.doi ? `DOI ${oneLine(r.doi)}` : null,
+    r.url && !r.doi ? oneLine(r.url) : null,
   ].filter(Boolean).join(' · ');
   const origin = r.kind === 'hal' ? 'Publication (HAL)'
     : r.kind === 'crossref' ? 'Publication (Crossref)'
       : r.kind === 'wikipedia' ? 'Article Wikipédia'
         : r.kind === 'institutional' ? 'Source institutionnelle'
           : 'Page web';
-  return `[S${r.n}] ${origin} : « ${r.title} »${meta ? ` — ${meta}` : ''}`;
+  return `[S${r.n}] ${origin} : « ${oneLine(r.title)} »${meta ? ` — ${meta}` : ''}`;
 }
 
 export function formatSourcesBlock(sources: PromptSource[]): string {
