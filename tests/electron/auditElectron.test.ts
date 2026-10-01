@@ -2,7 +2,7 @@
 // les outils de construction sont signalés, les autres outils de développement ignorés. Rapports simulés.
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,10 +12,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const dir = mkdtempSync(path.join(os.tmpdir(), 'magistra-audit-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-function audit(report: unknown) {
+/** Lance le script avec un rapport simulé (jamais npm ni le réseau) ; `script` : chemin saisi pour `node`. */
+function audit(report: unknown, script = path.join(root, 'scripts', 'audit-electron.mjs')) {
   const file = path.join(dir, `rapport-${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(file, JSON.stringify(report));
-  const res = spawnSync(process.execPath, [path.join(root, 'scripts', 'audit-electron.mjs'), '--report', file], { encoding: 'utf8' });
+  const res = spawnSync(process.execPath, [script, '--report', file], { encoding: 'utf8' });
   return { code: res.status, out: res.stdout, err: res.stderr };
 }
 
@@ -63,5 +64,21 @@ describe('audit d’Electron (CI)', () => {
     const r = audit({ error: { code: 'ENOAUDIT', summary: 'Your configured registry does not support audit requests.' } });
     expect(r.code).toBe(1);
     expect(r.err).toContain('Audit impossible : npm audit : Your configured registry');
+  });
+
+  it('lancé par un lien symbolique (ou une jonction) vers le dépôt : l’audit a bien lieu, jamais de code 0 silencieux', () => {
+    const link = path.join(dir, 'depot-lie');
+    symlinkSync(root, link, process.platform === 'win32' ? 'junction' : 'dir');
+    try {
+      const script = path.join(link, 'scripts', 'audit-electron.mjs');
+      const serious = audit({ vulnerabilities: { electron: { name: 'electron', severity: 'high', isDirect: true, via: [advisory('high')], effects: [] } } }, script);
+      expect(serious.code).toBe(1);
+      expect(serious.err).toContain('::error title=Audit Electron::electron');
+      const clean = audit({ auditReportVersion: 2, vulnerabilities: {} }, script);
+      expect(clean.code).toBe(0);
+      expect(clean.out).toContain('[audit-electron] Electron : aucune vulnérabilité');
+    } finally {
+      unlinkSync(link);
+    }
   });
 });

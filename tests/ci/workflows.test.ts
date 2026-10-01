@@ -2,11 +2,13 @@
 // documentation avec le code (préréglages, commandes). Contrôles textuels : aucune dépendance YAML ajoutée ;
 // la syntaxe elle-même est vérifiée par GitHub (et par actionlint en local).
 
+import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import playwrightConfig from '../../playwright.config';
+import { LEGAL_ENV_NAMES } from '../../src/lib/legal';
 import { LOCAL_NETWORK_ACCESS_ARGS, OTHER_SITE_PORT, SITE_PORT } from '../../e2e/connector-harness/sites';
 import { CONNECTOR_HARNESS_DIR, CONNECTOR_HARNESS_DIRS, CONNECTOR_PROJECTS, E2E_OUTPUT_DIRS, E2E_SCREENSHOT_DIRS, type E2EProject } from '../../e2e/outputDirs';
 import { PROVIDER_PRESETS } from '../../shared/ai/presets';
@@ -255,6 +257,73 @@ describe('ci.yml : installateur Windows construit à chaque envoi', () => {
     expect(win).toContain('if-no-files-found: error');
     // Aucun droit d'écriture : l'installateur reste dans l'exécution, jamais publié par la CI.
     expect(win).not.toMatch(/contents: write/);
+  });
+});
+
+describe('informations légales de l’éditeur dans l’installateur Windows (variables de build VITE_LEGAL_*)', () => {
+  // Les quatre informations lues par src/lib/legal.ts pour les pages légales de l'installateur, plus l'indicateur de
+  // validation des textes. L'hébergeur et la région des données ne concernent que le site en ligne avec comptes.
+  const PUBLISHER_VARS = [LEGAL_ENV_NAMES.publisher, LEGAL_ENV_NAMES.director, LEGAL_ENV_NAMES.address, LEGAL_ENV_NAMES.contact];
+  const BUILD_VARS = [...PUBLISHER_VARS, 'VITE_LEGAL_VALIDATED'];
+  const LEGAL_STEP = "name: Informations légales de l'éditeur";
+  /** Variables du bloc « env: » d'une étape, avec leur valeur telle qu'écrite dans le workflow. */
+  const envOf = (step: string) => Object.fromEntries([...step.matchAll(/^\s+(VITE_[A-Z_]+): (.+)$/gm)].map(m => [m[1], m[2].trim()]));
+  const fromRepositoryVariables = (names: string[]) => Object.fromEntries(names.map(name => [name, `\${{ vars.${name} }}`]));
+  /** Script shell d'une étape « run: | », sans son indentation. */
+  const scriptOf = (step: string) => step.slice(step.indexOf('run: |\n') + 'run: |\n'.length).split('\n').map(l => l.slice(10)).join('\n');
+  const hasBash = spawnSync('bash', ['--version']).status === 0;
+
+  it('release.yml : l’étape « Build web » transmet les cinq variables depuis les VARIABLES du dépôt, jamais depuis les secrets', () => {
+    const web = stepWith(job(release, 'build'), 'run: npm run build');
+    expect(envOf(web)).toEqual(fromRepositoryVariables(BUILD_VARS));
+    expect(code(release)).not.toMatch(/secrets\./);
+  });
+
+  it('ci.yml : le build web du job d’installateur Windows transmet les mêmes variables, et lui seul', () => {
+    const web = stepWith(job(ci, 'windows-package'), 'run: npx vite build');
+    expect(envOf(web)).toEqual(fromRepositoryVariables(BUILD_VARS));
+    expect(code(ci)).not.toMatch(/secrets\./);
+    expect(code(ci).match(/VITE_LEGAL_PUBLISHER:/g)).toHaveLength(1);
+  });
+
+  it('release.yml : une variable manquante donne un avertissement (jamais un échec), avant la construction, sans interpolation dans le script', () => {
+    const build = job(release, 'build');
+    const step = stepWith(build, LEGAL_STEP);
+    expect(step).toContain('shell: bash');
+    expect(envOf(step)).toEqual(fromRepositoryVariables(PUBLISHER_VARS));
+    const script = scriptOf(step);
+    expect(script).toContain(`for name in ${PUBLISHER_VARS.join(' ')}; do`);
+    expect(script).toContain('::warning title=');
+    expect(script).not.toMatch(/\bexit\b|::error/);
+    expect(script).not.toContain('${{');
+    expect(build.indexOf(LEGAL_STEP)).toBeLessThan(build.indexOf('run: npm run build'));
+  });
+
+  it.skipIf(!hasBash)('release.yml : le script n’annonce que les informations absentes ou blanches, par leur NOM, et réussit toujours', () => {
+    const script = scriptOf(stepWith(job(release, 'build'), LEGAL_STEP));
+    const run = (env: Record<string, string>) => spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } });
+    const some = run({ VITE_LEGAL_PUBLISHER: 'Collège Exemple', VITE_LEGAL_DIRECTOR: '  \t ', VITE_LEGAL_ADDRESS: '1 rue Exemple' });
+    expect(some.status).toBe(0);
+    const warned = [...some.stdout.matchAll(/^::warning title=[^:]+::La variable de dépôt (\w+) /gm)].map(m => m[1]);
+    expect(warned).toEqual(['VITE_LEGAL_DIRECTOR', 'VITE_LEGAL_CONTACT']);
+    expect(some.stdout).not.toContain('Collège Exemple');
+    const none = run({ VITE_LEGAL_PUBLISHER: 'A', VITE_LEGAL_DIRECTOR: 'B', VITE_LEGAL_ADDRESS: 'C', VITE_LEGAL_CONTACT: 'd@exemple.fr' });
+    expect(none.status).toBe(0);
+    expect(none.stdout).toBe('');
+    const all = run({});
+    expect(all.status).toBe(0);
+    expect(all.stdout.match(/^::warning /gm)).toHaveLength(4);
+  });
+
+  it('README et .env.example : où renseigner ces variables pour l’installateur, et ce que change VITE_LEGAL_VALIDATED', () => {
+    const maintainers = readme.slice(readme.indexOf('### Mainteneurs'), readme.indexOf('## Site web : déploiement'));
+    const section = maintainers.slice(maintainers.indexOf('**Informations légales de l\'installateur Windows**'));
+    expect(section.length).toBeGreaterThan(0);
+    expect(section).toContain('Settings → Secrets and variables → Actions → onglet Variables');
+    for (const name of BUILD_VARS) expect(section, name).toContain(`\`${name}\``);
+    expect(section).toMatch(/`VITE_LEGAL_VALIDATED` : `true` masque l'avis « projet de texte/);
+    expect(section).toMatch(/`VITE_LEGAL_HOST` et `VITE_LEGAL_DATA_REGION` ne concernent que le site en ligne/);
+    for (const name of BUILD_VARS) expect(read('.env.example'), name).toMatch(new RegExp(`^${name}=$`, 'm'));
   });
 });
 

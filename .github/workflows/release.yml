@@ -18,6 +18,10 @@
 # dépendances (npm ci depuis package-lock.json), aucun autre secret que GITHUB_TOKEN. La construction s'exécute avec
 # un jeton en lecture seule et sans identifiants git conservés ; seul le job « release », qui n'exécute aucun code
 # du dépôt ni aucune dépendance npm, reçoit « contents: write ».
+#
+# Informations légales de l'éditeur (pages « Mentions légales » et « Confidentialité » de l'installateur) : variables de
+# BUILD publiques par nature (src/lib/legal.ts), lues dans les VARIABLES du dépôt (GitHub → Settings → Secrets and
+# variables → Actions → onglet Variables), jamais dans les secrets. Voir le README, section « Mainteneurs ».
 
 name: Publication Windows
 
@@ -105,8 +109,31 @@ jobs:
 
       - run: npm ci
 
+      # Variable absente : les pages légales de l'installateur affichent « [à compléter] ». Avertissement seulement, la
+      # publication reste possible. Les valeurs passent par l'environnement, jamais dans le script ; seuls les NOMS
+      # manquants sont écrits dans l'annotation.
+      - name: Informations légales de l'éditeur
+        shell: bash
+        env:
+          VITE_LEGAL_PUBLISHER: ${{ vars.VITE_LEGAL_PUBLISHER }}
+          VITE_LEGAL_DIRECTOR: ${{ vars.VITE_LEGAL_DIRECTOR }}
+          VITE_LEGAL_ADDRESS: ${{ vars.VITE_LEGAL_ADDRESS }}
+          VITE_LEGAL_CONTACT: ${{ vars.VITE_LEGAL_CONTACT }}
+        run: |
+          for name in VITE_LEGAL_PUBLISHER VITE_LEGAL_DIRECTOR VITE_LEGAL_ADDRESS VITE_LEGAL_CONTACT; do
+            if [ -z "$(printf '%s' "${!name}" | tr -d '[:space:]')" ]; then
+              echo "::warning title=Information légale manquante::La variable de dépôt $name n'est pas renseignée : les pages légales de l'installateur afficheront « [à compléter] » (GitHub → Settings → Secrets and variables → Actions → Variables)."
+            fi
+          done
+
       - name: Build web (vérification des types + Vite)
         run: npm run build
+        env:
+          VITE_LEGAL_PUBLISHER: ${{ vars.VITE_LEGAL_PUBLISHER }}
+          VITE_LEGAL_DIRECTOR: ${{ vars.VITE_LEGAL_DIRECTOR }}
+          VITE_LEGAL_ADDRESS: ${{ vars.VITE_LEGAL_ADDRESS }}
+          VITE_LEGAL_CONTACT: ${{ vars.VITE_LEGAL_CONTACT }}
+          VITE_LEGAL_VALIDATED: ${{ vars.VITE_LEGAL_VALIDATED }}
 
       - name: Build Electron (processus principal + preload)
         run: node scripts/build-electron.mjs

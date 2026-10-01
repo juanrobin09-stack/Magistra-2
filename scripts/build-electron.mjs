@@ -10,7 +10,8 @@
 import { build, context } from 'esbuild';
 import { rm, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isMainModule } from './mainModule.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const outDir = path.join(root, 'dist-electron');
@@ -75,8 +76,7 @@ export async function watchElectron(onRebuild) {
   return { dispose: () => Promise.all(contexts.map(c => c.dispose())) };
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
-if (isDirectRun) {
+if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
   if (args.includes('--watch')) {
     await watchElectron(kind => console.log(`[build-electron] ${kind} reconstruit`));

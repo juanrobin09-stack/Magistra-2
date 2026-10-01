@@ -127,9 +127,10 @@ describe('déploiement', () => {
     const vars = [...env.matchAll(/^([A-Z0-9_]+)=(.*)$/gm)].map(m => ({ name: m[1], value: m[2] }));
     expect(vars.filter(v => v.name.startsWith('VITE_')).map(v => v.name)).toEqual([
       'VITE_CLERK_PUBLISHABLE_KEY', 'VITE_LEGAL_PUBLISHER', 'VITE_LEGAL_DIRECTOR', 'VITE_LEGAL_ADDRESS', 'VITE_LEGAL_CONTACT',
-      'VITE_LEGAL_HOST', 'VITE_LEGAL_DATA_REGION',
+      'VITE_LEGAL_HOST', 'VITE_LEGAL_DATA_REGION', 'VITE_LEGAL_VALIDATED',
     ]);
-    // Aucune identité n'est livrée dans le dépôt : chaque éditeur renseigne les siennes.
+    // Aucune identité n'est livrée dans le dépôt : chaque éditeur renseigne les siennes (et valide lui-même ses textes :
+    // VITE_LEGAL_VALIDATED reste vide).
     for (const v of vars.filter(v => v.name.startsWith('VITE_LEGAL_'))) expect(v.value, v.name).toBe('');
     for (const secret of ['CLERK_SECRET_KEY', 'CLERK_JWT_KEY', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_SERVICE_ROLE_KEY', 'AI_API_KEY', 'GITHUB_TOKEN']) {
       expect(vars.find(v => v.name === secret)?.value, secret).toBe('');
