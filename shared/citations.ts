@@ -5,7 +5,11 @@
 
 import type { DocumentPassage, Locator, SourceRef } from './types.js';
 
-export function formatLocator(locator: Locator): string {
+/**
+ * Localisation en toute lettre, toujours sur une seule ligne. Le titre de section vient du document (texte de tiers : un
+ * « <w:br/> » de Word, un titre Markdown en lien) : `clean` le rend inoffensif là où il est affiché.
+ */
+export function formatLocator(locator: Locator, clean: (title: string) => string = singleLine): string {
   const range = (singular: string, plural: string) =>
     locator.start === locator.end ? `${singular} ${locator.start}` : `${plural} ${locator.start} à ${locator.end}`;
   switch (locator.type) {
@@ -24,16 +28,18 @@ export function formatLocator(locator: Locator): string {
       return range('ligne', 'lignes');
     case 'paragraphs':
       return range('paragraphe', 'paragraphes');
-    case 'section':
-      return locator.title ? `section « ${truncate(locator.title, 80)} »` : range('section', 'sections');
+    case 'section': {
+      const title = locator.title ? clean(truncate(locator.title, 80)) : '';
+      return title ? `section « ${title} »` : range('section', 'sections');
+    }
     default:
       return '';
   }
 }
 
 /** Localisation affichée, avec « (extrait) » quand seule une partie du passage a été transmise au modèle. */
-export function formatLocatorFull(locator: Locator): string {
-  const base = formatLocator(locator);
+export function formatLocatorFull(locator: Locator, clean?: (title: string) => string): string {
+  const base = formatLocator(locator, clean);
   return locator.partial ? `${base} (extrait)` : base;
 }
 
@@ -53,6 +59,11 @@ export function documentSourceRef(p: DocumentPassage, n: number): SourceRef {
   return { n, kind: 'document', title: p.docName, docName: p.docName, locator: p.locator };
 }
 
+/** Texte de tiers ramené à une seule ligne (retours à la ligne, tabulations et caractères de contrôle deviennent une espace). */
+function singleLine(value: string): string {
+  return value.replace(/[\s\p{Cc}]+/gu, ' ').trim();
+}
+
 /**
  * Titre, auteur ou revue d'une source (texte de tiers : page web, notice Crossref, nom de fichier) rendu inoffensif
  * dans la liste « Sources utilisées » : une seule ligne, aucune syntaxe de lien, d'image, de code ou de HTML (un titre
@@ -61,9 +72,7 @@ export function documentSourceRef(p: DocumentPassage, n: number): SourceRef {
  * parenthèses) est inchangé.
  */
 function mdSafe(value: string): string {
-  return value
-    .replace(/[\s\p{Cc}]+/gu, ' ')
-    .trim()
+  return singleLine(value)
     // Sans « https:// » ni « www. » : le rendu en ferait des liens cliquables (même après un échappement).
     .replace(/\b(?:https?:\/\/|www\.)/gi, '')
     .replace(/[\\`<>[\]*_]/g, m => `\\${m}`);
@@ -71,7 +80,7 @@ function mdSafe(value: string): string {
 
 export function formatSourceLine(s: SourceRef): string {
   if (s.kind === 'document') {
-    return `[S${s.n}] ${mdSafe(s.docName ?? s.title)}${s.locator ? ` — ${formatLocatorFull(s.locator)}` : ''}`;
+    return `[S${s.n}] ${mdSafe(s.docName ?? s.title)}${s.locator ? ` — ${formatLocatorFull(s.locator, mdSafe)}` : ''}`;
   }
   const authorList = s.authors && s.authors.length
     ? `${s.authors.slice(0, 3).map(mdSafe).join(', ')}${s.authors.length > 3 ? ' et al.' : ''}`

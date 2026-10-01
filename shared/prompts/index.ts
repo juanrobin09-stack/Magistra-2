@@ -8,7 +8,7 @@ import {
 import { formatLocator } from '../citations.js';
 import { isClozeRequest } from '../cloze.js';
 import { disciplineRule } from '../disciplines.js';
-import { targetLanguage } from '../languages.js';
+import { targetLanguage, type TargetLanguage } from '../languages.js';
 import { getCycle, getLevelGroup, getNiveauLabel, isSuperieur, LEVEL_GROUP_LABELS, type LevelGroup } from '../levels.js';
 import type { GenerationRequest, SourceRef } from '../types.js';
 import { LETTER_AUDIENCE, LEVEL_GUIDANCE, REFERENTIEL_SUPERIEUR_RULES, SCOLAIRE_RULES, SUPERIEUR_RULES } from './levels.js';
@@ -84,6 +84,14 @@ function translationWork(req: GenerationRequest, kind: 'vivante' | 'ancienne'): 
 const translationDirection = (name: string) =>
   `la traduction se fait dans la langue d’arrivée (version : texte source en ${name}, traduction en français ; thème : texte source en français, traduction en ${name})`;
 
+/** Types toujours rédigés en français, même dans une matière de langue (bulletin, livret, courrier aux familles). */
+const FRENCH_ONLY_TYPES: readonly TypeContenu[] = ['appreciations', 'lettre_parents'];
+
+/** Langue étudiée dont la règle de langue s'applique à cette demande ; null hors matière de langue et pour les types toujours en français. */
+export function targetLanguageOf(req: GenerationRequest): TargetLanguage | null {
+  return FRENCH_ONLY_TYPES.includes(req.type) ? null : targetLanguage(req.matiere);
+}
+
 /**
  * Matière de langue (anglais, espagnol… latin, grec) : dans quelle langue écrire. Sans cette règle, un petit modèle
  * écrit en français (règle « français soigné », exemples des formats en français, sujet saisi en français) : un texte
@@ -92,8 +100,8 @@ const translationDirection = (name: string) =>
  * sujet de LLCER), une copie rédigée en français (version, commentaire latin), la civilisation antique.
  */
 function languageRule(req: GenerationRequest): string | null {
-  const lang = targetLanguage(req.matiere);
-  if (!lang || req.type === 'appreciations' || req.type === 'lettre_parents') return null;
+  const lang = targetLanguageOf(req);
+  if (!lang) return null;
   const { name } = lang;
   const vivante = lang.kind === 'vivante';
   const translation = translationWork(req, lang.kind);

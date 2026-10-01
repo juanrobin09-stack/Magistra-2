@@ -65,3 +65,59 @@ describe('normalizeFrenchTypography', () => {
     expect(checkOutputStructure(req, typeset)).toEqual(checkOutputStructure(req, plain));
   });
 });
+
+describe('normalizeFrenchTypography : sortie dégénérée', () => {
+  const elapsed = (fn: () => void) => {
+    const t0 = performance.now();
+    fn();
+    return performance.now() - t0;
+  };
+
+  // Un modèle qui boucle peut sortir des dizaines de milliers de blancs ou de débuts de balise sans fin : le temps doit
+  // rester linéaire (plusieurs secondes avec les anciens motifs, quelques millisecondes ensuite ; seuil très large).
+  const degenerate: Array<[string, string]> = [
+    ['ligne d’espaces', `Corrigé : B\n${' '.repeat(100_000)}\nFin`],
+    ['ligne de tabulations', `${'\t'.repeat(100_000)}x`],
+    ['séparateur de tableau suivi d’espaces', `-- ${' '.repeat(100_000)}x`],
+    ['séparateur de tableau suivi de tabulations', `--${'\t'.repeat(100_000)}x`],
+    ['barre verticale suivie d’espaces', `|${' '.repeat(100_000)}x`],
+    ['« <a » répété sans « > »', '<a'.repeat(60_000)],
+    ['« <br » répété sans « > »', '<br'.repeat(40_000)],
+    ['« \\( » jamais fermé', '\\('.repeat(100_000)],
+    ['« \\[ » jamais fermé', '\\['.repeat(100_000)],
+    ['« ]( » jamais fermé', ']('.repeat(100_000)],
+  ];
+
+  it.each(degenerate)('%s : temps borné', (_name, input) => {
+    expect(input.length).toBeGreaterThanOrEqual(100_000);
+    expect(elapsed(() => fr(input))).toBeLessThan(1000);
+  });
+
+  it('une ligne d’espaces ne gêne pas le reste du texte', () => {
+    const out = fr(`Corrigé : B\n${' '.repeat(100_000)}\nFin : C`);
+    expect(out.startsWith(`Corrigé${NB}: B\n`)).toBe(true);
+    expect(out.endsWith(`Fin${NB}: C`)).toBe(true);
+  });
+
+  it('lignes de séparation de tableau, avec ou sans espaces superflus : toujours protégées', () => {
+    const rows = ['|---|---|', '| --- | --- |', '|   :---   |   ---:   |', '---|---', '  --  ', '\t:--:\t|\t:--:\t', ':---: | :---:'];
+    for (const row of rows) expect(fr(`a ? b\n${row}\nc ? d`), row).toBe(`a${NB}? b\n${row}\nc${NB}? d`);
+    // Une ligne qui n'est pas un séparateur reste du texte courant.
+    expect(fr('a | -- | b : c')).toBe(`a | -- | b${NB}: c`);
+  });
+
+  it('balises, formules et destinations de liens complètes : toujours protégées', () => {
+    const samples = [
+      '<a href="https://exemple.fr/a?b=c : d">lien</a>',
+      '<img src="x.png" alt="a : b ?" />',
+      '\\(a : b ?\\) et \\[c : d !\\]',
+      '\\[\nx : y ?\n\\]',
+      '[texte](https://exemple.fr/a?b=c) et ![i](chemin/a : b.png)',
+    ];
+    for (const sample of samples) expect(fr(sample), sample).toBe(sample);
+    // Une ouverture jamais fermée n'étend pas la protection au reste du texte.
+    expect(fr('<a puis mot : fin')).toBe(`<a puis mot${NB}: fin`);
+    expect(fr('\\( puis mot : fin')).toBe(`\\( puis mot${NB}: fin`);
+    expect(fr('texte ]( puis mot : fin')).toBe(`texte ]( puis mot${NB}: fin`);
+  });
+});

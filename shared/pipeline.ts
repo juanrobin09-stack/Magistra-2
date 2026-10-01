@@ -14,11 +14,10 @@ import { buildClozeDocument, ClozeStream, isClozeRequest } from './cloze.js';
 import { rankChunks } from './documents/retrieve.js';
 import { MagistraError, toMagistraError, type ErrorCode } from './errors.js';
 import { normalizeExerciseLayout } from './exerciseLayout.js';
-import { targetLanguage } from './languages.js';
 import { getLevelGroup, getNiveauLabel } from './levels.js';
 import { unwrapDocumentFence } from './markdownFence.js';
 import { checkCopyQuotes, checkOutputStructure } from './outputChecks.js';
-import { buildMessages, estimateTokens, generationTemperature, type PromptSource } from './prompts/index.js';
+import { buildMessages, estimateTokens, generationTemperature, targetLanguageOf, type PromptSource } from './prompts/index.js';
 import { planResearch, runResearch, type ResearchConfig, type ResearchDeps, type ResearchOutcome } from './research/index.js';
 import type { ResearchSource } from './research/types.js';
 import { normalizeFrenchTypography } from './typography.js';
@@ -297,8 +296,9 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
   // sinon ils s'afficheraient en un seul paragraphe. Document final comme texte partiel (enregistrés, exportés ainsi).
   const shape = (body: string) => normalizeExerciseLayout(cloze ? buildClozeDocument(body, cloze) : body);
   // Espaces insécables de la typographie française : sur le document final seulement (jamais sur les morceaux affichés
-  // en direct), sauf pour les langues étudiées (ponctuation de la langue cible).
-  const typeset = (body: string) => (targetLanguage(req.matiere) ? body : normalizeFrenchTypography(body));
+  // en direct), sauf quand le contenu est écrit dans une langue étudiée (ponctuation de la langue cible) : les
+  // appréciations et les lettres aux parents d'une matière de langue restent en français, donc typographiées.
+  const typeset = (body: string) => (targetLanguageOf(req) ? body : normalizeFrenchTypography(body));
   try {
     if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
     const budgets = computeBudgets(provider, req, deps.maxOutputTokens);
@@ -475,7 +475,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
       for (const message of checkOutputStructure(req, shaped)) yield { type: 'warning', code: 'CONTENT_CHECK', message };
       // Correction annotée : les passages cités entre guillemets doivent figurer tels quels dans le travail fourni.
       if (req.type === 'corrige' && req.texteEleve) {
-        for (const message of checkCopyQuotes(shaped, req.texteEleve, [req.sujet, req.consignes, req.objectifs])) {
+        for (const message of checkCopyQuotes(shaped, req.texteEleve, [req.sujet, req.consignes, req.objectifs, ...sources.map(s => s.text)])) {
           yield { type: 'warning', code: 'CONTENT_CHECK', message };
         }
       }

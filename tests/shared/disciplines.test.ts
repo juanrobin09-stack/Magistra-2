@@ -4,9 +4,9 @@
 
 import { describe, expect, it } from 'vitest';
 import { MockProvider } from '../../shared/ai/mock';
-import { ALL_MATIERES, ALL_TYPES, type Matiere, type TypeContenu } from '../../shared/catalog';
+import { ALL_MATIERES, ALL_TYPES, isMatiereAvailableFor, type Matiere, type TypeContenu } from '../../shared/catalog';
 import { DISCIPLINE_RULE_MAX_CHARS, DISCIPLINES, disciplineRule } from '../../shared/disciplines';
-import { getLevelGroup, LEVEL_GROUP_LABELS, type LevelGroup, type NiveauScolaire } from '../../shared/levels';
+import { ALL_NIVEAUX, getLevelGroup, LEVEL_GROUP_LABELS, type LevelGroup, type NiveauScolaire } from '../../shared/levels';
 import { computeBudgets } from '../../shared/pipeline';
 import { buildMessages, buildSystemPrompt, estimateTokens } from '../../shared/prompts/index';
 import { toolInstructions } from '../../shared/prompts/tools';
@@ -71,6 +71,89 @@ describe('disciplines : le tableau des règles', () => {
     // Aucune variante « college » pour les statistiques : la règle par défaut.
     expect(DISCIPLINES.statistiques.groups?.college).toBeUndefined();
     expect(disciplineRule('statistiques', 'college')).toBe(DISCIPLINES.statistiques.default);
+  });
+});
+
+describe('disciplines : cohérence entre le niveau et la règle', () => {
+  /** Cycle officiel des niveaux du premier degré et du collège (la 6e est au cycle 3, avec le CM1-CM2). */
+  const SCHOOL_CYCLE: Partial<Record<NiveauScolaire, number>> = {
+    maternelle_tps: 1, maternelle_ps: 1, maternelle_ms: 1, maternelle_gs: 1, cp: 2, ce1: 2, ce2: 2, cm1: 3, cm2: 3,
+    '6eme': 3, '5eme': 4, '4eme': 4, '3eme': 4,
+  };
+
+  /** Chaque couple (matière, niveau) proposé par le catalogue, avec la règle que reçoit le modèle. */
+  const applications = ALL_MATIERES.flatMap(({ value: matiere }) => ALL_NIVEAUX
+    .filter(niveau => isMatiereAvailableFor(matiere, niveau))
+    .map(niveau => ({ matiere, niveau, group: getLevelGroup(niveau), rule: disciplineRule(matiere, getLevelGroup(niveau)) }))
+    .filter(a => a.rule !== ''));
+
+  /** Cycles cités par la règle (« cycles 2-3 », « cycle 4 »), ou aucun. */
+  const citedCycles = (rule: string): Set<number> => {
+    const cycles = new Set<number>();
+    for (const m of rule.matchAll(/cycles? (\d)(?:\s*(?:-|à|et)\s*(\d))?/gi)) {
+      for (let c = Number(m[1]); c <= Number(m[2] ?? m[1]); c++) cycles.add(c);
+    }
+    return cycles;
+  };
+  /** Cycles des classes nommées dans la règle (« CM1-CM2 », « 6e », « 5e-3e »). */
+  const namedClassCycles = (rule: string): Set<number> => {
+    const cycles = new Set<number>();
+    if (/\b(?:CP|CE[12])\b/.test(rule)) cycles.add(2);
+    if (/\b(?:CM[12]|6e)\b/.test(rule)) cycles.add(3);
+    if (/\b[345]e\b/.test(rule)) cycles.add(4);
+    return cycles;
+  };
+
+  it('une règle qui cite un cycle couvre le cycle de chaque classe à laquelle elle s’applique (6e : cycle 3)', () => {
+    for (const { matiere, niveau, rule } of applications) {
+      const cycle = SCHOOL_CYCLE[niveau];
+      const cited = citedCycles(rule);
+      if (cycle === undefined || cited.size === 0) continue;
+      const covered = new Set([...cited, ...namedClassCycles(rule)]);
+      expect(covered.has(cycle), `${matiere} / ${niveau} (cycle ${cycle}) : « ${rule} »`).toBe(true);
+    }
+  });
+
+  it('aucune règle du collège ne cite le lycée, « terminale » ou « bac » ; aucune règle du premier degré ne cite le collège ni le lycée', () => {
+    for (const { matiere, niveau, group, rule } of applications) {
+      if (group === 'college') expect(rule, `${matiere} / ${niveau}`).not.toMatch(/terminale|\bbac\b|lycée|seconde|licence|master|cpge|\bbts\b/i);
+      if (group === 'maternelle' || group === 'elementaire') expect(rule, `${matiere} / ${niveau}`).not.toMatch(/collège|lycée|terminale|\bbac\b|licence|master/i);
+      if (group === 'lycee' || group === 'lycee_pro') expect(rule, `${matiere} / ${niveau}`).not.toMatch(/cycles? [234]|collège|\b6e\b|fin de lycée/i);
+    }
+  });
+
+  it('philosophie au lycée : notions du programme de la classe, pas de terminale seulement', () => {
+    for (const niveau of ['2nde_gt', '1ere_gen', 'terminale_gen', '1ere_techno'] as NiveauScolaire[]) {
+      expect(disciplineRule('philosophie', getLevelGroup(niveau)), niveau).toMatch(/programme de la classe/);
+      expect(disciplineRule('philosophie', getLevelGroup(niveau)), niveau).not.toMatch(/terminale/i);
+    }
+  });
+
+  it('SVT et physique-chimie au collège : la 6e (cycle 3) n’est pas présentée comme du cycle 4', () => {
+    for (const matiere of ['svt', 'physique_chimie'] as Matiere[]) {
+      const rule = disciplineRule(matiere, 'college');
+      expect(rule, matiere).toMatch(/cycle 3/i);
+      expect(rule, matiere).toMatch(/6e/);
+      expect(rule, matiere).not.toMatch(/^Cycle 4/);
+    }
+  });
+
+  it('EVARS au collège : variante prudente, sans contraception ni IST de la 6e à la 3e', () => {
+    const college = DISCIPLINES.evars.groups?.college ?? '';
+    expect(college).not.toBe('');
+    expect(college).not.toBe(DISCIPLINES.evars.default);
+    expect(college).not.toMatch(/contraception|\bIST\b|\bVIH\b/i);
+    for (const word of ['puberté', 'respect', 'consentement', 'égalité']) expect(college.toLowerCase(), word).toContain(word);
+    // Le contenu du cycle 4 n'est abordé que « selon le programme ».
+    expect(college).toMatch(/cycle 4.*selon le programme/);
+    for (const niveau of ['6eme', '5eme', '4eme', '3eme'] as NiveauScolaire[]) {
+      const prompt = sys({ type: 'cours', niveau, matiere: 'evars' });
+      expect(prompt, niveau).toContain(`DISCIPLINE : ${college}`);
+      expect(prompt, niveau).not.toMatch(/contraception|\bIST\b/);
+    }
+    // Le lycée garde la règle générale.
+    expect(disciplineRule('evars', 'lycee')).toBe(DISCIPLINES.evars.default);
+    expect(DISCIPLINES.evars.default).toMatch(/contraception, IST/);
   });
 });
 

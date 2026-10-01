@@ -13,17 +13,22 @@ const NBSP = ' ';
 /** Marqueur interne d'un passage protégé (caractère d'usage privé, absent des textes réels). */
 const HOLD = '';
 
-/** Passages à ne jamais modifier. L'ordre compte : les plus englobants d'abord. */
+/**
+ * Passages à ne jamais modifier. L'ordre compte : les plus englobants d'abord.
+ * Motifs en temps linéaire, même sur une sortie dégénérée (lignes de milliers d'espaces, « <a » ou « \( » répétés et
+ * jamais fermés) : un corps de balise, de formule ou de lien ne contient pas de nouvelle ouverture, et deux blocs
+ * d'espaces ne se suivent pas sans caractère entre eux, sinon chaque début possible reparcourt toute la suite.
+ */
 const PROTECTED: readonly RegExp[] = [
   /\$\$[\s\S]*?\$\$/g,
-  /\\\([\s\S]*?\\\)/g,
-  /\\\[[\s\S]*?\\\]/g,
+  /\\\((?:(?!\\\()[\s\S])*?\\\)/g,
+  /\\\[(?:(?!\\\[)[\s\S])*?\\\]/g,
   /\$[^$\n]+\$/g,
-  /<\/?[A-Za-z][^>\n]*>/g,
+  /<\/?[A-Za-z][^<>\n]*>/g,
   /\b(?:https?:\/\/|www\.)[^\s<>"'[\]()]*/gi,
-  /\]\([^)\n]*\)/g,
+  /\]\((?:[^)\n\]]|\](?!\())*\)/g,
   /\[\s*(?:Sources?\s+|S\s?)\d{1,3}[^\]\n]{0,100}\]/g,
-  /^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(?:\|[ \t]*:?-{2,}:?[ \t]*)*\|?[ \t]*$/gm,
+  /^[ \t]*(?:\|[ \t]*)?:?-{2,}:?[ \t]*(?:\|[ \t]*:?-{2,}:?[ \t]*)*(?:\|[ \t]*)?$/gm,
 ];
 
 /** Espace(s) avant « : ; ! ? » : après un mot ou un signe qui le ferme, et avant un blanc, une fin de ligne, « * », « _ », « ) » ou « » ». */

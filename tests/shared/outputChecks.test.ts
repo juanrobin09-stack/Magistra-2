@@ -5,7 +5,7 @@ import { defaultMessage, MagistraError } from '../../shared/errors';
 import { normalizeExerciseLayout } from '../../shared/exerciseLayout';
 import { checkCopyQuotes, checkOutputStructure } from '../../shared/outputChecks';
 import { runGeneration } from '../../shared/pipeline';
-import type { GenerationEvent, GenerationRequest } from '../../shared/types';
+import type { DocumentPassage, GenerationEvent, GenerationRequest } from '../../shared/types';
 import { publicEvent } from '../../electron/connector/status.js';
 import { collect } from './helpers';
 
@@ -386,6 +386,57 @@ describe('checkCopyQuotes — citations de la copie (outil « corriger »)', () 
     expect(checkCopyQuotes(big, COPY.repeat(500))).toHaveLength(1);
     expect(performance.now() - t0).toBeLessThan(1500);
   });
+
+  describe('correction proposée entre guillemets', () => {
+    const WRONG = 'La plante respire par ses feuilles grâce aux stomates et les racines respirent à boire de l’eau';
+    const copy = `${WRONG}.`;
+    const FIXED = 'La plante respire par ses feuilles grâce aux stomates et les racines boivent de l’eau';
+
+    it('citation de la copie puis correction après une flèche : aucun avertissement', () => {
+      for (const arrow of ['→', '->', '=>', '⇒']) {
+        expect(checkCopyQuotes(`- « ${WRONG} » ${arrow} « ${FIXED} »`, copy), arrow).toEqual([]);
+      }
+      expect(checkCopyQuotes(`- "${WRONG}" → "${FIXED}"`, copy)).toEqual([]);
+      expect(checkCopyQuotes(`- “${WRONG}” → **« ${FIXED} »**`, copy)).toEqual([]);
+    });
+
+    it('correction annoncée par un mot (« correction proposée », « on attend », « plutôt »…)', () => {
+      const leads = [
+        'Correction proposée : ', '- **Correction proposée :** ', 'Correction : ', 'Proposition de correction : ', 'Corrigé : ',
+        'On attend ', 'On attendait plutôt ', 'Il fallait écrire ', 'Écrire plutôt ', 'Reformulation suggérée : ', 'Remplacer par ',
+        'La phrase devient ', '| Correction proposée | ', 'La forme attendue est ',
+      ];
+      for (const lead of leads) {
+        expect(checkCopyQuotes(`Erreur : « ${WRONG} ».\n${lead}« ${FIXED} ».`, copy), lead).toEqual([]);
+      }
+    });
+
+    it('correction écrite avant « au lieu de » : la citation de la copie qui suit est toujours vérifiée', () => {
+      expect(checkCopyQuotes(`« ${FIXED} » (au lieu de « ${WRONG} »).`, copy)).toEqual([]);
+      expect(checkCopyQuotes(`« ${FIXED} » et non « ${WRONG} ».`, copy)).toEqual([]);
+      expect(checkCopyQuotes(`« ${FIXED} » au lieu de « la plante respire par ses racines et ses fleurs ».`, copy)).toHaveLength(1);
+    });
+
+    it('citation inventée : l’avertissement reste, avec ou sans correction à côté', () => {
+      const invented = 'la plante respire par ses racines et ses fleurs';
+      expect(checkCopyQuotes(`- « ${invented} » → « ${FIXED} »`, copy)).toHaveLength(1);
+      expect(checkCopyQuotes(`Correction proposée : « ${FIXED} ».\nErreur : « ${invented} ».`, copy)).toHaveLength(1);
+      // Une flèche ou un mot de correction ailleurs dans la ligne n'excuse pas une citation inventée.
+      expect(checkCopyQuotes(`→ voir l’erreur de l’élève, qui écrit « ${invented} ».`, copy)).toHaveLength(1);
+      expect(checkCopyQuotes(`Correction : l’élève a écrit « ${invented} ».`, copy)).toHaveLength(1);
+      expect(checkCopyQuotes(`On attendait mieux que « ${invented} ».`, copy)).toHaveLength(1);
+      expect(checkCopyQuotes(`Il a écrit plutôt que « ${invented} ».`, copy)).toHaveLength(1);
+      // Citation Markdown (« > ») : pas une flèche.
+      expect(checkCopyQuotes(`> « ${invented} »`, copy)).toHaveLength(1);
+    });
+
+    it('texte d’une source fournie : retrouvé dans la référence', () => {
+      const support = 'La photosynthèse est la transformation de l’énergie lumineuse en énergie chimique par les chloroplastes.';
+      const content = 'Rappel : « la photosynthèse est la transformation de l’énergie lumineuse en énergie chimique ».';
+      expect(checkCopyQuotes(content, COPY)).toHaveLength(1);
+      expect(checkCopyQuotes(content, COPY, [undefined, support])).toEqual([]);
+    });
+  });
 });
 
 describe('pipeline — outil « corriger » : citations de la copie', () => {
@@ -403,6 +454,21 @@ describe('pipeline — outil « corriger » : citations de la copie', () => {
     const done = events.at(-1) as Extract<GenerationEvent, { type: 'done' }>;
     expect(done.type).toBe('done');
     expect(done.content).toContain('la plante respire par ses racines et ses fleurs');
+  });
+
+  it('correction proposée entre guillemets : aucun avertissement, citation inventée toujours signalée', async () => {
+    const proposed = 'Erreur : « la plante respire par ses feuilles » → « la plante respire grâce à ses feuilles vertes ».\nCorrection proposée : « l’eau monte par les racines jusqu’en haut du tronc ».';
+    expect(contentChecks(await collect(runGeneration(corrige(), { provider: new MockProvider({ reply: proposed }) })))).toEqual([]);
+    const invented = 'Erreur : « la plante respire par ses racines et ses fleurs » → « la plante respire par ses feuilles vertes ».';
+    expect(contentChecks(await collect(runGeneration(corrige(), { provider: new MockProvider({ reply: invented }) })))).toHaveLength(1);
+  });
+
+  it('texte d’une source fournie cité entre guillemets : retrouvé, pas d’avertissement', async () => {
+    const support = 'La photosynthèse est la transformation de l’énergie lumineuse en énergie chimique par les chloroplastes des feuilles.';
+    const doc: DocumentPassage = { docId: 'cours.pdf', docName: 'cours.pdf', kind: 'pdf', locator: { type: 'pages', start: 1, end: 1 }, text: support };
+    const reply = 'Rappel du cours : « la photosynthèse est la transformation de l’énergie lumineuse en énergie chimique » [S1].';
+    expect(contentChecks(await collect(runGeneration(corrige({ documents: [doc] }), { provider: new MockProvider({ reply }) })))).toEqual([]);
+    expect(contentChecks(await collect(runGeneration(corrige(), { provider: new MockProvider({ reply: reply.replace(' [S1]', '') }) })))).toHaveLength(1);
   });
 
   it('citations exactes : aucun avertissement ; autre outil : jamais de contrôle', async () => {

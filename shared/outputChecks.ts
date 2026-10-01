@@ -398,6 +398,14 @@ const CURLY_QUOTE_RE = /“([^“”\n]+)”/g;
 const STRAIGHT_QUOTE_RE = /"([^"\n]+)"/g;
 /** Coupure d'une citation : « […] », « [...] », « … », « ... ». */
 const ELLIPSIS_RE = /\[\s*(?:…|\.{2,})\s*\]|…|\.{3,}/g;
+/** Contexte conservé de part et d'autre d'une citation pour reconnaître une correction proposée. */
+const QUOTE_CONTEXT_CHARS = 80;
+/** Flèche juste avant la citation (« à jouer » → « ont joué »), « -> » et « => » compris ; un « > » seul est une citation Markdown. */
+const ARROW_BEFORE_RE = /(?:→|⇒|⟶|➔|➜|->|=>)[\s*_(]*$/;
+/** Mot qui annonce une correction proposée, et non un passage de la copie (texte déjà passé par `quoteForm`). */
+const PROPOSAL_BEFORE_RE = /(?:^| )(?:corrections?|corrig(?:e|ee)s?|propos(?:e|ee)s?|propositions?|reformulations?|reecritures?|suggestions?|sugger(?:e|ee)s?|attendue?s?|on attend(?:ait)?|il fallait|il faudrait|ecrire|ecrivez|devient|remplac(?:er|ez) par|plutot)(?: est| serait| devrait etre)?$/;
+/** « ont joué » (au lieu de « à jouer ») : la citation qui précède est la correction, celle qui suit est la copie. */
+const REPLACED_AFTER_RE = /^[\s*_),;]*\(?\s*(?:au lieu d|à la place d|plutôt qu|et non\b|et pas\b)/i;
 
 /** Minuscules, sans accents ni ponctuation, apostrophes et espaces unifiés : « L’élève, » et « l'eleve » se valent. */
 function quoteForm(text: string): string {
@@ -415,44 +423,69 @@ function wordsOf(form: string): number {
   return form ? form.split(' ').length : 0;
 }
 
+/** Citation d'un texte, avec un peu du texte qui la précède et la suit sur sa ligne. */
+interface QuotedSegment {
+  text: string;
+  before: string;
+  after: string;
+}
+
 /** Citations (entre « », “ ” ou " ") d'un texte hors blocs de code ; une ligne aux guillemets droits dépareillés est ignorée. */
-function quotedSegments(content: string): string[] {
-  const found: string[] = [];
+function quotedSegments(content: string): QuotedSegment[] {
+  const found: QuotedSegment[] = [];
+  const collect = (line: string, m: RegExpMatchArray) => {
+    const start = m.index ?? 0;
+    found.push({
+      text: m[1],
+      before: line.slice(Math.max(0, start - QUOTE_CONTEXT_CHARS), start),
+      after: line.slice(start + m[0].length, start + m[0].length + QUOTE_CONTEXT_CHARS),
+    });
+  };
   mapProse(content, prose => {
     for (const line of prose.split('\n')) {
       for (const re of [FRENCH_QUOTE_RE, CURLY_QUOTE_RE]) {
-        for (const m of line.matchAll(re)) found.push(m[1]);
+        for (const m of line.matchAll(re)) collect(line, m);
       }
       if ((line.match(/"/g)?.length ?? 0) % 2 === 0) {
-        for (const m of line.matchAll(STRAIGHT_QUOTE_RE)) found.push(m[1]);
+        for (const m of line.matchAll(STRAIGHT_QUOTE_RE)) collect(line, m);
       }
     }
     return prose;
   });
-  return found.filter(q => q.length <= MAX_QUOTE_CHARS);
+  return found.filter(q => q.text.length <= MAX_QUOTE_CHARS);
+}
+
+/** Vrai quand la citation est la correction proposée (après une flèche ou « correction : », avant « au lieu de »…), pas un extrait de la copie. */
+function isProposedCorrection({ before, after }: QuotedSegment): boolean {
+  return ARROW_BEFORE_RE.test(before) || PROPOSAL_BEFORE_RE.test(quoteForm(before)) || REPLACED_AFTER_RE.test(after);
 }
 
 /**
  * Avertissement (texte pour l'enseignant) quand la correction annotée cite, entre guillemets, des passages qui ne figurent
  * pas TELS QUELS dans le travail fourni (`copy`) : un petit modèle reformule ou invente l'extrait qu'il annote. [] si
  * tout est retrouvé ou en cas de doute : citation de moins de 5 mots, extrait coupé par « […] » (chaque morceau d'au moins
- * 3 mots est cherché), texte déjà présent dans `reference` (consignes, sujet de la demande), blocs de code ignorés.
+ * 3 mots est cherché), texte déjà présent dans `reference` (consignes, sujet de la demande, textes des sources fournies),
+ * correction proposée entre guillemets (après « → », « correction proposée : », « on attend », « plutôt »…, ou suivie
+ * de « au lieu de »), blocs de code ignorés.
  * Jamais bloquant, ne modifie pas le contenu ; accents, majuscules, apostrophes et ponctuation sont indifférents.
  */
 export function checkCopyQuotes(content: string, copy: string, reference: readonly (string | undefined)[] = []): string[] {
   if (typeof content !== 'string' || typeof copy !== 'string' || !copy.trim()) return [];
   try {
     const haystack = ` ${quoteForm(copy)} `;
-    const known = reference.filter((r): r is string => typeof r === 'string' && r.trim() !== '').map(r => ` ${quoteForm(r)} `);
+    // Textes de référence normalisés à la première citation introuvable seulement : les sources peuvent être longues.
+    let known: string[] | undefined;
+    const knownTexts = () => known ??= reference.filter((r): r is string => typeof r === 'string' && r.trim() !== '').map(r => ` ${quoteForm(r)} `);
     const present = (form: string, text: string) => text.includes(` ${form} `);
     let missing = 0;
-    for (const quote of quotedSegments(content).slice(0, MAX_QUOTES_CHECKED)) {
-      const whole = quoteForm(quote);
+    for (const segment of quotedSegments(content).slice(0, MAX_QUOTES_CHECKED)) {
+      const whole = quoteForm(segment.text);
       if (wordsOf(whole) < MIN_QUOTE_WORDS) continue;
-      const fragments = quote.split(ELLIPSIS_RE).map(quoteForm).filter(f => wordsOf(f) >= MIN_FRAGMENT_WORDS);
+      const fragments = segment.text.split(ELLIPSIS_RE).map(quoteForm).filter(f => wordsOf(f) >= MIN_FRAGMENT_WORDS);
       if (fragments.length === 0) continue;
       if (fragments.every(f => present(f, haystack))) continue;
-      if (known.some(text => present(whole, text))) continue;
+      if (isProposedCorrection(segment)) continue;
+      if (knownTexts().some(text => present(whole, text))) continue;
       missing++;
     }
     if (missing === 0) return [];

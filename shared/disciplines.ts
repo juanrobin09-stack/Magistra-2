@@ -69,7 +69,7 @@ export const DISCIPLINES: Record<Matiere, DisciplineRule> = {
   physique_chimie: {
     default: "Grandeurs en italique, unités SI en romain précédées d'une espace ($\\mathrm{m\\cdot s^{-1}}$). Formule littérale, application numérique, résultat avec unité et chiffres significatifs cohérents. Équations de réaction équilibrées.",
     groups: {
-      college: "Cycle 4 : démarche scientifique (observer, expérimenter, modéliser) à partir de phénomènes du quotidien. Modèles simples : atome, molécule, ion ; force représentée par un vecteur. Calculs simples, peu de littéral, unités SI.",
+      college: "Selon la classe (cycle 3 en 6e, cycle 4 de la 5e à la 3e) : démarche scientifique (observer, expérimenter, modéliser) à partir de phénomènes du quotidien. Cycle 4 : modèles simples (atome, molécule, ion), force représentée par un vecteur. Calculs simples, peu de littéral, unités SI.",
       lycee: "Démarche scientifique : modéliser, mesurer avec incertitude, valider ou critiquer. Formule littérale avant application numérique, chiffres significatifs, unités SI en romain, vecteurs $\\vec{F}$, équations équilibrées avec états physiques, ordres de grandeur.",
       cpge: "Système et hypothèses explicités ; homogénéité dimensionnelle ; résultat littéral avant application numérique ; ordres de grandeur ; approximations justifiées ; vecteurs $\\vec{v}$ ; résultat commenté physiquement.",
     },
@@ -77,7 +77,7 @@ export const DISCIPLINES: Record<Matiere, DisciplineRule> = {
   svt: {
     default: "Raisonnement scientifique : problème, hypothèse, exploitation de données citées avec valeurs et unités, conclusion limitée aux données. Vocabulaire exact ; schémas titrés et légendés ; noms d'espèces en binôme latin en italique.",
     groups: {
-      college: "Cycle 4 : trois thèmes (corps humain et santé ; vivant et évolution ; planète Terre, environnement et action humaine). Démarche d'investigation, vocabulaire du programme, schémas simples ; pas de biochimie détaillée.",
+      college: "Cycle 3 (6e) : vivant et ses fonctions, planète Terre, êtres vivants et leur environnement. Cycle 4 (5e-3e) : corps humain et santé ; vivant et évolution ; planète Terre, environnement et action humaine. Démarche d'investigation, schémas simples ; pas de biochimie détaillée.",
       lycee: "Exploiter des documents (courbes, tableaux, images avec échelle) : relever des valeurs, comparer, relier à une notion, conclure sans extrapoler. Distinguer corrélation et causalité, hypothèse et résultat ; mécanismes moléculaires exacts.",
     },
   }, // sources : https://www.education.gouv.fr/bo/19/Special1/MENE1901647A.htm
@@ -127,20 +127,20 @@ export const DISCIPLINES: Record<Matiere, DisciplineRule> = {
   philosophie: {
     default: "Concepts définis puis distingués ; problème explicite ; thèse exposée fidèlement, objection, réfutation ; auteurs réels et doctrines exactes ; raisonnement continu, exemples précis, sans simple énumération d'opinions.",
     groups: {
-      lycee: "Notions et repères du programme de terminale ; dissertation : analyse du sujet, problématique, plan progressif ; explication de texte : question, thèse, étapes de l'argumentation, enjeu ; auteurs du programme, citations seulement si sûres.",
+      lycee: "Notions et repères du programme de la classe ; dissertation : analyse du sujet, problématique, plan progressif ; explication de texte : question, thèse, étapes de l'argumentation, enjeu ; auteurs du programme, citations seulement si sûres.",
     },
   }, // sources : https://groupe-reussite.fr/ressources/programme-terminale-s-philosophie/ ; https://www.laboiteabac.fr/programme-philosophie-terminale-17-notions/ ; https://eduscol.education.gouv.fr/5826/programmes-et-ressources-en-philosophie-voie-gt
   latin: {
     default: "Lexique : nominatif, génitif et genre des noms ; verbes : présent, infinitif, parfait, supin ; analyse morphologique (cas, nombre, temps, voix) puis syntaxe avant toute traduction ; texte latin authentique ou adapté signalé ; auteurs et mots réels.",
     groups: {
-      college: "Cycle 4 : lire le texte latin sans traduire d'abord (formes et mots reconnus, sens global), puis traduire un texte court et accessible ; déclinaisons et conjugaisons de base ; mots latins et dérivés français ; culture antique liée au texte.",
+      college: "Collège (5e-3e) : lire le texte latin sans traduire d'abord (formes et mots reconnus, sens global), puis traduire un texte court et accessible ; déclinaisons et conjugaisons de base ; mots latins et dérivés français ; culture antique liée au texte.",
       lycee: "Textes authentiques plus longs : syntaxe (infinitive, participe, ablatif absolu, subordonnées au subjonctif), traduction rigoureuse et justifiée, commentaire de texte, mise en relation avec la culture et la littérature antiques.",
     },
   }, // sources : https://eduscol.education.gouv.fr/5715/langues-et-cultures-de-l-antiquite-au-cycle-4 ; https://eduscol.education.fr/document/17137/download ; https://www.education.gouv.fr/bo/16/Hebdo11/MENE1603855A.htm
   grec: {
     default: "Alphabet, esprits et accents exacts ; lexique : nominatif, génitif, article et genre des noms ; verbes : présent, futur, aoriste ; analyse morphologique puis syntaxe avant toute traduction ; noms propres en français usuel ; auteurs et œuvres réels.",
     groups: {
-      college: "Cycle 4 : lire le texte grec avec aides, repérer formes, mots connus et sens global avant de traduire un court texte accessible ; alphabet, déclinaisons et conjugaisons de base ; mots grecs dans le français savant ; culture antique.",
+      college: "Collège (5e-3e) : lire le texte grec avec aides, repérer formes, mots connus et sens global avant de traduire un court texte accessible ; alphabet, déclinaisons et conjugaisons de base ; mots grecs dans le français savant ; culture antique.",
       lycee: "Textes authentiques plus longs : syntaxe (participes, infinitives, subordonnées, optatif et subjonctif), traduction rigoureuse et justifiée, commentaire de texte, lien avec la culture, la mythologie et la littérature antiques.",
     },
   }, // sources : https://eduscol.education.gouv.fr/5715/langues-et-cultures-de-l-antiquite-au-cycle-4 ; https://eduscol.education.fr/document/17137/download
@@ -204,6 +204,9 @@ export const DISCIPLINES: Record<Matiere, DisciplineRule> = {
   }, // sources : https://www.education.gouv.fr/bo/2025/Hebdo6/MENE2503064A ; https://www.education.gouv.fr/sites/default/files/2025-08/-duquer-la-vie-affective-et-relationnelle-en-cm1-et-cm2-441933.pdf ; https://www.ih2ef.gouv.fr/publication-des-programmes-deducation-la-vie-affective-et-relationnelle-et-la-sexualite-evars
   evars: {
     default: "Champs : biologique, psycho-émotionnel, juridique et social. Informations exactes (anatomie, puberté, contraception, IST, consentement, droit), neutres, sans jugement moral. Égalité, prévention des violences et du harcèlement ; aucun récit intime demandé.",
+    groups: {
+      college: "Puberté et changements du corps (vocabulaire exact), émotions, respect de soi et d'autrui, consentement, égalité filles-garçons, prévention des violences et du harcèlement. En 6e, rien d'explicite ; contenus du cycle 4 (5e-3e) seulement selon le programme ; aucun récit intime demandé.",
+    },
   }, // sources : https://www.education.gouv.fr/bo/2025/Hebdo6/MENE2503064A ; https://www.ih2ef.gouv.fr/publication-des-programmes-deducation-la-vie-affective-et-relationnelle-et-la-sexualite-evars
   anglais: {
     default: "Activités langagières variées (compréhension orale et écrite, expression orale et écrite, interaction). Une seule variété, britannique ou américaine, sans mélange (colour/color). Verbes irréguliers exacts ; accent de mot et intonation. Culture : pays anglophones.",
@@ -299,8 +302,8 @@ export const DISCIPLINES: Record<Matiere, DisciplineRule> = {
   eps: {
     default: "Situation : but, dispositif (espace, matériel, effectifs, durée), consignes, critères de réussite observables, variables, sécurité. Temps d'engagement moteur élevé. Vocabulaire des APSA et rôles (joueur, arbitre, observateur).",
     groups: {
-      lycee: "Cinq champs d'apprentissage, dont le 5e : réaliser et orienter son activité physique en vue du développement et de l'entretien de soi. Attendus de fin de lycée, critères observables, rôles (arbitre, observateur, coach), sécurité.",
-      lycee_pro: "Cinq champs d'apprentissage, dont le 5e : réaliser et orienter son activité physique en vue du développement et de l'entretien de soi. Attendus de fin de lycée, critères observables, rôles (arbitre, observateur, coach), sécurité.",
+      lycee: "Cinq champs d'apprentissage, dont le 5e : réaliser et orienter son activité physique en vue du développement et de l'entretien de soi. Attendus du programme adaptés à la classe, critères observables, rôles (arbitre, observateur, coach), sécurité.",
+      lycee_pro: "Cinq champs d'apprentissage, dont le 5e : réaliser et orienter son activité physique en vue du développement et de l'entretien de soi. Attendus du programme adaptés à la classe, critères observables, rôles (arbitre, observateur, coach), sécurité.",
     },
   }, // sources : https://eduscol.education.gouv.fr/sites/default/files/document/ra19lyceepbpcapepsenjeuxprogramme1211545pdf-85143.pdf ; https://ent2d.ac-bordeaux.fr/disciplines/eps/category/ressources-pour-lenseignant/ressources-didactiques-et-pedagogiques/apsa-ressources-academiques/cp5/
   langage_oral: {
