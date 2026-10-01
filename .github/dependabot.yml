@@ -2,8 +2,10 @@
 # fusion automatique ; la CI (tests, E2E Electron, installateur Windows) valide chacune avant relecture.
 #
 # Electron est livré aux enseignants (Chromium + Node.js embarqués) et l'application n'a pas de mise à jour
-# automatique : ses correctifs de sécurité arrivent donc dans une demande SÉPARÉE (hors du groupe « minor/patch »),
-# pour être relus, testés et publiés sans attendre le reste des dépendances.
+# automatique : ses correctifs de sécurité arrivent donc dans une demande SÉPARÉE (hors des groupes « minor/patch » et
+# « major »), pour être relus, testés et publiés sans attendre le reste des dépendances. Les montées majeures des
+# autres dépendances sont réunies dans UNE seule demande : chacune, non groupée, occuperait un emplacement de
+# open-pull-requests-limit pendant des semaines et finirait par empêcher l'ouverture de la demande d'Electron.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -22,6 +24,11 @@ updates:
         patterns: ['*']
         exclude-patterns: ['electron']
         update-types: [minor, patch]
+      # Montées majeures de tout le reste (Electron exclu : demande à part) : une seule demande ouverte à la fois.
+      major-updates:
+        patterns: ['*']
+        exclude-patterns: ['electron']
+        update-types: [major]
     ignore:
       # Versions majeures du socle de l'interface : migrations à décider à la main, pas au fil de l'eau.
       - dependency-name: react

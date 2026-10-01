@@ -45,10 +45,20 @@ describe('vérificateur Clerk : un jeton valide n’est jamais refusé à cause 
     await expect(verifier(tokenWith('ins_valide000001', 'b'))).resolves.toBe('user_abc123');
   });
 
-  it('un identifiant inconnu de Clerk garde son verrou d’une minute, même avec des demandes simultanées', async () => {
+  it('une signature invalide d’une clé connue ne verrouille pas la vraie clé', async () => {
+    const outcomes: unknown[] = [Object.assign(new Error('signature'), { reason: 'token-invalid-signature' }), { sub: 'user_abc123' }];
+    const verifier = createClerkVerifier(config, {
+      verify: (async () => { const o = outcomes.shift(); if (o instanceof Error) throw o; return o; }) as never,
+      now: () => 0,
+    });
+    await expect(verifier(tokenWith('ins_valide000001', 'a'))).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+    await expect(verifier(tokenWith('ins_valide000001', 'b'))).resolves.toBe('user_abc123');
+  });
+
+  it.each(['jwk-kid-mismatch', 'jwk-failed-to-resolve'])('un identifiant inconnu de Clerk garde son verrou d’une minute, même avec des demandes simultanées (%s)', async reason => {
     let calls = 0;
     const verifier = createClerkVerifier(config, {
-      verify: (async () => { calls++; await wait(10); throw Object.assign(new Error('kid inconnu'), { reason: 'jwk-failed-to-resolve' }); }) as never,
+      verify: (async () => { calls++; await wait(10); throw Object.assign(new Error('kid inconnu'), { reason }); }) as never,
       now: () => 0,
     });
     const results = await Promise.allSettled([0, 1, 2, 3, 4, 5].map(i => verifier(tokenWith(`ins_forge${String(i).padStart(6, '0')}`))));

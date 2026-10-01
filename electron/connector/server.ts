@@ -13,7 +13,8 @@
 //      autre site, localhost…). Jamais « Access-Control-Allow-Origin: * », jamais « Allow-Credentials » ;
 //   4. route exacte (chemin sans requête, sans normalisation : « /v1/../v1/hello » → 404), puis méthode (405) ;
 //   5. OPTIONS : pré-vérification CORS (méthode et en-têtes demandés autorisés, accès au réseau privé de Chrome) ;
-//      blocage temporaire après trop d'échecs d'authentification : 429 (toutes les routes sauf hello) ;
+//      blocage temporaire (429) d'un navigateur appairé après trop de signatures, horodatages ou nonces faux : routes
+//      signées seulement, pour CE navigateur seul ; hello et POST /v1/pair ne sont jamais bloqués ;
 //   6. POST : Content-Type application/json (charset utf-8 toléré) → sinon 415 ; taille annoncée bornée → 413 ;
 //   7. routes signées : format des en-têtes → navigateur connu ET appairé pour CETTE origine (401
 //      CONNECTOR_UNPAIRED, avec la marque de retrait X-Magistra-Revoked si CETTE application l'a retiré) → horodatage

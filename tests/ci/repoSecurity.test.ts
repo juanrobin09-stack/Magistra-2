@@ -24,6 +24,15 @@ describe('Dependabot', () => {
     expect(dependabot).not.toMatch(/\n\s+patterns: \['electron/);
     for (const name of ['react', 'vite', 'tailwindcss']) expect(dependabot).toContain(`dependency-name: ${name}`);
   });
+
+  it('les montées majeures (hors Electron) forment une seule demande : elles ne saturent pas la limite des demandes ouvertes', () => {
+    expect(dependabot).toMatch(/major-updates:\n {8}patterns: \['\*'\]\n {8}exclude-patterns: \['electron'\]\n {8}update-types: \[major\]/);
+    const npm = dependabot.slice(dependabot.indexOf('package-ecosystem: npm'), dependabot.indexOf('package-ecosystem: github-actions'));
+    // Chaque groupe compte pour une demande, Electron pour une de plus : la limite doit les couvrir toutes.
+    const groups = npm.match(/^ {6}[\w-]+:\n {8}patterns:/gm) ?? [];
+    expect(groups).toHaveLength(2);
+    expect(Number(/open-pull-requests-limit: (\d+)/.exec(npm)?.[1])).toBeGreaterThanOrEqual(groups.length + 1);
+  });
 });
 
 describe('CODEOWNERS et SECURITY.md', () => {

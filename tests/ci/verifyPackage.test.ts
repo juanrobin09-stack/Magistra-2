@@ -4,7 +4,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -111,6 +111,44 @@ describe('verify-package : contenu de l’asar', () => {
     ]);
     // « service_role » apparaît aussi dans SUPABASE_SERVICE_ROLE_KEY (insensible à la casse) : 4 signalements.
     expect(errors).toHaveLength(4);
+  });
+
+  const b64url = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const jwtOf = (payload: unknown) => `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(payload)}.${'s'.repeat(43)}`;
+
+  it('clé Supabase au format sb_secret_… : échec ; clé publiable ou texte trop court : conforme', () => {
+    const errors = mod.checkNoSecrets([{ name: 'dist/assets/a.js', text: `k="sb_secret_${'A1b2'.repeat(8)}"` }]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('sb_secret_');
+    expect(mod.checkNoSecrets([{ name: 'dist/assets/b.js', text: `k="sb_publishable_${'A1b2'.repeat(8)}"` }])).toEqual([]);
+    expect(mod.checkNoSecrets([{ name: 'dist/assets/c.js', text: 'préfixe « sb_secret_ » et sb_secret_abc' }])).toEqual([]);
+  });
+
+  it('jeton JWT dont la charge utile porte le rôle « service_role » (illisible en clair) : échec', () => {
+    const token = jwtOf({ iss: 'supabase', ref: 'abcdefghij', role: 'service_role', iat: 1, exp: 2 });
+    expect(token).not.toMatch(/service_role/);
+    for (const text of [`VITE_SUPABASE_KEY:"${token}"`, `fetch(u,{headers:{apikey:'${token}'}})`, `Bearer ${token}`]) {
+      const errors = mod.checkNoSecrets([{ name: 'dist/assets/a.js', text }]);
+      expect(errors, text).toHaveLength(1);
+      expect(errors[0]).toContain('service_role');
+      expect(errors[0]).toContain('dist/assets/a.js');
+    }
+    // Charge utile avec espaces, et jeton noyé parmi d'autres chaînes.
+    const spaced = `${b64url({ alg: 'HS256' })}.${Buffer.from('{ "role" : "service_role" }').toString('base64url')}.sig`;
+    expect(mod.checkNoSecrets([{ name: 'x.js', text: `a="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abc";b="${spaced}"` }])).toHaveLength(1);
+  });
+
+  it('jetons JWT sans rôle « service_role » (clé anonyme, autres jetons) ou illisibles : rien à signaler', () => {
+    const anon = jwtOf({ iss: 'supabase', role: 'anon', exp: 2 });
+    const other = jwtOf({ sub: 'user_1', note: 'le rôle service_role est interdit' }).replace('service_role', 'service-role');
+    const text = [anon, other, 'eyJhbGciOiJIUzI1NiJ9.eyJ!!!pas-du-base64.x', 'eyJhbGciOiJIUzI1NiJ9.eyJ4.x', 'eyJ'.repeat(3_000)].join('\n');
+    expect(mod.checkNoSecrets([{ name: 'dist/assets/a.js', text }])).toEqual([]);
+  });
+
+  it('la recherche de jetons JWT reste linéaire : 3 Mo de « eyJ » collés se traitent en moins de 5 s (quadratique : plus de 20 s)', () => {
+    const started = Date.now();
+    expect(mod.checkNoSecrets([{ name: 'dist/assets/a.js', text: 'eyJ'.repeat(1_000_000) }])).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 });
 
@@ -222,5 +260,26 @@ describe('verify-package : paquet complet (ligne de commande)', () => {
     const res = run(path.join(tmp, 'inexistant'));
     expect(res.status).toBe(1);
     expect(res.stderr).toContain('introuvable');
+  });
+
+  it('jeton JWT « service_role » livré dans le bundle : code 1', async () => {
+    const token = `${Buffer.from('{"alg":"HS256"}').toString('base64url')}.${Buffer.from('{"role":"service_role"}').toString('base64url')}.${'s'.repeat(43)}`;
+    const res = run(await makePackage('jwt', { files: { 'dist/assets/app.js': `export const k = "${token}"` } }));
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('jeton JWT');
+    expect(res.stderr).toContain('dist/assets/app.js');
+  });
+
+  it('lancé par un lien symbolique (ou une jonction) vers le dépôt : l’inspection a bien lieu, jamais de code 0 silencieux', async () => {
+    const link = path.join(tmp, 'depot-lie');
+    symlinkSync(root, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const viaLink = (dir: string) => spawnSync(process.execPath, [path.join(link, 'scripts', 'verify-package.mjs'), dir], { encoding: 'utf8' });
+    const missing = viaLink(path.join(tmp, 'inexistant-lien'));
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain('introuvable');
+    const ok = viaLink(await makePackage('via-lien'));
+    expect(ok.stderr).toBe('');
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toContain('conformes');
   });
 });

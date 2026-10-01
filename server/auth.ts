@@ -40,6 +40,8 @@ const ALLOWED_ALGS = new Set(['RS256', 'RS384', 'RS512']);
 const CLERK_KID = /^ins_[A-Za-z0-9]{8,64}$/;
 /** Au plus un rechargement des clés publiques par minute pour un identifiant de clé inconnu. */
 const UNKNOWN_KID_INTERVAL_MS = 60_000;
+/** Raisons d'échec d'un identifiant de clé absent des clés publiques de Clerk : le créneau reste consommé. */
+const UNKNOWN_KID_REASONS = new Set(['jwk-kid-mismatch', 'jwk-failed-to-resolve']);
 
 /** Lit l'en-tête d'un JWT sans le vérifier (filtrage préalable, avant tout appel réseau). */
 export function readJwtHeader(token: string): { alg?: string; kid?: string } | null {
@@ -69,9 +71,9 @@ export function createClerkVerifier(config: ClerkConfig, deps: ClerkVerifierDeps
   const now = deps.now ?? (() => Date.now());
   // Protection contre l'amplification : sans clé publique locale (CLERK_JWT_KEY), chaque identifiant
   // de clé inconnu provoquerait un appel à l'API Clerk. On ne l'autorise qu'une fois par minute.
-  // Le créneau n'est consommé que pour un identifiant que Clerk ne connaît pas (« jwk-failed-to-resolve ») : un
-  // jeton valide n'est jamais refusé à cause d'un autre jeton (démarrage à froid avec plusieurs requêtes
-  // simultanées, jeton expiré ou panne passagère de l'API Clerk juste avant).
+  // Le créneau n'est consommé que pour un identifiant absent des clés de Clerk (« jwk-kid-mismatch » : clé introuvable
+  // après rechargement) : un jeton valide n'est jamais refusé à cause d'un autre jeton (démarrage à froid avec
+  // plusieurs requêtes simultanées, jeton expiré, signature invalide ou panne passagère de l'API Clerk juste avant).
   const knownKids = new Set<string>();
   let lastUnknownKidLookup = Number.NEGATIVE_INFINITY;
   /** Vérification en cours par identifiant de clé : les autres demandes du même identifiant l'attendent. */
@@ -121,8 +123,9 @@ export function createClerkVerifier(config: ClerkConfig, deps: ClerkVerifierDeps
       settle?.(true);
     } catch (err) {
       const reason = (err as { reason?: unknown } | null)?.reason;
-      // Jeton expiré, signature invalide, panne passagère de l'API Clerk : la vraie clé ne doit pas être verrouillée.
-      settle?.(reason === 'jwk-failed-to-resolve');
+      // Jeton expiré, signature invalide, panne passagère de l'API Clerk : la vraie clé ne doit pas être verrouillée
+      // (seul un identifiant absent des clés de Clerk garde son créneau).
+      settle?.(typeof reason === 'string' && UNKNOWN_KID_REASONS.has(reason));
       if (typeof reason === 'string' && SERVER_SIDE_REASONS.has(reason)) {
         if (reason === 'jwk-remote-failed-to-load') {
           throw new MagistraError('INTERNAL', 'Vérification de la session momentanément impossible. Réessayez.', { cause: err });

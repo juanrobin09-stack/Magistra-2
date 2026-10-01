@@ -12,16 +12,18 @@
 // 2. l'intégrité de l'asar : l'empreinte SHA-256 de l'en-tête de resources/app.asar est bien celle inscrite dans
 //    l'exécutable (ressource ELECTRONASAR) : c'est elle qu'Electron compare au démarrage ;
 // 3. le contenu de app.asar : processus principal, preload, page d'accueil et package.json présents ; ni node_modules,
-//    ni sourcemap, ni fichier .env ; aucun nom ou valeur de secret côté serveur (clé « service_role » de Supabase…) ;
+//    ni sourcemap, ni fichier .env ; aucun secret côté serveur : noms (service_role, SUPABASE_SERVICE_*) et valeurs
+//    (clé Supabase sb_secret_… ou jeton JWT dont la charge utile décodée porte le rôle « service_role », clés
+//    secrètes Clerk sk_live_/sk_test_, secrets de webhook whsec_) ;
 // 4. resources/icon.png (extraResources).
 //
 // Dépendances : @electron/fuses et @electron/asar, déjà installés par electron-builder (aucune dépendance ajoutée).
 // Usage : node scripts/verify-package.mjs [dossier]   (défaut : release/win-unpacked)
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -59,9 +61,25 @@ export const REQUIRED_ENTRIES = ['package.json', 'dist-electron/main.js', 'dist-
 export const SECRET_PATTERNS = [
   [/service_role/i, 'clé « service_role » de Supabase'],
   [/SUPABASE_SERVICE/, 'variable SUPABASE_SERVICE_*'],
+  [/\bsb_secret_[A-Za-z0-9_-]{20,}/, 'clé secrète Supabase (sb_secret_…)'],
   [/\bsk_(?:live|test)_[A-Za-z0-9]{16,}/, 'clé secrète Clerk'],
   [/\bwhsec_[A-Za-z0-9+/=]{16,}/, 'secret de webhook'],
 ];
+
+/**
+ * Jeton JWT (« eyJ….eyJ….… » : « ey » est « { » en base64url) ; seule la charge utile (groupe 1) est décodée.
+ * Le jeton commence après un caractère hors base64url : le temps reste linéaire quelle que soit la taille du fichier.
+ */
+const JWT = /(?<![A-Za-z0-9_-])ey[A-Za-z0-9_-]{4,8192}\.(ey[A-Za-z0-9_-]{4,8192})\.[A-Za-z0-9_-]*/g;
+const SERVICE_ROLE_CLAIM = /"role"\s*:\s*"service_role"/;
+
+/** Le texte contient-il un JWT dont la charge utile est celle d'une clé « service_role » (illisible en clair, car encodée) ? */
+function hasServiceRoleJwt(text) {
+  for (const [, payload] of text.matchAll(JWT)) {
+    if (SERVICE_ROLE_CLAIM.test(Buffer.from(payload, 'base64url').toString('utf8'))) return true;
+  }
+  return false;
+}
 
 const TEXT_EXTENSIONS = /\.(?:js|cjs|mjs|html|css|json|svg|txt)$/i;
 
@@ -131,6 +149,7 @@ export function checkNoSecrets(files) {
     for (const [pattern, label] of SECRET_PATTERNS) {
       if (pattern.test(text)) errors.push(`app.asar : ${label} trouvée dans « ${name} »`);
     }
+    if (hasServiceRoleJwt(text)) errors.push(`app.asar : clé « service_role » de Supabase (jeton JWT encodé) trouvée dans « ${name} »`);
   }
   return errors;
 }
@@ -190,8 +209,22 @@ export async function verifyPackage(dir) {
   return errors;
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
-if (isDirectRun) {
+/**
+ * Vrai si ce fichier est le script lancé par `node`. Les chemins réels sont comparés : Node résout le module principal
+ * (lien symbolique, jonction), alors que process.argv[1] garde le chemin saisi ; une comparaison brute serait fausse et
+ * le script sortirait en code 0 sans rien vérifier.
+ */
+function isMainModule() {
+  const self = fileURLToPath(import.meta.url);
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync.native(process.argv[1]) === realpathSync.native(self);
+  } catch {
+    return path.resolve(process.argv[1]) === path.resolve(self);
+  }
+}
+
+if (isMainModule()) {
   const dir = path.resolve(process.argv[2] ?? path.join(root, 'release', 'win-unpacked'));
   let errors;
   try {
