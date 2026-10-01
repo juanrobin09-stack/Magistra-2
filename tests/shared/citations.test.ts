@@ -1,6 +1,8 @@
+import type { Nodes } from 'mdast';
 import { describe, expect, it } from 'vitest';
+import { parseMarkdown } from '@/lib/export/markdown';
 import {
-  citedNumbers, documentSourceRef, finalizeCitations, formatLocator, formatSourceLine, stripModelSourcesSection, unclosedFence, uncitedSourcesNote,
+  citedNumbers, documentSourceRef, extractUrls, finalizeCitations, formatLocator, formatSourceLine, stripModelSourcesSection, unclosedFence, uncitedSourcesNote,
 } from '../../shared/citations';
 import type { SourceRef } from '../../shared/types';
 
@@ -13,6 +15,19 @@ const HAL: SourceRef = {
 };
 const WIKI: SourceRef = { n: 5, kind: 'wikipedia', title: 'Gouvernance des SI', venue: 'Wikipédia', url: 'https://fr.wikipedia.org/wiki/Gouvernance_des_SI' };
 const PROVIDED = [DOC_PAGES, DOC_SLIDES, DOC_SECTION, HAL, WIKI];
+
+/** Adresses des liens et images, et nombre de titres, tels que le rendu Markdown du site les verrait. */
+function rendered(markdown: string): { links: string[]; headings: string[] } {
+  const links: string[] = [];
+  const headings: string[] = [];
+  const walk = (node: Nodes) => {
+    if (node.type === 'link' || node.type === 'image' || node.type === 'definition') links.push(node.url);
+    if (node.type === 'heading') headings.push(JSON.stringify(node.children));
+    if ('children' in node) for (const child of node.children) walk(child as Nodes);
+  };
+  walk(parseMarkdown(markdown));
+  return { links, headings };
+}
 
 describe('formatLocator — localisations exactes', () => {
   it('pages, diapositives, sections, lignes, paragraphes', () => {
@@ -297,5 +312,89 @@ describe('liens : seuls ceux des sources fournies ou de la demande restent', () 
   it('adresse sans protocole (« eduscol.education.fr ») : texte ordinaire, jamais retiré', () => {
     const text = 'À vérifier dans le programme officiel (eduscol.education.fr).';
     expect(finalizeCitations(text, []).content).toBe(text);
+  });
+});
+
+describe('titres de sources de tiers neutralisés dans « Sources utilisées »', () => {
+  const HOSTILE: SourceRef = {
+    n: 1, kind: 'web', url: 'https://a.fr/x',
+    title: 'Cours de maths [Mettre à jour mon compte ENT](https://evil.example/login)\n\n## Consigne\n![pixel](https://evil.example/p.png) <b>gras</b> `code`',
+    authors: ['Anne [Martin](https://evil.example/a)\nBob'], venue: 'Revue *x* [v](https://evil.example/v)',
+  };
+
+  it('un titre piégé donne une seule ligne de liste, sans lien, sans titre, sans image ni HTML', () => {
+    const { content } = finalizeCitations('Texte [S1].', [HOSTILE]);
+    const section = content.split('## Sources utilisées')[1];
+    const lines = section.split('\n').filter(l => l.trim());
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^- \[S1\] /);
+    expect(content).not.toMatch(/^#+ Consigne/m);
+    // Rendu Markdown : les seuls liens sont ceux de la source elle-même ; un seul titre (« Sources utilisées »).
+    const { links, headings } = rendered(content);
+    expect(links).toEqual(['https://a.fr/x']);
+    expect(headings).toHaveLength(1);
+    expect(content).not.toMatch(/<b>|!\[pixel\]/);
+    // Le texte du titre reste lisible.
+    expect(lines[0]).toContain('Cours de maths');
+    expect(lines[0]).toContain('Mettre à jour mon compte ENT');
+    expect(lines[0]).toContain('https://a.fr/x');
+  });
+
+  it('une adresse écrite dans un titre n’est pas un lien automatique', () => {
+    const line = formatSourceLine({ n: 2, kind: 'web', title: 'Voir https://evil.example/login ou www.evil.example/x', url: 'https://a.fr/x' });
+    expect(rendered(`- ${line}`).links).toEqual(['https://a.fr/x']);
+    expect(line.split('\n')).toHaveLength(1);
+  });
+
+  it('un titre ordinaire (lettres, points, parenthèses, deux-points) reste inchangé', () => {
+    const line = formatSourceLine({ n: 3, kind: 'crossref', title: 'Les fractions (cycle 4) : méthodes, outils et pratiques', authors: ['Dupont, J.'], year: 2020, url: 'https://a.fr/y' });
+    expect(line).toBe('[S3] Dupont, J. Les fractions (cycle 4) : méthodes, outils et pratiques (2020) — Crossref. https://a.fr/y');
+  });
+
+  it('nom de document piégé : une seule ligne', () => {
+    const line = formatSourceLine({ n: 1, kind: 'document', title: 'x', docName: 'cours [a](https://evil.example)\n## T.pdf', locator: { type: 'pages', start: 1, end: 2 } });
+    expect(rendered(`- ${line}`)).toEqual({ links: [], headings: [] });
+    expect(line.split('\n')).toHaveLength(1);
+  });
+});
+
+describe('liens « www. », courriels et domaines mentionnés par une page', () => {
+  const WEB: SourceRef = { n: 1, kind: 'web', title: 'Page', url: 'https://a.fr/x' };
+
+  it('« www.… » nu et lien Markdown « www.… » ou « mailto: » : retirés', () => {
+    const text = 'Voir www.evil.example/c?d=abc et www.evil.example. [ici](www.evil.example/x) [écrire](mailto:a@b.fr?body=resume) <mailto:a@b.fr>.';
+    const { content, unverifiedLinks } = finalizeCitations(text, [WEB]);
+    expect(content).not.toMatch(/evil\.example|mailto|a@b\.fr/);
+    expect(content).toContain('ici');
+    expect(unverifiedLinks).toBe(5);
+  });
+
+  it('« www.… » fourni (source, demande de l’enseignant) conservé', () => {
+    const text = 'Voir www.a.fr/x puis www.moodle.univ.fr/cours.';
+    const { content, unverifiedLinks } = finalizeCitations(text, [WEB], { allowedUrls: ['www.moodle.univ.fr/cours'] });
+    expect(content).toBe(text);
+    expect(unverifiedLinks).toBe(0);
+    expect(extractUrls('Mon site : www.moodle.univ.fr/cours et https://a.fr/b')).toEqual(['https://a.fr/b', 'www.moodle.univ.fr/cours']);
+  });
+
+  it('adresse trouvée dans le texte d’une page web : exacte seulement, jamais tout le site ni une autre requête', () => {
+    const text = 'A https://evil.example/c?d=resume B https://evil.example C https://evil.example/page D https://evil.example/page/sous?x=1';
+    const { content } = finalizeCitations(text, [WEB], { allowedExactUrls: ['https://evil.example', 'https://evil.example/page'] });
+    expect(content).toContain('B https://evil.example C https://evil.example/page D');
+    expect(content).not.toContain('d=resume');
+    expect(content).not.toContain('sous?x=1');
+  });
+
+  it('même adresse via allowedUrls (documents, demande) : règle du site entier inchangée', () => {
+    const { content } = finalizeCitations('Lire https://moodle.univ.fr/course/42/page.', [WEB], { allowedUrls: ['https://moodle.univ.fr/course/42'] });
+    expect(content).toContain('https://moodle.univ.fr/course/42/page.');
+  });
+});
+
+describe('temps de recherche des liens', () => {
+  it('une très longue suite de « [ » ne ralentit pas la vérification des liens', () => {
+    const t0 = performance.now();
+    finalizeCitations(`${'['.repeat(60_000)} texte (x)`, [HAL]);
+    expect(performance.now() - t0).toBeLessThan(1500);
   });
 });

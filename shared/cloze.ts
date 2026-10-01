@@ -33,6 +33,8 @@ const MATH_BLANK = '\\_'.repeat(8);
 
 /** Longueur maximale d'un mot marqué (un mot ou un groupe court). */
 const MAX_MARK = 60;
+/** Nombre de « [ » consécutifs lus d'un coup (« [[[dort]]] » en compte 3) ; voir ClozeStream.drain. */
+const MAX_BRACKET_RUN = 16;
 
 /** Demande de texte à trous (le format a été validé pour l'outil, le niveau et la matière). */
 export function isClozeRequest(req: Pick<GenerationRequest, 'type' | 'modalite'>): boolean {
@@ -225,7 +227,9 @@ export class ClozeStream {
       const c = s[i];
       if (c === '[') {
         let run = 1;
-        while (s[i + run] === '[') run++;
+        // Série bornée : au-delà, les « [ » en trop sont rendus tels quels, deux par deux (sinon chaque tour relisait
+        // toute la série : temps quadratique sur des dizaines de milliers de « [ »).
+        while (run < MAX_BRACKET_RUN && s[i + run] === '[') run++;
         // Des « [ » en fin de morceau peuvent commencer une marque : ils attendent le morceau suivant.
         if (i + run === s.length && !final) break;
         if (run === 1) {
@@ -421,6 +425,21 @@ const MARKDOWN_HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 const BOLD_LINE = /^\s*(?:\*\*|__)(.+?)(?:\*\*|__)\s*(?:\([^)]*\))?\s*:?\s*$/;
 /** Étiquette en début de ligne suivie de son contenu : « **Réponses :** a, b », « Corrigé : a, b ». */
 const LABEL_LINE = /^\s*(?:\*\*|__)?([^:*_\n]{1,40}?)(?:\*\*|__)?\s*(?:\([^)]*\))?\s*(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(\S.*)$/;
+
+/**
+ * Ligne prête pour BOLD_LINE et LABEL_LINE : chaque suite d'espaces, de tabulations ou de blancs est ramenée à un seul
+ * espace. Ces motifs enchaînent plusieurs « \s* » qui se disputent les mêmes blancs : sur une ligne d'espaces (modèle
+ * qui boucle), le temps de recherche croissait comme la puissance 4 ou 5 de sa longueur. Le sens ne change pas : la
+ * mise en forme d'un titre ou d'une étiquette ne dépend jamais du nombre d'espaces.
+ */
+function squeezed(line: string): string {
+  return line.replace(/\s{2,}/g, ' ');
+}
+
+/** Étiquette « Corrigé : a, b » : son titre (1) et son contenu (2) ; null si la ligne n'en est pas une. */
+function labelOf(line: string): RegExpExecArray | null {
+  return LABEL_LINE.exec(squeezed(line));
+}
 const RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
 const FENCE = /^\s*(`{3,}|~{3,})(.*)$/;
 const LIST_ITEM = /^\s*(?:[-*+•]|\d+[.)]|\(\d+\))\s+\S/;
@@ -449,7 +468,7 @@ function codeLines(lines: readonly string[]): boolean[] {
 function headingLevel(line: string): { level: number; title: string } | null {
   const md = MARKDOWN_HEADING.exec(line);
   if (md) return { level: md[1].length, title: md[2] };
-  const bold = BOLD_LINE.exec(line);
+  const bold = BOLD_LINE.exec(squeezed(line));
   return bold ? { level: 7, title: bold[1] } : null;
 }
 
@@ -458,7 +477,7 @@ function headingOf(line: string): { rank: number; title: string } | null {
   const heading = headingLevel(line);
   if (heading) return { rank: heading.level, title: heading.title };
   // Élément de liste ou ligne de tableau (« 1. Réponse : chat ») : du contenu, jamais un titre.
-  const label = LIST_ITEM.test(line) || TABLE_ROW.test(line) ? null : LABEL_LINE.exec(line);
+  const label = LIST_ITEM.test(line) || TABLE_ROW.test(line) ? null : labelOf(line);
   return label ? { rank: 8, title: label[1] } : null;
 }
 
@@ -646,7 +665,7 @@ function ownSectionAt(scan: Scan, start: number): Section | null {
   if (!heading) return null;
   const kind = ownKind(heading.title);
   if (kind === null) return null;
-  const label = heading.rank === 8 ? LABEL_LINE.exec(lines[start])![2] : null;
+  const label = heading.rank === 8 ? labelOf(lines[start])![2] : null;
   if (kind === 'bank') {
     // Banque : le titre et les lignes de mots qui le suivent, jusqu'à la première ligne rédigée (le texte peut suivre
     // sans ligne vide) ; étiquette « Mots à placer : a, b » : sa ligne et les puces qui suivent.
@@ -1233,7 +1252,10 @@ function tryBuild(text: string, options: { max?: number; withKey: boolean }, bol
  * à trouver (petit modèle qui n'a pas marqué), sauf si le modèle a écrit ses propres blancs. Sans aucun blanc, le
  * document du modèle est rendu tel quel (seuls les doubles crochets sont retirés).
  */
-export function buildCloze(text: string, options: { max?: number; withKey: boolean }): ClozeDocument {
+export function buildCloze(raw: string, options: { max?: number; withKey: boolean }): ClozeDocument {
+  // Une suite démesurée d'espaces ou de tabulations (200 et plus : modèle qui boucle) est ramenée à un seul espace ;
+  // elle n'a aucun sens et ralentirait les motifs de lecture ligne à ligne.
+  const text = raw.replace(/[^\S\n]{200,}/g, ' ');
   return tryBuild(text, options, false)
     ?? (hasOwnBlanks(text) ? null : tryBuild(text, options, true))
     ?? { content: dropStrayBrackets(unwrapMarks(text)), words: [] };

@@ -129,7 +129,8 @@ describe('faux serveur Ollama (HTTP réel)', () => {
     const events = await run(REQUEST);
     const done = events.at(-1) as Extract<GenerationEvent, { type: 'done' }>;
     expect(done.type).toBe('done');
-    expect(done.content).toContain('# Cours : Apprentissage automatique');
+    // Espaces insécables de la typographie française (« Cours : ») : comparées comme des espaces.
+    expect(done.content.replace(/\u00a0/g, ' ')).toContain('# Cours : Apprentissage automatique');
     expect(done.content).toContain('[S1]');
     expect(done.sources.map(s => s.docName)).toEqual(['cours.md']);
     expect(done.saved).toBe(true);

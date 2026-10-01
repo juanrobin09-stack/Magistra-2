@@ -3,7 +3,7 @@ import { MockProvider } from '../../shared/ai/mock';
 import { buildClozeDocument } from '../../shared/cloze';
 import { defaultMessage, MagistraError } from '../../shared/errors';
 import { normalizeExerciseLayout } from '../../shared/exerciseLayout';
-import { checkOutputStructure } from '../../shared/outputChecks';
+import { checkCopyQuotes, checkOutputStructure } from '../../shared/outputChecks';
 import { runGeneration } from '../../shared/pipeline';
 import type { GenerationEvent, GenerationRequest } from '../../shared/types';
 import { publicEvent } from '../../electron/connector/status.js';
@@ -322,11 +322,93 @@ describe('pipeline — contrôle du nombre d’éléments et mise en page', () =
     const expected = '**Question 1.** Combien font 3 × 4 ?\n- A) 7\n- B) 12\n- C) 34\n- D) 1\n\n**Question 2.** Suite ?\n- A) 1\n- B) 2';
     const done = (await collect(runGeneration(req({ modalite: 'qcm', nombreExercices: 2 }), { provider: new MockProvider({ reply }) })))
       .find((e): e is Extract<GenerationEvent, { type: 'done' }> => e.type === 'done');
-    expect(done?.content.startsWith(expected)).toBe(true);
+    // Espaces insécables avant « ? » (typographie française) comparées comme des espaces.
+    expect(done?.content.replace(/\u00a0/g, ' ').startsWith(expected)).toBe(true);
 
     const failing = new MockProvider({ reply, chunkSize: 20, failAfterChunks: 3, failWith: new MagistraError('AI_TIMEOUT') });
     const error = (await collect(runGeneration(req({ modalite: 'qcm', nombreExercices: 2 }), { provider: failing, retryDelaysMs: [] })))
       .find((e): e is Extract<GenerationEvent, { type: 'error' }> => e.type === 'error');
-    expect(error?.partial).toContain('**Question 1.** Combien font 3 × 4 ?\n- A) 7\n- B) 12');
+    expect(error?.partial?.replace(/\u00a0/g, ' ')).toContain('**Question 1.** Combien font 3 × 4 ?\n- A) 7\n- B) 12');
+  });
+});
+
+describe('checkCopyQuotes — citations de la copie (outil « corriger »)', () => {
+  const COPY = 'La plante respire par ses feuilles grâce aux stomates. L’eau est absorbée par les racines et monte jusqu’aux feuilles. '
+    + 'Le chloroplaste produit du glucose grâce à la lumière du soleil.';
+
+  it('citation exacte : aucun avertissement', () => {
+    expect(checkCopyQuotes('Bien : « La plante respire par ses feuilles grâce aux stomates ».', COPY)).toEqual([]);
+    expect(checkCopyQuotes('Bien : "L’eau est absorbée par les racines" ok.', COPY)).toEqual([]);
+    expect(checkCopyQuotes('Bien : “Le chloroplaste produit du glucose grâce à la lumière” ok.', COPY)).toEqual([]);
+  });
+
+  it('citation inventée : un avertissement, au singulier ; plusieurs : au pluriel avec le nombre', () => {
+    const one = checkCopyQuotes('Erreur : « la plante respire par ses racines et ses fleurs ».', COPY);
+    expect(one).toHaveLength(1);
+    expect(one[0]).toMatch(/^Une citation de la copie n’a pas été retrouvée telle quelle/);
+    const two = checkCopyQuotes('« la plante respire par ses racines et ses fleurs » puis « le soleil produit de l’eau avec le vent froid ».', COPY);
+    expect(two).toHaveLength(1);
+    expect(two[0]).toMatch(/^2 citations de la copie n’ont pas été retrouvées telles quelles/);
+  });
+
+  it('accents, majuscules, apostrophes et ponctuation sans importance', () => {
+    expect(checkCopyQuotes('« LA PLANTE RESPIRE par ses feuilles, grâce aux stomates ! »', COPY)).toEqual([]);
+    expect(checkCopyQuotes('« L\'eau est absorbee par les racines »', COPY)).toEqual([]);
+    expect(checkCopyQuotes('« la plante respire par ses feuilles grace aux stomates »', COPY.replace(/é/g, 'e'))).toEqual([]);
+  });
+
+  it('extrait coupé par […] : chaque morceau est cherché', () => {
+    expect(checkCopyQuotes('« La plante respire par ses feuilles […] la lumière du soleil »', COPY)).toEqual([]);
+    expect(checkCopyQuotes('« La plante respire par ses feuilles ... la lumière du soleil »', COPY)).toEqual([]);
+    expect(checkCopyQuotes('« La plante respire par ses feuilles […] le vent froid de la nuit »', COPY)).toHaveLength(1);
+  });
+
+  it('citation de moins de 5 mots, ou texte sans guillemets : aucun avertissement', () => {
+    expect(checkCopyQuotes('« la plante respire mal »', COPY)).toEqual([]);
+    expect(checkCopyQuotes('Mot « inventé » ici, et « un autre mot ».', COPY)).toEqual([]);
+    expect(checkCopyQuotes('La plante respire par ses racines et ses fleurs sans guillemets.', COPY)).toEqual([]);
+  });
+
+  it('citation dans un bloc de code : ignorée', () => {
+    expect(checkCopyQuotes('```\n« la plante respire par ses racines et ses fleurs »\n```', COPY)).toEqual([]);
+    expect(checkCopyQuotes('`« la plante respire par ses racines et ses fleurs »`', COPY)).toEqual([]);
+  });
+
+  it('copie vide, guillemets droits dépareillés, texte déjà présent dans la demande : aucun avertissement', () => {
+    expect(checkCopyQuotes('« la plante respire par ses racines et ses fleurs »', '')).toEqual([]);
+    expect(checkCopyQuotes('Elle a écrit "la plante respire par ses racines et ses fleurs, puis', COPY)).toEqual([]);
+    expect(checkCopyQuotes('« respectez la consigne donnée dans le sujet du devoir »', COPY, ['Respectez la consigne donnée dans le sujet du devoir.'])).toEqual([]);
+  });
+
+  it('temps linéaire sur un texte démesuré', () => {
+    const big = `${'« la plante respire par ses racines et ses fleurs » '.repeat(20_000)}\n${'"'.repeat(50_001)}`;
+    const t0 = performance.now();
+    expect(checkCopyQuotes(big, COPY.repeat(500))).toHaveLength(1);
+    expect(performance.now() - t0).toBeLessThan(1500);
+  });
+});
+
+describe('pipeline — outil « corriger » : citations de la copie', () => {
+  const COPY = 'Le texte explique que la plante respire par ses feuilles. Ensuite il dit que l’eau monte par les racines jusqu’en haut.';
+  const corrige = (partial: Partial<GenerationRequest> = {}) => req({ type: 'corrige', texteEleve: COPY, sujet: 'La plante', ...partial });
+  const contentChecks = (events: GenerationEvent[]) =>
+    events.filter((e): e is Extract<GenerationEvent, { type: 'warning' }> => e.type === 'warning' && e.code === 'CONTENT_CHECK');
+
+  it('citation inventée : avertissement CONTENT_CHECK non bloquant, contenu inchangé', async () => {
+    const reply = 'Correction.\n\n- Erreur : « la plante respire par ses racines et ses fleurs » (voir copie).\n- Bien : « la plante respire par ses feuilles ».';
+    const events = await collect(runGeneration(corrige(), { provider: new MockProvider({ reply }) }));
+    const warnings = contentChecks(events);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toMatch(/citation de la copie/);
+    const done = events.at(-1) as Extract<GenerationEvent, { type: 'done' }>;
+    expect(done.type).toBe('done');
+    expect(done.content).toContain('la plante respire par ses racines et ses fleurs');
+  });
+
+  it('citations exactes : aucun avertissement ; autre outil : jamais de contrôle', async () => {
+    const exact = 'Bien : « la plante respire par ses feuilles ». Aussi « l’eau monte par les racines jusqu’en haut ».';
+    expect(contentChecks(await collect(runGeneration(corrige(), { provider: new MockProvider({ reply: exact }) })))).toEqual([]);
+    const invented = 'Cours : « la plante respire par ses racines et ses fleurs ».';
+    expect(contentChecks(await collect(runGeneration(req({ type: 'cours', sujet: 'La plante' }), { provider: new MockProvider({ reply: invented }) })))).toEqual([]);
   });
 });

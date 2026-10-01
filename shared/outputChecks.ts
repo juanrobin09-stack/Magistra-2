@@ -21,6 +21,7 @@
 // Temps linéaire, même sur une sortie dégénérée (lignes de milliers d'espaces) : jamais deux « \s* » à la suite dans
 // une expression régulière.
 
+import { mapProse } from './citations.js';
 import { CLOZE_BLANK, isClozeRequest } from './cloze.js';
 import { countText, countUnit } from './formats.js';
 import { getLevelGroup, SUPERIEUR_GROUPS } from './levels.js';
@@ -378,6 +379,86 @@ export function checkOutputStructure(req: GenerationRequest, document: string): 
     return [checkCloze, checkExercices, checkSeances, checkAppreciations]
       .map(check => check(req, document))
       .filter((message): message is string => message !== null);
+  } catch {
+    // Un contrôle facultatif ne doit jamais empêcher de rendre le contenu.
+    return [];
+  }
+}
+
+// ─── Citations de la copie (outil « corriger ») ─────────────────────────────
+
+/** Citation d'au moins ce nombre de mots : en dessous, un mot isolé entre guillemets n'est pas un extrait de la copie. */
+const MIN_QUOTE_WORDS = 5;
+/** Fragment d'une citation à retrouver (entre deux « […] ») : en dessous, trop court pour être sûr. */
+const MIN_FRAGMENT_WORDS = 3;
+const MAX_QUOTE_CHARS = 400;
+const MAX_QUOTES_CHECKED = 60;
+const FRENCH_QUOTE_RE = /«([^«»\n]+)»/g;
+const CURLY_QUOTE_RE = /“([^“”\n]+)”/g;
+const STRAIGHT_QUOTE_RE = /"([^"\n]+)"/g;
+/** Coupure d'une citation : « […] », « [...] », « … », « ... ». */
+const ELLIPSIS_RE = /\[\s*(?:…|\.{2,})\s*\]|…|\.{3,}/g;
+
+/** Minuscules, sans accents ni ponctuation, apostrophes et espaces unifiés : « L’élève, » et « l'eleve » se valent. */
+function quoteForm(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toLowerCase()
+    .replace(/œ/g, 'oe')
+    .replace(/æ/g, 'ae')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+function wordsOf(form: string): number {
+  return form ? form.split(' ').length : 0;
+}
+
+/** Citations (entre « », “ ” ou " ") d'un texte hors blocs de code ; une ligne aux guillemets droits dépareillés est ignorée. */
+function quotedSegments(content: string): string[] {
+  const found: string[] = [];
+  mapProse(content, prose => {
+    for (const line of prose.split('\n')) {
+      for (const re of [FRENCH_QUOTE_RE, CURLY_QUOTE_RE]) {
+        for (const m of line.matchAll(re)) found.push(m[1]);
+      }
+      if ((line.match(/"/g)?.length ?? 0) % 2 === 0) {
+        for (const m of line.matchAll(STRAIGHT_QUOTE_RE)) found.push(m[1]);
+      }
+    }
+    return prose;
+  });
+  return found.filter(q => q.length <= MAX_QUOTE_CHARS);
+}
+
+/**
+ * Avertissement (texte pour l'enseignant) quand la correction annotée cite, entre guillemets, des passages qui ne figurent
+ * pas TELS QUELS dans le travail fourni (`copy`) : un petit modèle reformule ou invente l'extrait qu'il annote. [] si
+ * tout est retrouvé ou en cas de doute : citation de moins de 5 mots, extrait coupé par « […] » (chaque morceau d'au moins
+ * 3 mots est cherché), texte déjà présent dans `reference` (consignes, sujet de la demande), blocs de code ignorés.
+ * Jamais bloquant, ne modifie pas le contenu ; accents, majuscules, apostrophes et ponctuation sont indifférents.
+ */
+export function checkCopyQuotes(content: string, copy: string, reference: readonly (string | undefined)[] = []): string[] {
+  if (typeof content !== 'string' || typeof copy !== 'string' || !copy.trim()) return [];
+  try {
+    const haystack = ` ${quoteForm(copy)} `;
+    const known = reference.filter((r): r is string => typeof r === 'string' && r.trim() !== '').map(r => ` ${quoteForm(r)} `);
+    const present = (form: string, text: string) => text.includes(` ${form} `);
+    let missing = 0;
+    for (const quote of quotedSegments(content).slice(0, MAX_QUOTES_CHECKED)) {
+      const whole = quoteForm(quote);
+      if (wordsOf(whole) < MIN_QUOTE_WORDS) continue;
+      const fragments = quote.split(ELLIPSIS_RE).map(quoteForm).filter(f => wordsOf(f) >= MIN_FRAGMENT_WORDS);
+      if (fragments.length === 0) continue;
+      if (fragments.every(f => present(f, haystack))) continue;
+      if (known.some(text => present(whole, text))) continue;
+      missing++;
+    }
+    if (missing === 0) return [];
+    return [missing === 1
+      ? 'Une citation de la copie n’a pas été retrouvée telle quelle dans le travail fourni : vérifiez-la avant de transmettre la correction.'
+      : `${missing} citations de la copie n’ont pas été retrouvées telles quelles dans le travail fourni : vérifiez-les avant de transmettre la correction.`];
   } catch {
     // Un contrôle facultatif ne doit jamais empêcher de rendre le contenu.
     return [];

@@ -14,12 +14,14 @@ import { buildClozeDocument, ClozeStream, isClozeRequest } from './cloze.js';
 import { rankChunks } from './documents/retrieve.js';
 import { MagistraError, toMagistraError, type ErrorCode } from './errors.js';
 import { normalizeExerciseLayout } from './exerciseLayout.js';
+import { targetLanguage } from './languages.js';
 import { getLevelGroup, getNiveauLabel } from './levels.js';
 import { unwrapDocumentFence } from './markdownFence.js';
-import { checkOutputStructure } from './outputChecks.js';
+import { checkCopyQuotes, checkOutputStructure } from './outputChecks.js';
 import { buildMessages, estimateTokens, generationTemperature, type PromptSource } from './prompts/index.js';
 import { planResearch, runResearch, type ResearchConfig, type ResearchDeps, type ResearchOutcome } from './research/index.js';
 import type { ResearchSource } from './research/types.js';
+import { normalizeFrenchTypography } from './typography.js';
 import { modeUsesDocuments, type DocumentPassage, type GenerationEvent, type GenerationRecordDraft, type GenerationRequest, type SourceRef } from './types.js';
 import { displaySujet, RECORD_LIMITS } from './validation.js';
 
@@ -121,9 +123,22 @@ export function computeBudgets(provider: AIProvider, req: GenerationRequest, max
   };
 }
 
-/** Requête de recherche : sujet, discipline et objectifs uniquement — jamais le texte des documents ni des consignes. */
+/**
+ * Requête envoyée aux services de recherche : sujet et discipline uniquement — jamais le texte des documents, des
+ * consignes ni les objectifs (texte libre : il peut nommer des élèves ; l'interface annonce « votre sujet et vos
+ * mots-clés »).
+ */
 function researchQueryText(req: GenerationRequest): string {
-  return [req.sujet, req.discipline, req.objectifs?.slice(0, 120)]
+  return [req.sujet, req.discipline]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Requête de classement des passages de documents (local, jamais envoyée) : la recherche + les objectifs. */
+function rankingQueryText(req: GenerationRequest): string {
+  return [researchQueryText(req), req.objectifs?.slice(0, 120)]
     .filter(Boolean)
     .join(' ')
     .replace(/\s+/g, ' ')
@@ -152,7 +167,16 @@ function fitPassages(passages: DocumentPassage[], query: string, budget: number)
   let used = 0;
   for (const p of ranked) {
     const cost = passageCost(p);
-    if (used + cost > budget) continue;
+    if (used + cost > budget) {
+      // Un passage pertinent trop long pour la place restante n'est pas écarté au profit de passages moins pertinents :
+      // on en garde le début (localisation marquée « (extrait) »), et le budget est alors épuisé.
+      const room = budget - used - (cost - p.text.length);
+      if (p.score > 0 && room >= MIN_PASSAGE_CHARS) {
+        keep.set(p.order, { ...passages[p.order], text: truncateText(p.text, room), locator: { ...passages[p.order].locator, partial: true } });
+        break;
+      }
+      continue;
+    }
     keep.set(p.order, passages[p.order]);
     used += cost;
   }
@@ -171,7 +195,9 @@ function fitPassages(passages: DocumentPassage[], query: string, budget: number)
 /** Texte borné à `max` caractères (UTF-16, comme la validation), terminé par « … » s'il a été coupé ; vide → undefined. */
 function clipMeta(value: unknown, max: number): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const text = value.trim();
+  // Une seule ligne : les titres viennent de tiers (pages web, notices) ; un saut de ligne y ajouterait des titres,
+  // des listes ou des instructions au document et au prompt.
+  const text = value.replace(/\s+/g, ' ').trim();
   if (!text) return undefined;
   if (text.length <= max) return text;
   let cut = text.slice(0, max - 1);
@@ -191,8 +217,8 @@ function researchSourceRef(n: number, s: ResearchSource): SourceRef {
     .map(a => clipMeta(a, RECORD_LIMITS.author))
     .filter((a): a is string => a !== undefined);
   const year = typeof s.year === 'number' && Number.isInteger(s.year) && s.year >= 0 && s.year <= 9_999 ? s.year : undefined;
-  const doi = typeof s.doi === 'string' && s.doi.trim() && s.doi.trim().length <= RECORD_LIMITS.doi ? s.doi.trim() : undefined;
-  const url = typeof s.url === 'string' && s.url.length <= RECORD_LIMITS.url && /^https?:\/\//i.test(s.url) ? s.url : undefined;
+  const doi = typeof s.doi === 'string' && s.doi.trim() && s.doi.trim().length <= RECORD_LIMITS.doi && !/\s/.test(s.doi.trim()) ? s.doi.trim() : undefined;
+  const url = typeof s.url === 'string' && s.url.length <= RECORD_LIMITS.url && /^https?:\/\/\S+$/i.test(s.url) ? s.url : undefined;
   return {
     n,
     kind: s.kind,
@@ -251,12 +277,16 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
   let text = '';
   let providedForPartial: SourceRef[] = [];
   let allowedUrls: string[] = [];
+  let allowedExactUrls: string[] = [];
   // Texte à trous : le modèle marque les mots à trouver ([[mot]]) ; Magistra pose les blancs numérotés, la banque de
   // mots et le corrigé (shared/cloze.ts), à l'affichage en direct comme dans le document final.
   const cloze = isClozeRequest(req) ? { max: req.nombreExercices, withKey: !req.sansCorrige } : null;
   // Choix de QCM et questions numérotées écrits ligne à ligne : mis en liste et séparés (shared/exerciseLayout.ts),
   // sinon ils s'afficheraient en un seul paragraphe. Document final comme texte partiel (enregistrés, exportés ainsi).
   const shape = (body: string) => normalizeExerciseLayout(cloze ? buildClozeDocument(body, cloze) : body);
+  // Espaces insécables de la typographie française : sur le document final seulement (jamais sur les morceaux affichés
+  // en direct), sauf pour les langues étudiées (ponctuation de la langue cible).
+  const typeset = (body: string) => (targetLanguage(req.matiere) ? body : normalizeFrenchTypography(body));
   try {
     if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
     const budgets = computeBudgets(provider, req, deps.maxOutputTokens);
@@ -269,6 +299,14 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     const networkMode = plan.academic || plan.web || plan.institutional || plan.wikipedia;
     const query = researchQueryText(req);
     const hasTopic = Boolean(req.sujet?.trim());
+    // Chargement du modèle (Ollama) lancé tout de suite, pendant la sélection des passages et la recherche : l'attente
+    // du premier mot ne le compte plus. Un échec est repris plus bas ; jamais de rejet non géré si la recherche, ou
+    // « Arrêter », met fin à la génération avant.
+    let preload: Promise<void> | undefined;
+    if (deps.preloadModel && typeof provider.preload === 'function') {
+      preload = Promise.resolve().then(() => provider.preload!({ signal }));
+      preload.catch(() => {});
+    }
     const toolUsesResearch = RESEARCH_TOOLS.has(req.type);
     const wantsResearch = networkMode && toolUsesResearch && hasTopic;
 
@@ -276,7 +314,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     const docs = modeUsesDocuments(req.researchMode) ? req.documents ?? [] : [];
     if (docs.length > 0) yield { type: 'status', stage: 'context', message: 'Sélection des passages utiles de vos documents…' };
     const docBudget = wantsResearch && deps.research ? Math.floor(budgets.sourcesChars * 0.6) : budgets.sourcesChars;
-    const fitted = fitPassages(docs, `${query} ${req.consignes ?? ''}`, docBudget);
+    const fitted = fitPassages(docs, `${rankingQueryText(req)} ${req.consignes ?? ''}`, docBudget);
     let docsWarned = false;
     if (docs.length > 0 && fitted.reduced) {
       docsWarned = true;
@@ -339,18 +377,21 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
 
     const provided = sources.map(s => s.ref);
     // Liens légitimes en plus de ceux des sources : ceux des extraits transmis et de la demande de l'enseignant.
+    // Texte de documents : même règle que les sources (le site, ou une page plus précise). Texte de pages web ou
+    // d'encyclopédie : adresse exacte seulement (une page qui cite « https://exemple.fr » n'autorise pas tout son site).
     allowedUrls = [
-      ...sources.flatMap(s => extractUrls(s.text)),
+      ...sources.filter(s => s.ref.kind === 'document').flatMap(s => extractUrls(s.text)),
       ...[req.sujet, req.objectifs, req.consignes, req.contenuSource, req.texteEleve].flatMap(t => (t ? extractUrls(t) : [])),
     ];
+    allowedExactUrls = sources.filter(s => s.ref.kind !== 'document').flatMap(s => extractUrls(s.text));
     yield { type: 'sources', sources: provided, internetUsed };
 
     // ─── Chargement du modèle (facultatif) ───────────────────────────────
     let preloaded = false;
-    if (deps.preloadModel && typeof provider.preload === 'function') {
+    if (preload) {
       yield { type: 'status', stage: 'loading_model', message: 'Chargement du modèle…' };
       try {
-        await provider.preload({ signal });
+        await preload;
         preloaded = true;
       } catch (err) {
         // Une panne passagère est laissée aux nouveaux essais de la rédaction ; le reste est affiché tout de suite.
@@ -366,7 +407,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
       message: !provider.local
         ? 'Rédaction en cours…'
         : preloaded
-          ? 'Le modèle rédige…'
+          ? 'Le modèle lit votre demande puis rédige… (sur un ordinateur sans carte graphique, cela peut prendre jusqu’à une minute avant l’apparition des premiers mots)'
           : 'Le modèle rédige… (le premier lancement peut prendre une minute, le temps de charger le modèle)',
     };
     providedForPartial = provided;
@@ -410,8 +451,8 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     // ─── Finalisation : citations vérifiées ──────────────────────────────
     yield { type: 'status', stage: 'finalizing', message: 'Vérification des citations…' };
     // Un document entier entouré de « ```markdown » serait vu comme du code : aucune citation vérifiée.
-    const shaped = shape(unwrapDocumentFence(text, { complete: finishReason === 'stop' }));
-    const final = finalizeCitations(shaped, provided, { allowedUrls, flagUncited: true });
+    const shaped = typeset(shape(unwrapDocumentFence(text, { complete: finishReason === 'stop' })));
+    const final = finalizeCitations(shaped, provided, { allowedUrls, allowedExactUrls, flagUncited: true });
     const truncated = finishReason !== 'stop';
     if (finishReason === 'length') {
       yield { type: 'warning', code: 'GENERATION_TRUNCATED', message: 'Le contenu a atteint la longueur maximale et peut être incomplet.' };
@@ -420,6 +461,12 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     } else {
       // Réponse complète : nombre d'exercices, de questions, de séances… comparé à la demande (jamais bloquant).
       for (const message of checkOutputStructure(req, shaped)) yield { type: 'warning', code: 'CONTENT_CHECK', message };
+      // Correction annotée : les passages cités entre guillemets doivent figurer tels quels dans le travail fourni.
+      if (req.type === 'corrige' && req.texteEleve) {
+        for (const message of checkCopyQuotes(shaped, req.texteEleve, [req.sujet, req.consignes, req.objectifs])) {
+          yield { type: 'warning', code: 'CONTENT_CHECK', message };
+        }
+      }
     }
 
     // ─── Sauvegarde ──────────────────────────────────────────────────────
@@ -458,7 +505,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
   } catch (err) {
     const e = signal?.aborted ? new MagistraError('GENERATION_ABORTED') : toMagistraError(err);
     // Le texte déjà produit n'est jamais rendu brut : ses citations sont vérifiées comme en fin normale.
-    const partial = text.trim() ? finalizeCitations(shape(unwrapDocumentFence(text)), providedForPartial, { allowedUrls }).content : undefined;
+    const partial = text.trim() ? finalizeCitations(typeset(shape(unwrapDocumentFence(text))), providedForPartial, { allowedUrls, allowedExactUrls }).content : undefined;
     yield { type: 'error', code: e.code, message: e.message, retryable: e.retryable, ...(partial ? { partial } : {}) };
   }
 }

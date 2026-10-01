@@ -53,17 +53,33 @@ export function documentSourceRef(p: DocumentPassage, n: number): SourceRef {
   return { n, kind: 'document', title: p.docName, docName: p.docName, locator: p.locator };
 }
 
+/**
+ * Titre, auteur ou revue d'une source (texte de tiers : page web, notice Crossref, nom de fichier) rendu inoffensif
+ * dans la liste « Sources utilisées » : une seule ligne, aucune syntaxe de lien, d'image, de code ou de HTML (un titre
+ * ne doit jamais devenir un lien cliquable ni ajouter un titre ou une ligne), et pas d'adresse que le rendu
+ * transformerait en lien : « https://exemple.fr/x » devient « exemple.fr/x ». Un titre ordinaire (lettres, points,
+ * parenthèses) est inchangé.
+ */
+function mdSafe(value: string): string {
+  return value
+    .replace(/[\s\p{Cc}]+/gu, ' ')
+    .trim()
+    // Sans « https:// » ni « www. » : le rendu en ferait des liens cliquables (même après un échappement).
+    .replace(/\b(?:https?:\/\/|www\.)/gi, '')
+    .replace(/[\\`<>[\]*_]/g, m => `\\${m}`);
+}
+
 export function formatSourceLine(s: SourceRef): string {
   if (s.kind === 'document') {
-    return `[S${s.n}] ${s.docName ?? s.title}${s.locator ? ` — ${formatLocatorFull(s.locator)}` : ''}`;
+    return `[S${s.n}] ${mdSafe(s.docName ?? s.title)}${s.locator ? ` — ${formatLocatorFull(s.locator)}` : ''}`;
   }
   const authorList = s.authors && s.authors.length
-    ? `${s.authors.slice(0, 3).join(', ')}${s.authors.length > 3 ? ' et al.' : ''}`
+    ? `${s.authors.slice(0, 3).map(mdSafe).join(', ')}${s.authors.length > 3 ? ' et al.' : ''}`
     : '';
   const authors = authorList ? `${authorList.replace(/\.+$/, '')}. ` : '';
-  const title = s.title.trim().replace(/[.\s]+$/, '');
+  const title = mdSafe(s.title).replace(/[.\s]+$/, '');
   const year = s.year ? ` (${s.year})` : '';
-  const venue = s.venue ? `. *${s.venue}*` : '';
+  const venue = s.venue ? `. *${mdSafe(s.venue)}*` : '';
   const originLabel = s.kind === 'hal' ? 'HAL'
     : s.kind === 'crossref' ? 'Crossref'
       : s.kind === 'wikipedia' ? 'Wikipédia'
@@ -274,20 +290,25 @@ export function stripModelSourcesSection(text: string): string {
 /** DOI nu, préfixé (« doi: ») ou sous forme d'URL (https://doi.org/…). */
 const DOI_RE = /(?:https?:\/\/(?:dx\.)?doi\.org\/|\bdoi:\s*)?\b(10\.\d{4,9}\/[^\s"<>)\]]*[^\s"<>)\].,;:])/gi;
 /** Lien Markdown pointant vers un DOI : [texte](https://doi.org/10.…). */
-const DOI_LINK_RE = /\[([^\]\n]*)\]\(\s*(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[^\s)]+)\s*\)/gi;
+const DOI_LINK_RE = /\[([^\]\n]{0,300})\]\(\s*(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[^\s)]+)\s*\)/gi;
 const UNVERIFIED = '[référence non vérifiée retirée]';
 /** URL http(s) nue ; la ponctuation qui la suit n'en fait pas partie. */
 const URL_RE = /\bhttps?:\/\/[^\s<>"'[\]()]*[^\s<>"'[\]().,;:!?»]/gi;
 /** Lien (ou image) Markdown vers une URL http(s) : [texte](https://…). */
-const MD_LINK_RE = /(!?)\[([^\]\n]*)\]\(\s*<?(https?:\/\/[^\s)>]+)>?(?:\s+"[^"\n]*")?\s*\)/gi;
-/** Lien automatique : <https://…>. */
-const AUTOLINK_RE = /<(https?:\/\/[^\s>]+)>/gi;
+const MD_LINK_RE = /(!?)\[([^\]\n]{0,300})\]\(\s*<?((?:https?:\/\/|www\.|mailto:)[^\s)>]+)>?(?:\s+"[^"\n]*")?\s*\)/gi;
+/** Lien automatique : <https://…> (ou <mailto:…>). */
+const AUTOLINK_RE = /<((?:https?:\/\/|mailto:)[^\s>]+)>/gi;
+/**
+ * Adresse « www.… » nue : le rendu Markdown (GFM) en fait un lien cliquable, comme « https://… ». Jamais celle qui
+ * suit « / », « @ » ou « . » (déjà une partie d'une adresse complète ou d'un courriel).
+ */
+const WWW_RE = /(?<![\w/@.:-])www\.[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[/?#][^\s<>"'[\]()]*[^\s<>"'[\]().,;:!?»])?/gi;
 const UNVERIFIED_LINK = '[lien non vérifié retiré]';
 
 /** Hôte (sans « www. ») + chemin, pour comparer deux adresses. */
 function urlKey(raw: string): string | null {
   try {
-    const u = new URL(raw);
+    const u = new URL(/^www\./i.test(raw) ? `https://${raw}` : raw);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
     return `${u.host.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`;
   } catch {
@@ -295,9 +316,9 @@ function urlKey(raw: string): string | null {
   }
 }
 
-/** Adresses http(s) présentes dans un texte (documents, demande de l'enseignant). */
+/** Adresses http(s) (et « www.… ») présentes dans un texte (documents, demande de l'enseignant). */
 export function extractUrls(text: string): string[] {
-  return text.match(URL_RE) ?? [];
+  return [...(text.match(URL_RE) ?? []), ...(text.match(WWW_RE) ?? [])];
 }
 /** Marqueur interne d'une citation retirée (caractère d'usage privé, absent des textes réels). */
 const REMOVED = '\uE000';
@@ -316,6 +337,11 @@ export interface FinalizeOptions {
    * ou dans la demande de l'enseignant.
    */
   allowedUrls?: readonly string[];
+  /**
+   * Adresses légitimes mais seulement TELLES QUELLES (même hôte, même chemin, même paramètres) : celles trouvées dans le
+   * texte de pages web ou d'encyclopédie. Une page qui cite « https://exemple.fr » n'autorise pas « https://exemple.fr/x?d=… ».
+   */
+  allowedExactUrls?: readonly string[];
   /**
    * Texte COMPLET (et non partiel) : si des sources ont été fournies mais qu'aucune n'est citée, une mention
    * le signale à l'enseignant (sinon rien n'indiquerait que le contenu ne s'appuie pas sur ses documents).
@@ -346,11 +372,12 @@ export function finalizeCitations(text: string, provided: SourceRef[], options: 
   const knownUrls = [...provided.map(s => s.url), ...(options.allowedUrls ?? [])]
     .map(u => (u ? urlKey(u) : null))
     .filter((k): k is string => Boolean(k));
+  const exactUrls = new Set((options.allowedExactUrls ?? []).map(u => urlKey(u)).filter((k): k is string => Boolean(k)));
   // Même adresse, ou page située sous une adresse fournie (même site, chemin plus précis).
   const isKnownUrl = (url: string) => {
     if (url.includes('\uE001')) return true; // DOI fourni, déjà protégé
     const key = urlKey(url);
-    return key !== null && knownUrls.some(k => key === k || key.startsWith(`${k}/`));
+    return key !== null && (exactUrls.has(key) || knownUrls.some(k => key === k || key.startsWith(`${k}/`)));
   };
 
   const normalize = (match: string, first: string, rest: string | undefined) => {
@@ -411,6 +438,11 @@ export function finalizeCitations(text: string, provided: SourceRef[], options: 
       return UNVERIFIED_LINK;
     });
     out = out.replace(URL_RE, url => {
+      if (isKnownUrl(url)) return url;
+      unverifiedLinks++;
+      return UNVERIFIED_LINK;
+    });
+    out = out.replace(WWW_RE, url => {
       if (isKnownUrl(url)) return url;
       unverifiedLinks++;
       return UNVERIFIED_LINK;
