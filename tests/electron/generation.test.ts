@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MockProvider } from '../../shared/ai/mock.js';
+import { isLoopbackUrl } from '../../shared/ai/loopback.js';
+import { OllamaProvider } from '../../shared/ai/ollama.js';
 import type { AIProvider, PreloadOptions } from '../../shared/ai/provider.js';
 import { MagistraError } from '../../shared/errors.js';
 import type { GenerationEvent, PrivacyInfo } from '../../shared/types.js';
@@ -267,6 +269,26 @@ describe('générations du site (connecteur local)', () => {
     await byProvider.gm.startExternal(REQUEST, { owner: 'A', send: out.send, requireLocal: true }).finished;
     expect(out.events.at(-1)).toMatchObject({ type: 'error', code: 'LOCAL_ENGINE_REMOTE' });
     expect(remote.calls).toHaveLength(0);
+  });
+
+  it('moteur réglé sur http://127.evil.com (faux « 127. ») : LOCAL_ENGINE_REMOTE, aucun envoi au serveur', async () => {
+    let calls = 0;
+    const provider = new OllamaProvider({
+      baseUrl: 'http://127.evil.com:11434', model: 'm', label: 'Moteur',
+      fetch: async () => {
+        calls += 1;
+        throw new Error('réseau interdit');
+      },
+    });
+    expect(provider.local).toBe(false);
+    const { gm } = manager(provider, { isLocalEngine: () => isLoopbackUrl('http://127.evil.com:11434') });
+    expect(() => gm.startExternal(REQUEST, { owner: 'A', send: sink().send, requireLocal: true }))
+      .toThrow(expect.objectContaining({ code: 'LOCAL_ENGINE_REMOTE', status: 409 }));
+    const byProvider = manager(provider);
+    const out = sink();
+    await byProvider.gm.startExternal(REQUEST, { owner: 'A', send: out.send, requireLocal: true }).finished;
+    expect(out.events.at(-1)).toMatchObject({ type: 'error', code: 'LOCAL_ENGINE_REMOTE' });
+    expect(calls).toBe(0);
   });
 
   it('demande invalide : refus immédiat, créneau libre', () => {

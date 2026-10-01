@@ -117,6 +117,8 @@ const MAX_CONNECTIONS = 32;
 /** Blocage après trop d'échecs d'authentification. */
 const BLOCK_MS = 60_000;
 const FAILURE_WINDOW_MS = 60_000;
+/** Navigateurs suivis au plus pour le blocage (au-delà, le plus ancien est oublié) : la mémoire reste bornée. */
+const MAX_TRACKED_CLIENTS = 64;
 /** Recul de l'horloge du système au-delà duquel il est journalisé (une fois par écoute). */
 const CLOCK_BACK_LOG_MS = 5_000;
 /** Nonces mémorisés au plus (au-delà : refus temporaire, jamais d'oubli prématuré qui permettrait un rejeu). */
@@ -171,8 +173,20 @@ class HttpError extends Error {
   }
 }
 
-/** Échec d'authentification : compté pour le blocage temporaire (429). */
-class AuthFailure extends HttpError {}
+/**
+ * Échec d'authentification. Il n'est compté pour le blocage temporaire (429) que s'il porte `countedFor` : l'identifiant
+ * d'un navigateur DÉJÀ appairé pour cette origine (signature, horodatage ou nonce faux). Un échec sans secret
+ * (en-têtes absents, navigateur inconnu) n'est jamais compté : n'importe quel programme local pourrait le répéter
+ * pour bloquer le site.
+ */
+class AuthFailure extends HttpError {
+  readonly countedFor: string | null;
+
+  constructor(status: number, error: MagistraError, headers: Record<string, string> = {}, countedFor: string | null = null) {
+    super(status, error, headers);
+    this.countedFor = countedFor;
+  }
+}
 
 function isLoopbackPeer(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::ffff:127.0.0.1';
@@ -244,8 +258,8 @@ export class ConnectorServer {
   private clockBackLogged = false;
   private readonly monotonic: () => number;
   private readonly sockets = new Set<Socket>();
-  private failures: number[] = [];
-  private blockedUntil = 0;
+  /** Échecs d'authentification récents et blocage en cours, PAR navigateur appairé. */
+  private readonly failures = new Map<string, { times: number[]; blockedUntil: number }>();
   /** « clientId.nonce » → instant après lequel l'horodatage de la requête serait de toute façon refusé. */
   private readonly nonces = new Map<string, number>();
 
@@ -424,19 +438,26 @@ export class ConnectorServer {
 
   // ─── Limitation des échecs d'authentification ─────────────────────────────
 
-  private blockedFor(): number {
-    return Math.max(0, this.blockedUntil - this.now());
+  /** Durée restante (ms) du blocage de CE navigateur ; 0 s'il n'est pas bloqué. */
+  private blockedFor(clientId: string): number {
+    const entry = this.failures.get(clientId);
+    return entry ? Math.max(0, entry.blockedUntil - this.now()) : 0;
   }
 
-  private recordFailure(): void {
+  private recordFailure(clientId: string): void {
     const now = this.now();
-    this.failures = this.failures.filter(t => now - t < FAILURE_WINDOW_MS);
-    this.failures.push(now);
-    if (this.failures.length > CONNECTOR_LIMITS.maxAuthFailuresPerMinute) {
-      this.blockedUntil = now + BLOCK_MS;
-      this.failures = [];
-      this.log('Connecteur local : trop d’échecs d’authentification, accès suspendu pendant une minute.');
+    for (const [id, e] of this.failures) if (e.blockedUntil <= now && e.times.every(t => now - t >= FAILURE_WINDOW_MS)) this.failures.delete(id);
+    const entry = this.failures.get(clientId) ?? { times: [], blockedUntil: 0 };
+    this.failures.delete(clientId);
+    entry.times = entry.times.filter(t => now - t < FAILURE_WINDOW_MS);
+    entry.times.push(now);
+    if (entry.times.length > CONNECTOR_LIMITS.maxAuthFailuresPerMinute) {
+      entry.blockedUntil = now + BLOCK_MS;
+      entry.times = [];
+      this.log('Connecteur local : trop d’échecs d’authentification pour un navigateur, accès suspendu pendant une minute.');
     }
+    this.failures.set(clientId, entry);
+    while (this.failures.size > MAX_TRACKED_CLIENTS) this.failures.delete(this.failures.keys().next().value as string);
   }
 
   private purgeNonces(): void {
@@ -494,8 +515,11 @@ export class ConnectorServer {
       if (!allowed.includes(method)) {
         throw new HttpError(405, new MagistraError('INVALID_REQUEST', 'Méthode non autorisée pour cette adresse.'), { Allow: [...allowed, 'OPTIONS'].join(', ') });
       }
-      if (route !== CONNECTOR_ROUTES.hello) {
-        const wait = this.blockedFor();
+      // Seul un navigateur appairé qui a multiplié les signatures fausses est suspendu (routes signées) ; hello et
+      // POST /v1/pair ne sont jamais bloqués, et un échec sans secret ne compte pour personne.
+      if (isSignedRoute(method, route)) {
+        const clientId = singleHeader(req, CONNECTOR_HEADERS.client);
+        const wait = clientId ? this.blockedFor(clientId) : 0;
         if (wait > 0) {
           throw new HttpError(429, new MagistraError('RATE_LIMITED'), { 'Retry-After': String(Math.ceil(wait / 1000)) });
         }
@@ -526,7 +550,7 @@ export class ConnectorServer {
 
       await this.dispatch(req, res, ctx, route, method, body, auth);
     } catch (err) {
-      if (err instanceof AuthFailure) this.recordFailure();
+      if (err instanceof AuthFailure && err.countedFor) this.recordFailure(err.countedFor);
       this.sendError(res, ctx, err);
     }
   }
@@ -572,10 +596,12 @@ export class ConnectorServer {
     const client = this.options.clients.find(clientId);
     // Navigateur inconnu, autorisation retirée, ou appairé pour un autre site : il doit se reconnecter.
     if (!client || client.origin !== origin) throw this.unpaired(clientId, origin);
-    if (Math.abs(this.now() - Number(timestamp)) > CONNECTOR_LIMITS.clockSkewMs) throw unauthenticated();
+    // À partir d'ici le navigateur est connu : ses échecs sont comptés (pour lui seul).
+    const counted = () => new AuthFailure(401, new MagistraError('UNAUTHENTICATED', 'Requête non authentifiée.'), {}, clientId);
+    if (Math.abs(this.now() - Number(timestamp)) > CONNECTOR_LIMITS.clockSkewMs) throw counted();
     // Signée avant le début de cette écoute : rejeu d'une requête captée par le programme qui occupait ce port.
-    if (Number(timestamp) < this.listeningStart()) throw unauthenticated();
-    if (this.nonces.has(`${clientId}.${nonce}`)) throw unauthenticated();
+    if (Number(timestamp) < this.listeningStart()) throw counted();
+    if (this.nonces.has(`${clientId}.${nonce}`)) throw counted();
     return { client, timestamp, nonce, signature };
   }
 
@@ -630,12 +656,12 @@ export class ConnectorServer {
       bodySha256: sha256Base64Url(body),
     });
     if (!verifyHmac(auth.client.key, message, auth.signature)) {
-      throw new AuthFailure(401, new MagistraError('UNAUTHENTICATED', 'Requête non authentifiée.'));
+      throw new AuthFailure(401, new MagistraError('UNAUTHENTICATED', 'Requête non authentifiée.'), {}, auth.client.clientId);
     }
     // Nonce mémorisé SEULEMENT après une signature valide (une requête forgée ne remplit pas la mémoire), avec un
     // nouveau contrôle : deux requêtes identiques simultanées ne passent jamais toutes les deux.
     const key = `${auth.client.clientId}.${auth.nonce}`;
-    if (this.nonces.has(key)) throw new AuthFailure(401, new MagistraError('UNAUTHENTICATED', 'Requête déjà reçue.'));
+    if (this.nonces.has(key)) throw new AuthFailure(401, new MagistraError('UNAUTHENTICATED', 'Requête déjà reçue.'), {}, auth.client.clientId);
     if (this.nonces.size >= NONCE_PURGE_THRESHOLD) this.purgeNonces();
     if (this.nonces.size >= MAX_NONCES) throw new HttpError(429, new MagistraError('RATE_LIMITED'), { 'Retry-After': '30' });
     this.nonces.set(key, Number(auth.timestamp) + CONNECTOR_LIMITS.clockSkewMs + 1_000);

@@ -2,6 +2,7 @@
 // Fonctions pures, testées dans tests/ai-ui.
 
 import { MIN_OLLAMA_VERSION, type TierFit, type TierId } from '@shared/ai/models';
+import { isLoopbackHostname } from '@shared/ai/loopback';
 import type { ErrorCode } from '@shared/errors';
 import type { AIStatus, TierStatus } from '@shared/ipc';
 
@@ -278,9 +279,8 @@ export function initialTierChoice(status: AIStatus, variant: 'setup' | 'settings
  */
 export function engineHostIfRemote(url: string): string | null {
   try {
-    const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
-    const loopback = host === 'localhost' || host === '::1' || host.startsWith('127.');
-    return loopback ? null : new URL(url).host;
+    const parsed = new URL(url);
+    return isLoopbackHostname(parsed.hostname) ? null : parsed.host;
   } catch {
     return null;
   }

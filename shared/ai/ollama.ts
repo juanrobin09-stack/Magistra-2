@@ -7,6 +7,7 @@ import {
   aiSubject, DEFAULT_AI_SERVER_LABEL, LOCAL_ENGINE_LABEL, localizeEngineError, mapHttpError, mapNetworkError, statusUnknown, timeoutError,
   unavailableError, type ErrorRecipient, type HttpErrorContext,
 } from './errorMapping.js';
+import { isLoopbackUrl } from './loopback.js';
 import { MODEL_TIERS, normalizeModelName, tierForModel } from './models.js';
 import { addressKind } from './presets.js';
 import {
@@ -33,14 +34,7 @@ export const PULL_VERIFY_IDLE_MS = 15 * 60_000;
 /** Délai maximal du préchargement d'un modèle en mémoire (preload). */
 export const PRELOAD_TIMEOUT_MS = 10 * 60_000;
 
-export function isLoopbackUrl(url: string): boolean {
-  try {
-    const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.startsWith('127.');
-  } catch {
-    return false;
-  }
-}
+export { isLoopbackUrl };
 
 /** Estimation prudente (plutôt haute) du nombre de tokens d'une conversation : ≈ 3 caractères par token. */
 export function estimatePromptTokens(messages: readonly ChatMessage[]): number {

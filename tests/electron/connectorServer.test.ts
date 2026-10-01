@@ -967,18 +967,49 @@ describe('requêtes signées', () => {
     expectCors(reply, DEV_ORIGIN);
   });
 
-  it(`au-delà de ${CONNECTOR_LIMITS.maxAuthFailuresPerMinute} échecs par minute : 429 pendant une minute (sauf hello)`, async () => {
+  const MANY = CONNECTOR_LIMITS.maxAuthFailuresPerMinute + 5;
+
+  it('échecs SANS secret (en-têtes absents, navigateur inconnu, mauvaise origine) : jamais comptés, aucun blocage', async () => {
     const browser = await paired();
+    const other = await paired();
+    for (let i = 0; i < MANY; i++) {
+      expectError(await send({ path: '/v1/status', headers: { origin: ORIGIN } }), 401, 'UNAUTHENTICATED');
+      const unknown = await browser.sign('GET', '/v1/status', '', { clientId: randomToken(16) });
+      expectError(await send({ path: '/v1/status', headers: unknown.headers }), 401, 'CONNECTOR_UNPAIRED');
+      const wrongOrigin = await browser.sign('GET', '/v1/status', '', { origin: DEV_ORIGIN });
+      expectError(await send({ path: '/v1/status', headers: { ...wrongOrigin.headers, origin: DEV_ORIGIN } }), 401, 'CONNECTOR_UNPAIRED');
+    }
+    expect((await browser.call('GET', '/v1/status')).reply.status).toBe(200);
+    expect((await other.call('GET', '/v1/status')).reply.status).toBe(200);
+    expect((await browser.call('POST', '/v1/generate', JSON.stringify(REQUEST))).reply.status).not.toBe(429);
+    expect((await paired()).clientId).toBeTruthy();
+  });
+
+  it(`plus de ${CONNECTOR_LIMITS.maxAuthFailuresPerMinute} signatures fausses d'un navigateur appairé : 429 pour lui seul, pendant une minute`, async () => {
+    const browser = await paired();
+    const other = await paired();
     for (let i = 0; i <= CONNECTOR_LIMITS.maxAuthFailuresPerMinute; i++) {
       expectError((await browser.call('GET', '/v1/status', '', { timestamp: '1000000000000' })).reply, 401, 'UNAUTHENTICATED');
     }
     const blocked = await browser.call('GET', '/v1/status');
     expectError(blocked.reply, 429, 'RATE_LIMITED');
     expect(Number(blocked.reply.headers['retry-after'])).toBeGreaterThan(0);
-    expectError(await send({ method: 'POST', path: '/v1/pair', headers: { 'content-type': 'application/json' }, body: '{}' }), 429, 'RATE_LIMITED');
+    expectError((await browser.call('POST', '/v1/generate', JSON.stringify(REQUEST))).reply, 429, 'RATE_LIMITED');
+    // Les autres navigateurs, l'appairage et hello ne sont pas touchés.
+    expect((await other.call('GET', '/v1/status')).reply.status).toBe(200);
+    expect((await paired()).clientId).toBeTruthy();
     expect((await send()).status).toBe(200);
     clock += 60_001;
     expect((await browser.call('GET', '/v1/status')).reply.status).toBe(200);
+  });
+
+  it('signature HMAC fausse : comptée pour le navigateur connu', async () => {
+    const browser = await paired();
+    const wrong = await subtle.importKey('raw', new Uint8Array(32).fill(7), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    for (let i = 0; i <= CONNECTOR_LIMITS.maxAuthFailuresPerMinute; i++) {
+      expectError((await browser.call('GET', '/v1/status', '', { key: wrong })).reply, 401, 'UNAUTHENTICATED');
+    }
+    expectError((await browser.call('GET', '/v1/status')).reply, 429, 'RATE_LIMITED');
   });
 
   it('GET /v1/status : état du moteur sans adresse, port, chemin ni réglage', async () => {

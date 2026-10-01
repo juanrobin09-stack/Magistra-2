@@ -24,12 +24,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fetchPublicPage } from '../server/safeFetch.js';
-import { isLoopbackUrl } from '../shared/ai/ollama.js';
+import { isLoopbackUrl } from '../shared/ai/loopback.js';
 import type { FetchLike } from '../shared/ai/provider.js';
 import { IPC, type AIProgressEvent, type UpdateCheckResult } from '../shared/ipc.js';
 import { CONNECTOR_PORTS, CONNECTOR_URL_SCHEME, OFFICIAL_WEB_ORIGINS } from '../shared/localConnector.js';
 import { AIConfigStore, safeStorageCipher } from './aiConfig.js';
 import { appUrlFromArgv, LocalConnector, PROTOCOL_HANDLER_ARGS, type ConsentRequest } from './connector/service.js';
+import { recordRendererCrash } from './crashWindow.js';
 import { GenerationManager } from './generation.js';
 import { detectHardware, freeDiskBytes, ollamaModelsDir, systemHardwareDeps } from './hardware.js';
 import { registerIpcHandlers } from './ipc.js';
@@ -190,7 +191,7 @@ app.on('web-contents-created', (_event, contents) => {
 // ─── Fenêtre ────────────────────────────────────────────────────────────────
 
 let services: { onAppReady: () => void } | null = null;
-let rendererCrashes = 0;
+const rendererCrashes: number[] = [];
 /**
  * Appelé quand la page affichée est remplacée (rechargement, redémarrage de l'affichage) : l'ancienne page
  * suivait peut-être une génération ; plus personne ne peut l'afficher ni l'arrêter, elle est donc interrompue
@@ -267,7 +268,7 @@ function createWindow(): BrowserWindow {
     console.error('[magistra] Processus d’affichage arrêté :', details.reason);
     onDocumentReplaced?.();
     if (smoke || details.reason === 'clean-exit' || win.isDestroyed()) return;
-    if (++rendererCrashes <= 3) wc.reload();
+    if (recordRendererCrash(rendererCrashes, Date.now())) wc.reload();
     else fatal(new Error(`affichage arrêté (${details.reason})`), 'afficher son interface');
   });
   wc.on('did-fail-load', (_e, code, description, url, isMainFrame) => {

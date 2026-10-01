@@ -36,7 +36,7 @@ import {
 } from '../shared/ipc.js';
 import type { AINotice, PrivacyInfo, ProviderInfo } from '../shared/types.js';
 import type { AIConfigStore } from './aiConfig.js';
-import { isLoopbackHost } from './security.js';
+import { isLoopbackUrl } from '../shared/ai/loopback.js';
 
 export const OLLAMA_DOWNLOAD_PAGE = 'https://ollama.com/download';
 export const OLLAMA_RELEASE_API = 'https://api.github.com/repos/ollama/ollama/releases/latest';
@@ -320,14 +320,6 @@ async function defaultReadFileTail(file: string, maxBytes: number): Promise<stri
     return undefined;
   } finally {
     await handle?.close().catch(() => undefined);
-  }
-}
-
-function isLoopbackUrl(url: string): boolean {
-  try {
-    return isLoopbackHost(new URL(url).hostname);
-  } catch {
-    return false;
   }
 }
 

@@ -138,8 +138,5 @@ export function stripNul(value: string): string {
   return value.split(String.fromCharCode(0)).join('');
 }
 
-/** Adresse de boucle locale (Ollama sur cet ordinateur). */
-export function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  return host === 'localhost' || host === '::1' || /^127(\.\d{1,3}){3}$/.test(host);
-}
+/** Adresse de boucle locale (Ollama sur cet ordinateur) : prédicat unique, partagé avec l'interface et les fournisseurs. */
+export { isLoopbackHostname as isLoopbackHost } from '../shared/ai/loopback.js';

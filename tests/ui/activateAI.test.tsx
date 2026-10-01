@@ -615,6 +615,32 @@ describe('Reprise au lancement suivant', () => {
     expect(fake.prefs.aiSetupRequested).toBe(false);
   });
 
+  it('reprise automatique en échec (modèle) : la demande est retirée, aucun nouveau téléchargement au lancement suivant ; « Reprendre » reste proposé', async () => {
+    const fake = installFakeLocalAI({ engine: 'running', installed: [] }, { aiSetupRequested: true });
+    fake.pullFailure = ipcError('NETWORK_ERROR', 'Le téléchargement a été interrompu (connexion perdue).');
+    const { container, controller } = await mountWithResume();
+    await act(async () => {
+      await controller().resumeActivation();
+    });
+    await settle();
+    expect(fake.spies.pullModel).toHaveBeenCalledOnce();
+    expect(text(container.querySelector('[role="alert"]'))).toContain('Le téléchargement du modèle d’IA n’a pas abouti.');
+    expect(fake.prefs.aiSetupRequested).toBe(false);
+    expect(button(container, /Reprendre le téléchargement/)).not.toBeNull();
+  });
+
+  it('reprise automatique en échec (installation du moteur) : la demande est retirée', async () => {
+    const fake = installFakeLocalAI({ engine: 'not_installed' }, { aiSetupRequested: true });
+    fake.engineFailure = ipcError('ENGINE_NOT_INSTALLED', 'L’installateur téléchargé ne correspond pas à l’empreinte officielle.');
+    const { controller } = await mountWithResume();
+    await act(async () => {
+      await controller().resumeActivation();
+    });
+    await settle();
+    expect(fake.spies.installEngine).toHaveBeenCalledOnce();
+    expect(fake.prefs.aiSetupRequested).toBe(false);
+  });
+
   it('sans demande mémorisée : rien ne démarre au lancement (jamais sans le clic initial)', async () => {
     const fake = installFakeLocalAI({ engine: 'not_installed' });
     const { controller } = await mountWithResume();

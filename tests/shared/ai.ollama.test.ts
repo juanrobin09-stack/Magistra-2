@@ -253,7 +253,13 @@ describe('utilitaires Ollama', () => {
     expect(isLoopbackUrl('http://127.0.0.1:11434')).toBe(true);
     expect(isLoopbackUrl('http://localhost:11434')).toBe(true);
     expect(isLoopbackUrl('http://[::1]:11434')).toBe(true);
+    expect(isLoopbackUrl('http://127.0.0.2:11434')).toBe(true);
+    expect(isLoopbackUrl('http://127.1:11434')).toBe(true);
     expect(isLoopbackUrl('http://192.168.1.20:11434')).toBe(false);
+    // Un nom de domaine commençant par « 127. » n'est PAS la boucle locale.
+    expect(isLoopbackUrl('http://127.evil.com:11434')).toBe(false);
+    expect(isLoopbackUrl('http://127.0.0.1.evil.com')).toBe(false);
+    expect(isLoopbackUrl('http://localhost.evil.com:11434')).toBe(false);
     expect(isLoopbackUrl('pas une url')).toBe(false);
   });
 
