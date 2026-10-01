@@ -9,7 +9,7 @@ import {
   type TypeLettre,
 } from '@shared/catalog';
 import { isClozeRequest } from '@shared/cloze';
-import { rankChunks } from '@shared/documents/retrieve';
+import { rankChunks, type QueryPart } from '@shared/documents/retrieve';
 import {
   BESOINS_PARTICULIERS, countUnit, isModaliteAvailable, modalitesFor,
   type Bareme, type BesoinParticulier, type CountUnit, type TonRedaction, type TypeEvaluation,
@@ -346,7 +346,7 @@ export function buildGenerationRequest(
   if (has('besoins') && besoins.length) set('besoins', BESOINS_PARTICULIERS.map(b => b.value).filter(v => besoins.includes(v)));
 
   if (modeUsesDocuments(researchMode) && documents && documents.length > 0) {
-    req.documents = fitPassagesToLimits(documents, buildPassageQuery(form, tool));
+    req.documents = fitPassagesToLimits(documents, buildWeightedPassageQuery(form, tool));
   }
   req.profile = profile ?? null;
   return req;
@@ -427,18 +427,43 @@ export function formDefaultNotation(form: GenerateForm): DefaultNotation {
   return defaultNotation(buildGenerationRequest(form, form.type, null, null, 'internet'));
 }
 
+/** Part du texte collé (texte à adapter, copie d'élève) reprise dans la requête quand le sujet ne dit presque rien. */
+const SOURCE_QUERY_CHARS = 300;
+/** En dessous, sujet + objectifs sont jugés trop courts pour décrire ce que les documents doivent éclairer. */
+const SHORT_TOPIC_CHARS = 40;
+/** Poids des morceaux de la requête : le sujet décrit ce que les documents doivent éclairer, les consignes beaucoup moins. */
+const QUERY_WEIGHTS = { sujet: 3, discipline: 1.5, source: 2, objectifs: 1, consignes: 1 } as const;
+
 /**
- * Texte servant à choisir les passages utiles des documents :
- * sujet + discipline + objectifs + consignes (champs de l'outil uniquement).
+ * Morceaux pondérés de la requête qui sert à choisir les passages utiles des documents : sujet, discipline, objectifs
+ * et consignes (champs de l'outil uniquement). Pour la différenciation et la correction, le sujet est facultatif :
+ * quand il (avec les objectifs) tient en moins de 40 caractères, le début du texte à adapter ou de la copie complète
+ * la requête, sinon elle se réduirait au nom de la matière. La requête ne sert qu'au classement des passages : elle
+ * n'est transmise à personne.
  */
-export function buildPassageQuery(form: GenerateForm, tool: TypeContenu = form.type): string {
+export function buildWeightedPassageQuery(form: GenerateForm, tool: TypeContenu = form.type): QueryPart[] {
   const fields = visibleFields(tool, form.niveau, form.matiere);
-  const parts = (['sujet', 'discipline', 'objectifs', 'consignes'] as const)
+  const parts: QueryPart[] = [];
+  for (const f of ['sujet', 'discipline', 'objectifs', 'consignes'] as const) {
+    const text = fields.has(f) ? form[f].trim() : '';
+    if (text) parts.push({ text, weight: QUERY_WEIGHTS[f] });
+  }
+  const topicLength = (['sujet', 'objectifs'] as const)
     .filter(f => fields.has(f))
-    .map(f => form[f].trim())
-    .filter(Boolean);
-  const query = parts.join(' ').trim();
-  return query || getMatiereLabel(form.matiere);
+    .reduce((n, f) => n + form[f].trim().length, 0);
+  if (topicLength < SHORT_TOPIC_CHARS) {
+    for (const f of ['contenuSource', 'texteEleve'] as const) {
+      if (!fields.has(f)) continue;
+      const excerpt = form[f].slice(0, SOURCE_QUERY_CHARS * 4).replace(/\s+/g, ' ').trim().slice(0, SOURCE_QUERY_CHARS);
+      if (excerpt) parts.push({ text: excerpt, weight: QUERY_WEIGHTS.source });
+    }
+  }
+  return parts.length > 0 ? parts : [{ text: getMatiereLabel(form.matiere), weight: 1 }];
+}
+
+/** Même requête, en un seul texte (sujet + discipline + objectifs + consignes). */
+export function buildPassageQuery(form: GenerateForm, tool: TypeContenu = form.type): string {
+  return buildWeightedPassageQuery(form, tool).map(p => p.text).join(' ');
 }
 
 /**
@@ -446,14 +471,14 @@ export function buildPassageQuery(form: GenerateForm, tool: TypeContenu = form.t
  * (nombre d'extraits, taille par extrait, taille totale). Au-delà, les plus pertinents sont gardés,
  * dans l'ordre de lecture.
  */
-export function fitPassagesToLimits(passages: DocumentPassage[], query: string, limits = REQUEST_LIMITS): DocumentPassage[] {
+export function fitPassagesToLimits(passages: DocumentPassage[], query: string | readonly QueryPart[], limits = REQUEST_LIMITS): DocumentPassage[] {
   const trimmed = passages
     .map(p => ({ ...p, text: p.text.length > limits.passageChars ? p.text.slice(0, limits.passageChars) : p.text }))
     .filter(p => p.text.trim().length > 0);
   const total = trimmed.reduce((n, p) => n + p.text.length, 0);
   if (trimmed.length <= limits.maxPassages && total <= limits.documentsChars) return trimmed;
 
-  const ranked = rankChunks(trimmed.map((p, i) => ({ ...p, order: i })), query)
+  const ranked = rankChunks(trimmed.map((p, i) => ({ ...p, order: i })), query, undefined, undefined, { dropGenericQueryWords: true })
     .sort((a, b) => b.score - a.score || a.order - b.order);
   const keep = new Set<number>();
   let used = 0;

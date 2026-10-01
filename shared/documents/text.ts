@@ -18,12 +18,18 @@ export function normalizeForSearch(text: string): string {
 const SUFFIXES = [
   'issements', 'issement', 'atrices', 'atrice', 'ateurs', 'ateur', 'ations', 'ation', 'ements', 'ement',
   'ances', 'ance', 'ences', 'ence', 'ites', 'ite', 'ives', 'ive', 'euses', 'euse', 'eurs', 'eur',
-  'ismes', 'isme', 'istes', 'iste', 'iques', 'ique', 'ables', 'able', 'ibles', 'ible', 'aux', 'es', 's', 'x', 'e',
+  'ismes', 'isme', 'istes', 'iste', 'iques', 'ique', 'ables', 'able', 'ibles', 'ible', 'es', 's', 'x', 'e',
 ];
 
-/** Racinisation très légère : suffisante pour rapprocher « gouvernance » / « gouverner » / « gouvernances ». */
+/**
+ * Racinisation très légère : suffisante pour rapprocher « gouvernance » / « gouverner » / « gouvernances ».
+ * Seul pluriel irrégulier traité : -aux → -al (animaux / animal, journaux / journal, chevaux / cheval) ; les mots de
+ * 5 lettres ou moins (beaux, faux, eaux) restent tels quels. Aucune règle verbale ou dérivationnelle : elles
+ * rapprocheraient aussi des mots sans rapport et déplaceraient le classement de tous les documents.
+ */
 export function stem(word: string): string {
   if (word.length <= 4) return word;
+  if (word.length > 5 && word.endsWith('aux')) return `${word.slice(0, -3)}al`;
   for (const suffix of SUFFIXES) {
     if (word.length - suffix.length >= 4 && word.endsWith(suffix)) return word.slice(0, -suffix.length);
   }
@@ -36,6 +42,19 @@ export function tokenize(text: string): string[] {
     .filter(w => w.length > 1 && !STOPWORDS.has(w))
     .map(stem);
 }
+
+/**
+ * Mots pédagogiques ou interrogatifs très fréquents dans les objectifs et les consignes d'une demande (« les élèves
+ * doivent comprendre et savoir expliquer… »). Ils ne désignent pas le sujet : retirés de la REQUÊTE de sélection des
+ * passages, jamais du texte des documents (l'indexation ne change pas). Comparés après normalisation et racinisation.
+ */
+const GENERIC_QUERY_WORDS = `
+élève élèves séance séances activité activités exercice exercices comprendre comprend savoir expliquer explique
+exemple exemples objectif objectifs consigne consignes comment pourquoi peut peuvent doit doivent plusieurs chaque
+après selon permet permettre capable
+`.split(/\s+/).filter(Boolean);
+
+export const QUERY_STOPWORDS: ReadonlySet<string> = new Set(GENERIC_QUERY_WORDS.map(w => stem(normalizeForSearch(w))));
 
 /** Nettoie un texte extrait : espaces multiples, césures de fin de ligne, caractères de contrôle. */
 export function cleanExtractedText(text: string): string {
@@ -64,9 +83,23 @@ export function cleanPlainText(text: string): string {
     .replace(/\u0000/g, '')
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0001-\u0008\u000b\u000c\u000e-\u001f]/g, ' ')
-    .replace(/[ \t\u00a0]+$/gm, '')
+    .split('\n')
+    .map(trimLineEnd)
+    .join('\n')
     .replace(/\n{3,}/g, '\n\n')
-    .replace(/^\n+|\s+$/g, '');
+    .replace(/^\n+/, '')
+    .trimEnd();
+}
+
+/** Retire les espaces, tabulations et espaces insécables de fin de ligne, en temps linéaire (aucune regex ancrée en fin). */
+function trimLineEnd(line: string): string {
+  let end = line.length;
+  while (end > 0) {
+    const c = line.charCodeAt(end - 1);
+    if (c !== 32 && c !== 9 && c !== 0xa0) break;
+    end--;
+  }
+  return end === line.length ? line : line.slice(0, end);
 }
 
 /** Décode du texte brut : UTF-8 par défaut, repli Windows-1252 si le fichier n'est manifestement pas en UTF-8. */

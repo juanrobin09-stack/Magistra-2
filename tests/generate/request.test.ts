@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { ALL_TYPES, getMatieresForNiveau, TOOL_FIELDS, type TypeContenu } from '@shared/catalog';
+import { ALL_TYPES, getMatiereLabel, getMatieresForNiveau, TOOL_FIELDS, type TypeContenu } from '@shared/catalog';
+import { selectPassages, type QueryPart } from '@shared/documents/retrieve';
 import type { NiveauScolaire } from '@shared/levels';
 import type { DocumentPassage, GenerationRequest, ResearchMode, TeacherProfile } from '@shared/types';
 import { REQUEST_LIMITS, validateGenerationRequest } from '@shared/validation';
 import {
-  appreciationCount, appreciationSummary, buildGenerationRequest, buildPassageQuery, chosenCount, createInitialForm, defaultTrimestre,
+  appreciationCount, appreciationSummary, buildGenerationRequest, buildPassageQuery, buildWeightedPassageQuery, chosenCount, createInitialForm, defaultTrimestre,
   fitPassagesToLimits, normalizeAppreciationInput, resolveInitialSujet, resolveInitialType, validateForm, visibleFields,
   withNiveau, type GenerateForm,
 } from '@/lib/generation/request';
+import { HISTOIRE_COURSE_PAGES, SVT_COURSE_PAGES } from '../documents/fixtures';
 
 const PROFILE: TeacherProfile = {
   displayName: 'Mme Durand',
@@ -349,5 +351,74 @@ describe('validation du formulaire', () => {
   it('textes trop longs signalés (pas de troncature silencieuse)', () => {
     const problems = validateForm({ ...fullForm('corrige', '4eme'), texteEleve: 'a'.repeat(REQUEST_LIMITS.texteEleve + 1) });
     expect(problems.map(p => p.field)).toEqual(['texteEleve']);
+  });
+});
+
+describe('requête de sélection des passages : texte à adapter, copie, poids du sujet (constats 35 et 41)', () => {
+  const STOMATES = 'Exercice : calculer le nombre de stomates sur une feuille de 40 cm² (densité 250/mm²)';
+  const vide = { sujet: '', objectifs: '', consignes: '', discipline: '' };
+  const svt = (type: TypeContenu, extra: Partial<GenerateForm>): GenerateForm => ({ ...fullForm(type, '2nde_gt'), matiere: 'svt', ...vide, ...extra });
+
+  it('différenciation sans sujet : le texte à adapter décrit la recherche (avant : « SVT »)', () => {
+    // AVANT : la requête se réduisait au libellé de la matière.
+    expect(buildPassageQuery(svt('differenciation', { contenuSource: '' }))).toBe('SVT');
+    const query = buildPassageQuery(svt('differenciation', { contenuSource: STOMATES }));
+    expect(query).toContain('stomates');
+    expect(query).toBe(STOMATES);
+  });
+
+  it('correction sans sujet : le début de la copie complète la requête, limité à 300 caractères et sans mise en forme', () => {
+    const copie = `La photosynthèse\n\n   permet aux plantes de fabriquer du glucose. ${'blabla '.repeat(200)}`;
+    const query = buildPassageQuery(svt('corrige', { texteEleve: copie }));
+    expect(query.startsWith('La photosynthèse permet aux plantes de fabriquer du glucose.')).toBe(true);
+    expect(query.length).toBeLessThanOrEqual(300);
+    expect(query).not.toContain('\n');
+  });
+
+  it('sujet et objectifs suffisants (40 caractères ou plus) : requête inchangée', () => {
+    const sujet = 'La photosynthèse et les échanges gazeux de la feuille';
+    expect(buildPassageQuery(svt('differenciation', { sujet, contenuSource: STOMATES }))).toBe(sujet);
+    // Sujet de 40 caractères exactement : pas de complément.
+    const quarante = 'Les échanges gazeux au niveau des feuill';
+    expect(quarante).toHaveLength(40);
+    expect(buildPassageQuery(svt('differenciation', { sujet: quarante, contenuSource: STOMATES }))).toBe(quarante);
+    // Sujet court : le texte à adapter vient après lui.
+    expect(buildPassageQuery(svt('differenciation', { sujet: 'Stomates', contenuSource: STOMATES }))).toBe(`Stomates ${STOMATES}`);
+  });
+
+  it('un outil qui n’affiche pas le champ n’utilise jamais ce texte', () => {
+    expect(buildPassageQuery(svt('cours', { contenuSource: STOMATES, texteEleve: STOMATES }))).toBe('SVT');
+    expect(buildPassageQuery(svt('differenciation', { contenuSource: '', texteEleve: 'Copie de l’élève sur les stomates' }))).toBe('SVT');
+  });
+
+  it('requête pondérée : le sujet pèse plus que les objectifs et les consignes', () => {
+    const form: GenerateForm = { ...fullForm('cours', 'master_1'), sujet: 'Gouvernance', discipline: 'SI', objectifs: 'COBIT', consignes: 'ITIL' };
+    expect(buildWeightedPassageQuery(form)).toEqual([
+      { text: 'Gouvernance', weight: 3 }, { text: 'SI', weight: 1.5 }, { text: 'COBIT', weight: 1 }, { text: 'ITIL', weight: 1 },
+    ]);
+    expect(buildWeightedPassageQuery({ ...form, sujet: '', discipline: '', objectifs: '', consignes: '' })).toEqual([{ text: getMatiereLabel(form.matiere), weight: 1 }]);
+  });
+
+  it('deux documents au-delà du budget : la page des stomates est choisie (avant : la page 1 par ordre de lecture)', () => {
+    const doc = (id: string, name: string, pages: string[]) => ({
+      id, name, kind: 'pdf' as const, warnings: [], stats: { chars: 0 },
+      units: pages.map((text, i) => ({ locator: { type: 'pages' as const, start: i + 1, end: i + 1 }, text })),
+    });
+    const docs = [doc('svt', 'cours_svt.pdf', SVT_COURSE_PAGES), doc('hist', 'cours_histoire.pdf', HISTOIRE_COURSE_PAGES)];
+    const pagesOf = (query: string | readonly QueryPart[]) => selectPassages(docs, query, { budgetChars: 1_800 })
+      .filter(p => p.docId === 'svt')
+      .flatMap(p => Array.from({ length: p.locator.end - p.locator.start + 1 }, (_, i) => p.locator.start + i));
+    expect(pagesOf('SVT')).not.toContain(2);
+    expect(pagesOf(buildWeightedPassageQuery(svt('differenciation', { contenuSource: STOMATES })))).toContain(2);
+  });
+
+  it('au-delà des limites du serveur, les passages gardés sont ceux de la requête pondérée', () => {
+    const passages: DocumentPassage[] = Array.from({ length: REQUEST_LIMITS.maxPassages + 5 }, (_, i) => ({
+      docId: 'd', docName: 'cours.pdf', kind: 'pdf', locator: { type: 'pages', start: i + 1, end: i + 1 },
+      text: i === 61 ? 'Les stomates de la feuille assurent les échanges gazeux.' : `Page ${i + 1} : les élèves doivent savoir expliquer cette séance.`,
+    }));
+    const kept = fitPassagesToLimits(passages, [{ text: 'Les échanges gazeux et les stomates', weight: 3 }, { text: 'Les élèves doivent savoir expliquer la séance', weight: 1 }]);
+    expect(kept).toHaveLength(REQUEST_LIMITS.maxPassages);
+    expect(kept.map(p => p.locator.start)).toContain(62);
   });
 });

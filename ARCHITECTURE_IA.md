@@ -128,10 +128,14 @@ fichier (PDF, DOCX, PPTX, TXT, MD)
   → découpage intelligent (paragraphes puis phrases, ≈ 1 200 caractères)
   → recherche des passages utiles (BM25 + racinisation légère du français)
   → sélection sous budget (au moins un passage par document ; tout le document s'il tient)
-  → fusion des passages contigus (« pages 14 à 18 »)
+  → fusion des passages contigus, par passages d'au plus ≈ 3 000 caractères (« pages 14 à 15 ») : une citation désigne
+    1 à 3 pages ou quelques diapositives que l'enseignant peut relire
   → contexte du modèle, sous forme de sources numérotées [S1], [S2]…
 ```
 
+- **Sélection des passages.** Le classement BM25 ignore, dans la requête, les mots pédagogiques génériques (« élèves », « savoir », « expliquer »…) et donne plus de poids au sujet qu'aux objectifs et aux consignes ; quand le sujet est court (différenciation, correction), le début du texte à adapter ou de la copie complète la requête. Racinisation : seul le pluriel en -aux est ramené à -al.
+- **Qualité d'extraction.** Les exposants et indices des PDF restent dans leur ligne (CO₂, mc²) ; l'en-tête et le pied de page répétés sont retirés des pages suivantes (première occurrence gardée) ; les lignes de tableau PPTX redeviennent « a | b | c » ; un DOCX avec un seul style « Titre » est découpé en blocs de paragraphes.
+- **Fichiers piégés.** L'extraction est en temps linéaire (aucune expression rationnelle à retour arrière sur le contenu) et la décompression des DOCX/PPTX est bornée (80 Mo par entrée XML, 200 Mo au total, 10 000 entrées), avec une erreur claire ; les documents sont analysés deux par deux.
 - **Pas de base vectorielle persistante.** La récupération est éphémère et recalculée à chaque génération.
 - **Le fichier original n'est jamais envoyé ni stocké.**
   - Sous Windows, seul le texte extrait peut être conservé, et seulement si l'enseignant l'a choisi dans les réglages.
@@ -157,7 +161,7 @@ Fichier : `shared/citations.ts`.
    - ne touche **jamais** aux blocs de code ni au code en ligne ;
    - ajoute la section **« Sources utilisées »**, construite **uniquement** à partir des sources citées dans le corps du texte, avec leurs localisations exactes :
      ```
-     [S1] Cours_Economie_M1.pdf — pages 14 à 18
+     [S1] Cours_Economie_M1.pdf — pages 14 à 15
      [S2] Chapitre_Strategie.docx — section « Stratégie d'entreprise »
      [S3] CM4.pptx — diapositives 8 à 12 (extrait)
      [S4] Dupont, J. Titre réel (2021). *Revue*. — HAL. https://doi.org/…
