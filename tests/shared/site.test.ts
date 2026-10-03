@@ -34,12 +34,18 @@ describe('adresse officielle du site', () => {
     expect(SITE_APEX_ORIGIN).toBe('https://mag-istra.fr');
   });
 
-  it('pages du plan du site : exactement les routes du site vitrine (accueil et pages légales)', () => {
+  it('plan du site : l’accueil seul ; les pages légales (même page statique, donc même lien canonique) n’y sont pas', () => {
+    expect([...SITE_PATHS]).toEqual(['/']);
     const routes = [...read('src/site/SiteApp.tsx').matchAll(/<Route path="([^"]+)"/g)].map(m => m[1]).filter(route => route !== '*');
-    expect([...SITE_PATHS].sort()).toEqual([...routes].sort());
-    expect([...SITE_PATHS].sort()).toEqual(['/', ...Object.values(LEGAL_PATHS)].sort());
+    // Le site a quatre routes ; une seule est à indexer.
+    expect([...routes].sort()).toEqual(['/', ...Object.values(LEGAL_PATHS)].sort());
+    for (const page of Object.values(LEGAL_PATHS)) expect(SITE_PATHS, page).not.toContain(page);
     expect(new Set(SITE_PATHS).size).toBe(SITE_PATHS.length);
     for (const page of SITE_PATHS) expect(page.startsWith('/')).toBe(true);
+    // Un seul signal : l'adresse du plan du site est celle du lien canonique et d'og:url de la page statique (site/index.html).
+    const index = read('site/index.html');
+    expect(index).toContain(`<link rel="canonical" href="${siteUrl(SITE_PATHS[0])}" />`);
+    expect(index).toContain(`<meta property="og:url" content="${siteUrl(SITE_PATHS[0])}" />`);
   });
 
   it('robots.txt : tout est autorisé, le plan du site est déclaré à l’adresse officielle', () => {
@@ -47,18 +53,16 @@ describe('adresse officielle du site', () => {
     expect(buildRobotsTxt()).not.toMatch(/disallow/i);
   });
 
-  it('sitemap.xml : une adresse par page, toutes sous https://www.mag-istra.fr, sans date', () => {
+  it('sitemap.xml : une seule adresse (l’accueil), sous https://www.mag-istra.fr, sans date', () => {
     const xml = buildSitemapXml();
     expect(xml).toBe(
       '<?xml version="1.0" encoding="UTF-8"?>\n'
       + '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
       + '  <url>\n    <loc>https://www.mag-istra.fr/</loc>\n  </url>\n'
-      + '  <url>\n    <loc>https://www.mag-istra.fr/mentions-legales</loc>\n  </url>\n'
-      + '  <url>\n    <loc>https://www.mag-istra.fr/confidentialite</loc>\n  </url>\n'
-      + '  <url>\n    <loc>https://www.mag-istra.fr/cgu</loc>\n  </url>\n'
       + '</urlset>\n',
     );
     expect([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m => m[1])).toEqual(SITE_PATHS.map(siteUrl));
+    for (const page of Object.values(LEGAL_PATHS)) expect(xml).not.toContain(page);
     expect(xml).not.toContain('lastmod');
     expect(xml).not.toContain('vercel.app');
   });

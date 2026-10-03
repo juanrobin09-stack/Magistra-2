@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CONNECTOR_HOST, CONNECTOR_PORTS } from '../../shared/localConnector.js';
 import { SITE_ORIGIN } from '../../shared/site.js';
@@ -20,6 +20,16 @@ interface VercelConfig {
   rewrites: { source: string; destination: string }[];
   functions: Record<string, { maxDuration?: number }>;
   headers: { source: string; headers: { key: string; value: string }[] }[];
+}
+
+/**
+ * Lecture stricte (liste blanche) de scripts/verify-site.mjs : elle lit l'HTML comme un navigateur (références de
+ * caractères nommées, caractères de contrôle, commentaires, <base>, formulaires…), là où expectFitsPolicy compare des
+ * littéraux (un « https:&sol;&sol;hôte » ou un « \u0001https://hôte » y échapperait).
+ */
+async function siteIndexErrors(html: string, source = false): Promise<string[]> {
+  const verify = (await import(pathToFileURL(path.join(root, 'scripts', 'verify-site.mjs')).href)) as { checkIndexHtml(page: string, options?: { source?: boolean }): string[] };
+  return verify.checkIndexHtml(html, { source });
 }
 
 /** Directives d'une politique de sécurité du contenu : { 'script-src': ["'self'"], … }. */
@@ -345,17 +355,39 @@ describe('CSP du site vitrine (vercel.json)', () => {
     expect(html).toMatch(/<link rel="icon"[^>]* href="data:image\/svg\+xml,/);
   });
 
-  it.skipIf(!existsSync(path.join(root, 'dist-site', 'index.html')))('dist-site/index.html (site construit) tient dans la politique', () => {
+  it.skipIf(!existsSync(path.join(root, 'dist-site', 'index.html')))('dist-site/index.html (site construit) tient dans la politique', async () => {
     const html = read('dist-site/index.html');
     expectFitsPolicy(html);
     expect([...html.matchAll(/rel="canonical"/g)]).toHaveLength(1);
     expect(html).toContain(CANONICAL_LINK);
+    expect(await siteIndexErrors(html)).toEqual([]);
   });
 
-  it('site/index.html (source) : le lien canonique est la seule adresse absolue d\'un attribut ; Open Graph sans image ni autre ressource', () => {
+  it('site/index.html (source) : le lien canonique est la seule adresse absolue d\'un attribut ; Open Graph sans image ni autre ressource', async () => {
     const html = read('site/index.html');
     expect(html).toContain(CANONICAL_LINK);
     expect(html.replace(CANONICAL_LINK, '')).not.toMatch(/\b(?:src|href|action|poster)\s*=\s*"(?:https?:)?\/\//i);
     expect(html).not.toMatch(/og:image|og:video|og:audio/);
+    expect(await siteIndexErrors(html, true)).toEqual([]);
+  });
+
+  it('un contournement de la lecture littérale (référence nommée, préfixe de contrôle, commentaire vide, <base>, formulaire) échappe à expectFitsPolicy mais pas à la liste blanche', async () => {
+    const evil = 'evil.example';
+    const page = (fragment: string) => read('site/index.html').replace('</head>', `${fragment}</head>`);
+    /** Aucun « src|href|action|poster="https?://hôte… » littéral : la lecture par expressions régulières de expectFitsPolicy ne voit rien. */
+    const literalAddresses = (html: string) => [...html.matchAll(/\b(?:src|href|action|poster)\s*=\s*"((?:https?:)?\/\/[^"]*)"/gi)].filter(([, url]) => url.includes(evil));
+    for (const fragment of [
+      `<script type="module" src="https:&sol;&sol;${evil}/x.js"></script>`,
+      `<img src="https&colon;//${evil}/x.png">`,
+      `<link rel=stylesheet href="https&colon;//${evil}/a.css">`,
+      `<script type="module" src="\u0001https://${evil}/x.js"></script>`,
+    ]) {
+      expect(literalAddresses(page(fragment)), fragment).toEqual([]);
+      expect((await siteIndexErrors(page(fragment), true)).length, fragment).toBeGreaterThan(0);
+    }
+    // Commentaire vide, <base> et formulaire : visibles pour une lecture littérale seulement s'ils portent une adresse en clair ; la liste blanche les refuse dans tous les cas.
+    for (const fragment of [`<!--><script src="https://${evil}/x.js"></script>-->`, `<base href="https://${evil}/">`, `<form action="https://${evil}/"></form>`, '<base target="_blank">', '<form></form>']) {
+      expect((await siteIndexErrors(page(fragment), true)).length, fragment).toBeGreaterThan(0);
+    }
   });
 });

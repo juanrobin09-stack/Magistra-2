@@ -153,7 +153,10 @@ test('référencement : lien canonique et Open Graph à l’adresse officielle, 
   const xml = await sitemap.text();
   expect(xml).toBe(buildSitemapXml());
   expect(xml).not.toContain('<html');
-  for (const location of xml.matchAll(/<loc>([^<]+)<\/loc>/g)) expect(location[1].startsWith(`${SITE_ORIGIN}/`)).toBe(true);
+  // L'accueil seul : les pages légales sont servies avec le lien canonique de l'accueil, elles ne sont pas à indexer.
+  expect([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(location => location[1])).toEqual([`${SITE_ORIGIN}/`]);
+  await page.goto('/mentions-legales');
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `${SITE_ORIGIN}/`);
 });
 
 // ─── 2. Attribution ─────────────────────────────────────────────────────────
@@ -263,7 +266,7 @@ test('« Magistra pour Windows » : aucune version publiée → bouton inactif e
 // ─── 4. Pages légales ───────────────────────────────────────────────────────
 
 const LEGAL_PAGES = [
-  { path: '/mentions-legales', title: 'Mentions légales', tab: 'Mentions légales', link: 'Mentions légales', contains: ['Éditeur du site', 'Hébergement', 'Hébergeur du site : Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com).', 'Magistra est conçu et développé par Juan Robin'] },
+  { path: '/mentions-legales', title: 'Mentions légales', tab: 'Mentions légales', link: 'Mentions légales', contains: ['Éditeur du site', 'Hébergement', 'Hébergeur du site : Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com).', 'Magistra est une application pédagogique gratuite, conçue et développée par Juan Robin'] },
   { path: '/confidentialite', title: 'Politique de confidentialité', tab: 'Politique de confidentialité', link: 'Politique de confidentialité', contains: ['Ce que ce site ne fait pas', 'Journaux techniques de l\'hébergeur', 'servi par GitHub'] },
   { path: '/cgu', title: 'Conditions générales d\'utilisation', tab: 'Conditions d\'utilisation', link: 'Conditions d\'utilisation', contains: ['Ce site présente Magistra', 'Usage du site'] },
 ] as const;
