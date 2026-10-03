@@ -8,7 +8,8 @@
 //   1. HAL, 2. Crossref, 3. OpenAlex : une recherche, la forme de la réponse, un exemple ;
 //   4. Wikipédia : pages trouvées, extrait, puis liens externes (références) et ceux qui sont dans le catalogue ;
 //   5. sites officiels vérifiés par les références de Wikipédia : le chemin complet, jusqu'aux pages récupérées ;
-//   6. SearXNG, seulement avec --searxng ou SEARXNG_URL : les requêtes « site: » sur tout le catalogue ;
+//   6. SearXNG, seulement avec --searxng ou SEARXNG_URL : les requêtes « site: » sur les principaux sites du catalogue (36
+//      domaines : les sites des académies, HAL, OpenAlex, Crossref… sont reconnus mais pas interrogés) ;
 //   7. avec --catalogue : chaque domaine du catalogue existe-t-il (DNS) ?
 //
 // Pour chaque service : état, nombre de résultats, un exemple (titre, année, revue, DOI, fiabilité) et durée. La forme de
@@ -403,7 +404,7 @@ function officialViaWikipediaCheck(core, opts) {
 }
 
 function searxngCheck(core, opts) {
-  return timed('SearXNG (requêtes « site: » sur le catalogue)', opts.timeoutMs, async () => {
+  return timed('SearXNG (requêtes « site: » sur les principaux sites du catalogue)', opts.timeoutMs, async () => {
     const recorder = recordingFetch();
     const outcome = await core.runResearch(
       { text: opts.query, topic: opts.query, mode: 'internet', group: 'college' },

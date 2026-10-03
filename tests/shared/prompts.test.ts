@@ -294,6 +294,14 @@ describe('prompts — niveau de fiabilité des sources', () => {
       .toBe('[S2] Source scientifique (CNRS) : « Les fractions » — https://www.cnrs.fr/fr/les-fractions');
   });
 
+  it('plateforme ouverte (HAL, data.gouv.fr, Canal-U) : « à recouper », jamais « Source officielle »', () => {
+    expect(line({ n: 2, kind: 'institutional', title: 'Un dépôt', venue: 'HAL', url: 'https://hal.science/hal-01234567' }))
+      .toBe('[S2] Plateforme ouverte, à recouper (HAL) : « Un dépôt » — https://hal.science/hal-01234567');
+    expect(line({ n: 3, kind: 'institutional', title: 'Un jeu de données', venue: 'data.gouv.fr', url: 'https://www.data.gouv.fr/fr/datasets/x' }))
+      .toBe('[S3] Plateforme ouverte, à recouper (data.gouv.fr) : « Un jeu de données » — https://www.data.gouv.fr/fr/datasets/x');
+    expect(line({ n: 4, kind: 'institutional', title: 'Une vidéo', venue: 'Canal-U', url: 'https://www.canal-u.tv/video/x' })).toMatch(/^\[S4\] Plateforme ouverte, à recouper \(Canal-U\)/);
+  });
+
   it('le nom du site vient du catalogue d’après l’adresse : un nom trompeur dans la métadonnée reste visible à part', () => {
     expect(line({ n: 2, kind: 'institutional', title: 'Page', venue: 'Ministère officiel', url: 'https://www.unesco.org/fr/x' }))
       .toBe('[S2] Source officielle (UNESCO) : « Page » — Ministère officiel · https://www.unesco.org/fr/x');
@@ -312,14 +320,42 @@ describe('prompts — hiérarchie des sources (règle courte)', () => {
     expect(buildUserPrompt(req({ type: 'cours', niveau: 'licence_2' }), SOURCES)).not.toContain('Hiérarchie');
   });
 
-  it('documents de l’enseignant > sources officielles > publications > Wikipédia ; la source la plus fiable l’emporte et le désaccord est signalé', () => {
+  it('documents de l’enseignant > sources officielles > publications > Wikipédia ; la source la plus fiable l’emporte, le désaccord est signalé, jamais mélangé', () => {
     expect(SOURCE_PRIORITY_RULE).toContain("documents de l'enseignant > sources officielles > publications > Wikipédia");
-    expect(SOURCE_PRIORITY_RULE).toMatch(/Désaccord : la plus fiable l'emporte et il est signalé/);
-    expect(SOURCE_PRIORITY_RULE).toMatch(/Faits chiffrés, dates, lois : ceux des sources/);
+    expect(SOURCE_PRIORITY_RULE).toMatch(/Désaccord : la plus fiable l'emporte et il est signalé, jamais mélangé/);
+    expect(SOURCE_PRIORITY_RULE).toMatch(/Faits chiffrés, dates, lois : seulement ceux des sources/);
   });
 
-  it('courte : 60 jetons au plus (le niveau Léger a peu de contexte)', () => {
-    expect(estimateTokens(SOURCE_PRIORITY_RULE)).toBeLessThanOrEqual(60);
+  it('courte : 70 jetons estimés au plus (le niveau Léger a peu de contexte)', () => {
+    expect(estimateTokens(SOURCE_PRIORITY_RULE)).toBeLessThanOrEqual(70);
+  });
+
+  it('n’apparaît QUE lorsque des sources sont fournies, pour chaque type de contenu, et une seule fois', () => {
+    for (const type of ALL_TYPES) {
+      for (const niveau of ['cp', '4eme', 'licence_2'] as const) {
+        const r = req({ type, niveau, texteEleve: 'Copie.', contenuSource: 'Exercice.' });
+        const without = buildSystemPrompt(r, false);
+        const withSources = buildSystemPrompt(r, true);
+        expect(without, `${type}/${niveau} sans sources`).not.toContain(SOURCE_PRIORITY_RULE);
+        expect(without, `${type}/${niveau} sans sources`).not.toContain('Hiérarchie');
+        expect(withSources.split(SOURCE_PRIORITY_RULE), `${type}/${niveau} avec sources`).toHaveLength(2);
+        // Jamais dans les messages construits à partir d'une liste de sources vide, toujours avec une liste non vide.
+        expect(buildMessages(r, [])[0].content, `${type}/${niveau} aucune source`).not.toContain(SOURCE_PRIORITY_RULE);
+        expect(buildMessages(r, SOURCES)[0].content, `${type}/${niveau} deux sources`).toContain(SOURCE_PRIORITY_RULE);
+        // Ni dans la demande de l'utilisateur.
+        expect(buildMessages(r, SOURCES)[1].content, `${type}/${niveau} demande`).not.toContain('Hiérarchie');
+      }
+    }
+  });
+
+  it('ne vise que les faits à citer : elle ne dit rien des exercices chiffrés, que les règles de qualité conservent (nombres demandés, calculs refaits)', () => {
+    expect(SOURCE_PRIORITY_RULE).not.toMatch(/\bnombres?\b|calcul|exercice|énoncé|barème|score|valeurs?\b/i);
+    for (const type of ['exercices', 'evaluation', 'corrige'] as const) {
+      const sys = buildSystemPrompt(req({ type, niveau: '4eme', nombreExercices: 5 }), true);
+      expect(sys, type).toContain(SOURCE_PRIORITY_RULE);
+      expect(sys, type).toMatch(/Respecte exactement les nombres demandés \(exercices, séances, questions, points du barème\)/);
+      expect(sys, type).toMatch(/refais chaque calcul et vérifie chaque réponse du corrigé/);
+    }
   });
 
   it('ne contredit aucune règle existante : citations, connaissances générales, exactitude des calculs et des nombres demandés', () => {

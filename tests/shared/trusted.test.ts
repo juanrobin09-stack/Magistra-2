@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  isTrustedHttpsUrl, isTrustedUrl, selectTrustedLinks, TRUSTED_SITES, trustedPriority, trustedSearchGroups, trustedSiteFor,
+  fetchableSiteFor, isCitablePage, isFetchableHttpsUrl, isTrustedHttpsUrl, isTrustedUrl, NOT_SEARCHED_SITES, SEARCH_SCOPE_TEXT,
+  SEARCHED_DOMAIN_COUNT, selectTrustedLinks, TRUSTED_SITES, trustedSearchGroups, trustedSiteFor,
 } from '../../shared/research/trusted';
 import { INSTITUTIONAL_SITES, isInstitutionalUrl } from '../../shared/research/providers';
 
@@ -24,7 +25,7 @@ describe('catalogue des sites vérifiés', () => {
     for (const site of TRUSTED_SITES) {
       expect(site.domain, site.domain).toMatch(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/);
       expect(site.label.trim(), site.domain).not.toBe('');
-      expect(['official', 'scientific']).toContain(site.tier);
+      expect(['official', 'scientific', 'open']).toContain(site.tier);
       expect(['education', 'academie', 'international', 'administration', 'recherche', 'bibliotheque']).toContain(site.category);
       expect(seen.has(site.domain), `doublon ${site.domain}`).toBe(false);
       seen.add(site.domain);
@@ -172,22 +173,62 @@ describe('trustedSearchGroups — lots pour les requêtes « site: »', () => {
     for (const domain of all) expect(trustedSiteFor(`https://${domain}/`)?.domain, domain).toBeTruthy();
   });
 
-  it('ordre : éducation, puis organisations internationales, puis recherche', () => {
-    const rank = (domain: string) => trustedPriority(TRUSTED_SITES.find(s => s.domain === domain)!);
-    const ranks = all.map(rank);
-    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+  it('ordre : éducation, puis organisations internationales, recherche publique, Service-Public.fr et portails de publications', () => {
     expect(groups[0].slice(0, 3)).toEqual(['education.gouv.fr', 'eduscol.education.fr', 'enseignementsup-recherche.gouv.fr']);
-    expect(all.indexOf('unesco.org')).toBeGreaterThan(all.indexOf('canal-u.tv'));
-    expect(all.indexOf('unesco.org')).toBeLessThan(all.indexOf('cnrs.fr'));
+    const at = (domain: string) => all.indexOf(domain);
+    // Éducation avant UNESCO et agences de l'ONU, avant OCDE, Banque mondiale, UE, Conseil de l'Europe, avant la recherche publique.
+    const order = ['education.gouv.fr', 'lumni.fr', 'unesco.org', 'un.org', 'who.int', 'oecd.org', 'worldbank.org', 'europa.eu', 'coe.int', 'cnrs.fr', 'academie-francaise.fr'];
+    for (const domain of order) expect(at(domain), domain).toBeGreaterThanOrEqual(0);
+    expect(order.map(at)).toEqual([...order.map(at)].sort((a, b) => a - b));
+    // Puis Service-Public.fr et les portails de publications.
+    for (const domain of ['service-public.fr', 'gouv.fr', 'openedition.org', 'theses.fr', 'europepmc.org', 'doaj.org']) {
+      expect(at(domain), domain).toBeGreaterThan(at('academie-francaise.fr'));
+    }
+    expect(at('service-public.fr')).toBeLessThan(at('openedition.org'));
+    // Dernier lot : le dernier portail de publications, puis la seule agence étrangère qui tient dans le plafond.
+    expect(at('doaj.org')).toBe(all.length - 2);
+    expect(at('nasa.gov')).toBe(all.length - 1);
   });
 
-  it('couvre tout le catalogue d’éducation, des organisations internationales et de la recherche (un parent couvre ses sous-domaines)', () => {
-    const covered = (domain: string) => all.some(d => domain === d || domain.endsWith(`.${d}`));
-    for (const site of TRUSTED_SITES.filter(s => ['education', 'international', 'recherche'].includes(s.category))) {
-      expect(covered(site.domain), site.domain).toBe(true);
+  it('les sites les plus utiles à un enseignant sont interrogés avant les moins utiles ; les autres sont reconnus mais non interrogés', () => {
+    for (const domain of ['service-public.fr', 'openedition.org', 'theses.fr', 'europepmc.org', 'doaj.org', 'bnf.fr', 'persee.fr']) {
+      expect(all, domain).toContain(domain);
     }
+    // Reconnus mais non interrogés directement : plateformes ouvertes, infrastructures, agences étrangères, académies.
+    for (const domain of ['hal.science', 'archives-ouvertes.fr', 'openalex.org', 'crossref.org', 'doi.org', 'canal-u.tv', 'esa.int', 'cern.ch', 'noaa.gov', 'nih.gov']) {
+      expect(all, domain).not.toContain(domain);
+      expect(trustedSiteFor(`https://${domain}/`), domain).not.toBeNull();
+    }
+    // Le plafond de 6 requêtes est conservé.
+    expect(groups).toHaveLength(6);
+  });
+
+  it('le nombre de domaines interrogés est exactement celui que les réglages annoncent (SEARCHED_DOMAIN_COUNT)', () => {
+    expect(all).toHaveLength(SEARCHED_DOMAIN_COUNT);
+    expect(SEARCH_SCOPE_TEXT).toContain(`${SEARCHED_DOMAIN_COUNT} domaines`);
+    expect(SEARCH_SCOPE_TEXT).toContain(NOT_SEARCHED_SITES);
+    expect(SEARCH_SCOPE_TEXT).not.toMatch(/\btous\b|tout le catalogue/i);
+  });
+
+  it('ce qui n’est pas interrogé directement est dit exactement : tout site non couvert est nommé, aucun site couvert ne l’est', () => {
+    const covered = (domain: string) => all.some(d => domain === d || domain.endsWith(`.${d}`));
+    const escape = (label: string) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const named = (label: string) => new RegExp(`(?<![\\p{L}\\p{N}])${escape(label)}(?![\\p{L}\\p{N}])`, 'u').test(NOT_SEARCHED_SITES);
+    for (const site of TRUSTED_SITES) {
+      if (site.category === 'academie') expect(NOT_SEARCHED_SITES, site.domain).toContain('académies scolaires');
+      else if (site.redirectOnly) continue;
+      else if (covered(site.domain)) expect(named(site.label), `${site.label} est interrogé`).toBe(false);
+      else expect(named(site.label), `${site.label} n’est pas interrogé`).toBe(true);
+    }
+  });
+
+  it('tout le catalogue d’éducation, des organisations internationales et de la recherche française est interrogé (un parent couvre ses sous-domaines)', () => {
+    const covered = (domain: string) => all.some(d => domain === d || domain.endsWith(`.${d}`));
+    const foreignAgencies = ['nasa.gov', 'esa.int', 'cern.ch', 'noaa.gov', 'nih.gov'];
+    const wanted = TRUSTED_SITES.filter(s => ['education', 'international', 'recherche'].includes(s.category) && s.tier !== 'open' && !foreignAgencies.slice(1).includes(s.domain));
+    for (const site of wanted) expect(covered(site.domain), site.domain).toBe(true);
     // Les sous-domaines déjà couverts ne sont pas répétés.
-    for (const domain of ['unesdoc.unesco.org', 'whc.unesco.org', 'ec.europa.eu', 'eur-lex.europa.eu', 'legifrance.gouv.fr', 'gallica.bnf.fr']) {
+    for (const domain of ['unesdoc.unesco.org', 'whc.unesco.org', 'ec.europa.eu', 'eur-lex.europa.eu', 'legifrance.gouv.fr', 'data.gouv.fr', 'culture.gouv.fr', 'gallica.bnf.fr']) {
       expect(all, domain).not.toContain(domain);
     }
     expect(all).toContain('unesco.org');
@@ -217,7 +258,6 @@ describe('selectTrustedLinks — pages à citer parmi les références d’un ar
       'https://www.unesco.org/fr/articles?s=eau',
       'https://www.unesco.org/fr/login',
       'https://www.unesco.org/fr/connexion',
-      'https://www.unesco.org/recherche/eau',
       'http://www.unesco.org/fr/articles/eau',
       'https://evilunesco.org/fr/articles/eau',
       'https://www.unesco.org/fr/articles/eau-et-assainissement',
@@ -253,13 +293,115 @@ describe('selectTrustedLinks — pages à citer parmi les références d’un ar
     expect(selectTrustedLinks(links, 0)).toEqual([]);
   });
 
-  it('adresse normalisée sans fragment, avec le site du catalogue ; « doi.org » passe après tout le reste', () => {
-    const picked = selectTrustedLinks(['https://doi.org/10.1000/xyz123', 'https://www.persee.fr/doc/x#page_1'], 3);
-    expect(picked.map(l => l.url)).toEqual(['https://www.persee.fr/doc/x', 'https://doi.org/10.1000/xyz123']);
+  it('adresse normalisée sans fragment, avec le site du catalogue', () => {
+    const picked = selectTrustedLinks(['https://www.persee.fr/doc/x#page_1'], 3);
+    expect(picked.map(l => l.url)).toEqual(['https://www.persee.fr/doc/x']);
     expect(picked[0].site.label).toBe('Persée');
+  });
+
+  it('« doi.org » n’est jamais sélectionné : il ne fait que renvoyer vers un éditeur quelconque (reconnu, mais ni récupéré ni compté parmi les 3 pages)', () => {
+    const links = ['https://doi.org/10.5555/attacker', 'https://dx.doi.org/10.1000/xyz123', 'https://www.persee.fr/doc/x'];
+    expect(selectTrustedLinks(links, 3).map(l => l.url)).toEqual(['https://www.persee.fr/doc/x']);
+    expect(selectTrustedLinks(links.slice(0, 2), 3)).toEqual([]);
+    // Toujours reconnu pour étiqueter un DOI.
+    expect(trustedSiteFor('https://doi.org/10.1000/xyz123')).toMatchObject({ domain: 'doi.org', redirectOnly: true });
+    expect(fetchableSiteFor('https://doi.org/10.1000/xyz123')).toBeNull();
+    expect(isFetchableHttpsUrl('https://doi.org/10.1000/xyz123')).toBe(false);
+    expect(isCitablePage('https://doi.org/10.1000/xyz123')).toBe(false);
+    expect(fetchableSiteFor('https://www.persee.fr/doc/x')?.domain).toBe('persee.fr');
+    expect(isFetchableHttpsUrl('https://www.persee.fr/doc/x')).toBe(true);
+    expect(isFetchableHttpsUrl('http://www.persee.fr/doc/x')).toBe(false);
+    expect(isFetchableHttpsUrl('https://persee.fr.pirate.example/x')).toBe(false);
+  });
+
+  it('une plateforme ouverte (HAL, data.gouv.fr, Canal-U) passe après tout le reste, jamais « officielle »', () => {
+    const links = ['https://hal.science/hal-01234567', 'https://data.gouv.fr/fr/datasets/x', 'https://www.canal-u.tv/video/x', 'https://theses.fr/2019SACLS001'];
+    const picked = selectTrustedLinks(links, 4);
+    expect(picked.map(l => l.site.domain)).toEqual(['theses.fr', 'hal.science', 'data.gouv.fr', 'canal-u.tv']);
+    expect(picked.slice(1).map(l => l.site.tier)).toEqual(['open', 'open', 'open']);
+  });
+
+  it('tiers : « officiel » réservé aux administrations, organisations intergouvernementales et agences publiques', () => {
+    for (const domain of ['data.gouv.fr', 'hal.science', 'archives-ouvertes.fr', 'canal-u.tv']) {
+      expect(trustedSiteFor(`https://www.${domain}/x`)?.tier, domain).toBe('open');
+    }
+    // data.gouv.fr est aussi couvert par « gouv.fr » (administration, officielle) : l'entrée la plus précise l'emporte.
+    expect(trustedSiteFor('https://www.sante.gouv.fr/')?.tier).toBe('official');
+    expect(trustedSiteFor('https://static.data.gouv.fr/resources/x.csv')?.tier).toBe('open');
+    for (const site of TRUSTED_SITES.filter(s => s.tier === 'official')) {
+      expect(['education', 'academie', 'international', 'administration', 'recherche'], site.domain).toContain(site.category);
+      expect(['data.gouv.fr', 'hal.science', 'archives-ouvertes.fr', 'canal-u.tv']).not.toContain(site.domain);
+    }
   });
 
   it('entrées inattendues ignorées sans exception', () => {
     expect(selectTrustedLinks(['', 'pas une adresse', 'javascript:alert(1)', 'https://unesco.org@evil.com/x'], 3)).toEqual([]);
+  });
+});
+
+describe('isCitablePage — page qu’une source peut citer (adresse FINALE d’une page récupérée)', () => {
+  it.each([
+    'https://www.education.gouv.fr/bo/2024/Hebdo1',
+    'https://eduscol.education.fr/1234/programme-cycle-3',
+    'https://www.unesco.org/fr/articles/eau',
+    // « recherche » est une rubrique avant d'être une page de recherche (P3).
+    'https://www.cnrs.fr/fr/recherche/biologie',
+    'https://www.cnrs.fr/recherche/biologie/genomique',
+    'https://www.education.gouv.fr/accueil-des-eleves-allophones',
+    'https://www.education.gouv.fr/home-economics',
+    'https://www.unesco.org/fr/index-des-themes',
+  ])('citable : %s', url => {
+    expect(isCitablePage(url)).toBe(true);
+    expect(isCitablePage(new URL(url))).toBe(true);
+  });
+
+  it.each([
+    // Accueil (S2) et variantes d'accueil nommées (P3).
+    'https://www.education.gouv.fr/',
+    'https://www.education.gouv.fr',
+    'https://www.education.gouv.fr/fr',
+    'https://www.education.gouv.fr/fr/',
+    'https://www.education.gouv.fr/index.html',
+    'https://www.education.gouv.fr/index.php',
+    'https://www.education.gouv.fr/index.htm',
+    'https://www.education.gouv.fr/index',
+    'https://www.education.gouv.fr/fr/index.html',
+    'https://www.education.gouv.fr/home',
+    'https://www.education.gouv.fr/accueil',
+    'https://www.education.gouv.fr/accueil/',
+    'https://www.unesco.org/en/home',
+    'https://www.unesco.org/fr-ca/accueil',
+    // Connexion et authentification (S2).
+    'https://cas.education.gouv.fr/login?service=x',
+    'https://www.education.gouv.fr/login',
+    'https://www.education.gouv.fr/cas/',
+    'https://www.education.gouv.fr/cas/login',
+    'https://www.ac-lyon.fr/connexion',
+    'https://www.ac-lyon.fr/compte/mes-informations',
+    'https://www.unesco.org/account/profile',
+    'https://www.unesco.org/sso/start',
+    // Recherche (en dernier segment, sans suite, ou avec un paramètre de requête).
+    'https://www.unesco.org/fr/search?q=eau',
+    'https://www.unesco.org/search/all',
+    'https://www.cnrs.fr/fr/recherche',
+    'https://www.cnrs.fr/fr/recherche/',
+    'https://www.cnrs.fr/recherche.php',
+    'https://www.cnrs.fr/fr/recherche?q=biologie',
+    'https://www.cnrs.fr/fr/recherche/biologie?s=eau',
+    // Hors catalogue, http, redirection seule.
+    'https://example.org/article',
+    'http://www.unesco.org/fr/articles/eau',
+    'https://unesco.org.pirate.example/fr/articles/eau',
+    'https://doi.org/10.1000/xyz123',
+    // Pas une adresse.
+    'unesco.org',
+    '',
+  ])('non citable : %j', url => {
+    expect(isCitablePage(url)).toBe(false);
+  });
+
+  it('même contrôle que la sélection des liens (références de Wikipédia)', () => {
+    const links = ['https://www.cnrs.fr/fr/recherche/biologie', 'https://www.education.gouv.fr/index.html', 'https://www.unesco.org/fr/home'];
+    expect(selectTrustedLinks(links, 3).map(l => l.url)).toEqual(['https://www.cnrs.fr/fr/recherche/biologie']);
   });
 });

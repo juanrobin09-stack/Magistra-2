@@ -3,7 +3,7 @@ import { NO_OFFICIAL_FOUND_MESSAGE, OFFICIAL_UNAVAILABLE_MESSAGE, planResearch, 
 import {
   isInstitutionalUrl, NO_ABSTRACT_TEXT, searchCrossref, searchHal, searchSearxng, searchWikipedia, stripTags, toPlainQuery,
 } from '../../shared/research/providers';
-import { trustedSearchGroups } from '../../shared/research/trusted';
+import { SEARCH_SCOPE_TEXT, SEARCHED_DOMAIN_COUNT, trustedSearchGroups } from '../../shared/research/trusted';
 import { jsonResponse, mockFetch, networkError, textResponse } from './helpers';
 import { CONFIG, deps, fakePages, NO_SEARX, router, searxHandler, wikiHandler } from './researchFixtures';
 
@@ -195,7 +195,7 @@ describe('runResearch', () => {
     expect(outcome.sources[1].text).toBe(NO_ABSTRACT_TEXT);
   });
 
-  it('scolaire avec SearXNG : requêtes « site: » par lots sur TOUT le catalogue, jamais de requête générale, sites vérifiés > Wikipédia', async () => {
+  it('scolaire avec SearXNG : requêtes « site: » par lots sur les principaux sites du catalogue, jamais de requête générale, sites vérifiés > Wikipédia', async () => {
     const fetchImpl = router();
     const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'elementaire' }, CONFIG, deps(fetchImpl), { budgetChars: 50_000 });
     const queries = fetchImpl.calls.filter(c => c.url.startsWith('https://searx.example.fr/search')).map(c => new URL(c.url).searchParams.get('q'));
@@ -203,9 +203,15 @@ describe('runResearch', () => {
     expect(queries.length).toBeGreaterThan(1);
     expect(queries.length).toBeLessThanOrEqual(6);
     expect(queries.every(q => q?.includes('site:'))).toBe(true);
-    // Les domaines de tous les lots forment le catalogue interrogé : éducation en premier.
+    // Les domaines de tous les lots forment ce qui est interrogé : éducation en premier. Leur nombre est celui qu'annoncent les réglages.
     expect(queries[0]).toContain('site:education.gouv.fr');
     expect(queries.join(' ')).toContain('site:unesco.org');
+    const queried = queries.flatMap(q => [...q!.matchAll(/site:([^\s)]+)/g)].map(m => m[1]));
+    expect(new Set(queried).size).toBe(queried.length);
+    expect(queried).toHaveLength(SEARCHED_DOMAIN_COUNT);
+    expect(SEARCH_SCOPE_TEXT).toContain(`${queried.length} domaines`);
+    expect(queried).toContain('openedition.org');
+    expect(queried.some(d => d.startsWith('ac-') || d === 'hal.science' || d === 'doi.org')).toBe(false);
     expect(fetchImpl.calls.some(c => /archives-ouvertes|crossref|openalex/.test(c.url))).toBe(false);
     expect(outcome.sources.map(s => [s.kind, s.url])).toEqual([
       ['institutional', 'https://eduscol.education.fr/1234/programme-cycle-3'],
@@ -274,10 +280,78 @@ describe('runResearch', () => {
     const urls = outcome.sources.map(s => s.url);
     expect(urls).not.toContain('https://eduscol.education.fr/1234/programme-cycle-3');
     expect(outcome.sources.some(s => /pirate/.test(s.text) || /pirate/.test(s.title))).toBe(false);
-    const bo = outcome.sources.find(s => s.url === 'https://www.education.gouv.fr/bo/2024/Hebdo1');
-    expect(bo).toMatchObject({ kind: 'institutional', venue: 'Ministère de l’Éducation nationale' });
+    // La redirection vers un autre site vérifié est gardée : la source porte l'adresse FINALE et le titre de la page lue (P2).
+    expect(urls).not.toContain('https://www.education.gouv.fr/bo/2024/Hebdo1');
+    const bo = outcome.sources.find(s => s.url === 'https://www.education.gouv.fr/bo/2024/Hebdo1-final');
+    expect(bo).toMatchObject({ kind: 'institutional', venue: 'Ministère de l’Éducation nationale', title: 'BO final' });
     expect(bo?.text).toMatch(/Contenu officiel de www\.education\.gouv\.fr/);
     expect(fetchPage.calls).toContain('https://eduscol.education.fr/1234/programme-cycle-3');
+  });
+
+  it('SearXNG + fetchPage, redirection catalogue → catalogue : adresse, nom du site, niveau et titre de la page FINALE (comme pour les références de Wikipédia) ; dédoublonnage sur l’adresse finale', async () => {
+    const final = 'https://whc.unesco.org/fr/list/';
+    const page = { url: final, title: 'Liste du patrimoine mondial', text: 'Contenu officiel de whc.unesco.org : la liste du patrimoine mondial, les critères d’inscription et les sites inscrits, à utiliser en classe.' };
+    const fetchPage = fakePages({
+      'https://eduscol.education.fr/1234/programme-cycle-3': page,
+      'https://www.education.gouv.fr/bo/2024/Hebdo1': page,
+    });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    const moved = outcome.sources.filter(s => s.url === final);
+    expect(moved).toHaveLength(1);
+    expect(moved[0]).toMatchObject({ kind: 'institutional', venue: 'Patrimoine mondial (UNESCO)', title: 'Liste du patrimoine mondial' });
+    expect(moved[0].text).toMatch(/Contenu officiel de whc\.unesco\.org/);
+    // Ni l'adresse demandée ni le nom du premier site ne restent attachés au texte de la page finale.
+    expect(outcome.sources.some(s => s.url === 'https://eduscol.education.fr/1234/programme-cycle-3')).toBe(false);
+    expect(outcome.sources.some(s => s.venue === 'Éduscol')).toBe(false);
+  });
+
+  it('SearXNG + fetchPage : une redirection vers l’accueil, une page de connexion ou /cas/ du catalogue écarte la page (adresse finale non citable)', async () => {
+    const fetchPage = fakePages({
+      'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://eduscol.education.fr/' },
+      'https://www.education.gouv.fr/bo/2024/Hebdo1': { url: 'https://cas.education.gouv.fr/login?service=x' },
+    });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    const urls = outcome.sources.map(s => s.url);
+    expect(urls).not.toContain('https://eduscol.education.fr/1234/programme-cycle-3');
+    expect(urls).not.toContain('https://www.education.gouv.fr/bo/2024/Hebdo1');
+    expect(urls.some(u => /cas\.education|login/.test(u ?? ''))).toBe(false);
+    expect(outcome.sources.some(s => /Contenu officiel de (cas\.|eduscol\.)/.test(s.text))).toBe(false);
+    const cas = fakePages({ 'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://www.education.gouv.fr/cas/' } });
+    const again = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router(), cas), { budgetChars: 50_000 });
+    expect(again.sources.some(s => /Contenu officiel de www\.education/.test(s.text) && s.url?.includes('/cas/'))).toBe(false);
+  });
+
+  it('SearXNG : un résultat « site: » qui est l’accueil ou une page de connexion du catalogue n’est pas retenu (aucune page demandée)', async () => {
+    const homes = (url: string) => (new URL(url).searchParams.get('q')?.includes('site:')
+      ? jsonResponse({ results: [
+        { url: 'https://www.education.gouv.fr/', title: 'Accueil', content: 'Accueil du site du ministère : actualités, menu, espace presse et liens utiles pour les enseignants.' },
+        { url: 'https://cas.education.gouv.fr/login?service=x', title: 'Connexion', content: 'Connexion à l’espace enseignant : identifiant, mot de passe et assistance, pour accéder à vos services.' },
+      ] })
+      : jsonResponse({ results: [] }));
+    const fetchPage = fakePages();
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router({ searx: homes }), fetchPage), { budgetChars: 50_000 });
+    expect(outcome.sources).toEqual([]);
+    expect(fetchPage.calls).toEqual([]);
+  });
+
+  it('allowUrl : transmis à la récupération des pages sous la restriction aux sites vérifiés (https du catalogue seulement, jamais doi.org), absent sinon', async () => {
+    const seen: (((url: URL) => boolean) | undefined)[] = [];
+    const fetchPage = async (url: string, _signal?: AbortSignal, options?: { allowUrl?: (url: URL) => boolean }) => {
+      seen.push(options?.allowUrl);
+      return { url, title: 'Page', text: 'Contenu officiel suffisamment long pour être retenu comme source de la recherche en ligne.' };
+    };
+    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router(), fetchPage), { budgetChars: 50_000 });
+    expect(seen.length).toBeGreaterThan(0);
+    const allow = seen[0]!;
+    expect(seen.every(a => typeof a === 'function')).toBe(true);
+    for (const url of ['https://www.unesco.org/fr/a', 'https://eduscol.education.fr/x', 'https://cas.education.gouv.fr/login']) expect(allow(new URL(url)), url).toBe(true);
+    for (const url of ['http://www.unesco.org/fr/a', 'https://attacker.example/x', 'https://unesco.org.attacker.example/', 'https://doi.org/10.5555/x', 'https://user@www.unesco.org/', 'https://www.unesco.org:8443/'])
+      expect(allow(new URL(url)), url).toBe(false);
+
+    seen.length = 0;
+    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, trustedOnly: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every(a => a === undefined)).toBe(true);
   });
 
   it('SearXNG + fetchPage : redirection vers http, ou vers un hôte voisin (suffixe collé), écartée aussi', async () => {
@@ -294,7 +368,12 @@ describe('runResearch', () => {
   it('SearXNG, restriction levée : une redirection hors du catalogue est admise (comportement du web général)', async () => {
     const fetchPage = fakePages({ 'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://autre.example.net/x', title: 'Autre page', text: 'Texte de la page finale, bien plus long que l’extrait fourni par le moteur de recherche : les fractions au cycle 3, leurs écritures, leurs comparaisons, les opérations et les problèmes.' } });
     const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, trustedOnly: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
-    expect(outcome.sources.find(s => s.url === 'https://eduscol.education.fr/1234/programme-cycle-3')?.text).toMatch(/Texte de la page finale/);
+    // L'adresse de la source est celle du texte retenu ; hors catalogue, jamais « officielle ».
+    const moved = outcome.sources.find(s => s.url === 'https://autre.example.net/x');
+    expect(moved?.text).toMatch(/Texte de la page finale/);
+    expect(moved).toMatchObject({ kind: 'web', title: 'Autre page' });
+    expect(moved?.venue).toBeUndefined();
+    expect(outcome.sources.some(s => s.url === 'https://eduscol.education.fr/1234/programme-cycle-3')).toBe(false);
   });
 
   it('SearXNG sans aucune page du catalogue : « Aucune source officielle trouvée », jamais une source hors catalogue', async () => {

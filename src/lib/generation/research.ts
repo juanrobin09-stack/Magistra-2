@@ -20,8 +20,15 @@ export interface ResearchOption {
 
 /** Ce que la recherche consulte : ces libellés sont ceux de la note affichée sous chaque mode. */
 export const PUBLICATIONS_CONSULTED = 'publications HAL, Crossref et OpenAlex';
-export const OFFICIAL_VIA_SEARCH_CONSULTED = 'sites officiels vérifiés (UNESCO, Éduscol, ministères…)';
+/** Moteur de recherche web : les principaux sites du catalogue (pas chacun), jamais « tous » les sites vérifiés. */
+export const OFFICIAL_VIA_SEARCH_CONSULTED = 'principaux sites officiels vérifiés (UNESCO, Éduscol, ministères, ONU…)';
+/** Sans moteur de recherche web : seulement les pages que Wikipédia cite pour le sujet, aucun site nommé comme garanti. */
 export const OFFICIAL_VIA_WIKIPEDIA_CONSULTED = 'sites officiels vérifiés cités par Wikipédia';
+/**
+ * Application plus ancienne (même version du protocole, sans « trustedCatalogue ») : elle n'interroge que quelques sites,
+ * avec le web général non filtré ; ni UNESCO ni « vérifiés » (aucun filtrage promis).
+ */
+export const OFFICIAL_LEGACY_CONSULTED = 'sites officiels (Éduscol, education.gouv.fr…)';
 export const WIKIPEDIA_CONSULTED = 'Wikipédia (à recouper)';
 export const NO_INTERNET_LOCAL_NOTE = 'Internet indisponible : aucun moteur web configuré et Wikipédia désactivé dans les réglages.';
 export const ACADEMIC_DISABLED_LOCAL_NOTE = 'Recherche académique désactivée dans les réglages.';
@@ -107,8 +114,13 @@ export function describeResearchOptions(
     if (mode === 'demo') return { ...base, available: false, note: DEMO_RESEARCH_NOTE };
     if (!caps) return base;
 
-    const { academic, institutional, web, wikipedia } = caps.research;
-    const official = institutional ? (web ? OFFICIAL_VIA_SEARCH_CONSULTED : OFFICIAL_VIA_WIKIPEDIA_CONSULTED) : null;
+    const { academic, institutional, web, wikipedia, trustedCatalogue } = caps.research;
+    // Le catalogue (UNESCO…) n'est annoncé que par un moteur qui l'annonce lui-même : avec un moteur de recherche web,
+    // l'absence de `trustedCatalogue` signale une version plus ancienne. Sans moteur web, « institutional » ne peut venir
+    // que du chemin par Wikipédia, que seules les versions actuelles ont.
+    const official = !institutional
+      ? null
+      : !web ? OFFICIAL_VIA_WIKIPEDIA_CONSULTED : trustedCatalogue === true ? OFFICIAL_VIA_SEARCH_CONSULTED : OFFICIAL_LEGACY_CONSULTED;
     const missingOfficial = institutional ? null : officialMissingNote(side, wikipedia);
 
     if (m.value === 'academic') {

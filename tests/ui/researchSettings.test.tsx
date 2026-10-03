@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import { NOT_SEARCHED_SITES, SEARCHED_DOMAIN_COUNT, trustedSearchGroups } from '@shared/research/trusted';
 import { cleanup, fakeRuntime, flush, MemoryStore, PROFILE_COLLEGE, render } from './helpers';
 import { installFakeLocalAI, removeFakeLocalAI } from './localAIHelpers';
 
@@ -38,18 +39,24 @@ describe('Réglages (application Windows) — recherche', () => {
     const { container } = await mountSettings();
     const section = text(container);
     expect(section).toContain('Recherche académique (HAL, Crossref, OpenAlex)');
-    expect(section).toContain('les sites officiels vérifiés (UNESCO, Éduscol, ministères…) que leurs références citent');
+    expect(section).toContain('les sites officiels vérifiés que leurs références citent pour votre sujet');
+    expect(section).not.toMatch(/\btous les sites\b|tout le catalogue/);
   });
 
-  it('moteur de recherche web (SearXNG) : facultatif, interroge directement les sites officiels vérifiés, aucun autre site', async () => {
+  it('moteur de recherche web (SearXNG) : facultatif, interroge directement les principaux sites officiels vérifiés (nombre exact), dit ce qui ne l\'est pas, aucun autre site', async () => {
     installFakeLocalAI({ engine: 'running', installed: ['standard'] });
     const { container } = await mountSettings();
     const label = [...container.querySelectorAll('label')].find(l => l.textContent === 'Moteur de recherche web (facultatif)');
     expect(label).toBeDefined();
     const paragraph = text(label!.nextElementSibling);
     expect(paragraph).toContain('SearXNG');
-    expect(paragraph).toContain('interroger directement tous les sites officiels vérifiés (UNESCO, Éduscol, ministères…)');
-    expect(paragraph).toContain('sans lui, Magistra consulte ceux que Wikipédia cite');
+    expect(paragraph).toContain('interroger directement les principaux sites officiels vérifiés (UNESCO, Éduscol, ministères, ONU…)');
+    expect(paragraph).not.toMatch(/\btous\b|tout le catalogue/);
+    // Le nombre annoncé est celui des domaines réellement interrogés, et ce qui ne l'est pas est nommé.
+    expect(paragraph).toContain(`soit ${SEARCHED_DOMAIN_COUNT} domaines`);
+    expect(trustedSearchGroups().flat()).toHaveLength(SEARCHED_DOMAIN_COUNT);
+    expect(paragraph).toContain(`Ne sont pas interrogés directement : ${NOT_SEARCHED_SITES}.`);
+    expect(paragraph).toContain('Sans lui, Magistra consulte seulement les sites officiels vérifiés que Wikipédia cite pour le sujet');
     expect(paragraph).toContain("Aucun autre site n'est interrogé");
     // Plus d'annonce d'une « recherche web » générale ni de « sources institutionnelles (Bulletin officiel) ».
     expect(text(container)).not.toMatch(/Recherche web \(facultatif\)|[Ss]ources institutionnelles/);

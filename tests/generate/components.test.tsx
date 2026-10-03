@@ -411,7 +411,8 @@ describe('ResearchModePicker — sites officiels vérifiés', () => {
     );
     expect(html).toContain('Consulté : sites officiels vérifiés cités par Wikipédia, Wikipédia (à recouper).');
     expect(html).not.toContain('non consultés');
-    expect(html).toContain('Sites officiels vérifiés (UNESCO, Éduscol, ministères…) et Wikipédia, sans vos documents.');
+    expect(html).toContain('Sites officiels vérifiés et Wikipédia, sans vos documents.');
+    expect(html).not.toMatch(/UNESCO|Éduscol/);
   });
 });
 

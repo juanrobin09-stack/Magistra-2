@@ -361,7 +361,7 @@ describe('site web ⇄ application : protocole réel', () => {
     expect(status).toEqual({
       version: VERSION,
       engine: { ready: true, local: true, label: 'Magistra Standard' },
-      capabilities: { maxDocumentChars: expect.any(Number), research: { academic: true, web: false, institutional: false, wikipedia: true } },
+      capabilities: { maxDocumentChars: expect.any(Number), research: { academic: true, web: false, institutional: false, wikipedia: true, trustedCatalogue: true } },
       busy: false,
     });
 

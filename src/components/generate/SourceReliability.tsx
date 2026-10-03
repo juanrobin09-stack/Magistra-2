@@ -1,7 +1,7 @@
-// Fiabilité des sources citées : combien de documents, de sources officielles, de publications scientifiques, d'articles
-// Wikipédia (à recouper) et de pages web non vérifiées, du plus fiable au moins fiable.
+// Fiabilité des sources citées : combien de documents, de sources officielles, de publications scientifiques, de pages de
+// plateformes ouvertes, d'articles Wikipédia (à recouper) et de pages web non vérifiées, du plus fiable au moins fiable.
 
-import { BookOpenCheck, Building2, FileText, Globe, GraduationCap } from 'lucide-react';
+import { BookOpenCheck, Building2, FileText, Globe, GraduationCap, Library } from 'lucide-react';
 import { reliabilitySummary, type ReliabilityTier } from '@shared/citations';
 import type { SourceRef } from '@shared/types';
 
@@ -9,6 +9,7 @@ const ICONS: Record<ReliabilityTier, typeof Globe> = {
   document: FileText,
   official: Building2,
   scientific: GraduationCap,
+  open: Library,
   encyclopedic: BookOpenCheck,
   web: Globe,
 };
@@ -18,6 +19,7 @@ const STYLES: Record<ReliabilityTier, string> = {
   document: 'badge-accent',
   official: 'badge-success',
   scientific: 'badge-success',
+  open: 'bg-warning/10 text-warning border border-warning/25',
   encyclopedic: 'bg-warning/10 text-warning border border-warning/25',
   web: 'bg-warning/10 text-warning border border-warning/25',
 };
@@ -30,7 +32,7 @@ export default function SourceReliability({ sources }: { sources: readonly Sourc
       {summary.map(({ tier, label, count }) => {
         const Icon = ICONS[tier];
         return (
-          <li key={tier} className={`badge ${STYLES[tier]}`}>
+          <li key={label} className={`badge ${STYLES[tier]}`}>
             <Icon size={11} aria-hidden="true" /> {label} : {count}
           </li>
         );

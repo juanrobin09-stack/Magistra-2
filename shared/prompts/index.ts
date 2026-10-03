@@ -27,11 +27,12 @@ const HONESTY_RULES = `RÈGLES D'HONNÊTETÉ (impératives) :
 - Ne rédige pas toi-même de section « Sources », « Références » ou « Bibliographie » : la liste des sources est ajoutée automatiquement à partir des sources réellement fournies.`;
 
 /**
- * Ordre de confiance des sources fournies, en une ligne (≤ 60 jetons : le niveau Léger a peu de contexte). Il ne vise
- * que les faits à citer : jamais les nombres d'un exercice ou d'un calcul, que QUALITY_RULES demande de vérifier.
+ * Ordre de confiance des sources fournies, en une ligne (≤ 70 jetons estimés : le niveau Léger a peu de contexte ; la règle
+ * n'est présente que lorsque des sources sont fournies). Il ne vise que les faits à citer : jamais les nombres d'un
+ * exercice ou d'un calcul, que QUALITY_RULES demande de vérifier.
  */
 export const SOURCE_PRIORITY_RULE =
-  "Hiérarchie : documents de l'enseignant > sources officielles > publications > Wikipédia. Désaccord : la plus fiable l'emporte et il est signalé. Faits chiffrés, dates, lois : ceux des sources.";
+  "Hiérarchie : documents de l'enseignant > sources officielles > publications > Wikipédia. Désaccord : la plus fiable l'emporte et il est signalé, jamais mélangé. Faits chiffrés, dates, lois : seulement ceux des sources.";
 
 const WITH_SOURCES = `UTILISATION DES SOURCES :
 - Des SOURCES numérotées [S1], [S2]… te sont fournies. Appuie-toi d'abord sur elles.

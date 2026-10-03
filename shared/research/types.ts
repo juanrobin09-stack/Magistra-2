@@ -26,7 +26,7 @@ export interface ResearchConfig {
    * l'administrateur d'un serveur auto-hébergé (RESEARCH_TRUSTED_ONLY=false) : le web général est alors admis.
    */
   trustedOnly?: boolean;
-  /** Adresse de contact transmise à Crossref (« polite pool »), facultative. */
+  /** Adresse de contact transmise à Crossref et à OpenAlex (paramètre « mailto », accès prioritaire), facultative. */
   crossrefMailto?: string;
   /** Délai maximal par requête externe. */
   timeoutMs: number;
@@ -50,13 +50,23 @@ export interface FetchedPage {
   text: string;
 }
 
+/** Options facultatives d'une récupération de page. */
+export interface FetchPageOptions {
+  /**
+   * Prédicat évalué AVANT la première connexion et AVANT chaque saut de redirection : faux, la page est refusée (null)
+   * sans aucune connexion, pas même une résolution DNS. Une redirection n'est ainsi jamais suivie vers un hôte que
+   * l'appelant n'a pas admis : rien n'est contacté chez lui (adresse IP, user-agent, sujet cherché).
+   */
+  allowUrl?: (url: URL) => boolean;
+}
+
 export interface ResearchDeps {
   fetch: (input: string, init?: RequestInit) => Promise<Response>;
   /**
    * Récupération sécurisée d'une page web (protection SSRF, taille bornée).
    * Fournie par le serveur ou l'application Windows ; absente dans le navigateur.
    */
-  fetchPage?: (url: string, signal?: AbortSignal) => Promise<FetchedPage | null>;
+  fetchPage?: (url: string, signal?: AbortSignal, options?: FetchPageOptions) => Promise<FetchedPage | null>;
 }
 
 export const DEFAULT_RESEARCH_CONFIG: ResearchConfig = {

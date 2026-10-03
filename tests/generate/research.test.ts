@@ -16,11 +16,13 @@ function caps(partial: Omit<Partial<Capabilities>, 'research'> & { research?: Pa
     ready: true,
     privacy: { level: 'local', message: 'Tout reste sur cet ordinateur.' },
     ...partial,
-    research: { academic: true, web: true, institutional: true, wikipedia: true, ...partial.research },
+    // Version actuelle du moteur : elle annonce le catalogue des sites vérifiés (`trustedCatalogue`).
+    research: { academic: true, web: true, institutional: true, wikipedia: true, trustedCatalogue: true, ...partial.research },
   };
 }
 
-const OFFICIAL_SEARCH = 'sites officiels vérifiés (UNESCO, Éduscol, ministères…)';
+const OFFICIAL_SEARCH = 'principaux sites officiels vérifiés (UNESCO, Éduscol, ministères, ONU…)';
+const OFFICIAL_LEGACY = 'sites officiels (Éduscol, education.gouv.fr…)';
 const OFFICIAL_WIKIPEDIA = 'sites officiels vérifiés cités par Wikipédia';
 const PUBLICATIONS = 'publications HAL, Crossref et OpenAlex';
 const WIKIPEDIA = 'Wikipédia (à recouper)';
@@ -137,11 +139,48 @@ describe('modes de recherche', () => {
     expect(options.every(o => o.note === undefined)).toBe(true);
   });
 
-  it('descriptions des modes : sites officiels vérifiés, jamais « le web » en général', () => {
+  it('descriptions des modes : sites officiels vérifiés, jamais « le web » en général, aucun site nommé comme garanti', () => {
     const descriptions = describeResearchOptions(caps(), 'local', '4eme').map(o => o.description);
     expect(descriptions[1]).toBe('Vos documents + publications scientifiques (HAL, Crossref, OpenAlex) et sites officiels vérifiés.');
-    expect(descriptions[2]).toBe('Sites officiels vérifiés (UNESCO, Éduscol, ministères…) et Wikipédia, sans vos documents.');
+    expect(descriptions[2]).toBe('Sites officiels vérifiés et Wikipédia, sans vos documents.');
     expect(descriptions[3]).toBe('Vos documents en priorité, complétés par les sites officiels vérifiés et Wikipédia.');
+    expect(descriptions.join(' ')).not.toMatch(/UNESCO|Éduscol|\btous\b|tout le catalogue/);
+  });
+
+  it('jamais « tous » les sites ni « tout le catalogue » dans ce que le sélecteur annonce ; seul le moteur de recherche web nomme des sites, comme des exemples', () => {
+    const all = [OFFICIAL_SEARCH, OFFICIAL_WIKIPEDIA, OFFICIAL_LEGACY];
+    for (const text of all) expect(text).not.toMatch(/\btous\b|tout le catalogue/i);
+    expect(OFFICIAL_SEARCH).toMatch(/^principaux sites officiels vérifiés/);
+    // Sans moteur de recherche web : les pages que Wikipédia cite pour le sujet, aucun site nommé comme garanti.
+    expect(OFFICIAL_WIKIPEDIA).not.toMatch(/UNESCO|Éduscol|ministères/);
+    const wikipediaOnly = describeResearchOptions(caps({ research: { web: false } }), 'local', '4eme');
+    expect(wikipediaOnly.map(o => o.note ?? '').join(' ')).not.toMatch(/UNESCO|Éduscol|ministères/);
+  });
+
+  it('ancienne application (même protocole, sans « trustedCatalogue ») : texte prudent, ni UNESCO ni « vérifiés », aucun filtrage promis', () => {
+    const legacy = (research: Partial<Capabilities['research']>) => caps({ research: { trustedCatalogue: undefined, ...research } });
+    for (const mode of ['local', 'web'] as const) {
+      for (const niveau of ['4eme', 'master_1'] as const) {
+        const options = describeResearchOptions(legacy({}), mode, niveau);
+        for (const value of ['internet', 'documents_internet', 'academic'] as const) {
+          const text = note(options, value) ?? '';
+          expect(text, `${mode}/${niveau}/${value}`).toContain(OFFICIAL_LEGACY);
+          expect(text, `${mode}/${niveau}/${value}`).not.toMatch(/UNESCO|vérifiés|ministères|ONU/);
+        }
+      }
+    }
+    expect(note(describeResearchOptions(legacy({}), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_LEGACY}, ${WIKIPEDIA}.`);
+    expect(note(describeResearchOptions(legacy({}), 'local', 'master_1'), 'academic')).toBe(`Consulté : ${PUBLICATIONS}, ${OFFICIAL_LEGACY}.`);
+    // Site web, Magistra locale : même texte prudent.
+    expect(note(describeResearchOptions(legacy({}), 'web', '4eme', 'local-connector'), 'internet')).toBe(`Consulté : ${OFFICIAL_LEGACY}, ${WIKIPEDIA}.`);
+    // Le champ explicitement faux vaut l'absence ; seul « vrai » annonce le catalogue.
+    expect(note(describeResearchOptions(legacy({ trustedCatalogue: false }), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_LEGACY}, ${WIKIPEDIA}.`);
+    expect(note(describeResearchOptions(caps({ research: { trustedCatalogue: true } }), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_SEARCH}, ${WIKIPEDIA}.`);
+    // Sans moteur de recherche web, « institutional » ne vient que du chemin par Wikipédia, propre aux versions actuelles.
+    expect(note(describeResearchOptions(legacy({ web: false }), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_WIKIPEDIA}, ${WIKIPEDIA}.`);
+    // Sans chemin vers les sites officiels : le champ ne change rien (rien n'est promis).
+    expect(note(describeResearchOptions(legacy({ web: false, institutional: false }), 'local', '4eme'), 'internet'))
+      .toBe(`Consulté : ${WIKIPEDIA}. Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.`);
   });
 });
 

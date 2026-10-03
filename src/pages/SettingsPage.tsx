@@ -17,7 +17,8 @@ import { getMatiereLabel } from '@shared/catalog';
 import { isMagistraError } from '@shared/errors';
 import type { AppInfo, LocalPreferences } from '@shared/ipc';
 import { getNiveauLabel } from '@shared/levels';
-import { RESEARCH_MODES, type ResearchMode } from '@shared/types';
+import { SEARCH_SCOPE_TEXT } from '@shared/research/trusted';
+import { RESEARCH_MODES, type Capabilities, type ResearchMode } from '@shared/types';
 import ActivateAICard from '@/components/ai/ActivateAICard';
 import AdminContactLine from '@/components/ai/AdminContactLine';
 import AdvancedAIOptions from '@/components/ai/AdvancedAIOptions';
@@ -388,6 +389,9 @@ function DemoAISettings() {
 // ─── Recherche ─────────────────────────────────────────────────────────────
 
 const RESEARCH_PRIVACY = 'Quand une recherche en ligne est utilisée, Magistra envoie seulement le sujet et les mots-clés de votre demande : jamais vos documents ni votre profil.';
+/** Serveur en ligne : l'adresse de contact de son administrateur (CROSSREF_MAILTO) accompagne les requêtes de publications. */
+const RESEARCH_CONTACT_NOTE =
+  'Si l’administrateur du serveur a indiqué une adresse de contact, elle est transmise à Crossref et à OpenAlex avec la requête (jamais la vôtre).';
 
 function Checkbox({ checked, onChange, label, hint, disabled }: {
   checked: boolean; onChange(value: boolean): void; label: string; hint?: string; disabled?: boolean;
@@ -469,7 +473,7 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
           checked={prefs.wikipediaEnabled}
           onChange={v => void update({ wikipediaEnabled: v }, 'wikipedia')}
           label="Wikipédia"
-          hint="Articles de l'encyclopédie en français, signalés « à recouper », et les sites officiels vérifiés (UNESCO, Éduscol, ministères…) que leurs références citent."
+          hint="Articles de l'encyclopédie en français, signalés « à recouper », et les sites officiels vérifiés que leurs références citent pour votre sujet."
         />
         {(saved === 'academic' || saved === 'wikipedia') && <SuccessNote>Enregistré.</SuccessNote>}
       </div>
@@ -500,8 +504,8 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
       <form onSubmit={e => void submitSearx(e)} className="space-y-2 border-t border-white/5 pt-4">
         <label htmlFor={searxId} className="block text-sm font-semibold text-white">Moteur de recherche web (facultatif)</label>
         <p className="text-xs text-mg-200">
-          Adresse d'un moteur de recherche SearXNG. Il permet d'interroger directement tous les sites officiels vérifiés
-          (UNESCO, Éduscol, ministères…) ; sans lui, Magistra consulte ceux que Wikipédia cite. Aucun autre site n'est
+          Adresse d'un moteur de recherche SearXNG. Il permet d'interroger directement {SEARCH_SCOPE_TEXT} Sans lui,
+          Magistra consulte seulement les sites officiels vérifiés que Wikipédia cite pour le sujet. Aucun autre site n'est
           interrogé. Laissez vide si vous n'en avez pas.
         </p>
         <input
@@ -524,19 +528,34 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
   );
 }
 
+/**
+ * Ce que « Sites officiels vérifiés » consulte réellement, d'après les capacités : jamais « tous » les sites, jamais un site
+ * nommé comme garanti sans moteur de recherche web (seuls les sites que Wikipédia cite pour le sujet sont alors consultés).
+ */
+function officialSitesNote(r: Capabilities['research']): string {
+  if (!r.institutional) return '';
+  // Sans moteur de recherche web, « institutional » ne vient que du chemin par Wikipédia, propre aux versions actuelles.
+  if (!r.web) return 'Seulement ceux que Wikipédia cite pour votre sujet : aucun moteur de recherche web n’est configuré.';
+  return r.trustedCatalogue === true
+    ? 'Les principaux sites officiels vérifiés (UNESCO, Éduscol, ministères, ONU…), par le moteur de recherche web.'
+    : 'Version plus ancienne : seulement quelques sites officiels (Éduscol, education.gouv.fr…), par le moteur de recherche web.';
+}
+
 function WebResearchSettings({ caps }: { caps: CapabilitiesState }) {
   const c = caps.capabilities;
   // Magistra locale pas encore prête : ses sources ne sont pas connues (jamais « non disponible » à tort).
   const r = c && !(c.route === 'local-connector' && !c.ready) ? c.research : undefined;
-  const rows: { label: string; ok: boolean | undefined }[] = [
+  const rows: { label: string; ok: boolean | undefined; note?: string }[] = [
     { label: 'Sources académiques (HAL, Crossref, OpenAlex)', ok: r?.academic },
-    { label: 'Sites officiels vérifiés (UNESCO, Éduscol, ministères…)', ok: r?.institutional },
+    { label: 'Sites officiels vérifiés', ok: r?.institutional, note: r ? officialSitesNote(r) : undefined },
     { label: 'Moteur de recherche web', ok: r?.web },
     { label: 'Wikipédia', ok: r?.wikipedia },
   ];
   return (
     <>
       <p className="text-sm text-mg-100">{RESEARCH_PRIVACY}</p>
+      {/* Magistra locale : les recherches sont faites par l'application Windows, qui n'a pas d'adresse de contact à transmettre. */}
+      {c?.route !== 'local-connector' && <p className="text-xs text-mg-200">{RESEARCH_CONTACT_NOTE}</p>}
       <dl className="space-y-1.5 text-sm">
         {rows.map(row => (
           <div key={row.label} className="flex flex-wrap justify-between gap-2">
@@ -544,6 +563,7 @@ function WebResearchSettings({ caps }: { caps: CapabilitiesState }) {
             <dd className={row.ok ? 'text-success' : 'text-mg-100'}>
               {r === undefined ? (caps.loading ? 'Vérification…' : 'Inconnu') : row.ok ? 'Disponible' : 'Non disponible'}
             </dd>
+            {row.note && <dd className="basis-full text-xs text-mg-200">{row.note}</dd>}
           </div>
         ))}
       </dl>

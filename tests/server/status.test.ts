@@ -120,7 +120,7 @@ describe('GET /api/status', () => {
           retention: 'Selon les conditions du prestataire', training: 'Selon les conditions du prestataire',
         },
       },
-      research: { academic: true, web: true, institutional: true, wikipedia: true },
+      research: { academic: true, web: true, institutional: true, wikipedia: true, trustedCatalogue: true },
       maxDocumentChars: maxDocumentCharsFor(32_768),
     });
   });
@@ -138,18 +138,18 @@ describe('GET /api/status', () => {
       return status.research;
     };
     // Cas normal d'un serveur sans SearXNG : Wikipédia actif (défaut) et récupération de pages.
-    expect(await research({})).toEqual({ academic: true, web: false, institutional: true, wikipedia: true });
+    expect(await research({})).toEqual({ academic: true, web: false, institutional: true, wikipedia: true, trustedCatalogue: true });
     // Wikipédia désactivé, aucun moteur : plus aucun chemin vers les sites officiels.
-    expect(await research({ RESEARCH_WIKIPEDIA: 'false' })).toEqual({ academic: true, web: false, institutional: false, wikipedia: false });
+    expect(await research({ RESEARCH_WIKIPEDIA: 'false' })).toEqual({ academic: true, web: false, institutional: false, wikipedia: false, trustedCatalogue: true });
     // SearXNG suffit, même sans Wikipédia.
-    expect(await research({ RESEARCH_WIKIPEDIA: 'false', SEARXNG_URL: 'https://searx.univ.fr' })).toEqual({ academic: true, web: true, institutional: true, wikipedia: false });
+    expect(await research({ RESEARCH_WIKIPEDIA: 'false', SEARXNG_URL: 'https://searx.univ.fr' })).toEqual({ academic: true, web: true, institutional: true, wikipedia: false, trustedCatalogue: true });
   });
 
   it('sans récupération de pages (hébergement qui n’en fournit pas) et sans SearXNG : sites officiels non disponibles', async () => {
     const research = { config: { academic: true, wikipedia: true, timeoutMs: 1_000 }, deps: { fetch: () => Promise.reject(new Error('réseau interdit')) } };
     server = await startApi(testDeps({ overrides: { research } }));
     const status = await (await call(server.url, '/api/status', 'token-A')).json() as ServerStatus;
-    expect(status.research).toEqual({ academic: true, web: false, institutional: false, wikipedia: true });
+    expect(status.research).toEqual({ academic: true, web: false, institutional: false, wikipedia: true, trustedCatalogue: true });
   });
 
   it('serveur d’IA non configuré : ai.ok = false avec un message clair', async () => {
@@ -158,7 +158,7 @@ describe('GET /api/status', () => {
     expect(status.ai.ok).toBe(false);
     expect(status.ai.code).toBe('AI_NOT_CONFIGURED');
     expect(status.ai.label).toBe("Serveur d'IA");
-    expect(status.research).toEqual({ academic: false, web: false, institutional: false, wikipedia: false });
+    expect(status.research).toEqual({ academic: false, web: false, institutional: false, wikipedia: false, trustedCatalogue: true });
   });
 
   it('serveur d’IA injoignable : ai.ok = false (délai court)', async () => {

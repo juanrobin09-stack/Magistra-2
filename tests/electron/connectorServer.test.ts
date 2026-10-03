@@ -1023,7 +1023,7 @@ describe('requêtes signées', () => {
     expect(reply.json).toEqual({
       version: VERSION,
       engine: { ready: false, local: true, label: 'Magistra Standard', notReady: { code: 'AI_SERVER_UNAVAILABLE', message: "Serveur d'IA indisponible. Réessayez dans quelques instants." } },
-      capabilities: { maxDocumentChars: expect.any(Number), research: { academic: true, web: false, institutional: false, wikipedia: true } },
+      capabilities: { maxDocumentChars: expect.any(Number), research: { academic: true, web: false, institutional: false, wikipedia: true, trustedCatalogue: true } },
       busy: false,
     });
     for (const leak of ['127.0.0.1', 'localhost', 'http', '11434', String(port), 'Users', '.ollama', 'ministral']) expect(reply.text).not.toContain(leak);

@@ -8,8 +8,10 @@ import {
   NO_ABSTRACT_TEXT, readWikipediaPages, searchCrossref, searchHal, searchOpenAlex, searchSearxng, searchWikipediaPages, stripTags,
   wikipediaExternalLinks, type WikipediaPage,
 } from './providers.js';
-import { isTrustedHttpsUrl, selectTrustedLinks, trustedPriority, trustedSearchGroups, trustedSiteFor } from './trusted.js';
-import type { FetchedPage, ResearchConfig, ResearchDeps, ResearchOutcome, ResearchSource, ResearchWarning } from './types.js';
+import {
+  isCitablePage, isFetchableHttpsUrl, selectTrustedLinks, trustedPriority, trustedSearchGroups, trustedSiteFor,
+} from './trusted.js';
+import type { FetchedPage, FetchPageOptions, ResearchConfig, ResearchDeps, ResearchOutcome, ResearchSource, ResearchWarning } from './types.js';
 
 export * from './types.js';
 
@@ -18,6 +20,8 @@ export const OFFICIAL_UNAVAILABLE_MESSAGE =
   'Sites officiels (Éduscol, UNESCO, ministères…) non consultés. Ajoutez vos documents officiels (programmes, textes) pour les utiliser.';
 /** Un chemin a répondu, mais aucune page des sites vérifiés ne correspond au sujet. */
 export const NO_OFFICIAL_FOUND_MESSAGE = 'Aucune source officielle trouvée pour ce sujet : à vérifier.';
+/** Wikipédia a répondu, mais aucune requête de ses références (liens externes) n'a abouti : les sites officiels n'ont pas été consultés. */
+export const OFFICIAL_LINKS_UNAVAILABLE_MESSAGE = 'Sites officiels non consultés : les références de Wikipédia n’ont pas pu être lues.';
 
 const UNIVERSITY: LevelGroup[] = ['bts_but', 'cpge', 'licence', 'master', 'doctorat'];
 
@@ -49,6 +53,7 @@ function boundedFetchPage(
   url: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  options?: FetchPageOptions,
 ): Promise<Awaited<ReturnType<NonNullable<ResearchDeps['fetchPage']>>>> {
   const controller = new AbortController();
   const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
@@ -62,7 +67,7 @@ function boundedFetchPage(
       reject(new Error('recherche interrompue'));
     };
     signal?.addEventListener('abort', onAbort, { once: true });
-    fetchPage(url, combined).then(
+    fetchPage(url, combined, options).then(
       page => {
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
@@ -83,9 +88,10 @@ function boundedFetchPage(
  * - « Sources académiques » : HAL, Crossref et OpenAlex, puis les sites vérifiés ;
  * - « Internet » / « Documents + Internet » :
  *   - supérieur : HAL, Crossref et OpenAlex > sites vérifiés > Wikipédia ;
- *   - scolaire : sites vérifiés (Éduscol, UNESCO, ministères…) > Wikipédia.
- * Les sites vérifiés (`institutional`) sont interrogés par SearXNG (requêtes « site: ») ou, sans lui, par les références
- * de Wikipédia. `web` (web général) n'est consulté que si l'administrateur a levé la restriction `trustedOnly`.
+ *   - scolaire : sites vérifiés > Wikipédia.
+ * Les sites vérifiés (`institutional`) sont interrogés par SearXNG (requêtes « site: » sur les principaux sites du
+ * catalogue : SEARCHED_DOMAIN_COUNT) ou, sans lui, par les références de Wikipédia (les pages que Wikipédia cite pour le
+ * sujet). `web` (web général) n'est consulté que si l'administrateur a levé la restriction `trustedOnly`.
  */
 export function planResearch(mode: ResearchMode, group: LevelGroup): ResearchPlan {
   const university = UNIVERSITY.includes(group);
@@ -96,8 +102,9 @@ export function planResearch(mode: ResearchMode, group: LevelGroup): ResearchPla
 }
 
 /**
- * Chemin vers les sites vérifiés : SearXNG (requêtes « site: » sur tout le catalogue) ; à défaut, les références de
- * Wikipédia, dont les pages sont récupérées avec `fetchPage` (absente dans le navigateur) ; sinon aucun.
+ * Chemin vers les sites vérifiés : SearXNG (requêtes « site: » sur les SEARCHED_DOMAIN_COUNT principaux sites du catalogue,
+ * pas sur chacun) ; à défaut, les références de Wikipédia, dont les pages sont récupérées avec `fetchPage` (absente dans le
+ * navigateur) ; sinon aucun.
  */
 export function officialSitesPath(
   config: Pick<ResearchConfig, 'searxngUrl' | 'wikipedia'>,
@@ -144,9 +151,19 @@ function trustRank(url: string): number {
   return site ? trustedPriority(site) : 5;
 }
 
-/** Redirection hors du catalogue : sous la restriction aux sites vérifiés, l'adresse finale de la page doit en faire partie (https). */
-function leftCatalogue(page: FetchedPage, trustedOnly: boolean): boolean {
-  return trustedOnly && !isTrustedHttpsUrl(page.url);
+/**
+ * Page récupérée à écarter : sous la restriction aux sites vérifiés, son adresse FINALE (après redirections) doit être une
+ * page citable du catalogue (https, ni accueil ni recherche ni connexion). Défense en profondeur : `allowUrl` a déjà
+ * empêché toute connexion à un hôte hors catalogue.
+ */
+function refusedPage(page: FetchedPage, trustedOnly: boolean): boolean {
+  return trustedOnly && !isCitablePage(page.url);
+}
+
+/** Origine d'une source d'après l'adresse FINALE de sa page : « officielle » seulement pour une page citable du catalogue. */
+function originOf(url: string): Pick<ResearchSource, 'kind' | 'venue'> {
+  const site = isCitablePage(url) ? trustedSiteFor(url) : null;
+  return site ? { kind: 'institutional', venue: site.label } : { kind: 'web' };
 }
 
 /** Dédoublonne par DOI, URL ou titre : la première occurrence (la plus prioritaire) est conservée. */
@@ -197,8 +214,10 @@ export async function runResearch(
     }
   };
 
-  // Sous la restriction aux sites vérifiés (défaut), rien d'autre que le catalogue n'est retenu.
+  // Sous la restriction aux sites vérifiés (défaut), rien d'autre que le catalogue n'est retenu, ni même contacté : la
+  // récupération d'une page refuse l'adresse de départ comme chaque redirection AVANT de s'y connecter.
   const trustedOnly = config.trustedOnly !== false;
+  const fetchOptions: FetchPageOptions | undefined = trustedOnly ? { allowUrl: url => isFetchableHttpsUrl(url.href) } : undefined;
 
   // 1. Académique : HAL, Crossref puis OpenAlex.
   const academicTask = plan.academic && config.academic
@@ -217,7 +236,7 @@ export async function runResearch(
     warnings.push({ code: 'ACADEMIC_UNAVAILABLE', message: 'Recherche académique désactivée dans les réglages.' });
   }
 
-  // 2. Sites vérifiés : par SearXNG (requêtes « site: » sur tout le catalogue) ou, sans lui, par les références de Wikipédia.
+  // 2. Sites vérifiés : par SearXNG (requêtes « site: » sur les principaux sites du catalogue) ou, sans lui, par les références de Wikipédia.
   const officialPath = officialSitesPath(config, deps);
   const viaSearx = officialPath === 'searxng';
   const viaWikipedia = officialPath === 'wikipedia';
@@ -244,9 +263,10 @@ export async function runResearch(
       officialResponded = true;
       const results = settled.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
       // Sites vérifiés d'abord (éducation, organisations internationales, recherche, le reste), puis le reste ; dédoublonnage par URL.
+      // Sous la restriction, seules des pages citables du catalogue sont retenues (ni accueil, ni recherche, ni connexion).
       const seen = new Set<string>();
       const ordered = results
-        .filter(r => !trustedOnly || isTrustedHttpsUrl(r.url!))
+        .filter(r => !trustedOnly || isCitablePage(r.url!))
         .sort((a, b) => trustRank(a.url!) - trustRank(b.url!))
         .filter(r => {
           const key = normalizeUrl(r.url!);
@@ -258,24 +278,36 @@ export async function runResearch(
       const pages = await Promise.all(ordered.map(async (r): Promise<ResearchSource | null> => {
         let text = stripTags(r.content ?? '');
         let title = (r.title ?? '').trim() || r.url!;
+        // Adresse de la source : celle du texte retenu. Une redirection (catalogue vers catalogue) la déplace, avec le nom
+        // du site et le niveau de fiabilité, comme pour les pages citées par Wikipédia.
+        let url = r.url!;
         if (deps.fetchPage) {
           try {
-            const page = await boundedFetchPage(deps.fetchPage, r.url!, config.timeoutMs * 2, options.signal);
-            // Redirection hors du catalogue : la page est écartée.
-            if (page && leftCatalogue(page, trustedOnly)) return null;
+            const page = await boundedFetchPage(deps.fetchPage, r.url!, config.timeoutMs * 2, options.signal, fetchOptions);
+            // Redirection hors du catalogue, ou vers une page qui n'est pas citable : la page est écartée.
+            if (page && refusedPage(page, trustedOnly)) return null;
             if (page?.text && page.text.length > text.length) {
+              const moved = normalizeUrl(page.url) !== normalizeUrl(r.url!);
               text = page.text;
-              title = (r.title ?? '').trim() || page.title || title;
+              url = page.url;
+              // Le titre du moteur de recherche décrit l'adresse demandée : après une redirection, celui de la page finale.
+              title = moved ? page.title?.trim() || title : (r.title ?? '').trim() || page.title || title;
             }
           } catch {
             // on garde l'extrait fourni par le moteur de recherche
           }
         }
-        // Officielle seulement si le site est du catalogue ET servi en https ; sinon « web » (restriction levée).
-        const site = isTrustedHttpsUrl(r.url!) ? trustedSiteFor(r.url!) : null;
-        return { kind: site ? 'institutional' : 'web', title, ...(site ? { venue: site.label } : {}), url: r.url, text };
+        return { ...originOf(url), title, url, text };
       }));
-      return pages.filter((p): p is ResearchSource => p !== null && p.text.trim().length > 40);
+      // Deux résultats peuvent aboutir à la même page : dédoublonnage sur l'adresse FINALE.
+      const finalUrls = new Set<string>();
+      return pages.filter((p): p is ResearchSource => {
+        if (p === null || p.text.trim().length <= 40) return false;
+        const key = normalizeUrl(p.url!);
+        if (finalUrls.has(key)) return false;
+        finalUrls.add(key);
+        return true;
+      });
     })();
   }
 
@@ -295,16 +327,21 @@ export async function runResearch(
   const officialViaWikipediaTask = plan.institutional && viaWikipedia
     ? wikiPagesTask.then(async (pages): Promise<ResearchSource[]> => {
         if (!pages) return [];
-        officialResponded = true;
         // Liens externes des pages trouvées (une requête par page), puis au plus 3 pages des sites vérifiés.
         const linkSets = await Promise.allSettled(pages.map(page => track(wikipediaExternalLinks(page.pageId, deps, { timeoutMs: t, signal: options.signal }))));
+        // Le chemin n'a « répondu » que si une requête de liens a abouti (ou si Wikipédia n'a trouvé aucune page) : sinon
+        // « aucune source officielle trouvée » serait faux, rien n'ayant été consulté.
+        if (linkSets.length > 0 && linkSets.every(r => r.status === 'rejected')) {
+          warnings.push({ code: 'INSTITUTIONAL_UNAVAILABLE', message: OFFICIAL_LINKS_UNAVAILABLE_MESSAGE });
+          return [];
+        }
+        officialResponded = true;
         const links = selectTrustedLinks(linkSets.flatMap(r => (r.status === 'fulfilled' ? r.value : [])), 3);
         const found = await Promise.all(links.map(async ({ url }): Promise<ResearchSource | null> => {
           try {
-            const page = await boundedFetchPage(deps.fetchPage!, url, config.timeoutMs * 2, options.signal);
-            if (!page || page.text.trim().length <= 40 || leftCatalogue(page, trustedOnly)) return null;
-            const site = isTrustedHttpsUrl(page.url) ? trustedSiteFor(page.url) : null;
-            return { kind: site ? 'institutional' : 'web', title: page.title?.trim() || new URL(page.url).hostname, ...(site ? { venue: site.label } : {}), url: page.url, text: page.text };
+            const page = await boundedFetchPage(deps.fetchPage!, url, config.timeoutMs * 2, options.signal, fetchOptions);
+            if (!page || page.text.trim().length <= 40 || refusedPage(page, trustedOnly)) return null;
+            return { ...originOf(page.url), title: page.title?.trim() || new URL(page.url).hostname, url: page.url, text: page.text };
           } catch {
             return null;
           }

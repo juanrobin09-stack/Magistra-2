@@ -215,6 +215,8 @@ async function status(deps: ServerDeps): Promise<ApiResult> {
       web: Boolean(research.searxngUrl),
       institutional: officialSitesPath(research, deps.research.deps) !== null,
       wikipedia: research.wikipedia,
+      // Cette version s'appuie sur le catalogue des sites officiels vérifiés (absent d'un serveur plus ancien).
+      trustedCatalogue: true,
     },
     maxDocumentChars,
   };

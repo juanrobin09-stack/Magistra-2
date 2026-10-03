@@ -122,12 +122,47 @@ describe('Réglages — IA du serveur', () => {
     const state = (label: string) => [...container.querySelectorAll('dl > div')]
       .find(row => row.querySelector('dt')?.textContent === label)?.querySelector('dd')?.textContent;
     expect(state('Sources académiques (HAL, Crossref, OpenAlex)')).toBe('Disponible');
-    expect(state('Sites officiels vérifiés (UNESCO, Éduscol, ministères…)')).toBe('Disponible');
+    expect(state('Sites officiels vérifiés')).toBe('Disponible');
     expect(state('Moteur de recherche web')).toBe('Non disponible');
     expect(state('Wikipédia')).toBe('Disponible');
     const none: Capabilities = { ...READY, research: { academic: true, web: false, institutional: false, wikipedia: false } };
     const unavailable = (await mount(<SettingsPage />, 'personal', none)).container;
     expect([...unavailable.querySelectorAll('dl > div')].find(row => row.textContent?.startsWith('Sites officiels vérifiés'))?.querySelector('dd')?.textContent).toBe('Non disponible');
+  });
+
+  it('« Sites officiels vérifiés » : « Disponible » avec la nuance exacte (jamais « tous », ni un site nommé sans moteur de recherche web)', async () => {
+    const note = async (research: Capabilities['research']) => {
+      const { container } = await mount(<SettingsPage />, 'personal', { ...READY, research });
+      const row = [...container.querySelectorAll('dl > div')].find(r => r.querySelector('dt')?.textContent === 'Sites officiels vérifiés');
+      cleanup();
+      return { state: row?.querySelector('dd')?.textContent, note: row?.querySelectorAll('dd')[1]?.textContent ?? '' };
+    };
+    // Sans moteur de recherche web : seulement les sites que Wikipédia cite pour le sujet ; ni UNESCO ni Éduscol.
+    const viaWikipedia = await note({ academic: true, web: false, institutional: true, wikipedia: true, trustedCatalogue: true });
+    expect(viaWikipedia.state).toBe('Disponible');
+    expect(viaWikipedia.note).toBe('Seulement ceux que Wikipédia cite pour votre sujet : aucun moteur de recherche web n’est configuré.');
+    expect(viaWikipedia.note).not.toMatch(/UNESCO|Éduscol|ministères/);
+    // Avec un moteur de recherche web : les principaux sites, nommés comme exemples.
+    const viaSearch = await note({ academic: true, web: true, institutional: true, wikipedia: true, trustedCatalogue: true });
+    expect(viaSearch.note).toBe('Les principaux sites officiels vérifiés (UNESCO, Éduscol, ministères, ONU…), par le moteur de recherche web.');
+    expect(viaSearch.note).not.toMatch(/\btous\b|tout le catalogue/);
+    // Ancienne application (champ absent) : quelques sites seulement, ni UNESCO ni « principaux ».
+    const legacy = await note({ academic: true, web: true, institutional: true, wikipedia: true });
+    expect(legacy.state).toBe('Disponible');
+    expect(legacy.note).toBe('Version plus ancienne : seulement quelques sites officiels (Éduscol, education.gouv.fr…), par le moteur de recherche web.');
+    expect(legacy.note).not.toMatch(/UNESCO|principaux/);
+    // Non disponible : aucune nuance.
+    expect((await note({ academic: true, web: false, institutional: false, wikipedia: false })).note).toBe('');
+  });
+
+  it('serveur en ligne : l’adresse de contact de l’administrateur est dite transmise à Crossref et OpenAlex (jamais celle de l’enseignant)', async () => {
+    const { container } = await mount(<SettingsPage />, 'personal', READY);
+    const section = (container.textContent ?? '').replace(/\s+/g, ' ');
+    expect(section).toContain('Si l’administrateur du serveur a indiqué une adresse de contact, elle est transmise à Crossref et à OpenAlex avec la requête (jamais la vôtre).');
+    // Magistra locale : les recherches sont faites par l'application Windows, qui n'a aucune adresse de contact à transmettre.
+    cleanup();
+    const local = (await mount(<SettingsPage />, 'personal', { ...READY, route: 'local-connector' })).container;
+    expect((local.textContent ?? '').replace(/\s+/g, ' ')).not.toContain('adresse de contact');
   });
 
   it('démonstration : carte « Passez à la vraie IA »', async () => {

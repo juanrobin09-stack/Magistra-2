@@ -1,4 +1,7 @@
 import type { Nodes } from 'mdast';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
 import { describe, expect, it } from 'vitest';
 import { parseMarkdown } from '@/lib/export/markdown';
 import {
@@ -277,6 +280,23 @@ describe('niveaux de fiabilité des sources', () => {
     expect(sourceReliability({ kind: 'institutional', url: 'https://www.insee.fr/fr/statistiques' }).tier).toBe('official');
   });
 
+  it('plateforme ouverte (HAL, data.gouv.fr, Canal-U) : « à recouper », jamais « Source officielle » ; l’administration reste officielle', () => {
+    const open = { tier: 'open', label: 'Plateforme ouverte, à recouper' };
+    for (const url of [
+      'https://data.gouv.fr/fr/datasets/x', 'https://www.data.gouv.fr/fr/datasets/x', 'https://static.data.gouv.fr/resources/x.csv',
+      'https://hal.science/hal-01234567', 'https://cel.hal.science/cel-00000000', 'https://hal.archives-ouvertes.fr/hal-00000000',
+      'https://www.canal-u.tv/video/x',
+    ]) {
+      expect(sourceReliability({ kind: 'institutional', url }), url).toEqual(open);
+    }
+    expect(sourceReliability({ kind: 'institutional', url: 'https://www.legifrance.gouv.fr/codes' }).tier).toBe('official');
+    expect(sourceReliability({ kind: 'institutional', url: 'https://www.sante.gouv.fr/x' }).tier).toBe('official');
+    expect(formatSourceLine({ n: 2, kind: 'institutional', title: 'Un dépôt', venue: 'HAL', url: 'https://hal.science/hal-01234567' }))
+      .toBe('[S2] Un dépôt — Plateforme ouverte, à recouper · HAL. https://hal.science/hal-01234567');
+    // Un DOI reste reconnu pour étiqueter la publication (Crossref, OpenAlex), pas comme une page à récupérer.
+    expect(sourceReliability({ kind: 'crossref', url: 'https://doi.org/10.1000/x' })).toEqual({ tier: 'scientific', label: 'Publication scientifique' });
+  });
+
   it('sourceOrigin : base de publications, Wikipédia, site du catalogue (jamais le texte d’une page quand l’adresse est connue)', () => {
     expect(sourceOrigin({ kind: 'hal' })).toBe('HAL');
     expect(sourceOrigin({ kind: 'crossref' })).toBe('Crossref');
@@ -303,6 +323,40 @@ describe('niveaux de fiabilité des sources', () => {
       { tier: 'encyclopedic', label: 'Encyclopédie collaborative (à recouper)', count: 1 },
     ]);
     expect(reliabilitySummary([])).toEqual([]);
+  });
+
+  it('reliabilitySummary : « Source scientifique » et « Publication scientifique » comptés chacun sous leur libellé, quel que soit l’ordre des sources', () => {
+    const organism: SourceRef = { n: 1, kind: 'institutional', title: 'CNRS', url: 'https://www.cnrs.fr/fr/x' }; // Source scientifique
+    const publication: SourceRef = { n: 2, kind: 'hal', title: 'Un article' }; // Publication scientifique
+    const expected = [
+      { tier: 'scientific', label: 'Publication scientifique', count: 2 },
+      { tier: 'scientific', label: 'Source scientifique', count: 2 },
+    ];
+    // Le libellé affiché ne dépend pas de la première source rencontrée.
+    expect(reliabilitySummary([organism, publication, organism, publication])).toEqual(expected);
+    expect(reliabilitySummary([publication, organism, publication, organism])).toEqual(expected);
+    expect(reliabilitySummary([publication, publication, organism, organism])).toEqual(expected);
+    expect(reliabilitySummary([organism, organism, publication, publication])).toEqual(expected);
+    // Un seul de chaque : même résultat dans les deux ordres.
+    expect(reliabilitySummary([organism, publication])).toEqual(reliabilitySummary([publication, organism]));
+    expect(reliabilitySummary([organism, organism])).toEqual([{ tier: 'scientific', label: 'Source scientifique', count: 2 }]);
+    expect(reliabilitySummary([publication, publication])).toEqual([{ tier: 'scientific', label: 'Publication scientifique', count: 2 }]);
+  });
+
+  it('reliabilitySummary : plateformes ouvertes après les publications, avant Wikipédia ; ordre indépendant de celui des sources', () => {
+    const refs: SourceRef[] = [
+      WIKI,
+      { n: 2, kind: 'institutional', title: 'D', url: 'https://hal.science/hal-1' },
+      { n: 3, kind: 'web', title: 'W', url: 'https://blog.example.org' },
+      { n: 4, kind: 'institutional', title: 'O', url: 'https://www.unesco.org/fr/a' },
+      { n: 5, kind: 'institutional', title: 'J', url: 'https://data.gouv.fr/fr/datasets/x' },
+      DOC_PAGES,
+    ];
+    const labels = (list: SourceRef[]) => reliabilitySummary(list).map(r => `${r.label} : ${r.count}`);
+    expect(labels(refs)).toEqual([
+      "Document de l'enseignant : 1", 'Source officielle : 1', 'Plateforme ouverte, à recouper : 2', 'Encyclopédie collaborative (à recouper) : 1', 'Page web non vérifiée : 1',
+    ]);
+    expect(labels([...refs].reverse())).toEqual(labels(refs));
   });
 
   it('« Sources utilisées » : chaque source citée porte son niveau de fiabilité, les documents leur localisation', () => {
@@ -508,5 +562,189 @@ describe('temps de recherche des liens', () => {
     finalizeCitations(`${'['.repeat(60_000)} texte (x)`, [HAL]);
     // Borne très large (machine chargée) : environ 150 ms en temps normal.
     expect(performance.now() - t0).toBeLessThan(6000);
+  });
+});
+
+describe('DOI et adresses de tiers : jamais un second lien dans « Sources utilisées » (remark-gfm)', () => {
+  /** Analyse GFM brute (sans le filtre de l'application) : liens, images, références, HTML, code, titres, éléments de liste. */
+  function analyse(markdown: string) {
+    const found = { links: [] as string[], other: [] as string[], items: 0, headings: 0 };
+    const walk = (node: Nodes) => {
+      if (node.type === 'link') found.links.push(node.url);
+      else if (['image', 'linkReference', 'imageReference', 'definition', 'html', 'inlineCode', 'code', 'footnoteReference'].includes(node.type)) found.other.push(node.type);
+      if (node.type === 'listItem') found.items++;
+      if (node.type === 'heading') found.headings++;
+      if ('children' in node) for (const child of node.children) walk(child as Nodes);
+    };
+    walk(unified().use(remarkParse).use(remarkGfm).parse(markdown) as Nodes);
+    return found;
+  }
+
+  const EVIL = /evil/i;
+  /** Charges utiles : tentative de lien, de liste, de titre, de code, d'HTML, d'image, adresse après « _ » ou « * ». */
+  const HOSTILE_DOIS = [
+    '10.5555/x)[Lire](https://evil.example/',
+    '10.5555/x)[Lire](https://evil.example/)',
+    '10.5555/x](https://evil.example/)[',
+    '10.5555/x\n- [S9] Source inventée — Source officielle · UNESCO. https://evil.example/\n\n## Titre piégé',
+    '10.5555/x <https://evil.example/> y',
+    '10.5555/x`code`https://evil.example',
+    '10.5555/x<img src=https://evil.example/p.png>',
+    '10.5555/x_https://evil.example/',
+    '10.5555/x*https://evil.example/*',
+    '10.5555/x www.evil.example/p',
+    '10.5555/x\\)[a](https://evil.example)',
+    '10.5555/x [a](https://evil.example)',
+  ];
+  const HOSTILE_URLS = [
+    'https://www.unesco.org/x)[click](https://evil.com/',
+    'https://www.unesco.org/x](https://evil.com/)[',
+    'https://www.unesco.org/x <https://evil.com/>',
+    'https://www.unesco.org/x\n- [S9] faux\n\n## Titre piégé',
+    'https://www.unesco.org/x`https://evil.com`',
+    'https://www.unesco.org/x*https://evil.com/*',
+    'https://www.unesco.org/x_https://evil.com/',
+    'javascript:1_https://evil.com/',
+    '_https://evil.com/',
+    '*www.evil.com/p',
+    '(https://evil.com)',
+    '[a](https://evil.com)',
+    '<https://evil.com>',
+    'x https://evil.com/',
+    'https://www.unesco.org/x [a](https://evil.com)',
+    'https://a.b/x)[c](https://evil.com/)',
+    'https://a.b)https://evil.com',
+    'https://1.2.3.4/x](https://evil.com/)',
+    'https://a_b.com/x)[c](https://evil.com/)',
+    'https://)https://evil.com/',
+    'HTTPS://www.unesco.org/x)[c](HTTPS://evil.com/)',
+  ];
+
+  it('DOI piégé (HAL, Crossref, OpenAlex) : une seule ligne, un seul lien automatique vers doi.org, rien d’autre', () => {
+    for (const doi of HOSTILE_DOIS) {
+      for (const kind of ['hal', 'crossref', 'openalex'] as const) {
+        const line = formatSourceLine({ n: 1, kind, title: 'Un article', doi });
+        const list = `- ${line}\n`;
+        const { links, other, items, headings } = analyse(list);
+        const label = `${kind} ${JSON.stringify(doi)}`;
+        expect(line.split('\n'), label).toHaveLength(1);
+        expect(items, label).toBe(1);
+        expect(headings, label).toBe(0);
+        expect(other, label).toEqual([]);
+        expect(links, label).toHaveLength(1);
+        expect(new URL(links[0]).hostname, label).toBe('doi.org');
+        expect(links[0], label).not.toMatch(/[()[\]<>`\\\s]/);
+        // Même rendu que celui de l'application (analyse commune à l'affichage, à l'impression et à l'export PDF).
+        expect(rendered(list).links.every(l => !EVIL.test(new URL(l).hostname)), label).toBe(true);
+      }
+    }
+  });
+
+  it('adresse piégée (page web, site officiel, Wikipédia, HAL) : au plus un lien, jamais vers un autre site, rien d’autre', () => {
+    for (const url of HOSTILE_URLS) {
+      for (const kind of ['web', 'institutional', 'wikipedia', 'hal'] as const) {
+        const line = formatSourceLine({ n: 1, kind, title: 'Page', url });
+        const list = `- ${line}\n`;
+        const { links, other, items, headings } = analyse(list);
+        const label = `${kind} ${JSON.stringify(url)}`;
+        expect(line.split('\n'), label).toHaveLength(1);
+        expect(items, label).toBe(1);
+        expect(headings, label).toBe(0);
+        expect(other, label).toEqual([]);
+        expect(links.length, label).toBeLessThanOrEqual(1);
+        for (const link of links) expect(new URL(link).hostname, label).not.toMatch(EVIL);
+        expect(rendered(list).links.every(l => !EVIL.test(new URL(l).hostname)), label).toBe(true);
+      }
+    }
+  });
+
+  it('la liste entière (plusieurs sources piégées) garde un lien par source au plus et aucun élément de liste ajouté', () => {
+    const provided: SourceRef[] = [
+      { n: 1, kind: 'crossref', title: 'A', doi: HOSTILE_DOIS[0] },
+      { n: 2, kind: 'hal', title: 'B', doi: HOSTILE_DOIS[3], url: 'https://hal.science/hal-1' },
+      { n: 3, kind: 'openalex', title: 'C', doi: HOSTILE_DOIS[7] },
+      { n: 4, kind: 'web', title: 'D', url: HOSTILE_URLS[0] },
+      { n: 5, kind: 'institutional', title: 'E', url: 'https://eduscol.education.fr/x', venue: 'Éduscol' },
+    ];
+    const { content } = finalizeCitations('A [S1]. B [S2]. C [S3]. D [S4]. E [S5].', provided);
+    const { links, other, items, headings } = analyse(content);
+    expect(items).toBe(5);
+    expect(headings).toBe(1);
+    expect(other).toEqual([]);
+    expect(links.length).toBeLessThanOrEqual(5);
+    expect(links.some(l => EVIL.test(new URL(l).hostname))).toBe(false);
+  });
+
+  it('une adresse ou un DOI ordinaire reste lisible et inchangé (« _ » compris) ; un DOI à parenthèses reste valable, encodé', () => {
+    expect(formatSourceLine({ n: 1, kind: 'crossref', title: 'A', doi: '10.1371/journal.pone.0123456' })).toMatch(/ https:\/\/doi\.org\/10\.1371\/journal\.pone\.0123456$/);
+    expect(formatSourceLine(WIKI)).toMatch(/ https:\/\/fr\.wikipedia\.org\/wiki\/Gouvernance_des_SI$/);
+    expect(formatSourceLine({ n: 2, kind: 'web', title: 'T', url: 'https://www.who.int/fr/news/item/12-05-2020-q&a?x=1#y' })).toMatch(/ https:\/\/www\.who\.int\/fr\/news\/item\/12-05-2020-q&a\?x=1#y$/);
+    const doi = '10.1002/(SICI)1097-4571(199806)49:8<693::AID-ASI4>3.0.CO;2-O';
+    const line = formatSourceLine({ n: 3, kind: 'crossref', title: 'T', doi });
+    expect(line).toMatch(/ https:\/\/doi\.org\/10\.1002\/%28SICI%291097-4571%28199806%2949:8%3C693::AID-ASI4%3E3\.0\.CO;2-O$/);
+    const link = line.slice(line.indexOf('https://'));
+    expect(decodeURIComponent(link)).toBe(`https://doi.org/${doi}`);
+    expect(analyse(`- ${line}`).links).toEqual([link]);
+  });
+
+  it('encodage en pourcentage de ( ) [ ] < > * ` \\, des espaces et des caractères de contrôle ; le soulignement « _ » reste dans une adresse qui commence par un hôte valide', () => {
+    const line = formatSourceLine({ n: 1, kind: 'web', title: 'T', url: 'https://x.org/a(b)c[d]e<f>g*h_i`j\\k l\tm\nn o' });
+    const tail = line.slice(line.indexOf('https:'));
+    expect(tail).toBe('https://x.org/a%28b%29c%5Bd%5De%3Cf%3Eg%2Ah_i%60j%5Ck%20l%09m%0An%C2%A0o');
+    expect(tail).not.toMatch(/[()[\]<>*`\\\s]/);
+    // Wikipédia : parenthèses d'une page d'homonymie encodées, soulignement et accents (déjà encodés par MediaWiki) inchangés.
+    expect(formatSourceLine({ n: 2, kind: 'wikipedia', title: 'Fraction', url: 'https://fr.wikipedia.org/wiki/Fraction_(math%C3%A9matiques)' }))
+      .toMatch(/ https:\/\/fr\.wikipedia\.org\/wiki\/Fraction_%28math%C3%A9matiques%29$/);
+  });
+
+  it('une valeur qui n’est pas une adresse web (« ftp:// », « javascript: », « www. », sans hôte valide) est entièrement encodée : aucun « https:// », « www. » ni « @ » ne subsiste', () => {
+    const line = formatSourceLine({ n: 1, kind: 'web', title: 'T', url: 'ftp://x/a(b)c[d]e<f>g*h_i`j\\k l\tm\nn o' });
+    expect(line.slice(line.indexOf('ftp'))).toBe('ftp%3A%2F%2Fx%2Fa%28b%29c%5Bd%5De%3Cf%3Eg%2Ah%5Fi%60j%5Ck%20l%09m%0An%C2%A0o');
+    for (const url of ['www.evil.com/p', 'https://)https://evil.com/', 'x https://evil.com', 'mailto:a@evil.com', 'https://localhost/x', 'a@evil.com']) {
+      const tail = formatSourceLine({ n: 1, kind: 'web', title: 'T', url }).split(' — Page web non vérifiée. ')[1];
+      expect(tail, url).toMatch(/^[A-Za-z0-9%-]+$/);
+      expect(analyse(`- ${tail}`).links, url).toEqual([]);
+    }
+    // Demi-caractère isolé : jamais d'exception.
+    expect(formatSourceLine({ n: 1, kind: 'web', title: 'T', url: 'a\ud800b' })).toMatch(/ a%EF%BF%BDb$/);
+  });
+
+  it('au hasard (2 000 valeurs de 12 morceaux dangereux) : au plus un lien par source, vers le site annoncé, rien d’autre dans la liste', () => {
+    const pieces = ['https://', 'http://', 'www.', 'doi.org/', 'evil.com', 'a.b', '(', ')', '[', ']', '<', '>', '`', '\\', '*', '_', '~', ' ', '\n', '@', '/', '.', ':', 'x', '%', '&', '!', '?', '#', '10.5555/', '](', '[a](', '- [S9] ', '## T', '![i](', ' ', '&amp;', '&#40;'];
+    let seed = 20_260_503;
+    const random = () => {
+      seed = (seed * 1_103_515_245 + 12_345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    for (let i = 0; i < 2_000; i++) {
+      const value = Array.from({ length: 12 }, () => pieces[Math.floor(random() * pieces.length)]).join('');
+      for (const ref of [
+        { n: 1, kind: 'crossref', title: 'A', doi: value },
+        { n: 1, kind: 'web', title: 'A', url: value },
+        { n: 1, kind: 'wikipedia', title: 'A', url: `https://fr.wikipedia.org/wiki/${value}` },
+        { n: 1, kind: 'institutional', title: 'A', url: `https://www.unesco.org/${value}` },
+      ] as SourceRef[]) {
+        const list = `- ${formatSourceLine(ref)}\n`;
+        const { links, other, items, headings } = analyse(list);
+        const label = `${ref.kind} ${JSON.stringify(value)}`;
+        expect(items, label).toBe(1);
+        expect(headings, label).toBe(0);
+        expect(other, label).toEqual([]);
+        expect(links.length, label).toBeLessThanOrEqual(1);
+        if (ref.kind === 'crossref') expect(links, label).toHaveLength(1);
+        // Le seul lien possible est l'adresse de la source elle-même : DOI, page de Wikipédia ou de l'UNESCO, ou (page web) la
+        // valeur quand c'est une adresse http(s).
+        for (const link of links) {
+          const host = new URL(link).hostname;
+          const own = ref.kind === 'web' ? /^https?:\/\//i.test(value) : ['doi.org', 'fr.wikipedia.org', 'www.unesco.org'].includes(host);
+          expect(own, `${label} → ${link}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('valeur inattendue (nombre, objet) : jamais d’exception', () => {
+    expect(() => formatSourceLine({ n: 1, kind: 'hal', title: 'T', url: 42 as unknown as string })).not.toThrow();
+    expect(() => formatSourceLine({ n: 1, kind: 'crossref', title: 'T', doi: { a: 1 } as unknown as string })).not.toThrow();
   });
 });

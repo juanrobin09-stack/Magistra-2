@@ -79,6 +79,22 @@ describe('ResultPanel — fiabilité des sources citées', () => {
     expect(list!.querySelectorAll('li')[1].className).toContain('badge-success');
   });
 
+  it('« Source scientifique » et « Publication scientifique » : un badge chacun, le même quel que soit l’ordre des sources ; plateforme ouverte « à recouper » avant Wikipédia', async () => {
+    const organism: SourceRef = { n: 6, kind: 'institutional', title: 'CNRS', url: 'https://www.cnrs.fr/fr/x' };
+    const open: SourceRef = { n: 7, kind: 'institutional', title: 'Dépôt', url: 'https://hal.science/hal-01234567' };
+    const badges = async (cited: SourceRef[]) => {
+      const { container } = await panel(done(cited));
+      const items = [...container.querySelectorAll('[aria-label="Fiabilité des sources citées"] li')];
+      return { texts: items.map(li => li.textContent?.trim()), classes: items.map(li => li.className) };
+    };
+    const forward = await badges([sources[3], organism, sources[3], organism, open, sources[4]]);
+    const backward = await badges([sources[4], open, organism, sources[3], organism, sources[3]]);
+    expect(forward.texts).toEqual(['Publication scientifique : 2', 'Source scientifique : 2', 'Plateforme ouverte, à recouper : 1', 'Encyclopédie collaborative (à recouper) : 1']);
+    expect(backward.texts).toEqual(forward.texts);
+    // Pas de clé dupliquée entre deux badges du même niveau, et la plateforme ouverte ressort « à recouper ».
+    expect(forward.classes[2]).toContain('text-warning');
+  });
+
   it('aucune source citée, ou génération en cours : aucun badge', async () => {
     expect((await panel(done([]))).container.querySelector('[aria-label="Fiabilité des sources citées"]')).toBeNull();
     const running: GenerationState = { ...initialGenerationState(), phase: 'running', runId: 1, request: REQ, sources };

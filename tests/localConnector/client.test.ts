@@ -595,6 +595,27 @@ describe('status : requêtes signées et preuve', () => {
     expect(await rejection(ctx.client.status())).toMatchObject({ code: 'CONNECTOR_UNREACHABLE', message: UNEXPECTED_REPLY_MESSAGE });
   });
 
+  it('capacité facultative « trustedCatalogue » : conservée quand l’application la renvoie, absente d’une application plus ancienne (même protocole), ignorée si ce n’est pas un booléen', async () => {
+    const ctx = setup();
+    await pairClient(ctx);
+    const research = (extra: Record<string, unknown>) => ({
+      ...READY_STATUS, capabilities: { ...READY_STATUS.capabilities, research: { ...READY_STATUS.capabilities.research, ...extra } },
+    }) as typeof READY_STATUS;
+    // Application plus ancienne : le champ n'existe pas, le client n'en invente pas (jamais « vrai » par défaut).
+    expect((await ctx.client.status()).capabilities.research).toEqual({ academic: true, web: false, institutional: false, wikipedia: true });
+    expect((await ctx.client.status()).capabilities.research).not.toHaveProperty('trustedCatalogue');
+    ctx.connector.status = research({ trustedCatalogue: true });
+    expect((await ctx.client.status()).capabilities.research).toEqual({ academic: true, web: false, institutional: false, wikipedia: true, trustedCatalogue: true });
+    ctx.connector.status = research({ trustedCatalogue: false });
+    expect((await ctx.client.status()).capabilities.research.trustedCatalogue).toBe(false);
+    for (const odd of ['oui', 1, null, {}]) {
+      ctx.connector.status = research({ trustedCatalogue: odd });
+      const status = await ctx.client.status();
+      expect(status.capabilities.research, JSON.stringify(odd)).not.toHaveProperty('trustedCatalogue');
+      expect(status.capabilities.research.institutional).toBe(false);
+    }
+  });
+
   it('état non prêt : cause précise conservée ; message démesuré remplacé par le message du code', async () => {
     const ctx = setup();
     await pairClient(ctx);

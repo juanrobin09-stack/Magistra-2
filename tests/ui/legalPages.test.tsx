@@ -174,6 +174,11 @@ describe('Contenu', () => {
       // Plus de « web » en général : seuls ces services sont nommés.
       expect(text, mode).not.toMatch(/sites institutionnels ou web/);
       expect(text, mode).toMatch(/jamais vos documents/);
+      // L'adresse de contact de l'administrateur du serveur (CROSSREF_MAILTO) part vers Crossref et OpenAlex : dit sur le site
+      // en ligne seulement (l'application Windows n'en a pas).
+      const contact = "Si l'administrateur du serveur a indiqué une adresse de contact, elle est transmise à Crossref et à OpenAlex avec la requête (jamais la vôtre).";
+      if (mode === 'web') expect(text).toContain(contact);
+      else expect(text).not.toContain('adresse de contact');
       cleanup();
     }
   });

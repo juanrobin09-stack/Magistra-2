@@ -181,7 +181,8 @@ function PrivacyWeb({ info, provider }: { info: LegalInfo; provider: ProviderInf
           <strong>Recherche en ligne</strong> (si vous l'activez) : seuls le sujet et les mots-clés de la demande sont
           envoyés aux sources interrogées (Wikipédia, HAL, Crossref, OpenAlex, les sites officiels vérifiés cités par
           Wikipédia et, si l'administrateur en a configuré un, un moteur de recherche web), jamais vos documents ni votre
-          profil.
+          profil. Si l'administrateur du serveur a indiqué une adresse de contact, elle est transmise à Crossref et à
+          OpenAlex avec la requête (jamais la vôtre).
         </li>
         <li>
           <strong>Journal technique</strong> : identifiant du compte et horaire des demandes de génération, pour limiter

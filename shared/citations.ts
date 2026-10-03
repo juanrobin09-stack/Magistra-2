@@ -79,7 +79,45 @@ function mdSafe(value: string): string {
     .replace(/[\\`<>[\]*_]/g, m => `\\${m}`);
 }
 
-export type ReliabilityTier = 'document' | 'official' | 'scientific' | 'encyclopedic' | 'web';
+/** Nom d'hôte à au moins deux segments : la condition pour que le rendu (GFM) fasse un lien automatique d'une adresse. */
+const HOST_NAME = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+';
+/** Adresse web qui commence par un nom d'hôte valide (« https://www.unesco.org/… »). */
+const WEB_ADDRESS = new RegExp(`^https?://${HOST_NAME}(?=[/?#:]|$)`, 'i');
+
+/** « %XX » (UTF-8 pour un caractère non ASCII) ; un demi-caractère isolé devient U+FFFD. */
+function percentEncode(char: string): string {
+  const code = char.codePointAt(0)!;
+  if (code < 0x80) return `%${code.toString(16).toUpperCase().padStart(2, '0')}`;
+  try {
+    return encodeURIComponent(char);
+  } catch {
+    return '%EF%BF%BD';
+  }
+}
+
+/**
+ * DOI ou adresse (texte de tiers : notice Crossref, page web, lien de Wikipédia) ajouté à une ligne Markdown, sans jamais
+ * pouvoir y ajouter un lien, du code, de la mise en forme ou une ligne.
+ * - Adresse web qui commence par un hôte valide (le DOI est toujours préfixé de « https://doi.org/ ») : le rendu (GFM) en
+ *   fait UN lien automatique qui avale tout ce qui suit, jusqu'à une espace, un « < », un crochet ou une parenthèse :
+ *   ces caractères, le code (`), la barre oblique inverse, les espaces et les caractères de contrôle sont encodés en
+ *   pourcentage, comme « * ». Le soulignement « _ » reste (courant dans les adresses de Wikipédia) : dans un lien qui
+ *   commence ainsi, il ne peut rien ouvrir ni fermer.
+ * - Toute autre valeur n'est pas une adresse : tout est encodé sauf lettres, chiffres et « - » (aucun « https:// »,
+ *   « www. » ou « @ » ne subsiste, que le rendu transformerait en lien après un chiffre ou une parenthèse).
+ */
+function mdUrlSafe(value: string): string {
+  // Une notice mal formée (nombre, objet) ne doit jamais faire échouer la génération : le texte, jamais d'exception.
+  const text = String(value);
+  if (WEB_ADDRESS.test(text)) return text.replace(/[\s\p{Cc}()[\]<>*`\\]/gu, percentEncode);
+  return text.replace(/[^A-Za-z0-9-]/gu, percentEncode);
+}
+
+/**
+ * Niveaux de fiabilité, du plus au moins fiable. « open » : plateforme ouverte dont n'importe qui peut déposer le contenu
+ * (HAL, data.gouv.fr, Canal-U) : à recouper, jamais « officielle ».
+ */
+export type ReliabilityTier = 'document' | 'official' | 'scientific' | 'open' | 'encyclopedic' | 'web';
 
 export interface SourceReliability {
   tier: ReliabilityTier;
@@ -88,8 +126,9 @@ export interface SourceReliability {
 }
 
 /**
- * Niveau de fiabilité d'une source, déduit de son origine : document de l'enseignant, source officielle (site du catalogue
- * des sites vérifiés), publication scientifique, encyclopédie collaborative (Wikipédia : à recouper) ou web non vérifié.
+ * Niveau de fiabilité d'une source, déduit de son origine : document de l'enseignant, source officielle (administration,
+ * organisation intergouvernementale ou agence publique du catalogue des sites vérifiés), publication scientifique,
+ * plateforme ouverte (à recouper), encyclopédie collaborative (Wikipédia : à recouper) ou web non vérifié.
  */
 export function sourceReliability(ref: Pick<SourceRef, 'kind' | 'url'>): SourceReliability {
   switch (ref.kind) {
@@ -99,11 +138,14 @@ export function sourceReliability(ref: Pick<SourceRef, 'kind' | 'url'>): SourceR
     case 'crossref':
     case 'openalex':
       return { tier: 'scientific', label: 'Publication scientifique' };
-    case 'institutional':
-      // Organisme de recherche, agence scientifique ou archive ouverte du catalogue : source scientifique ; sinon officielle.
-      return ref.url && trustedSiteFor(ref.url)?.tier === 'scientific'
-        ? { tier: 'scientific', label: 'Source scientifique' }
-        : { tier: 'official', label: 'Source officielle' };
+    case 'institutional': {
+      // Organisme de recherche, agence scientifique ou bibliothèque du catalogue : source scientifique ; plateforme ouverte
+      // (contenu déposé par des tiers) : à recouper, jamais officielle ; sinon officielle.
+      const tier = ref.url ? trustedSiteFor(ref.url)?.tier : undefined;
+      if (tier === 'scientific') return { tier: 'scientific', label: 'Source scientifique' };
+      if (tier === 'open') return { tier: 'open', label: 'Plateforme ouverte, à recouper' };
+      return { tier: 'official', label: 'Source officielle' };
+    }
     case 'wikipedia':
       return { tier: 'encyclopedic', label: 'Encyclopédie collaborative (à recouper)' };
     case 'web':
@@ -129,18 +171,22 @@ export function sourceOrigin(ref: Pick<SourceRef, 'kind' | 'url' | 'venue'>): st
   }
 }
 
-const TIER_ORDER: readonly ReliabilityTier[] = ['document', 'official', 'scientific', 'encyclopedic', 'web'];
+const TIER_ORDER: readonly ReliabilityTier[] = ['document', 'official', 'scientific', 'open', 'encyclopedic', 'web'];
 
-/** Nombre de sources par niveau de fiabilité, du plus fiable au moins fiable ; les niveaux absents ne figurent pas. */
+/**
+ * Nombre de sources par libellé de fiabilité, du plus fiable au moins fiable ; les niveaux absents ne figurent pas. Le
+ * regroupement se fait par LIBELLÉ (« Publication scientifique » et « Source scientifique » sont deux lignes) : le
+ * libellé affiché est toujours celui des sources comptées, quel que soit leur ordre. À niveau égal, ordre alphabétique.
+ */
 export function reliabilitySummary(refs: readonly Pick<SourceRef, 'kind' | 'url'>[]): (SourceReliability & { count: number })[] {
-  const found = new Map<ReliabilityTier, SourceReliability & { count: number }>();
+  const found = new Map<string, SourceReliability & { count: number }>();
   for (const ref of refs) {
     const reliability = sourceReliability(ref);
-    const entry = found.get(reliability.tier);
+    const entry = found.get(reliability.label);
     if (entry) entry.count++;
-    else found.set(reliability.tier, { ...reliability, count: 1 });
+    else found.set(reliability.label, { ...reliability, count: 1 });
   }
-  return TIER_ORDER.flatMap(tier => found.get(tier) ?? []);
+  return [...found.values()].sort((a, b) => TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) || a.label.localeCompare(b.label, 'fr'));
 }
 
 export function formatSourceLine(s: SourceRef): string {
@@ -158,7 +204,9 @@ export function formatSourceLine(s: SourceRef): string {
   // « Source officielle · UNESCO » : le niveau de fiabilité, puis le site ou la base.
   const { label } = sourceReliability(s);
   const reliability = origin ? `${label} · ${mdSafe(origin)}` : label;
-  const link = s.doi ? ` https://doi.org/${s.doi}` : s.url ? ` ${s.url}` : '';
+  // DOI et adresse viennent de tiers (notice Crossref, page web, lien de Wikipédia) : encodés, ils ne peuvent ajouter ni lien,
+  // ni mise en forme, ni ligne à la liste.
+  const link = s.doi ? ` ${mdUrlSafe(`https://doi.org/${s.doi}`)}` : s.url ? ` ${mdUrlSafe(s.url)}` : '';
   return `[S${s.n}] ${authors}${title}${year}${venue} — ${reliability}.${link}`;
 }
 

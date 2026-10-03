@@ -7,6 +7,8 @@
 //    ou réservée (IPv4 et IPv6, y compris ULA, ::1, fe80::, adresses IPv4 encapsulées) ;
 //  - connexion à l'adresse VÉRIFIÉE (pas de seconde résolution DNS : pas de « DNS rebinding ») ;
 //  - redirections suivies manuellement (3 au plus), chacune revérifiée ;
+//  - prédicat facultatif de l'appelant (allowUrl), évalué AVANT la première connexion et AVANT chaque saut de redirection :
+//    refusé, aucun hôte n'est résolu ni contacté (la défense ne peut pas agir après coup) ;
 //  - 1,5 Mo au plus (lecture en flux interrompue au-delà), text/html ou text/plain, 6 s au total.
 //
 // Module Node pur (aucune dépendance d'hébergeur) : il est aussi utilisé par l'application Windows.
@@ -18,7 +20,7 @@ import { isIP, type LookupFunction } from 'node:net';
 import { pipeline, Readable } from 'node:stream';
 import zlib from 'node:zlib';
 import { stripTags } from '../shared/research/providers.js';
-import type { FetchedPage } from '../shared/research/types.js';
+import type { FetchedPage, FetchPageOptions } from '../shared/research/types.js';
 
 export const SAFE_FETCH_LIMITS = {
   maxBytes: 1_500_000,
@@ -368,20 +370,35 @@ export function neutralizeUnclosedBlocks(html: string): string {
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
+/** Vrai si l'appelant admet cette adresse ; un prédicat qui lève une exception refuse (jamais de connexion dans le doute). */
+function isAllowed(allowUrl: FetchPageOptions['allowUrl'], url: URL): boolean {
+  if (!allowUrl) return true;
+  try {
+    // Copie : le prédicat ne peut pas modifier l'adresse qui sera contactée.
+    return allowUrl(new URL(url.href)) === true;
+  } catch {
+    return false;
+  }
+}
+
 /** Crée une fonction de récupération sécurisée (dépendances injectables pour les tests). */
-export function createSafePageFetcher(options: SafeFetchOptions = {}): (url: string, signal?: AbortSignal) => Promise<FetchedPage | null> {
+export function createSafePageFetcher(
+  options: SafeFetchOptions = {},
+): (url: string, signal?: AbortSignal, fetchOptions?: FetchPageOptions) => Promise<FetchedPage | null> {
   const resolve = options.resolve ?? defaultResolver;
   const transport = options.fetch ?? nodeTransport;
   const maxBytes = options.maxBytes ?? SAFE_FETCH_LIMITS.maxBytes;
   const timeoutMs = options.timeoutMs ?? SAFE_FETCH_LIMITS.timeoutMs;
   const maxRedirects = options.maxRedirects ?? SAFE_FETCH_LIMITS.maxRedirects;
 
-  return async (rawUrl, signal) => {
+  return async (rawUrl, signal, fetchOptions) => {
     const timeout = AbortSignal.timeout(timeoutMs);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     try {
       let url = checkUrlShape(rawUrl);
       for (let hop = 0; hop <= maxRedirects; hop++) {
+        // Avant toute résolution DNS et toute connexion : l'adresse de départ comme chaque destination d'une redirection.
+        if (!isAllowed(fetchOptions?.allowUrl, url)) return null;
         const address = await resolvePublic(url, resolve);
         if (combined.aborted) return null;
         const res = await transport(url, {
@@ -428,6 +445,6 @@ export function createSafePageFetcher(options: SafeFetchOptions = {}): (url: str
 const defaultFetcher = createSafePageFetcher();
 
 /** Récupère une page web publique en toute sécurité ; null si elle est refusée ou illisible. */
-export async function fetchPublicPage(url: string, signal?: AbortSignal): Promise<FetchedPage | null> {
-  return defaultFetcher(url, signal);
+export async function fetchPublicPage(url: string, signal?: AbortSignal, options?: FetchPageOptions): Promise<FetchedPage | null> {
+  return defaultFetcher(url, signal, options);
 }

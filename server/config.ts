@@ -403,7 +403,7 @@ function loadResearch(env: Env, problems: string[]): ResearchConfig {
   if (rawSearx && !searxngUrl) problems.push('SEARXNG_URL doit être une adresse http(s) valide : recherche web désactivée.');
   const mailto = clean(env.CROSSREF_MAILTO);
   const validMailto = mailto && /^[^\s@<>()]{1,64}@[^\s@<>()]{1,190}\.[a-z]{2,}$/i.test(mailto) ? mailto : undefined;
-  if (mailto && !validMailto) problems.push('CROSSREF_MAILTO doit être une adresse électronique valide : ignorée.');
+  if (mailto && !validMailto) problems.push('CROSSREF_MAILTO (adresse de contact transmise à Crossref et OpenAlex) doit être une adresse électronique valide : ignorée.');
   return {
     academic: boolVar(env, 'RESEARCH_ACADEMIC', true, problems),
     wikipedia: boolVar(env, 'RESEARCH_WIKIPEDIA', true, problems),

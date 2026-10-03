@@ -49,7 +49,7 @@ export const FEATURES_PLUS: { icon: string; title: string; desc: string; link?: 
     link: { href: WINDOWS_SECTION_HREF, label: 'Télécharger pour Windows' },
   },
   { icon: '🏛️', title: 'Gratuit, sans compte, hors connexion', desc: 'L’application Windows est gratuite : ni abonnement, ni compte à créer. Une fois l’IA activée, elle fonctionne sur votre ordinateur, même sans Internet.' },
-  { icon: '📚', title: 'Sources vérifiables', desc: 'Vos documents (PDF, Word, PowerPoint…), HAL, Crossref, OpenAlex et des sites officiels vérifiés (UNESCO, Éduscol…) : les citations renvoient aux sources réellement utilisées, avec leur niveau de fiabilité.' },
+  { icon: '📚', title: 'Sources vérifiables', desc: 'Vos documents (PDF, Word, PowerPoint…), HAL, Crossref, OpenAlex et des sites officiels vérifiés (ceux que Wikipédia cite pour votre sujet, ou les principaux avec un moteur de recherche web) : les citations renvoient aux sources réellement utilisées, avec leur niveau de fiabilité.' },
   { icon: '◉', title: 'Open source, licence MIT', desc: 'Code public et auditable, projet non lucratif : pas d’abonnement, pas de quota commercial.' },
   { icon: '✧', title: 'À relire et adapter', desc: 'Magistra propose des brouillons structurés ; vous restez l’auteur. Relisez et vérifiez, puis copiez ou exportez (Markdown, PDF) pour adapter le texte dans votre traitement de texte. Besoin d’un autre angle ? Précisez vos consignes et relancez.' },
 ];

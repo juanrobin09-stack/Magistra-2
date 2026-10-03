@@ -334,6 +334,8 @@ export function parseConnectorStatus(raw: unknown): ConnectorStatus | null {
         web: research.web as boolean,
         institutional: research.institutional as boolean,
         wikipedia: research.wikipedia as boolean,
+        // Facultatif : absent d'une application plus ancienne (même version du protocole), qui ne connaît pas le catalogue.
+        ...(typeof research.trustedCatalogue === 'boolean' ? { trustedCatalogue: research.trustedCatalogue } : {}),
       },
     },
     busy: raw.busy,
