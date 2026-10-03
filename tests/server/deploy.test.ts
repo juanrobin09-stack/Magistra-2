@@ -183,11 +183,13 @@ describe('déploiement', () => {
     // par les fonctions du site. Ni Clerk, ni Supabase, ni IA.
     expect(site.map(v => v.name)).toEqual([
       'VITE_LEGAL_PUBLISHER', 'VITE_LEGAL_DIRECTOR', 'VITE_LEGAL_ADDRESS', 'VITE_LEGAL_CONTACT', 'VITE_LEGAL_HOST',
-      'VITE_LEGAL_VALIDATED', 'VITE_AUTHOR_PROFILE_URL', 'MAGISTRA_RELEASES_REPO', 'GITHUB_TOKEN',
+      'VITE_AUTHOR_PROFILE_URL', 'MAGISTRA_RELEASES_REPO', 'GITHUB_TOKEN',
     ]);
-    // Aucune identité ni adresse n'est livrée dans le dépôt : chaque éditeur renseigne les siennes (et valide lui-même ses
-    // textes : VITE_LEGAL_VALIDATED reste vide).
+    // Surcharges facultatives, toutes vides : les valeurs par défaut (éditeur, contact, hébergeur) sont dans le code
+    // (src/lib/legal.ts) ; aucune variable ne valide plus les textes.
     for (const v of site) expect(v.value, v.name).toBe('');
+    expect(variables(env).some(v => v.name === 'VITE_LEGAL_VALIDATED')).toBe(false);
+    expect(env).not.toContain('VITE_LEGAL_VALIDATED');
 
     // Hébergement personnel : les seules variables VITE_ sont la région de la base (pages légales) et la clé publiable
     // Clerk ; toutes les valeurs secrètes sont vides.

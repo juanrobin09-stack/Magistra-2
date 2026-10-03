@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // Pages légales : routes publiques (sans connexion), contenu fidèle aux flux de données réels, informations de
-// l'éditeur lues dans VITE_LEGAL_*, avis « à compléter » visible, prestataire d'IA pris dans providerInfo.
+// l'éditeur (valeurs par défaut, surcharges VITE_LEGAL_*), prestataire d'IA pris dans providerInfo. Les valeurs par
+// défaut, l'absence de marque « à compléter » et les surcharges de chaque mode : legalDefaults.test.tsx.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -51,22 +52,40 @@ function mountPage(page: 'mentions' | 'confidentialite' | 'cgu') {
 }
 
 describe('readLegalInfo', () => {
-  it('lit les variables VITE_LEGAL_* et signale ce qui manque', () => {
-    const info = readLegalInfo({ VITE_LEGAL_PUBLISHER: '  Asso  ', VITE_LEGAL_CONTACT: '' });
+  it('lit les variables VITE_LEGAL_* ; une variable absente, vide ou blanche laisse la valeur par défaut', () => {
+    const info = readLegalInfo({ VITE_LEGAL_PUBLISHER: '  Asso  ', VITE_LEGAL_CONTACT: '', VITE_LEGAL_HOST: ' \t ' });
     expect(info.publisher).toBe('Asso');
-    expect(info.contact).toBeUndefined();
-    expect(info.missing).toEqual(['director', 'address', 'contact', 'host', 'dataRegion']);
-    expect(readLegalInfo(LEGAL_VARS).missing).toEqual([]);
+    expect(info.director).toBe('Juan Robin');
+    expect(info.contact).toBe('juanrobin89@gmail.com');
+    expect(info.host).toBe('Vercel Inc., États-Unis (https://vercel.com)');
+    expect(info.address).toBeUndefined();
+    expect(info.dataRegion).toBeUndefined();
+    expect(readLegalInfo(LEGAL_VARS)).toEqual({
+      publisher: 'Association Exemple',
+      director: 'Mme Dupont',
+      address: '1 rue de la Paix, 33000 Bordeaux',
+      contact: 'contact@exemple.test',
+      host: 'Hébergeur Exemple, 2 avenue du Cloud',
+      dataRegion: 'Union européenne (Paris)',
+    });
   });
 
-  it('le contact de l\'administrateur du serveur sert de repli', () => {
+  it('le contact de l\'administrateur du serveur passe avant le contact par défaut, après VITE_LEGAL_CONTACT', () => {
     expect(readLegalInfo({}, 'admin@exemple.test').contact).toBe('admin@exemple.test');
     expect(readLegalInfo({ VITE_LEGAL_CONTACT: 'a@b.fr' }, 'admin@exemple.test').contact).toBe('a@b.fr');
+    expect(readLegalInfo({}, '   ').contact).toBe('juanrobin89@gmail.com');
+    expect(readLegalInfo({}, undefined).contact).toBe('juanrobin89@gmail.com');
   });
 
   it('neutralise les caractères de contrôle et borne la longueur', () => {
     expect(readLegalInfo({ VITE_LEGAL_ADDRESS: 'ligne 1\u0000\nligne 2' }).address).toBe('ligne 1 ligne 2');
     expect(readLegalInfo({ VITE_LEGAL_ADDRESS: 'x'.repeat(1000) }).address!.length).toBe(300);
+  });
+
+  it('une valeur qui n\'est pas du texte équivaut à une variable absente', () => {
+    for (const value of [42, true, null, ['a@b.fr'], { toString: () => 'a@b.fr' }]) {
+      expect(readLegalInfo({ VITE_LEGAL_CONTACT: value }).contact).toBe('juanrobin89@gmail.com');
+    }
   });
 
   it('emailOf extrait l\'adresse', () => {
@@ -99,27 +118,28 @@ describe('Routes publiques', () => {
 });
 
 describe('Contenu', () => {
-  it('annonce un projet à valider et liste ce qui reste « à compléter » quand VITE_LEGAL_* manque', async () => {
+  it('site web : éditeur, contact et hébergeur par défaut, sans avis ni marque « à compléter »', async () => {
     const { container } = await mountPage('mentions');
-    const notice = container.querySelector('[role="note"]')!;
-    expect(notice.textContent).toContain('à faire valider');
-    expect(notice.textContent).toContain('VITE_LEGAL_PUBLISHER');
-    expect(notice.textContent).toContain('VITE_LEGAL_HOST');
-    expect(container.querySelectorAll('[data-legal-todo]').length).toBeGreaterThanOrEqual(4);
-    expect(container.textContent).toContain('[à compléter');
+    const text = container.textContent ?? '';
+    expect(text).toContain('Juan Robin');
+    expect(text).toContain('Hébergeur du site : Vercel Inc., États-Unis (https://vercel.com).');
+    expect(container.querySelector('a[href="mailto:juanrobin89@gmail.com"]')).not.toBeNull();
+    expect(container.querySelector('[role="note"]')).toBeNull();
+    expect(container.querySelector('[data-legal-todo]')).toBeNull();
+    expect(text).not.toMatch(/à compléter|projet de texte|à faire valider|VITE_/i);
   });
 
-  it('affiche les informations de l\'éditeur et plus aucun avis « à compléter » quand tout est renseigné', async () => {
+  it('affiche les informations de l\'éditeur renseignées par le build à la place des valeurs par défaut', async () => {
     for (const [key, value] of Object.entries(LEGAL_VARS)) vi.stubEnv(key, value);
     const { container } = await mountPage('mentions');
     expect(container.textContent).toContain('Association Exemple');
     expect(container.textContent).toContain('1 rue de la Paix, 33000 Bordeaux');
     expect(container.textContent).toContain('Hébergeur Exemple');
+    expect(container.textContent).not.toContain('Vercel');
     expect(container.querySelector('a[href="mailto:contact@exemple.test"]')).not.toBeNull();
-    expect(container.querySelector('[data-legal-missing]')).toBeNull();
+    expect(container.querySelector('a[href="mailto:juanrobin89@gmail.com"]')).toBeNull();
+    expect(container.querySelector('[role="note"]')).toBeNull();
     expect(container.querySelector('[data-legal-todo]')).toBeNull();
-    // L'avis « projet à valider » reste affiché.
-    expect(container.querySelector('[role="note"]')!.textContent).toContain('à faire valider');
   });
 
   it('confidentialité : sous-traitants réels, droits, CNIL, cookies, et prestataire d\'IA tiré de providerInfo', async () => {

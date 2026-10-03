@@ -275,16 +275,15 @@ describe('ci.yml : installateur Windows construit à chaque envoi', () => {
   });
 });
 
-describe('informations légales de l’éditeur dans l’installateur Windows (variables de build VITE_LEGAL_*)', () => {
-  // Les quatre informations lues par src/lib/legal.ts pour les pages légales de l'installateur, plus l'indicateur de
-  // validation des textes. L'hébergeur et la région des données ne concernent que le site en ligne avec comptes.
+describe('informations légales de l’éditeur dans l’installateur Windows (surcharges facultatives VITE_LEGAL_*)', () => {
+  // Les quatre informations lues par src/lib/legal.ts pour les pages légales de l'installateur : chacune a une valeur
+  // par défaut, la variable de dépôt ne sert qu'à la remplacer. L'hébergeur et la région des données ne concernent que
+  // le site en ligne.
   const PUBLISHER_VARS = [LEGAL_ENV_NAMES.publisher, LEGAL_ENV_NAMES.director, LEGAL_ENV_NAMES.address, LEGAL_ENV_NAMES.contact];
-  const BUILD_VARS = [...PUBLISHER_VARS, 'VITE_LEGAL_VALIDATED'];
-  const LEGAL_STEP = "name: Informations légales de l'éditeur";
   // Le profil de l'auteur (lien de « Magistra, créé par Juan Robin ») est transmis avec les mêmes variables de dépôt.
-  const BUILD_ENV_VARS = [...BUILD_VARS, 'VITE_AUTHOR_PROFILE_URL'];
+  const BUILD_ENV_VARS = [...PUBLISHER_VARS, 'VITE_AUTHOR_PROFILE_URL'];
 
-  it('release.yml : l’étape « Build web » transmet les cinq variables légales et le profil de l’auteur depuis les VARIABLES du dépôt, jamais depuis les secrets', () => {
+  it('release.yml : l’étape « Build web » transmet les quatre surcharges légales et le profil de l’auteur depuis les VARIABLES du dépôt, jamais depuis les secrets', () => {
     const web = stepWith(job(release, 'build'), 'run: npm run build');
     expect(envOf(web)).toEqual(fromRepositoryVariables(BUILD_ENV_VARS));
     expect(code(release)).not.toMatch(/secrets\./);
@@ -298,44 +297,32 @@ describe('informations légales de l’éditeur dans l’installateur Windows (v
     expect(code(ci).match(/VITE_AUTHOR_PROFILE_URL:/g)).toHaveLength(1);
   });
 
-  it('release.yml : une variable manquante donne un avertissement (jamais un échec), avant la construction, sans interpolation dans le script', () => {
-    const build = job(release, 'build');
-    const step = stepWith(build, LEGAL_STEP);
-    expect(step).toContain('shell: bash');
-    expect(envOf(step)).toEqual(fromRepositoryVariables(PUBLISHER_VARS));
-    const script = scriptOf(step);
-    expect(script).toContain(`for name in ${PUBLISHER_VARS.join(' ')}; do`);
-    expect(script).toContain('::warning title=');
-    expect(script).not.toMatch(/\bexit\b|::error/);
-    expect(script).not.toContain('${{');
-    expect(build.indexOf(LEGAL_STEP)).toBeLessThan(build.indexOf('run: npm run build'));
+  it('plus d’indicateur de validation des textes ni d’avertissement « à compléter » : une variable absente laisse la valeur par défaut', () => {
+    for (const [name, text] of [['release.yml', release], ['ci.yml', ci]] as const) {
+      expect(text, name).not.toContain('VITE_LEGAL_VALIDATED');
+      expect(text, name).not.toMatch(/à compléter|Information légale manquante|Informations légales de l'éditeur$/m);
+    }
+    // Aucune étape ne vérifie plus les variables légales : seules les surcharges sont transmises à la construction.
+    expect(job(release, 'build')).not.toContain("name: Informations légales de l'éditeur");
+    expect(code(release)).not.toMatch(/for name in VITE_LEGAL/);
   });
 
-  it.skipIf(!hasBash)('release.yml : le script n’annonce que les informations absentes ou blanches, par leur NOM, et réussit toujours', () => {
-    const script = scriptOf(stepWith(job(release, 'build'), LEGAL_STEP));
-    const run = (env: Record<string, string>) => spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } });
-    const some = run({ VITE_LEGAL_PUBLISHER: 'Collège Exemple', VITE_LEGAL_DIRECTOR: '  \t ', VITE_LEGAL_ADDRESS: '1 rue Exemple' });
-    expect(some.status).toBe(0);
-    const warned = [...some.stdout.matchAll(/^::warning title=[^:]+::La variable de dépôt (\w+) /gm)].map(m => m[1]);
-    expect(warned).toEqual(['VITE_LEGAL_DIRECTOR', 'VITE_LEGAL_CONTACT']);
-    expect(some.stdout).not.toContain('Collège Exemple');
-    const none = run({ VITE_LEGAL_PUBLISHER: 'A', VITE_LEGAL_DIRECTOR: 'B', VITE_LEGAL_ADDRESS: 'C', VITE_LEGAL_CONTACT: 'd@exemple.fr' });
-    expect(none.status).toBe(0);
-    expect(none.stdout).toBe('');
-    const all = run({});
-    expect(all.status).toBe(0);
-    expect(all.stdout.match(/^::warning /gm)).toHaveLength(4);
-  });
-
-  it('README et .env.example : où renseigner ces variables pour l’installateur, et ce que change VITE_LEGAL_VALIDATED', () => {
+  it('README et .env.example : où renseigner les surcharges pour l’installateur, valeurs par défaut, aucune variable de validation', () => {
     const maintainers = readme.slice(readme.indexOf('### Mainteneurs'), readme.indexOf('## Déploiement du site (Vercel)'));
-    const section = maintainers.slice(maintainers.indexOf('**Informations légales de l\'installateur Windows**'));
+    const section = maintainers.slice(maintainers.indexOf('**Informations légales de l\'installateur Windows**'), maintainers.indexOf('**Profil de l\'auteur**'));
     expect(section.length).toBeGreaterThan(0);
     expect(section).toContain('Settings → Secrets and variables → Actions → onglet Variables');
-    for (const name of BUILD_VARS) expect(section, name).toContain(`\`${name}\``);
-    expect(section).toMatch(/`VITE_LEGAL_VALIDATED` : `true` masque l'avis « projet de texte/);
+    for (const name of PUBLISHER_VARS) expect(section, name).toContain(`\`${name}\``);
+    expect(section).toContain('**valeur par défaut**');
+    expect(section).toContain('`juanrobin89@gmail.com`');
     expect(section).toMatch(/`VITE_LEGAL_HOST` \(hébergeur du site vitrine\) et `VITE_LEGAL_DATA_REGION` \([^)]*\) ne concernent pas l'application Windows/);
-    for (const name of BUILD_VARS) expect(read('.env.example'), name).toMatch(new RegExp(`^${name}=$`, 'm'));
+    for (const name of [...PUBLISHER_VARS, LEGAL_ENV_NAMES.host]) expect(read('.env.example'), name).toMatch(new RegExp(`^${name}=$`, 'm'));
+    for (const [name, text] of [['README.md', readme], ['.env.example', read('.env.example')], ['ARCHITECTURE_IA.md', architecture]] as const) {
+      expect(text, name).not.toContain('VITE_LEGAL_VALIDATED');
+      expect(text, name).not.toMatch(/avis « projet de texte|bandeau « à compléter/);
+    }
+    expect(read('.env.example')).toContain('juanrobin89@gmail.com');
+    expect(read('.env.example')).toContain('Vercel Inc., États-Unis (https://vercel.com)');
   });
 });
 
@@ -448,7 +435,7 @@ describe('README : attribution, architecture et déploiement du site vitrine', (
     expect(deploy).toContain('**aucune clé Clerk, Supabase ni IA**');
     expect(beforeCleanup).not.toMatch(/\b(?:CLERK|SUPABASE|AI)_[A-Z_]+|NODEJS_HELPERS|VITE_CLERK/);
     // La région de la base de données n'existe que pour l'hébergement personnel avec base distante : pas sur le site vitrine.
-    for (const name of [...Object.values(LEGAL_ENV_NAMES).filter(n => n !== 'VITE_LEGAL_DATA_REGION'), 'VITE_LEGAL_VALIDATED', 'VITE_AUTHOR_PROFILE_URL', 'GITHUB_TOKEN', 'MAGISTRA_RELEASES_REPO']) {
+    for (const name of [...Object.values(LEGAL_ENV_NAMES).filter(n => n !== 'VITE_LEGAL_DATA_REGION'), 'VITE_AUTHOR_PROFILE_URL', 'GITHUB_TOKEN', 'MAGISTRA_RELEASES_REPO']) {
       expect(beforeCleanup, name).toContain(`\`${name}\``);
     }
     expect(beforeCleanup).not.toContain('VITE_LEGAL_DATA_REGION');

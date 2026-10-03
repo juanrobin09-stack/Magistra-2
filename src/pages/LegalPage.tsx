@@ -1,24 +1,23 @@
 // Pages légales publiques (sans connexion) : mentions légales, politique de confidentialité, conditions d'utilisation.
 //
-// Les textes sont rédigés à partir du fonctionnement réel de Magistra (Clerk, Supabase, prestataire d'IA, Vercel,
-// stockage local) ; l'identité de l'éditeur, son contact, son hébergeur viennent des variables VITE_LEGAL_* (voir
-// src/lib/legal.ts) et restent visibles comme « à compléter » tant qu'elles manquent. Le prestataire d'IA est celui
-// que le serveur annonce (GET /api/mode) : la page reste vraie quand AI_PRESET change.
-// Ces textes sont un PROJET à faire valider : l'avis en tête de page le dit, jusqu'à ce que l'éditeur les déclare
-// validés (VITE_LEGAL_VALIDATED). Une information manquante reste signalée (liste en tête, marque dans le texte).
+// Les textes sont rédigés à partir du fonctionnement réel de Magistra (Clerk, Supabase, prestataire d'IA, hébergeur,
+// stockage local) ; l'éditeur, son contact et son hébergeur ont des valeurs par défaut (src/lib/legal.ts) que les
+// variables VITE_LEGAL_* remplacent ; une information sans valeur (l'adresse, la région de la base) n'est pas affichée.
+// Le prestataire d'IA est celui que le serveur annonce (GET /api/mode) : la page reste vraie quand AI_PRESET change.
 // Le site vitrine (mode « showcase ») a ses propres textes (legal/ShowcaseLegal.tsx) ; le cadre de la page et les pièces
 // communes sont dans legal/LegalParts.tsx.
 
+import { Fragment, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { AUTHOR_NAME } from '@shared/author';
 import type { ProviderInfo } from '@shared/types';
 import {
-  hasDatabase, hasHosting, LEGAL_PATHS, readLegalInfo, type LegalInfo, type LegalPageKind,
+  hasDatabase, hasHosting, LEGAL_NON_PROFESSIONAL_NOTICE, LEGAL_PATHS, readLegalInfo, type LegalInfo, type LegalPageKind,
 } from '@/lib/legal';
 import { REPOSITORY_URL, safeExternalUrl } from '@/lib/links';
 import { getRuntimeConfig } from '@/lib/runtime/mode';
 import type { PageMode, RuntimeMode } from '@/lib/runtime/types';
-import { ContactField, Ext, Field, LegalShell } from './legal/LegalParts';
+import { ContactField, Ext, HostField, LegalShell } from './legal/LegalParts';
 import ShowcaseLegalPage from './legal/ShowcaseLegal';
 
 const SECTION_CLASS = 'mb-2';
@@ -30,28 +29,33 @@ function Mentions({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
     <>
       <h1>Mentions légales</h1>
 
-      <h2>Éditeur du site</h2>
+      <h2>{hasHosting(mode) ? 'Éditeur du site' : "Éditeur de l'application"}</h2>
       <p className={SECTION_CLASS}>
-        <strong><Field info={info} name="publisher" /></strong>
-        <br />
-        Adresse : <Field info={info} name="address" />
+        <strong>{info.publisher}</strong>
+        {info.address && (
+          <>
+            <br />
+            Adresse : {info.address}
+          </>
+        )}
         <br />
         Contact : <ContactField info={info} />
       </p>
       <p>
-        Directeur ou directrice de la publication : <Field info={info} name="director" />.
+        Directeur ou directrice de la publication : {info.director}.
       </p>
+      {hasHosting(mode) && !info.address && <p>{LEGAL_NON_PROFESSIONAL_NOTICE}</p>}
 
       {hasHosting(mode) && (
         <>
           <h2>Hébergement</h2>
           <p>
-            Hébergeur du site : <Field info={info} name="host" />.
+            Hébergeur du site : <HostField info={info} />.
           </p>
           {hasDatabase(mode) && (
             <p>
-              Les données des comptes (profil, historique) sont conservées dans une base de données Supabase, région :{' '}
-              <Field info={info} name="dataRegion" />. Le détail des prestataires figure dans la{' '}
+              Les données des comptes (profil, historique) sont conservées dans une base de données Supabase
+              {info.dataRegion && <>, région : {info.dataRegion}</>}. Le détail des prestataires figure dans la{' '}
               <Link to={LEGAL_PATHS.confidentialite}>politique de confidentialité</Link>.
             </p>
           )}
@@ -149,8 +153,8 @@ function PrivacyWeb({ info, provider }: { info: LegalInfo; provider: ProviderInf
     <>
       <h2>1. Qui est responsable de vos données ?</h2>
       <p>
-        Le responsable du traitement est <strong><Field info={info} name="publisher" /></strong>, {' '}
-        <Field info={info} name="address" />. Contact : <ContactField info={info} />.
+        Le responsable du traitement est <strong>{info.publisher}</strong>, éditeur du site{info.address && <>, {info.address}</>}.
+        Contact : <ContactField info={info} />.
       </p>
 
       <h2>2. Quelles données sont traitées ?</h2>
@@ -212,16 +216,14 @@ function PrivacyWeb({ info, provider }: { info: LegalInfo; provider: ProviderInf
         <li><strong>Clerk</strong> : création et gestion des comptes, connexion, cookies de session.</li>
         <li><strong>Cloudflare (Turnstile, via Clerk)</strong> : contrôle anti-robot lors de la connexion.</li>
         <li>
-          <strong>Supabase</strong> : base de données (profil, historique, favoris). Région :{' '}
-          <Field info={info} name="dataRegion" />.
+          <strong>Supabase</strong> : base de données (profil, historique, favoris){info.dataRegion && <>. Région : {info.dataRegion}</>}.
         </li>
-        <li><strong>Vercel</strong> : exécution du site et de ses fonctions serveur. Hébergeur : <Field info={info} name="host" />.</li>
+        <li><strong>Hébergeur du site</strong> : <HostField info={info} />. Exécution du site et de ses fonctions serveur.</li>
       </ul>
       <ProviderBlock provider={provider} />
       <p>
         Certains de ces prestataires sont établis hors de l'Union européenne : les transferts sont alors encadrés par les
         garanties qu'ils annoncent (clauses contractuelles types, cadre de protection des données UE–États-Unis).
-        {!info.validated && " Ces garanties sont à vérifier par l'éditeur avant publication."}
       </p>
 
       <h2>5. Combien de temps ?</h2>
@@ -271,8 +273,7 @@ function PrivacyLocal({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
     <>
       <h2>1. Responsable</h2>
       <p>
-        Magistra est publié par <strong><Field info={info} name="publisher" /></strong>. Contact :{' '}
-        <ContactField info={info} />.
+        Magistra est publié par <strong>{info.publisher}</strong>. Contact : <ContactField info={info} />.
       </p>
 
       <h2>2. Vos données restent chez vous</h2>
@@ -327,7 +328,7 @@ function PrivacyLocal({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
       <h2>6. Vos droits</h2>
       <p>
         Vos données étant sur votre ordinateur, vous les consultez, les exportez (Réglages → « Télécharger toutes mes
-        données (JSON) ») et les effacez directement dans Réglages. Pour toute question : <ContactField info={info} />.
+        données (JSON) ») et les effacez directement dans Réglages. Pour toute question ou pour exercer vos droits : <ContactField info={info} />.
         Vous pouvez saisir la CNIL : <Ext href="https://www.cnil.fr/fr/plaintes">www.cnil.fr/fr/plaintes</Ext>.
       </p>
     </>
@@ -349,73 +350,136 @@ function Privacy({ info, mode, provider }: { info: LegalInfo; mode: RuntimeMode;
 
 // ─── Conditions générales d'utilisation ────────────────────────────────────
 
-function Terms({ info }: { info: LegalInfo }) {
+/**
+ * Seul le site web a des comptes, des limites de débit et peut suspendre un accès ; dans l'application Windows, avec un
+ * serveur personnel ou en démonstration, Magistra fonctionne sans compte et les conditions ne parlent d'aucun de ces trois
+ * points. La numérotation suit les rubriques réellement affichées.
+ */
+function Terms({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
+  const accounts = mode === 'web';
+  const sections: { title: string; body: ReactNode }[] = [
+    {
+      title: 'Objet',
+      body: (
+        <p>
+          Magistra est un assistant gratuit destiné aux enseignants : il aide à préparer des cours, exercices, évaluations et
+          autres documents pédagogiques à l'aide d'une intelligence artificielle. Utiliser Magistra, c'est accepter ces
+          conditions.
+        </p>
+      ),
+    },
+    {
+      title: accounts ? 'Accès et compte' : 'Accès',
+      body: accounts ? (
+        <ul>
+          <li>Le service est gratuit et destiné à un usage professionnel d'enseignement.</li>
+          <li>Le compte est personnel : gardez vos identifiants confidentiels et fournissez des informations exactes.</li>
+          <li>Vous pouvez supprimer vos données et votre compte à tout moment (Réglages).</li>
+        </ul>
+      ) : (
+        <ul>
+          <li>Magistra est gratuit et destiné à un usage professionnel d'enseignement.</li>
+          <li>Il fonctionne sans compte : vous pouvez effacer vos données à tout moment (Réglages).</li>
+        </ul>
+      ),
+    },
+    {
+      title: accounts ? 'Usage du service' : 'Usage de Magistra',
+      body: (
+        <>
+          <p>Vous vous engagez à ne pas :</p>
+          <ul>
+            <li>
+              utiliser {accounts ? 'le service' : 'Magistra'} pour produire ou diffuser des contenus illicites, haineux ou
+              portant atteinte aux droits d'autrui ;
+            </li>
+            {accounts && <li>chercher à contourner les limites techniques (limites de débit, protections) ou à perturber le fonctionnement du service ;</li>}
+            <li>saisir des données personnelles d'élèves (noms, notes, appréciations nominatives) ni importer des documents que vous n'avez pas le droit d'utiliser.</li>
+          </ul>
+        </>
+      ),
+    },
+    {
+      title: 'Contenus générés par intelligence artificielle',
+      body: (
+        <p>
+          Les contenus sont produits par un modèle d'intelligence artificielle : ils peuvent comporter des erreurs, des
+          oublis ou des références inexactes. Magistra cite les sources utilisées quand elles existent, mais vous devez les
+          contrôler. L'enseignant relit, vérifie et adapte chaque contenu avant de le donner à ses élèves ; il en demeure
+          responsable.
+        </p>
+      ),
+    },
+    {
+      title: 'Vos contenus et la propriété intellectuelle',
+      body: (
+        <p>
+          Vous conservez vos droits sur les contenus que vous créez avec Magistra. Vous garantissez avoir le droit
+          d'utiliser les documents que vous importez. Magistra ne revendique aucun droit sur vos productions et ne les
+          utilise pas pour d'autres finalités que le service. Le logiciel est publié sous licence MIT.
+        </p>
+      ),
+    },
+    {
+      title: 'Disponibilité',
+      body: accounts ? (
+        <p>
+          Le service est fourni gratuitement, sans garantie de disponibilité continue : il peut être interrompu pour
+          maintenance, limité (nombre de demandes par minute) ou dépendre de la disponibilité de prestataires tiers.
+        </p>
+      ) : (
+        <p>
+          Magistra est fourni gratuitement, sans garantie de disponibilité continue. Les fonctions qui passent par un service
+          en ligne (recherche de sources, téléchargement du moteur d'IA, recherche d'une mise à jour) dépendent de la
+          disponibilité de ce service.
+        </p>
+      ),
+    },
+    {
+      title: 'Responsabilité',
+      body: accounts ? (
+        <p>
+          Le service est fourni « en l'état ». Dans les limites permises par la loi, l'éditeur n'est pas responsable des
+          conséquences de l'usage des contenus générés ni des interruptions du service.
+        </p>
+      ) : (
+        <p>
+          Le logiciel est fourni « en l'état ». Dans les limites permises par la loi, l'éditeur n'est pas responsable des
+          conséquences de l'usage des contenus générés ni des interruptions des services en ligne dont dépendent certaines
+          fonctions.
+        </p>
+      ),
+    },
+    {
+      title: 'Données personnelles',
+      body: (
+        <p>
+          Le traitement des données est décrit dans la <Link to={LEGAL_PATHS.confidentialite}>politique de confidentialité</Link>.
+        </p>
+      ),
+    },
+    ...(accounts
+      ? [{ title: 'Suspension', body: <p>L'éditeur peut suspendre un accès en cas d'usage abusif ou contraire à ces conditions.</p> }]
+      : []),
+    {
+      title: 'Évolution des conditions et droit applicable',
+      body: (
+        <p>
+          Ces conditions peuvent évoluer ; la version en vigueur est celle de cette page. Elles sont soumises au droit
+          français. Contact : <ContactField info={info} />.
+        </p>
+      ),
+    },
+  ];
   return (
     <>
       <h1>Conditions générales d'utilisation</h1>
-
-      <h2>1. Objet</h2>
-      <p>
-        Magistra est un assistant gratuit destiné aux enseignants : il aide à préparer des cours, exercices, évaluations et
-        autres documents pédagogiques à l'aide d'une intelligence artificielle. Utiliser Magistra, c'est accepter ces
-        conditions.
-      </p>
-
-      <h2>2. Accès et compte</h2>
-      <ul>
-        <li>Le service est gratuit et destiné à un usage professionnel d'enseignement.</li>
-        <li>Le compte est personnel : gardez vos identifiants confidentiels et fournissez des informations exactes.</li>
-        <li>Vous pouvez supprimer vos données et votre compte à tout moment (Réglages).</li>
-      </ul>
-
-      <h2>3. Usage du service</h2>
-      <p>Vous vous engagez à ne pas :</p>
-      <ul>
-        <li>utiliser le service pour produire ou diffuser des contenus illicites, haineux ou portant atteinte aux droits d'autrui ;</li>
-        <li>chercher à contourner les limites techniques (limites de débit, protections) ou à perturber le fonctionnement du service ;</li>
-        <li>saisir des données personnelles d'élèves (noms, notes, appréciations nominatives) ni importer des documents que vous n'avez pas le droit d'utiliser.</li>
-      </ul>
-
-      <h2>4. Contenus générés par intelligence artificielle</h2>
-      <p>
-        Les contenus sont produits par un modèle d'intelligence artificielle : ils peuvent comporter des erreurs, des
-        oublis ou des références inexactes. Magistra cite les sources utilisées quand elles existent, mais vous devez les
-        contrôler. L'enseignant relit, vérifie et adapte chaque contenu avant de le donner à ses élèves ; il en demeure
-        responsable.
-      </p>
-
-      <h2>5. Vos contenus et la propriété intellectuelle</h2>
-      <p>
-        Vous conservez vos droits sur les contenus que vous créez avec Magistra. Vous garantissez avoir le droit
-        d'utiliser les documents que vous importez. Magistra ne revendique aucun droit sur vos productions et ne les
-        utilise pas pour d'autres finalités que le service. Le logiciel est publié sous licence MIT.
-      </p>
-
-      <h2>6. Disponibilité</h2>
-      <p>
-        Le service est fourni gratuitement, sans garantie de disponibilité continue : il peut être interrompu pour
-        maintenance, limité (nombre de demandes par minute) ou dépendre de la disponibilité de prestataires tiers.
-      </p>
-
-      <h2>7. Responsabilité</h2>
-      <p>
-        Le service est fourni « en l'état ». Dans les limites permises par la loi, l'éditeur n'est pas responsable des
-        conséquences de l'usage des contenus générés ni des interruptions du service.
-      </p>
-
-      <h2>8. Données personnelles</h2>
-      <p>
-        Le traitement des données est décrit dans la <Link to={LEGAL_PATHS.confidentialite}>politique de confidentialité</Link>.
-      </p>
-
-      <h2>9. Suspension</h2>
-      <p>L'éditeur peut suspendre un accès en cas d'usage abusif ou contraire à ces conditions.</p>
-
-      <h2>10. Évolution des conditions et droit applicable</h2>
-      <p>
-        Ces conditions peuvent évoluer ; la version en vigueur est celle de cette page. Elles sont soumises au droit
-        français. Contact : <ContactField info={info} />.
-      </p>
+      {sections.map((section, i) => (
+        <Fragment key={section.title}>
+          <h2>{i + 1}. {section.title}</h2>
+          {section.body}
+        </Fragment>
+      ))}
     </>
   );
 }
@@ -432,10 +496,10 @@ export default function LegalPage({ page, mode: forcedMode }: { page: LegalPageK
   if (mode === 'showcase') return <ShowcaseLegalPage page={page} />;
   const info = readLegalInfo(undefined, config.adminContact);
   return (
-    <LegalShell page={page} info={info} mode={mode}>
+    <LegalShell page={page}>
       {page === 'mentions' && <Mentions info={info} mode={mode} />}
       {page === 'confidentialite' && <Privacy info={info} mode={mode} provider={config.providerInfo} />}
-      {page === 'cgu' && <Terms info={info} />}
+      {page === 'cgu' && <Terms info={info} mode={mode} />}
     </LegalShell>
   );
 }

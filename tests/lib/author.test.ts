@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { AUTHOR_CREDIT, AUTHOR_DEFAULT_PROFILE_URL, AUTHOR_NAME, authorProfile } from '@shared/author';
+import { AUTHOR_CONTACT_EMAIL, AUTHOR_CREDIT, AUTHOR_DEFAULT_PROFILE_URL, AUTHOR_NAME, authorProfile } from '@shared/author';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const env = (VITE_AUTHOR_PROFILE_URL: unknown) => ({ VITE_AUTHOR_PROFILE_URL });
@@ -14,6 +14,10 @@ describe('Attribution : texte fixe', () => {
   it('nom et phrase d’attribution', () => {
     expect(AUTHOR_NAME).toBe('Juan Robin');
     expect(AUTHOR_CREDIT).toBe('Magistra, créé par Juan Robin');
+  });
+
+  it('contact de l’éditeur : juanrobin89@gmail.com, tel que le mainteneur l’a donné', () => {
+    expect(AUTHOR_CONTACT_EMAIL).toBe('juanrobin89@gmail.com');
   });
 
   it('package.json : auteur Juan Robin, avec le profil par défaut', () => {

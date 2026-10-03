@@ -1,16 +1,17 @@
-// Informations légales de l'éditeur du site (mentions légales, politique de confidentialité).
+// Informations légales de l'éditeur (mentions légales, politique de confidentialité, conditions d'utilisation).
 //
-// Aucune identité n'est écrite dans le code : elle vient de variables du BUILD (VITE_LEGAL_*, publiques par nature,
-// affichées sur le site) — et, pour le contact, du MAGISTRA_ADMIN_CONTACT du serveur (GET /api/mode) à défaut.
-// Une information absente reste visible comme « à compléter » dans les pages : un déploiement ne peut pas passer
-// pour complet sans l'être. Les textes sont un projet à faire valider : l'éditeur qui les a relus (et fait relire)
-// le déclare avec VITE_LEGAL_VALIDATED, ce qui retire l'avis « projet de texte » (jamais les marques « à compléter »).
+// Valeurs par défaut : l'éditeur et directeur de la publication est l'auteur du projet, son contact est
+// AUTHOR_CONTACT_EMAIL (shared/author.ts) et l'hébergeur du site est Vercel. Des variables du BUILD (VITE_LEGAL_*,
+// publiques par nature, affichées sur le site) les remplacent ; pour le contact, celui de l'administrateur annoncé par le
+// serveur (GET /api/mode) passe avant le défaut quand VITE_LEGAL_CONTACT est absente. L'adresse de l'éditeur et la région
+// de la base de données n'ont pas de défaut : absentes, elles ne sont pas affichées (les pages n'ont jamais de trou).
 
+import { AUTHOR_CONTACT_EMAIL, AUTHOR_NAME } from '@shared/author';
 import type { PageMode } from '@/lib/runtime/types';
 
 export type LegalField = 'publisher' | 'director' | 'address' | 'contact' | 'host' | 'dataRegion';
 
-/** Variable de build attendue pour chaque information (affichée à l'administrateur dans l'avis « à compléter »). */
+/** Variable de build qui remplace chaque information. */
 export const LEGAL_ENV_NAMES: Record<LegalField, string> = {
   publisher: 'VITE_LEGAL_PUBLISHER',
   director: 'VITE_LEGAL_DIRECTOR',
@@ -20,24 +21,31 @@ export const LEGAL_ENV_NAMES: Record<LegalField, string> = {
   dataRegion: 'VITE_LEGAL_DATA_REGION',
 };
 
-/** Intitulé de chaque information, pour l'avis « à compléter ». */
-export const LEGAL_LABELS: Record<LegalField, string> = {
-  publisher: "Éditeur (nom ou raison sociale)",
-  director: 'Directeur ou directrice de la publication',
-  address: "Adresse de l'éditeur",
-  contact: 'Contact (e-mail) pour les questions et les droits RGPD',
-  host: "Hébergeur du site (nom et adresse)",
-  dataRegion: 'Région de la base de données',
-};
+/** Hébergeur du site quand VITE_LEGAL_HOST est absente : nom, pays et site (aucune adresse postale n'est inventée). */
+export const LEGAL_DEFAULT_HOST = 'Vercel Inc., États-Unis (https://vercel.com)';
 
-export const LEGAL_FIELDS = Object.keys(LEGAL_ENV_NAMES) as LegalField[];
+/**
+ * Mention des éditeurs non professionnels (article 6, III, 2° de la loi n° 2004-575 du 21 juin 2004, LCEN) : seuls leur
+ * nom et les coordonnées de l'hébergeur sont communiqués au public. Affichée à la place de l'adresse quand le build n'en
+ * donne pas (VITE_LEGAL_ADDRESS) ; elle suppose un éditeur personne physique, hors activité professionnelle.
+ */
+export const LEGAL_NON_PROFESSIONAL_NOTICE =
+  "L'éditeur, personne physique éditant le site à titre non professionnel, a communiqué ses éléments d'identification à l'hébergeur et ne publie pas son adresse personnelle (article 6, III, 2° de la loi n° 2004-575 du 21 juin 2004).";
 
-export type LegalInfo = Record<LegalField, string | undefined> & {
-  /** Informations non renseignées. */
-  missing: LegalField[];
-  /** Textes déclarés relus et validés par l'éditeur (VITE_LEGAL_VALIDATED). */
-  validated: boolean;
-};
+export interface LegalInfo {
+  /** Éditeur du site et de l'application (nom). */
+  publisher: string;
+  /** Directeur ou directrice de la publication. */
+  director: string;
+  /** Contact : une adresse e-mail, éventuellement accompagnée d'un texte (« Service X, aide@… »). */
+  contact: string;
+  /** Hébergeur du site (nom, pays, site) ; affiché là où le mode a un hébergeur (hasHosting). */
+  host: string;
+  /** Adresse de l'éditeur : seulement si le build la donne. */
+  address?: string;
+  /** Région de la base de données d'un hébergement personnel avec comptes : seulement si le build la donne. */
+  dataRegion?: string;
+}
 
 const MAX_LENGTH = 300;
 
@@ -49,32 +57,24 @@ function clean(value: unknown): string | undefined {
   return text.length > MAX_LENGTH ? `${text.slice(0, MAX_LENGTH - 1)}…` : text;
 }
 
-const VALIDATED_VALUES = new Set(['true', '1', 'oui', 'yes']);
-
-/** « true », « 1 », « oui » ou « yes » (casse et espaces ignorés) : toute autre valeur, ou l'absence, laisse l'avis. */
-function isValidated(value: unknown): boolean {
-  return VALIDATED_VALUES.has(clean(value)?.toLowerCase() ?? '');
-}
-
 /**
- * Lit les informations légales. `env` : variables du build (par défaut import.meta.env) ;
- * `fallbackContact` : contact de l'administrateur annoncé par le serveur, utilisé si VITE_LEGAL_CONTACT est absent.
+ * Lit les informations légales. `env` : variables du build (par défaut import.meta.env) ; `fallbackContact` : contact de
+ * l'administrateur annoncé par le serveur, utilisé si VITE_LEGAL_CONTACT est absente. Une valeur vide ou illisible
+ * (blanc, autre type que du texte) équivaut à une variable absente.
  */
 export function readLegalInfo(
   env: Record<string, unknown> = import.meta.env as unknown as Record<string, unknown>,
   fallbackContact?: string,
 ): LegalInfo {
-  const info = {
-    publisher: clean(env.VITE_LEGAL_PUBLISHER),
-    director: clean(env.VITE_LEGAL_DIRECTOR),
-    address: clean(env.VITE_LEGAL_ADDRESS),
-    contact: clean(env.VITE_LEGAL_CONTACT) ?? clean(fallbackContact),
-    host: clean(env.VITE_LEGAL_HOST),
-    dataRegion: clean(env.VITE_LEGAL_DATA_REGION),
-  } as LegalInfo;
-  info.missing = LEGAL_FIELDS.filter(field => !info[field]);
-  info.validated = isValidated(env.VITE_LEGAL_VALIDATED);
-  return info;
+  const read = (field: LegalField) => clean(env[LEGAL_ENV_NAMES[field]]);
+  return {
+    publisher: read('publisher') ?? AUTHOR_NAME,
+    director: read('director') ?? AUTHOR_NAME,
+    contact: read('contact') ?? clean(fallbackContact) ?? AUTHOR_CONTACT_EMAIL,
+    host: read('host') ?? LEGAL_DEFAULT_HOST,
+    address: read('address'),
+    dataRegion: read('dataRegion'),
+  };
 }
 
 /** Adresse e-mail simple (pour proposer un lien « mailto: ») ; sinon le contact est affiché tel quel. */
@@ -101,17 +101,8 @@ export const LEGAL_TITLES: Record<LegalPageKind, string> = {
 /**
  * Hébergeur et base de données : seuls le site web (avec comptes) et le site vitrine ont un hébergeur ; seul le site web a
  * une base de données. En mode personnel les données sont dans le stockage fichier du serveur local, en démonstration
- * dans le navigateur, dans l'application Windows sur l'ordinateur. Une seule règle pour les textes et pour la liste
- * « à compléter » : ils ne peuvent pas diverger.
+ * dans le navigateur, dans l'application Windows sur l'ordinateur. Une seule règle pour tous les textes : ils ne peuvent
+ * pas diverger.
  */
 export const hasHosting = (mode: PageMode): boolean => mode === 'web' || mode === 'showcase';
 export const hasDatabase = (mode: PageMode): boolean => mode === 'web';
-
-/** Informations que chaque page affiche vraiment : seules celles-là sont listées « à compléter ». */
-export function relevantFields(page: LegalPageKind, mode: PageMode): LegalField[] {
-  if (page === 'cgu') return ['contact'];
-  const host: LegalField[] = hasHosting(mode) ? ['host'] : [];
-  const database: LegalField[] = hasDatabase(mode) ? ['dataRegion'] : [];
-  if (page === 'mentions') return ['publisher', 'director', 'address', 'contact', ...host, ...database];
-  return hasHosting(mode) ? ['publisher', 'address', 'contact', ...host, ...database] : ['publisher', 'contact'];
-}

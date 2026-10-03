@@ -32,11 +32,13 @@ import EngineSettings from '@/components/localEngine/EngineSettings';
 import { WEBSITE_SECTION_TITLE } from '@/components/localEngine/texts';
 import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSection';
 import AuthorCredit from '@/components/AuthorCredit';
+import ContactLink from '@/components/ContactLink';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import UpdateCheck from '@/components/UpdateCheck';
 import { useAIStatus, useCapabilities, type AIController, type CapabilitiesState } from '@/hooks/useAIStatus';
 import LegalLinks from '@/components/LegalLinks';
 import { exportAccountData, ExportCancelled, EXPORT_ERROR_MESSAGE, type ExportProgress } from '@/lib/exportAccountData';
+import { readLegalInfo } from '@/lib/legal';
 import { activationPlan } from '@/lib/ai-ui/activation';
 import { providerPolicyUrl, serverAIView, type ServerMode } from '@/lib/ai-ui/server';
 import { aiPhase, engineHostIfRemote, engineOutdatedText, phaseInfo, phaseLine } from '@/lib/ai-ui/status';
@@ -899,6 +901,8 @@ function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: Capabilities
 
 function About({ mode }: { mode: RuntimeMode }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
+  /** Même contact que les pages légales : variable de build, sinon celui de l'administrateur du serveur, sinon celui de l'éditeur. */
+  const { contact } = readLegalInfo(undefined, adminContact());
   /** Application Windows uniquement : le site web et la démonstration n'ont pas de mise à jour à rechercher. */
   const updateBridge = mode === 'local' ? getBridge() : null;
   useEffect(() => {
@@ -924,6 +928,9 @@ function About({ mode }: { mode: RuntimeMode }) {
       {updateBridge && <UpdateCheck bridge={updateBridge} />}
       <p>Assistant pédagogique pour les enseignants, de la maternelle au doctorat.</p>
       <p>Code source publié sous licence MIT.</p>
+      <p>
+        Contact : <ContactLink contact={contact} className="text-accent hover:underline underline-offset-2 [overflow-wrap:anywhere]" />
+      </p>
       <p><LegalLinks /></p>
       <p><AuthorCredit variant="footer" showProfile /></p>
     </div>

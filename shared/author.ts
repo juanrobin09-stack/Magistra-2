@@ -2,10 +2,17 @@
 // d'accueil du site et de l'application, pied de page, Réglages) ; seul le lien vers le profil professionnel se règle
 // au build (VITE_AUTHOR_PROFILE_URL) et il n'est jamais retenu sans contrôle : https seulement, sans identifiants,
 // sans caractère de contrôle, 300 caractères au plus. Toute autre valeur, ou l'absence, donne le profil par défaut.
+// L'adresse de contact de l'éditeur (pages légales) est aussi définie ici.
 // Module pur (aucun DOM, aucun accès à import.meta.env) : l'environnement lu est un paramètre.
 
 export const AUTHOR_NAME = 'Juan Robin';
 export const AUTHOR_CREDIT = `Magistra, créé par ${AUTHOR_NAME}`;
+
+/**
+ * Adresse de contact de l'éditeur : questions, droits RGPD, signalements (pages légales du site et de l'application).
+ * Valeur par défaut : VITE_LEGAL_CONTACT (ou le contact annoncé par le serveur) la remplace, voir src/lib/legal.ts.
+ */
+export const AUTHOR_CONTACT_EMAIL = 'juanrobin89@gmail.com';
 
 /** Profil affiché quand VITE_AUTHOR_PROFILE_URL est absente ou refusée. */
 export const AUTHOR_DEFAULT_PROFILE_URL = 'https://github.com/juanrobin09-stack';

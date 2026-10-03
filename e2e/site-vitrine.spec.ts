@@ -263,7 +263,7 @@ test('« Magistra pour Windows » : aucune version publiée → bouton inactif e
 // ─── 4. Pages légales ───────────────────────────────────────────────────────
 
 const LEGAL_PAGES = [
-  { path: '/mentions-legales', title: 'Mentions légales', tab: 'Mentions légales', link: 'Mentions légales', contains: ['Éditeur du site', 'Hébergement', 'Magistra est conçu et développé par Juan Robin'] },
+  { path: '/mentions-legales', title: 'Mentions légales', tab: 'Mentions légales', link: 'Mentions légales', contains: ['Éditeur du site', 'Hébergement', 'Hébergeur du site : Vercel Inc., États-Unis (https://vercel.com).', 'Magistra est conçu et développé par Juan Robin'] },
   { path: '/confidentialite', title: 'Politique de confidentialité', tab: 'Politique de confidentialité', link: 'Politique de confidentialité', contains: ['Ce que ce site ne fait pas', 'Journaux techniques de l\'hébergeur', 'servi par GitHub'] },
   { path: '/cgu', title: 'Conditions générales d\'utilisation', tab: 'Conditions d\'utilisation', link: 'Conditions d\'utilisation', contains: ['Ce site présente Magistra', 'Usage du site'] },
 ] as const;
@@ -277,8 +277,11 @@ for (const legal of LEGAL_PAGES) {
     const main = (await page.locator('main').innerText()).toLowerCase();
     for (const word of ['clerk', 'supabase', 'région de la base']) expect(main).not.toContain(word);
     await expect(page.getByRole('navigation', { name: 'Pages légales' }).getByRole('link')).toHaveCount(3);
-    // Rien n'est écrit en dur : l'éditeur et l'hébergeur restent « à compléter » tant que le build ne les donne pas.
-    await expect(page.getByRole('note').first()).toBeVisible();
+    // Aucun trou, avis de projet ni consigne d'éditeur : l'éditeur, le contact et l'hébergeur ont des valeurs par défaut.
+    expect(main).not.toMatch(/à compléter|projet de texte|à faire valider|à vérifier|vite_/);
+    await expect(page.getByRole('note')).toHaveCount(0);
+    const contact = page.locator('main').getByRole('link', { name: 'juanrobin89@gmail.com' }).first();
+    await expect(contact).toHaveAttribute('href', 'mailto:juanrobin89@gmail.com');
     await expect(page.getByRole('link', { name: /Magistra, retour à l'accueil/ })).toHaveAttribute('href', '/');
   });
 }

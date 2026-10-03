@@ -1,17 +1,16 @@
-// Pièces communes des pages légales : lien externe, valeur ou marque « à compléter », contact, avis « projet de texte »
-// et cadre de la page (en-tête, navigation, avis). Utilisées par les textes de l'application et du site avec comptes
-// (LegalPage.tsx) comme par ceux du site vitrine (ShowcaseLegal.tsx), qui n'embarque donc aucun autre texte légal.
+// Pièces communes des pages légales : lien externe, contact, hébergeur et cadre de la page (en-tête, navigation).
+// Utilisées par les textes de l'application et du site avec comptes (LegalPage.tsx) comme par ceux du site vitrine
+// (ShowcaseLegal.tsx), qui n'embarque donc aucun autre texte légal.
 
 import type { MouseEvent, ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, GraduationCap } from 'lucide-react';
+import { ArrowLeft, GraduationCap } from 'lucide-react';
+import ContactLink from '@/components/ContactLink';
 import LegalLinks from '@/components/LegalLinks';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import {
-  emailOf, LEGAL_ENV_NAMES, LEGAL_LABELS, LEGAL_TITLES, relevantFields, type LegalField, type LegalInfo, type LegalPageKind,
-} from '@/lib/legal';
+import { LEGAL_TITLES, type LegalInfo, type LegalPageKind } from '@/lib/legal';
+import { safeExternalUrl } from '@/lib/links';
 import { getBridge } from '@/lib/runtime/local';
-import type { PageMode } from '@/lib/runtime/types';
 
 /** Lien externe : dans l'application Windows, il s'ouvre dans le navigateur du système (pont existant). */
 export function Ext({ href, children }: { href: string; children: ReactNode }) {
@@ -36,72 +35,27 @@ export function Ext({ href, children }: { href: string; children: ReactNode }) {
   );
 }
 
-/** Valeur renseignée, ou marque « à compléter » bien visible (jamais un blanc silencieux). */
-export function Field({ info, name }: { info: LegalInfo; name: LegalField }) {
-  const value = info[name];
-  if (value) return <>{value}</>;
-  return (
-    <mark
-      className="rounded bg-warning/15 px-1.5 py-0.5 font-semibold text-warning"
-      data-legal-todo={name}
-    >
-      [à compléter : {LEGAL_LABELS[name].toLowerCase()}]
-    </mark>
-  );
+/** Contact de l'éditeur : l'adresse e-mail est un lien « mailto: ». */
+export function ContactField({ info }: { info: LegalInfo }) {
+  return <ContactLink contact={info.contact} />;
 }
 
-export function ContactField({ info }: { info: LegalInfo }) {
-  const { contact } = info;
-  const email = emailOf(contact);
-  if (!contact || !email) return <Field info={info} name="contact" />;
-  // Seule l'adresse e-mail devient un lien ; le reste du texte (« Service X, … ») est affiché tel quel.
-  const at = contact.indexOf(email);
+/** Hébergeur du site : l'adresse https qu'il porte (« Vercel Inc., États-Unis (https://vercel.com) ») est un lien. */
+export function HostField({ info }: { info: LegalInfo }) {
+  const found = /https:\/\/[^\s)]+/.exec(info.host);
+  const href = found ? safeExternalUrl(found[0]) : null;
+  if (!found || !href) return <>{info.host}</>;
   return (
     <>
-      {contact.slice(0, at)}
-      <a href={`mailto:${email}`}>{email}</a>
-      {contact.slice(at + email.length)}
+      {info.host.slice(0, found.index)}
+      <Ext href={href}>{found[0]}</Ext>
+      {info.host.slice(found.index + found[0].length)}
     </>
   );
 }
 
-function DraftNotice({ info, fields }: { info: LegalInfo; fields: LegalField[] }) {
-  const missing = fields.filter(field => info.missing.includes(field));
-  // Textes validés et complets : plus d'avis. Validés mais incomplets : la liste seule, sans la phrase « projet de texte ».
-  if (info.validated && missing.length === 0) return null;
-  return (
-    <div role="note" className="mb-8 rounded-xl border border-warning/30 bg-warning/10 p-4 text-sm text-mg-50">
-      {!info.validated && (
-        <>
-          <p className="flex items-start gap-2 font-semibold text-warning">
-            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-            <span>Projet de texte, à faire valider avant mise en ligne</span>
-          </p>
-          <p className="mt-1.5">
-            Ce texte a été rédigé à partir du fonctionnement réel de Magistra. Il s'agit d'un modèle de départ : il doit
-            être relu et validé par l'éditeur du site (et, au besoin, par un conseil juridique) avant d'être considéré
-            comme définitif.
-          </p>
-        </>
-      )}
-      {missing.length > 0 && (
-        <div className={info.validated ? undefined : 'mt-2'} data-legal-missing>
-          <p className="font-semibold">Informations à compléter par l'éditeur du site :</p>
-          <ul className="mt-1 list-disc pl-5">
-            {missing.map(field => (
-              <li key={field}>
-                {LEGAL_LABELS[field]} — variable de build <code>{LEGAL_ENV_NAMES[field]}</code>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Cadre d'une page légale : en-tête, liens vers les trois pages, avis « à compléter » (selon `mode`), puis le texte. */
-export function LegalShell({ page, info, mode, children }: { page: LegalPageKind; info: LegalInfo; mode: PageMode; children: ReactNode }) {
+/** Cadre d'une page légale : en-tête, liens vers les trois pages, puis le texte. */
+export function LegalShell({ page, children }: { page: LegalPageKind; children: ReactNode }) {
   useDocumentTitle(LEGAL_TITLES[page]);
   const navigate = useNavigate();
   // La première entrée de l'historique porte la clé « default » : sinon l'utilisateur vient d'une page de l'application.
@@ -133,7 +87,6 @@ export function LegalShell({ page, info, mode, children }: { page: LegalPageKind
         <nav aria-label="Pages légales" className="mb-6 text-sm text-mg-200">
           <LegalLinks />
         </nav>
-        <DraftNotice info={info} fields={relevantFields(page, mode)} />
         <div className="prose-content">{children}</div>
       </main>
     </div>

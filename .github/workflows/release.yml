@@ -19,10 +19,11 @@
 # un jeton en lecture seule et sans identifiants git conservés ; seul le job « release », qui n'exécute aucun code
 # du dépôt ni aucune dépendance npm, reçoit « contents: write ».
 #
-# Informations légales de l'éditeur (pages « Mentions légales » et « Confidentialité » de l'installateur) et profil de
-# l'auteur (lien de « Magistra, créé par Juan Robin ») : variables de BUILD publiques par nature (VITE_LEGAL_*,
-# VITE_AUTHOR_PROFILE_URL), lues dans les VARIABLES du dépôt (GitHub → Settings → Secrets and variables → Actions →
-# onglet Variables), jamais dans les secrets. Voir le README, section « Mainteneurs ».
+# Surcharges facultatives des informations légales de l'éditeur (pages légales de l'installateur : éditeur, directeur de
+# la publication, adresse, contact ; valeurs par défaut dans src/lib/legal.ts) et du profil de l'auteur (lien de
+# « Magistra, créé par Juan Robin ») : variables de BUILD publiques par nature (VITE_LEGAL_*, VITE_AUTHOR_PROFILE_URL),
+# lues dans les VARIABLES du dépôt (GitHub → Settings → Secrets and variables → Actions → onglet Variables), jamais dans
+# les secrets. Une variable absente laisse la valeur par défaut. Voir le README, section « Mainteneurs ».
 
 name: Publication Windows
 
@@ -110,26 +111,9 @@ jobs:
 
       - run: npm ci
 
-      # Variable absente : les pages légales de l'installateur affichent « [à compléter] ». Avertissement seulement, la
-      # publication reste possible. Les valeurs passent par l'environnement, jamais dans le script ; seuls les NOMS
-      # manquants sont écrits dans l'annotation.
-      - name: Informations légales de l'éditeur
-        shell: bash
-        env:
-          VITE_LEGAL_PUBLISHER: ${{ vars.VITE_LEGAL_PUBLISHER }}
-          VITE_LEGAL_DIRECTOR: ${{ vars.VITE_LEGAL_DIRECTOR }}
-          VITE_LEGAL_ADDRESS: ${{ vars.VITE_LEGAL_ADDRESS }}
-          VITE_LEGAL_CONTACT: ${{ vars.VITE_LEGAL_CONTACT }}
-        run: |
-          for name in VITE_LEGAL_PUBLISHER VITE_LEGAL_DIRECTOR VITE_LEGAL_ADDRESS VITE_LEGAL_CONTACT; do
-            if [ -z "$(printf '%s' "${!name}" | tr -d '[:space:]')" ]; then
-              echo "::warning title=Information légale manquante::La variable de dépôt $name n'est pas renseignée : les pages légales de l'installateur afficheront « [à compléter] » (GitHub → Settings → Secrets and variables → Actions → Variables)."
-            fi
-          done
-
       - name: Profil de l'auteur
         # Variable absente : le lien « Magistra, créé par Juan Robin » mène au profil GitHub par défaut. Avertissement
-        # seulement, la publication reste possible (même principe que les informations légales).
+        # seulement, la publication reste possible.
         shell: bash
         env:
           VITE_AUTHOR_PROFILE_URL: ${{ vars.VITE_AUTHOR_PROFILE_URL }}
@@ -145,7 +129,6 @@ jobs:
           VITE_LEGAL_DIRECTOR: ${{ vars.VITE_LEGAL_DIRECTOR }}
           VITE_LEGAL_ADDRESS: ${{ vars.VITE_LEGAL_ADDRESS }}
           VITE_LEGAL_CONTACT: ${{ vars.VITE_LEGAL_CONTACT }}
-          VITE_LEGAL_VALIDATED: ${{ vars.VITE_LEGAL_VALIDATED }}
           VITE_AUTHOR_PROFILE_URL: ${{ vars.VITE_AUTHOR_PROFILE_URL }}
 
       - name: Build Electron (processus principal + preload)

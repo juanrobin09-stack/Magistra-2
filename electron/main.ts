@@ -38,7 +38,7 @@ import { LocalStore } from './localStore.js';
 import { AIManager } from './ollamaSetup.js';
 import { createAppProtocolHandler } from './protocol.js';
 import { devOptionsFrom } from './devOptions.js';
-import { APP_SCHEME, APP_URL, isSafeExternalUrl, isTrustedUrl, trustedOrigins } from './security.js';
+import { APP_SCHEME, APP_URL, isSafeExternalUrl, isSafeMailtoUrl, isTrustedUrl, trustedOrigins } from './security.js';
 import { SmokeTest } from './smoke.js';
 import { checkForUpdate } from './updateCheck.js';
 import { configureWindowSession, denyAllPermissions, WINDOW_PARTITION } from './windowSession.js';
@@ -174,8 +174,9 @@ function buildMenu(): Menu {
 /** Session de la fenêtre (partition dédiée, voir windowSession.ts) ; créée au démarrage. */
 let windowSession: Session | null = null;
 
+/** Lien http(s) externe, ou « mailto: » simple (contact de l'éditeur) : s'ouvre dans le navigateur ou la messagerie du système. */
 function openExternalSafely(url: string): void {
-  if (isSafeExternalUrl(url) && !isTrustedUrl(url, origins)) {
+  if ((isSafeExternalUrl(url) && !isTrustedUrl(url, origins)) || isSafeMailtoUrl(url)) {
     shell.openExternal(url).catch(err => console.warn('[magistra] Ouverture du lien impossible :', err));
   }
 }

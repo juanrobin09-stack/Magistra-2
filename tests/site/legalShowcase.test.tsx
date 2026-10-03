@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-// Pages légales du site vitrine (mode « showcase ») : mentions légales (éditeur, directeur, adresse, contact, hébergeur ;
-// jamais de région de base de données), politique de confidentialité exacte et prudente, conditions d'utilisation
-// adaptées. Même mécanique « à compléter » / VITE_LEGAL_VALIDATED que les autres modes ; les modes existants ne changent pas.
+// Pages légales du site vitrine (mode « showcase ») : mentions légales (éditeur, directeur, contact, hébergeur ; jamais
+// de région de base de données), politique de confidentialité exacte et prudente, conditions d'utilisation adaptées.
+// L'éditeur, son contact et l'hébergeur ont des valeurs par défaut (Juan Robin, juanrobin89@gmail.com, Vercel) que les
+// variables VITE_LEGAL_* remplacent ; l'adresse n'est affichée que si elle est renseignée. Valeurs par défaut et
+// absence de formulation d'éditeur dans tous les modes : tests/ui/legalDefaults.test.tsx.
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { readLegalInfo, relevantFields, LEGAL_ENV_NAMES, type LegalField, type LegalPageKind } from '@/lib/legal';
+import { readLegalInfo, type LegalPageKind } from '@/lib/legal';
 import { setRuntimeConfig } from '@/lib/runtime/mode';
 import LegalPage from '@/pages/LegalPage';
 import ShowcaseLegalPage from '@/pages/legal/ShowcaseLegal';
@@ -25,7 +27,6 @@ const FULL = {
   VITE_LEGAL_CONTACT: 'Contact Exemple, contact@exemple.fr',
   VITE_LEGAL_HOST: 'Hébergeur Exemple, 2 avenue du Serveur, 75000 Paris',
   VITE_LEGAL_DATA_REGION: 'Paris',
-  VITE_LEGAL_VALIDATED: 'oui',
 };
 
 async function mount(page: LegalPageKind, env: Record<string, unknown> = {}) {
@@ -36,12 +37,8 @@ async function mount(page: LegalPageKind, env: Record<string, unknown> = {}) {
   );
 }
 
-const marked = (container: HTMLElement) =>
-  [...new Set(Array.from(container.querySelectorAll('[data-legal-todo]')).map(el => el.getAttribute('data-legal-todo') as LegalField))].sort();
-const listed = (container: HTMLElement) => Array.from(container.querySelectorAll('[data-legal-missing] code')).map(el => el.textContent).sort();
-
 describe('Showcase : mentions légales', () => {
-  it('éditeur, directeur, adresse, contact et hébergeur renseignés', async () => {
+  it('éditeur, directeur, adresse, contact et hébergeur renseignés par le build', async () => {
     const { container } = await mount('mentions', FULL);
     const text = container.textContent ?? '';
     expect(container.querySelector('h1')?.textContent).toBe('Mentions légales');
@@ -50,25 +47,33 @@ describe('Showcase : mentions légales', () => {
     expect(text).toContain('Adresse : 1 rue de l\'Exemple, 33000 Bordeaux');
     expect(container.querySelector('a[href="mailto:contact@exemple.fr"]')).not.toBeNull();
     expect(text).toContain('Hébergeur du site : Hébergeur Exemple, 2 avenue du Serveur, 75000 Paris.');
-    // Tout est renseigné et validé : plus aucun avis.
+    // Une adresse est publiée : la phrase de l'éditeur non professionnel n'a plus lieu d'être.
+    expect(text).not.toContain('article 6, III');
     expect(container.querySelector('[role="note"]')).toBeNull();
   });
 
-  it('jamais de région de base de données : ni Supabase, ni compte, ni région', async () => {
+  it('sans variable : Juan Robin éditeur et directeur de la publication, juanrobin89@gmail.com, Vercel ; ni adresse ni avis', async () => {
     const { container } = await mount('mentions');
     const text = container.textContent ?? '';
-    expect(text).not.toMatch(/Supabase|Clerk|base de données|région|dataRegion/i);
-    expect(marked(container)).not.toContain('dataRegion');
-    expect(listed(container)).not.toContain(LEGAL_ENV_NAMES.dataRegion);
+    expect(text).toContain('Juan Robin');
+    expect(text).toContain('Directeur ou directrice de la publication : Juan Robin.');
+    expect(text).toContain('Contact : juanrobin89@gmail.com');
+    expect(container.querySelector('a[href="mailto:juanrobin89@gmail.com"]')).not.toBeNull();
+    expect(text).toContain('Hébergeur du site : Vercel Inc., États-Unis (https://vercel.com).');
+    expect(text).not.toContain('Adresse :');
+    expect(text).toContain(
+      "L'éditeur, personne physique éditant le site à titre non professionnel, a communiqué ses éléments d'identification à l'hébergeur et ne publie pas son adresse personnelle (article 6, III, 2° de la loi n° 2004-575 du 21 juin 2004).",
+    );
+    expect(container.querySelector('[role="note"]')).toBeNull();
+    expect(container.querySelector('[data-legal-todo]')).toBeNull();
   });
 
-  it('éditeur, directeur, adresse, contact et hébergeur manquants : marques « à compléter » et liste des variables', async () => {
-    const { container } = await mount('mentions');
-    expect(marked(container)).toEqual(['address', 'contact', 'director', 'host', 'publisher']);
-    expect(listed(container)).toEqual(
-      ['address', 'contact', 'director', 'host', 'publisher'].map(field => LEGAL_ENV_NAMES[field as LegalField]).sort(),
-    );
-    expect(container.textContent).toContain('Projet de texte, à faire valider avant mise en ligne');
+  it('jamais de région de base de données : ni Supabase, ni compte, ni région, même si la variable existe', async () => {
+    for (const env of [{}, FULL]) {
+      cleanup();
+      const { container } = await mount('mentions', env);
+      expect(container.textContent ?? '').not.toMatch(/Supabase|Clerk|base de données|région|dataRegion/i);
+    }
   });
 
   it('attribution : conçu et développé par Juan Robin, dans le cadre du projet FutureAI ; vitrine sans compte', async () => {
@@ -78,6 +83,17 @@ describe('Showcase : mentions légales', () => {
     expect(text).toContain('Ce site est une vitrine');
     expect(text).toContain('Ce site ne produit aucun contenu.');
   });
+
+  it('conservé : licence MIT, propriété intellectuelle, contenus d\'IA à relire, empreinte du téléchargement servi par GitHub', async () => {
+    const { container } = await mount('mentions');
+    const text = container.textContent ?? '';
+    expect(text).toContain('licence MIT');
+    expect([...container.querySelectorAll('h2')].map(h => h.textContent)).toEqual(
+      expect.arrayContaining(['Propriété intellectuelle', 'Contenus générés par intelligence artificielle', 'Données personnelles']),
+    );
+    expect(text).toContain('ils peuvent contenir des erreurs, des approximations ou des références inexactes');
+    expect(text).toContain('il est servi par GitHub');
+  });
 });
 
 describe('Showcase : politique de confidentialité', () => {
@@ -86,14 +102,21 @@ describe('Showcase : politique de confidentialité', () => {
     return { text: container.textContent ?? '', container };
   }
 
-  it('ce que le site n’a pas : compte, formulaire, cookie de suivi, statistiques d’audience, police tierce', async () => {
+  it('ce que le site n’a pas : compte, formulaire, publicité, statistiques d’audience, police tierce ; aucun cookie ni stockage', async () => {
     const { text } = await privacyText();
-    expect(text).toContain('il n\'a ni compte, ni connexion');
-    expect(text).toContain('il n\'a aucun formulaire');
-    expect(text).toContain('ne dépose aucun cookie de suivi');
+    expect(text).toContain('il n\'a ni compte, ni connexion, ni formulaire');
+    expect(text).toContain('il ne vous demande aucune information');
+    expect(text).toContain('aucune publicité');
     expect(text).toContain('ne mesure pas son audience');
     expect(text).toContain('il charge ses polices depuis lui-même');
-    expect(text).toContain('Ce site ne dépose aucun cookie et n\'enregistre rien dans le stockage de votre navigateur.');
+    expect(text).toContain('Ce site ne dépose aucun cookie, de suivi ou autre, et n\'enregistre rien dans le stockage de votre navigateur.');
+  });
+
+  it('chaque affirmation n’est dite qu’une fois : cookies, durée de conservation, politique de l’application', async () => {
+    const { text } = await privacyText();
+    expect(text.match(/aucun cookie/g)).toHaveLength(1);
+    expect(text.match(/fixée par l'hébergeur/g)).toHaveLength(1);
+    expect(text.match(/est affichée dans l'application/g)).toHaveLength(1);
   });
 
   it('ce qui est traité : journaux de l’hébergeur (IP, date, page), recherche de version depuis le serveur, téléchargement servi par GitHub', async () => {
@@ -103,47 +126,48 @@ describe('Showcase : politique de confidentialité', () => {
     expect(text).toContain('c\'est ce serveur, non votre navigateur, qui appelle GitHub');
     expect(text).toContain('le fichier d\'installation est servi par GitHub');
     expect(text).toContain('votre navigateur contacte GitHub');
+    expect(text).toContain('dont votre adresse IP');
   });
 
   it('liens externes qui quittent le site, et application Windows : sa propre politique est dans l’application', async () => {
     const { text } = await privacyText();
     expect(text).toContain('quittent ce site');
     expect(text).toContain('profil professionnel de l\'auteur');
-    expect(text).toContain('sa propre politique de confidentialité est affichée dans l\'application');
+    expect(text).toContain('Sa politique de confidentialité, qui précise ce qui peut en sortir et dans quels cas, est affichée dans l\'application');
   });
 
-  it('exacte : aucun prestataire de l’application (comptes, base de données, IA en ligne) n’est cité', async () => {
-    const { text } = await privacyText();
-    expect(text).not.toMatch(/Clerk|Supabase|Cloudflare|Turnstile|Vercel|OpenAI|Ollama|historique|favoris|profil enseignant/i);
+  it('exacte : aucun prestataire de l’application (comptes, base de données, IA en ligne) n’est cité ; Vercel seulement comme hébergeur', async () => {
+    const { text } = await privacyText({});
+    expect(text).not.toMatch(/Clerk|Supabase|Cloudflare|Turnstile|OpenAI|Ollama|historique|favoris|profil enseignant/i);
+    expect(text.match(/Vercel/g)).toHaveLength(2);
+    expect(text).toContain('L\'hébergeur du site : Vercel Inc., États-Unis (https://vercel.com).');
   });
 
-  it('prudente : aucune durée de conservation inventée pour les journaux, aucun nom d’hébergeur écrit en dur', async () => {
+  it('prudente : aucune durée de conservation inventée pour les journaux ; l’hébergeur est celui que le build donne', async () => {
     const { text } = await privacyText();
-    expect(text).toContain('leur durée de conservation est fixée par l\'hébergeur');
+    expect(text).toContain('la durée de conservation est fixée par l\'hébergeur');
     expect(text).not.toMatch(/\d+\s*(jours?|mois|ans)\b/);
-    const missing = await privacyText({});
-    expect(missing.text).toContain('[à compléter : hébergeur du site (nom et adresse)]');
+    expect(text).not.toContain('Vercel');
   });
 
   it('responsable et droits : contact, CNIL', async () => {
     const { text, container } = await privacyText();
-    expect(text).toContain('Association Exemple');
+    expect(text).toContain('Le responsable du traitement est Association Exemple, éditeur du site, 1 rue de l\'Exemple, 33000 Bordeaux.');
     expect(container.querySelector('a[href="mailto:contact@exemple.fr"]')).not.toBeNull();
     expect(container.querySelector('a[href="https://www.cnil.fr/fr/plaintes"]')).not.toBeNull();
+    expect(text).toContain('droit d\'accès, de rectification, d\'effacement, de limitation, d\'opposition et de portabilité');
   });
 
-  it('seuls l’éditeur, l’adresse, le contact et l’hébergeur sont « à compléter » (jamais la région de base de données)', async () => {
-    const { container } = await mount('confidentialite');
-    expect(marked(container)).toEqual(['address', 'contact', 'host', 'publisher']);
-    expect(listed(container)).toEqual(['address', 'contact', 'host', 'publisher'].map(field => LEGAL_ENV_NAMES[field as LegalField]).sort());
+  it('responsable par défaut : Juan Robin, éditeur du site, sans adresse ; droits exercés auprès de juanrobin89@gmail.com', async () => {
+    const { text, container } = await privacyText({});
+    expect(text).toContain('Le responsable du traitement est Juan Robin, éditeur du site. Contact : juanrobin89@gmail.com.');
+    expect(container.querySelectorAll('a[href="mailto:juanrobin89@gmail.com"]').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('garanties de transfert : à vérifier tant que les textes ne sont pas validés ; plus ensuite', async () => {
-    const draft = await privacyText({ ...FULL, VITE_LEGAL_VALIDATED: '' });
-    expect(draft.text).toContain('Ces garanties sont à vérifier par l\'éditeur avant publication.');
-    cleanup();
-    const validated = await privacyText(FULL);
-    expect(validated.text).not.toContain('à vérifier par l\'éditeur');
+  it('transferts hors Union européenne : les garanties annoncées, sans consigne à l’éditeur', async () => {
+    const { text } = await privacyText({});
+    expect(text).toContain('clauses contractuelles types');
+    expect(text).not.toMatch(/à vérifier|avant publication|par l'éditeur/);
   });
 });
 
@@ -160,40 +184,15 @@ describe('Showcase : conditions d’utilisation', () => {
     expect(container.querySelector('[role="note"]')).toBeNull();
   });
 
-  it('seul le contact est « à compléter »', async () => {
+  it('contact : celui du build, sinon juanrobin89@gmail.com ; limites de responsabilité et licence conservées', async () => {
+    const custom = await mount('cgu', FULL);
+    expect(custom.container.querySelector('a[href="mailto:contact@exemple.fr"]')).not.toBeNull();
+    cleanup();
     const { container } = await mount('cgu');
-    expect(marked(container)).toEqual(['contact']);
-    expect(listed(container)).toEqual([LEGAL_ENV_NAMES.contact]);
-  });
-});
-
-describe('Showcase : mécanique « à compléter » / VITE_LEGAL_VALIDATED', () => {
-  it.each(PAGES)('%s : validé mais incomplet : la liste seule, sans « projet de texte »', async page => {
-    const { container } = await mount(page, { VITE_LEGAL_VALIDATED: 'true' });
-    expect(container.textContent).not.toContain('Projet de texte, à faire valider');
-    expect(container.querySelector('[data-legal-missing]')).not.toBeNull();
-  });
-
-  it.each(PAGES)('%s : l’avis liste exactement les variables dont la page affiche la marque', async page => {
-    const { container } = await mount(page);
-    const expected = marked(container).map(field => LEGAL_ENV_NAMES[field]).sort();
-    expect(listed(container)).toEqual(expected);
-    expect(marked(container).sort()).toEqual(relevantFields(page, 'showcase').slice().sort());
-  });
-
-  it('relevantFields : hébergeur oui, région de base de données non', () => {
-    for (const page of ['mentions', 'confidentialite'] as const) {
-      expect(relevantFields(page, 'showcase')).toContain('host');
-      expect(relevantFields(page, 'showcase')).not.toContain('dataRegion');
-    }
-    // Les modes existants ne changent pas.
-    expect(relevantFields('mentions', 'web')).toEqual(['publisher', 'director', 'address', 'contact', 'host', 'dataRegion']);
-    expect(relevantFields('confidentialite', 'web')).toEqual(['publisher', 'address', 'contact', 'host', 'dataRegion']);
-    for (const mode of ['personal', 'demo', 'local'] as const) {
-      expect(relevantFields('mentions', mode)).toEqual(['publisher', 'director', 'address', 'contact']);
-      expect(relevantFields('confidentialite', mode)).toEqual(['publisher', 'contact']);
-    }
-    for (const mode of ['web', 'personal', 'demo', 'local', 'showcase'] as const) expect(relevantFields('cgu', mode)).toEqual(['contact']);
+    expect(container.querySelector('a[href="mailto:juanrobin89@gmail.com"]')).not.toBeNull();
+    const text = container.textContent ?? '';
+    expect(text).toContain('Dans les limites permises par la loi, l\'éditeur n\'est pas responsable');
+    expect(text).toContain('licence MIT');
   });
 });
 

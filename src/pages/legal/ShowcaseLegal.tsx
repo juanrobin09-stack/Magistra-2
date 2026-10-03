@@ -5,14 +5,14 @@
 // d'audience ; ses polices viennent de lui-même ; le serveur d'hébergement garde des journaux techniques ; la recherche
 // de la dernière version appelle GitHub depuis le serveur du site ; le téléchargement est servi par GitHub. Aucune
 // affirmation sur l'application elle-même au-delà de renvoyer à sa propre politique, affichée dans l'application.
-// Même mécanique que les autres modes : l'identité de l'éditeur vient des variables VITE_LEGAL_* et reste visible
-// comme « à compléter » tant qu'elle manque ; VITE_LEGAL_VALIDATED retire l'avis « projet de texte ».
+// L'éditeur, son contact et l'hébergeur ont des valeurs par défaut (src/lib/legal.ts) que les variables VITE_LEGAL_*
+// remplacent ; une information sans valeur (l'adresse) n'est simplement pas affichée.
 
 import { Link } from 'react-router-dom';
 import { AUTHOR_NAME } from '@shared/author';
-import { LEGAL_PATHS, readLegalInfo, type LegalInfo, type LegalPageKind } from '@/lib/legal';
+import { LEGAL_NON_PROFESSIONAL_NOTICE, LEGAL_PATHS, readLegalInfo, type LegalInfo, type LegalPageKind } from '@/lib/legal';
 import { REPOSITORY_URL } from '@/lib/links';
-import { ContactField, Ext, Field, LegalShell } from './LegalParts';
+import { ContactField, Ext, HostField, LegalShell } from './LegalParts';
 
 const FUTUREAI_URL = 'https://futurai.space';
 
@@ -23,19 +23,24 @@ function Mentions({ info }: { info: LegalInfo }) {
 
       <h2>Éditeur du site</h2>
       <p className="mb-2">
-        <strong><Field info={info} name="publisher" /></strong>
-        <br />
-        Adresse : <Field info={info} name="address" />
+        <strong>{info.publisher}</strong>
+        {info.address && (
+          <>
+            <br />
+            Adresse : {info.address}
+          </>
+        )}
         <br />
         Contact : <ContactField info={info} />
       </p>
       <p>
-        Directeur ou directrice de la publication : <Field info={info} name="director" />.
+        Directeur ou directrice de la publication : {info.director}.
       </p>
+      {!info.address && <p>{LEGAL_NON_PROFESSIONAL_NOTICE}</p>}
 
       <h2>Hébergement</h2>
       <p>
-        Hébergeur du site : <Field info={info} name="host" />.
+        Hébergeur du site : <HostField info={info} />.
       </p>
       <p>
         Le fichier d'installation de l'application Windows n'est pas hébergé par le site : il est servi par GitHub (voir la{' '}
@@ -44,8 +49,8 @@ function Mentions({ info }: { info: LegalInfo }) {
 
       <h2>Ce site</h2>
       <p>
-        Ce site est une vitrine : il présente Magistra et permet de télécharger l'application Windows. Il n'offre ni compte,
-        ni connexion, ni application dans le navigateur : Magistra fonctionne sur l'ordinateur de l'enseignant.
+        Ce site est une vitrine : il présente Magistra et permet de télécharger l'application Windows. Magistra elle-même
+        fonctionne sur l'ordinateur de l'enseignant.
       </p>
 
       <h2>Le logiciel Magistra</h2>
@@ -85,30 +90,28 @@ function Privacy({ info }: { info: LegalInfo }) {
       <h1>Politique de confidentialité</h1>
       <p>
         Cette page explique ce que traite le site vitrine de Magistra, pourquoi, chez qui, pendant combien de temps, et
-        comment exercer vos droits (articles 13 et suivants du RGPD). L'application Windows fonctionne sur l'ordinateur de
-        l'enseignant : sa propre politique de confidentialité est affichée dans l'application.
+        comment exercer vos droits (articles 13 et suivants du RGPD).
       </p>
 
       <h2>1. Qui est responsable ?</h2>
       <p>
-        Le responsable du traitement est <strong><Field info={info} name="publisher" /></strong>, <Field info={info} name="address" />.
+        Le responsable du traitement est <strong>{info.publisher}</strong>, éditeur du site{info.address && <>, {info.address}</>}.
         Contact : <ContactField info={info} />.
       </p>
 
       <h2>2. Ce que ce site ne fait pas</h2>
       <ul>
-        <li>il n'a ni compte, ni connexion ;</li>
-        <li>il n'a aucun formulaire : il ne vous demande aucune information ;</li>
-        <li>il ne dépose aucun cookie de suivi, ne contient aucune publicité et ne mesure pas son audience (aucune statistique de fréquentation) ;</li>
+        <li>il n'a ni compte, ni connexion, ni formulaire : il ne vous demande aucune information ;</li>
+        <li>il ne contient aucune publicité et ne mesure pas son audience (aucune statistique de fréquentation) ;</li>
         <li>il charge ses polices depuis lui-même : aucune requête vers un service de polices tiers.</li>
       </ul>
 
       <h2>3. Ce qui est traité</h2>
       <ul>
         <li>
-          <strong>Journaux techniques de l'hébergeur</strong> : comme tout serveur web, le serveur qui héberge ce site
-          (<Field info={info} name="host" />) conserve des journaux techniques : adresse IP, date et heure, page demandée.
-          Ils servent au fonctionnement et à la sécurité du site ; leur durée de conservation est fixée par l'hébergeur.
+          <strong>Journaux techniques de l'hébergeur</strong> : comme tout serveur web, l'hébergeur de ce site,{' '}
+          <HostField info={info} />, conserve des journaux techniques (adresse IP, date et heure, page demandée). Ils servent
+          au fonctionnement et à la sécurité du site.
         </li>
         <li>
           <strong>Recherche de la dernière version</strong> : pour afficher la version, la taille et l'empreinte de
@@ -135,18 +138,17 @@ function Privacy({ info }: { info: LegalInfo }) {
 
       <h2>5. Qui reçoit ces données ?</h2>
       <ul>
-        <li><strong>L'hébergeur du site</strong> : <Field info={info} name="host" />.</li>
+        <li><strong>L'hébergeur du site</strong> : <HostField info={info} />.</li>
         <li><strong>GitHub</strong> : uniquement si vous téléchargez l'application.</li>
       </ul>
       <p>
         Certains de ces prestataires sont établis hors de l'Union européenne : les transferts sont alors encadrés par les
         garanties qu'ils annoncent (clauses contractuelles types, cadre de protection des données UE–États-Unis).
-        {!info.validated && " Ces garanties sont à vérifier par l'éditeur avant publication."}
       </p>
 
       <h2>6. Combien de temps ?</h2>
       <p>
-        Journaux techniques : la durée fixée par l'hébergeur. Le site lui-même ne conserve rien d'autre.
+        Journaux techniques : la durée de conservation est fixée par l'hébergeur. Le site lui-même ne conserve rien d'autre.
       </p>
 
       <h2>7. Vos droits</h2>
@@ -161,7 +163,7 @@ function Privacy({ info }: { info: LegalInfo }) {
 
       <h2>8. Cookies et stockage dans votre navigateur</h2>
       <p>
-        Ce site ne dépose aucun cookie et n'enregistre rien dans le stockage de votre navigateur.
+        Ce site ne dépose aucun cookie, de suivi ou autre, et n'enregistre rien dans le stockage de votre navigateur.
       </p>
 
       <h2>9. Magistra pour Windows</h2>
@@ -186,10 +188,7 @@ function Terms({ info }: { info: LegalInfo }) {
       </p>
 
       <h2>2. Accès au site</h2>
-      <ul>
-        <li>Le site est gratuit, sans compte ni connexion.</li>
-        <li>Il sert à s'informer sur Magistra et à télécharger l'application Windows.</li>
-      </ul>
+      <p>Le site est gratuit, sans compte ni connexion.</p>
 
       <h2>3. Usage du site</h2>
       <p>Vous vous engagez à ne pas :</p>
@@ -241,10 +240,10 @@ function Terms({ info }: { info: LegalInfo }) {
   );
 }
 
-/** Page légale du site vitrine. `info` : informations de l'éditeur (par défaut, celles du build : VITE_LEGAL_*). */
+/** Page légale du site vitrine. `info` : informations de l'éditeur (par défaut, celles du build : VITE_LEGAL_*, sinon les valeurs par défaut). */
 export default function ShowcaseLegalPage({ page, info = readLegalInfo() }: { page: LegalPageKind; info?: LegalInfo }) {
   return (
-    <LegalShell page={page} info={info} mode="showcase">
+    <LegalShell page={page}>
       {page === 'mentions' && <Mentions info={info} />}
       {page === 'confidentialite' && <Privacy info={info} />}
       {page === 'cgu' && <Terms info={info} />}

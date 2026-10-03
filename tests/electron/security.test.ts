@@ -21,7 +21,7 @@ import { IPC } from '../../shared/ipc.js';
 import { OFFICIAL_WEB_ORIGINS } from '../../shared/localConnector.js';
 import { registerIpcHandlers, type IpcContext } from '../../electron/ipc.js';
 import {
-  APP_ORIGIN, isSafeExternalUrl, isTrustedSender, isTrustedUrl, originOf, parseDevServerUrl, trustedOrigins,
+  APP_ORIGIN, isSafeExternalUrl, isSafeMailtoUrl, isTrustedSender, isTrustedUrl, originOf, parseDevServerUrl, trustedOrigins,
   type TrustedWindowLike,
 } from '../../electron/security.js';
 
@@ -115,6 +115,20 @@ describe('origines et expéditeur IPC', () => {
     ]) {
       expect(isSafeExternalUrl(url)).toBe(false);
     }
+  });
+
+  it("n'ouvre dans la messagerie du système que l'adresse de contact simple (« mailto: » sans paramètre)", () => {
+    expect(isSafeMailtoUrl('mailto:juanrobin89@gmail.com')).toBe(true);
+    expect(isSafeMailtoUrl('mailto:aide.magistra+rgpd@exemple.univ-test.fr')).toBe(true);
+    for (const url of [
+      'mailto:juanrobin89@gmail.com?subject=x', 'mailto:juanrobin89@gmail.com?attach=C:\\Windows\\win.ini', 'mailto:a@b.fr,c@d.fr',
+      'mailto:', 'mailto:sans-arobase', 'mailto:a@b', 'mailto:a@b.fr\n', 'mailto:a@b.fr ', 'mailto:a b@c.fr', 'mailto:%0d@b.fr?bcc=x@y.fr',
+      `mailto:${'x'.repeat(400)}@exemple.fr`, 'https://exemple.fr/', 'javascript:alert(1)', 'file:///C:/Windows/win.ini', 42, null,
+    ]) {
+      expect(isSafeMailtoUrl(url)).toBe(false);
+    }
+    // Ce n'est pas un lien http(s) : l'ouverture par le pont (isSafeExternalUrl) reste réservée à http(s).
+    expect(isSafeExternalUrl('mailto:juanrobin89@gmail.com')).toBe(false);
   });
 });
 
