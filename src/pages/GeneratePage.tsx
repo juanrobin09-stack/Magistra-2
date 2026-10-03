@@ -57,6 +57,7 @@ import { ExampleGenerationClient } from '@/lib/runtime/demo';
 import { HybridGenerationClient, type EngineRoute } from '@/lib/runtime/hybrid';
 import { usesServerApi } from '@/lib/runtime/types';
 import { TOOL_ICONS, TOOL_STYLE } from '@/lib/toolIcons';
+import IconBadge from '@/components/IconBadge';
 
 /** Magistra locale attend l'accord du navigateur : la génération ne doit pas faire apparaître sa demande sans explication. */
 export const LOCAL_PERMISSION_NOTICE =
@@ -429,12 +430,7 @@ export default function GeneratePage() {
       <div className="min-w-0">
         {/* En-tête : l'outil choisi, en grand */}
         <header className="mb-5 flex items-start gap-3.5 sm:gap-4">
-          <div
-            aria-hidden="true"
-            className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl ${TOOL_STYLE[form.type].iconBg} border border-white/8 flex items-center justify-center shrink-0 shadow-[0_8px_30px_rgba(0,0,0,0.25)]`}
-          >
-            <ToolIcon size={24} className={TOOL_STYLE[form.type].iconColor} />
-          </div>
+          <IconBadge icon={ToolIcon} size="lg" className={TOOL_STYLE[form.type].iconColor} />
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-1.5 text-[11px] font-semibold text-accent/85 uppercase tracking-widest">
               <Sparkles size={11} aria-hidden="true" />

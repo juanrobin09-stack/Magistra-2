@@ -1,5 +1,5 @@
 // Identité visuelle des outils (icône et couleur), commune au tableau de bord, à la barre latérale (« Outils
-// pédagogiques ») et à l'en-tête de la page Générer.
+// pédagogiques »), à l'en-tête de la page Générer et au site vitrine.
 
 import {
   BookOpen, CalendarRange, ClipboardCheck, FileText, Layers, Mail, MessageSquare, NotebookPen, PenLine, SpellCheck2, Users,

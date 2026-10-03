@@ -83,7 +83,8 @@ const SidebarTools = forwardRef<HTMLButtonElement, SidebarToolsProps>(function S
                       `}
                     >
                       <Icon
-                        size={15}
+                        size={16}
+                        strokeWidth={1.7}
                         aria-hidden="true"
                         className={`shrink-0 ${current ? 'text-accent' : 'text-mg-300 group-hover:text-mg-100'}`}
                       />

@@ -9,7 +9,9 @@ import type { ReactNode } from 'react';
 import { ArrowRight, GraduationCap } from 'lucide-react';
 import AuthorCredit from '@/components/AuthorCredit';
 import LegalLinks from '@/components/LegalLinks';
+import IconBadge from '@/components/IconBadge';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { TOOL_ICONS, TOOL_STYLE } from '@/lib/toolIcons';
 import { FEATURES_CREATION, FEATURES_OUTILS, FEATURES_PLUS, STATS, STEPS } from './content';
 
 interface LandingContentProps {
@@ -121,7 +123,7 @@ export default function LandingContent({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {FEATURES_CREATION.map(f => (
                 <div key={f.title} className="card p-6 group">
-                  <span className="text-2xl text-accent block mb-3 group-hover:scale-110 transition-transform" aria-hidden="true">{f.icon}</span>
+                  <IconBadge icon={TOOL_ICONS[f.tool]} className={`mb-4 ${TOOL_STYLE[f.tool].iconColor}`} />
                   <h3 className="text-sm font-semibold text-white mb-2">{f.title}</h3>
                   <p className="text-sm text-mg-200 leading-relaxed">{f.desc}</p>
                 </div>
@@ -144,7 +146,7 @@ export default function LandingContent({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {FEATURES_OUTILS.map(f => (
                 <div key={f.title} className="card p-6 group">
-                  <span className="text-2xl block mb-3 group-hover:scale-110 transition-transform" aria-hidden="true">{f.icon}</span>
+                  <IconBadge icon={TOOL_ICONS[f.tool]} className={`mb-4 ${TOOL_STYLE[f.tool].iconColor}`} />
                   <h3 className="text-sm font-semibold text-white mb-2">{f.title}</h3>
                   <p className="text-sm text-mg-200 leading-relaxed">{f.desc}</p>
                 </div>
@@ -162,7 +164,7 @@ export default function LandingContent({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {FEATURES_PLUS.map(f => (
                 <div key={f.title} className="card p-6 text-center group">
-                  <span className="text-2xl text-accent block mb-3 mx-auto group-hover:scale-110 transition-transform" aria-hidden="true">{f.icon}</span>
+                  <IconBadge icon={f.icon} className={`mb-4 mx-auto ${f.iconColor}`} />
                   <h3 className="text-sm font-semibold text-white mb-2">{f.title}</h3>
                   <p className="text-sm text-mg-200 leading-relaxed">{f.desc}</p>
                   {f.link && windowsLinks && (

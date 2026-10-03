@@ -14,6 +14,7 @@ import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import LocalEngineCard from '@/components/localEngine/LocalEngineCard';
 import { errorMessage, niveauLabelFor, timeAgo, toolLabelFor } from '@/components/history/logic';
 import { TOOL_ICONS, TOOL_STYLE } from '@/lib/toolIcons';
+import IconBadge from '@/components/IconBadge';
 import { useAppShell } from '@/components/layout/shell';
 
 type Loadable<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'error'; error: string };
@@ -128,7 +129,8 @@ export default function DashboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl sm:text-4xl text-white mb-1.5 leading-tight" style={{ fontFamily: 'var(--font-display)' }}>
-            {greetingFor(now)}{displayName ? `, ${displayName}` : ''} <span aria-hidden="true">✨</span>
+            {greetingFor(now)}{displayName ? `, ${displayName}` : ''}{' '}
+            <Sparkles size={24} strokeWidth={1.7} className="inline-block align-middle text-accent" aria-hidden="true" />
           </h1>
           <p className="text-sm text-mg-300 first-letter:uppercase">{dateStr}</p>
         </div>
@@ -238,17 +240,14 @@ export default function DashboardPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {quickTools.map(type => {
                 const info = getToolInfo(type, niveau);
-                const Icon = TOOL_ICONS[type];
                 const style = TOOL_STYLE[type];
                 return (
                   <Link
                     key={type}
                     to={`/app/generate?type=${type}`}
-                    className="card p-4 hover:border-white/12 hover:-translate-y-0.5 group flex flex-col gap-3 transition-all duration-200"
+                    className="card p-4 hover:border-white/12 motion-safe:hover:-translate-y-0.5 group flex flex-col gap-3 transition-all duration-200"
                   >
-                    <div className={`w-9 h-9 rounded-xl ${style.iconBg} flex items-center justify-center group-hover:scale-110 transition-transform duration-200`}>
-                      <Icon size={17} className={style.iconColor} aria-hidden="true" />
-                    </div>
+                    <IconBadge icon={TOOL_ICONS[type]} size="sm" className={style.iconColor} />
                     <div>
                       <p className="text-sm font-semibold text-mg-100 group-hover:text-white transition-colors">{info.label}</p>
                       <p className="text-xs text-mg-300 mt-0.5">{info.description}</p>
