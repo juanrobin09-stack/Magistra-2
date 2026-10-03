@@ -112,7 +112,11 @@ describe('Page Générer — Magistra locale', () => {
       const research = view.container.querySelector<HTMLElement>('[aria-labelledby="gen-research-title"]')!;
       expect(research.textContent, state.kind).toContain('Aucune recherche externe.');
       expect(research.textContent, state.kind).not.toMatch(/hors ligne|searxng/i);
-      if (state.kind === 'connected') expect(research.textContent).toContain('réglages de l’application Magistra (Windows)');
+      if (state.kind === 'connected') {
+        await click(button(research, /^Internet/));
+        expect(research.textContent).toContain('réglages de l’application Magistra (Windows)');
+        expect(research.textContent).not.toMatch(/hors ligne|searxng/i);
+      }
       cleanup();
     }
   });
