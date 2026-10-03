@@ -1,10 +1,12 @@
 // Informations légales de l'éditeur (mentions légales, politique de confidentialité, conditions d'utilisation).
 //
 // Valeurs par défaut : l'éditeur et directeur de la publication est l'auteur du projet, son contact est
-// AUTHOR_CONTACT_EMAIL (shared/author.ts) et l'hébergeur du site est Vercel. Des variables du BUILD (VITE_LEGAL_*,
-// publiques par nature, affichées sur le site) les remplacent ; pour le contact, celui de l'administrateur annoncé par le
-// serveur (GET /api/mode) passe avant le défaut quand VITE_LEGAL_CONTACT est absente. L'adresse de l'éditeur et la région
-// de la base de données n'ont pas de défaut : absentes, elles ne sont pas affichées (les pages n'ont jamais de trou).
+// AUTHOR_CONTACT_EMAIL (shared/author.ts) et l'hébergeur du site est Vercel (nom ET adresse). Des variables du BUILD
+// (VITE_LEGAL_*, publiques par nature, affichées sur le site) les remplacent ; dans l'application servie par un serveur
+// Magistra (modes web et personnel), le contact de l'administrateur annoncé par ce serveur (GET /api/mode) passe avant le
+// défaut quand VITE_LEGAL_CONTACT est absente : le site vitrine n'interroge jamais ce serveur, il n'a donc que
+// VITE_LEGAL_CONTACT ou le défaut. L'adresse de l'éditeur et la région de la base de données n'ont pas de défaut :
+// absentes, elles ne sont pas affichées (les pages n'ont jamais de trou).
 
 import { AUTHOR_CONTACT_EMAIL, AUTHOR_NAME } from '@shared/author';
 import type { PageMode } from '@/lib/runtime/types';
@@ -21,13 +23,17 @@ export const LEGAL_ENV_NAMES: Record<LegalField, string> = {
   dataRegion: 'VITE_LEGAL_DATA_REGION',
 };
 
-/** Hébergeur du site quand VITE_LEGAL_HOST est absente : nom, pays et site (aucune adresse postale n'est inventée). */
-export const LEGAL_DEFAULT_HOST = 'Vercel Inc., États-Unis (https://vercel.com)';
+/**
+ * Hébergeur du site quand VITE_LEGAL_HOST est absente : nom, adresse postale, pays et site de Vercel Inc. Le régime des
+ * éditeurs non professionnels (LEGAL_NON_PROFESSIONAL_NOTICE) exige de publier le nom ET l'adresse de l'hébergeur ;
+ * cette adresse est celle que Vercel Inc. publie dans ses propres mentions.
+ */
+export const LEGAL_DEFAULT_HOST = 'Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com)';
 
 /**
  * Mention des éditeurs non professionnels (article 6, III, 2° de la loi n° 2004-575 du 21 juin 2004, LCEN) : seuls leur
- * nom et les coordonnées de l'hébergeur sont communiqués au public. Affichée à la place de l'adresse quand le build n'en
- * donne pas (VITE_LEGAL_ADDRESS) ; elle suppose un éditeur personne physique, hors activité professionnelle.
+ * nom et les coordonnées de l'hébergeur sont communiqués au public. Elle suppose un éditeur personne physique, hors
+ * activité professionnelle : showsNonProfessionalNotice décide de l'afficher.
  */
 export const LEGAL_NON_PROFESSIONAL_NOTICE =
   "L'éditeur, personne physique éditant le site à titre non professionnel, a communiqué ses éléments d'identification à l'hébergeur et ne publie pas son adresse personnelle (article 6, III, 2° de la loi n° 2004-575 du 21 juin 2004).";
@@ -75,6 +81,27 @@ export function readLegalInfo(
     address: read('address'),
     dataRegion: read('dataRegion'),
   };
+}
+
+/**
+ * La phrase LCEN n'est vraie que pour l'éditeur par défaut, personne physique : l'éditeur ET le directeur de la
+ * publication sont ceux par défaut (VITE_LEGAL_PUBLISHER et VITE_LEGAL_DIRECTOR absentes, ou égales à l'auteur) ET le
+ * build ne donne aucune adresse (VITE_LEGAL_ADDRESS). Éditeur ou directeur surchargé (association, société…) sans
+ * adresse : la phrase ne s'affiche pas, et aucune ligne « Adresse » n'est inventée.
+ */
+export function showsNonProfessionalNotice(info: Pick<LegalInfo, 'publisher' | 'director' | 'address'>): boolean {
+  return !info.address && info.publisher === AUTHOR_NAME && info.director === AUTHOR_NAME;
+}
+
+/**
+ * Adresse https de l'hébergeur dans son texte (« … (https://vercel.com), … ») : sa position, et l'adresse SANS la
+ * ponctuation qui la suit dans la phrase (virgule, point, point-virgule, deux-points, « ! », « ? », parenthèse
+ * fermante). null : aucune adresse https.
+ */
+export function findHostUrl(host: string): { index: number; url: string } | null {
+  const found = /https:\/\/[^\s)]+/.exec(host);
+  if (!found) return null;
+  return { index: found.index, url: found[0].replace(/[.,;:!?]+$/, '') };
 }
 
 /** Adresse e-mail simple (pour proposer un lien « mailto: ») ; sinon le contact est affiché tel quel. */

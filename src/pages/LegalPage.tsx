@@ -12,7 +12,8 @@ import { Link } from 'react-router-dom';
 import { AUTHOR_NAME } from '@shared/author';
 import type { ProviderInfo } from '@shared/types';
 import {
-  hasDatabase, hasHosting, LEGAL_NON_PROFESSIONAL_NOTICE, LEGAL_PATHS, readLegalInfo, type LegalInfo, type LegalPageKind,
+  hasDatabase, hasHosting, LEGAL_NON_PROFESSIONAL_NOTICE, LEGAL_PATHS, readLegalInfo, showsNonProfessionalNotice,
+  type LegalInfo, type LegalPageKind,
 } from '@/lib/legal';
 import { REPOSITORY_URL, safeExternalUrl } from '@/lib/links';
 import { getRuntimeConfig } from '@/lib/runtime/mode';
@@ -44,7 +45,7 @@ function Mentions({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
       <p>
         Directeur ou directrice de la publication : {info.director}.
       </p>
-      {hasHosting(mode) && !info.address && <p>{LEGAL_NON_PROFESSIONAL_NOTICE}</p>}
+      {hasHosting(mode) && showsNonProfessionalNotice(info) && <p>{LEGAL_NON_PROFESSIONAL_NOTICE}</p>}
 
       {hasHosting(mode) && (
         <>
@@ -303,18 +304,14 @@ function PrivacyLocal({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
         <li>
           la <strong>recherche en ligne</strong>, si vous l'activez : le sujet et les mots-clés de la demande sont envoyés
           aux sources interrogées (Wikipédia, HAL, Crossref, OpenAlex, les sites officiels vérifiés cités par Wikipédia et,
-          si vous en avez indiqué un, un moteur de recherche web), jamais vos documents ;
+          si vous en avez indiqué un, un moteur de recherche web), jamais vos documents{mode === 'local' ? ' ;' : '.'}
         </li>
         {mode === 'local' && (
           <>
             <li>le <strong>téléchargement du moteur et des modèles d'IA</strong>, que vous lancez explicitement ;</li>
-            <li>la <strong>recherche d'une mise à jour</strong>, au clic, auprès du dépôt officiel du projet ;</li>
+            <li>la <strong>recherche d'une mise à jour</strong>, au clic, auprès du dépôt officiel du projet.</li>
           </>
         )}
-        <li>
-          l'utilisation du <strong>site Magistra</strong> avec cet ordinateur, si vous le décidez : voir la politique de
-          confidentialité du site.
-        </li>
       </ul>
 
       <h2>4. Cookies</h2>

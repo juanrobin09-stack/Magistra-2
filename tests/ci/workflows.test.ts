@@ -322,7 +322,84 @@ describe('informations légales de l’éditeur dans l’installateur Windows (s
       expect(text, name).not.toMatch(/avis « projet de texte|bandeau « à compléter/);
     }
     expect(read('.env.example')).toContain('juanrobin89@gmail.com');
-    expect(read('.env.example')).toContain('Vercel Inc., États-Unis (https://vercel.com)');
+    expect(read('.env.example')).toContain('Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com)');
+  });
+});
+
+describe('documentation des informations légales : hébergeur, éditeur et contact du site vitrine', () => {
+  /** Bloc « VITE_LEGAL_* » de .env.example : de la variable VITE_LEGAL_PUBLISHER à la première affectation. */
+  const envBlock = () => {
+    const env = read('.env.example');
+    return env.slice(env.indexOf('#   VITE_LEGAL_PUBLISHER'), env.indexOf('VITE_LEGAL_PUBLISHER=\n'));
+  };
+  const vercelSection = () => readme.slice(readme.indexOf('## Déploiement du site (Vercel)'));
+
+  it('l’hébergeur par défaut porte son adresse postale (régime LCEN des éditeurs non professionnels), partout où il est cité', () => {
+    const address = 'Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com)';
+    expect(envBlock()).toContain(address);
+    expect(vercelSection()).toContain('Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis');
+    expect(vercelSection()).toContain('nom, **adresse postale**, pays et site');
+    // L'ancienne valeur sans adresse ne subsiste nulle part.
+    expect(envBlock()).not.toContain('Vercel Inc., États-Unis');
+    expect(vercelSection()).not.toContain('Vercel Inc. (États-Unis)');
+  });
+
+  it('la phrase de l’éditeur non professionnel est documentée comme propre à l’éditeur et au directeur par défaut', () => {
+    expect(envBlock()).toMatch(/sans adresse, ET seulement si l'éditeur et le\s+#\s+directeur sont ceux par défaut/);
+    expect(vercelSection()).toContain('**et seulement si l\'éditeur et le directeur sont ceux par défaut**');
+  });
+
+  it('.env.example : le contact de l’administrateur ne passe avant le défaut que dans l’application, jamais sur le site vitrine', () => {
+    const block = envBlock();
+    expect(block).toContain('modes web et');
+    expect(block).toContain('personnel seulement : MAGISTRA_ADMIN_CONTACT');
+    expect(block).toMatch(/le site vitrine\s+#\s+ne le lit jamais/);
+    expect(block).not.toContain("MAGISTRA_ADMIN_CONTACT, s'il est renseigné, passe avant)");
+    // README : aucune affirmation contraire pour le site (la variable n'y est citée que comme contact affiché aux enseignants).
+    expect(vercelSection()).not.toMatch(/VITE_LEGAL_CONTACT[^.]*MAGISTRA_ADMIN_CONTACT[^.]*passe avant/);
+  });
+});
+
+describe('ARCHITECTURE_IA.md § 17 : la fenêtre d’accueil d’Ollama n’est évitée que pour les lancements faits par Magistra', () => {
+  const line = () => architecture.split('\n').find(l => l.startsWith('- **Démarrage discret**')) ?? '';
+
+  it('--hide ne couvre que ces lancements ; l’installateur officiel peut ouvrir la fenêtre ; renvoi aux constantes et au composant', () => {
+    const text = line();
+    expect(text).toContain('`--hide --fast-startup`');
+    expect(text).toContain('pour les lancements faits par Magistra, aucune fenêtre d\'accueil ne s\'ouvre');
+    expect(text).toContain('`--hide` ne couvre que ces lancements');
+    expect(text).toContain('l\'installateur officiel (installation, mise à jour, page officielle)');
+    expect(text).toContain('peut ouvrir la fenêtre d\'Ollama');
+    for (const name of ['ENGINE_WINDOW_NOTE', 'EngineWindowNote', 'engineWindowMayOpen', 'ENGINE_WINDOW_MANUAL_NOTE']) expect(text, name).toContain(`\`${name}\``);
+    // L'affirmation absolue d'origine, contredite par la note affichée à l'enseignant, n'existe plus.
+    expect(text).not.toMatch(/: aucune fenêtre d'accueil ne s'ouvre par-dessus Magistra\.$/);
+    expect(architecture).not.toContain('comme la ligne de commande officielle d\'Ollama : aucune fenêtre d\'accueil ne s\'ouvre par-dessus Magistra.');
+  });
+});
+
+describe('ton des textes sur l’avertissement de Windows : calme et factuel, sans excuse', () => {
+  const EXCUSE = /certificat[^.\n]*payant|payant et se renouvelle|projet non lucratif ne l'a pas|ne l'a pas encore acquis/;
+  const notes = () => release.slice(release.indexOf('## Magistra $VERSION pour Windows'), release.indexOf('Guide complet'));
+
+  it('README : SmartScreen peut afficher un avertissement, le fichier n’est pas encore signé, vérifier la provenance puis « Exécuter quand même »', () => {
+    const teacher = readme.slice(readme.indexOf('## Installer Magistra (enseignants)'), readme.indexOf('## Brancher une vraie IA'));
+    const why = teacher.slice(teacher.indexOf('> **Pourquoi cet avertissement de Windows ?**'));
+    expect(why).toContain('Windows SmartScreen peut afficher un avertissement : le fichier n\'est pas encore signé numériquement');
+    expect(why).toContain('empreinte SHA-256');
+    expect(why).toContain('**Informations complémentaires** → **Exécuter quand même**');
+    expect(why).toContain('[page officielle des versions](https://github.com/juanrobin09-stack/magistra-2/releases)');
+    expect(teacher).not.toMatch(EXCUSE);
+    expect(readme).not.toMatch(EXCUSE);
+  });
+
+  it('notes de version générées par release.yml : même formule, l’information utile (signature, provenance, étapes) est conservée', () => {
+    const text = notes();
+    expect(text).toContain('**Windows SmartScreen** peut afficher un avertissement');
+    expect(text).toContain('le fichier n\'est pas encore signé numériquement');
+    expect(text).toContain('empreinte SHA-256');
+    expect(text).toContain('**Informations complémentaires** → **Exécuter quand même**');
+    expect(text).not.toMatch(EXCUSE);
+    expect(code(release)).not.toMatch(EXCUSE);
   });
 });
 

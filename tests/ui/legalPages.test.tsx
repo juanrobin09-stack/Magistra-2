@@ -57,7 +57,7 @@ describe('readLegalInfo', () => {
     expect(info.publisher).toBe('Asso');
     expect(info.director).toBe('Juan Robin');
     expect(info.contact).toBe('juanrobin89@gmail.com');
-    expect(info.host).toBe('Vercel Inc., États-Unis (https://vercel.com)');
+    expect(info.host).toBe('Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com)');
     expect(info.address).toBeUndefined();
     expect(info.dataRegion).toBeUndefined();
     expect(readLegalInfo(LEGAL_VARS)).toEqual({
@@ -122,7 +122,7 @@ describe('Contenu', () => {
     const { container } = await mountPage('mentions');
     const text = container.textContent ?? '';
     expect(text).toContain('Juan Robin');
-    expect(text).toContain('Hébergeur du site : Vercel Inc., États-Unis (https://vercel.com).');
+    expect(text).toContain('Hébergeur du site : Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com).');
     expect(container.querySelector('a[href="mailto:juanrobin89@gmail.com"]')).not.toBeNull();
     expect(container.querySelector('[role="note"]')).toBeNull();
     expect(container.querySelector('[data-legal-todo]')).toBeNull();

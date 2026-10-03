@@ -36,7 +36,7 @@ describe('Mentions légales selon le mode', () => {
   it('site web : hébergeur (Vercel par défaut) et base Supabase, sans région tant que le build ne la donne pas', async () => {
     const { container } = await mount('mentions', CONFIGS.web);
     const text = container.textContent ?? '';
-    expect(text).toContain('Hébergeur du site : Vercel Inc., États-Unis (https://vercel.com).');
+    expect(text).toContain('Hébergeur du site : Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com).');
     expect(text).toContain('Supabase');
     expect(text).not.toMatch(/région/i);
   });

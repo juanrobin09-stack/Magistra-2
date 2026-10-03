@@ -286,13 +286,18 @@ async function clickActivate(page: Page, name: string | RegExp = 'Activer l’IA
  * l'installateur officiel (Windows). Sous Linux et macOS (la CI), l'installation se fait à la main depuis la page
  * officielle et la note n'apparaît jamais : c'est ce qui est vérifié ici, aux endroits où la carte annonce l'installation
  * du moteur, sans lancer un test de plus.
+ * `moment` : « install » (installation ou mise à jour par Magistra : « Fermez-la simplement ») ou « manual » (installateur
+ * lancé par l'enseignant depuis la page officielle : il le termine d'abord, « Terminer », puis ferme la fenêtre d'Ollama).
  */
-async function expectEngineWindowNote(scope: Locator): Promise<void> {
+async function expectEngineWindowNote(scope: Locator, moment: 'install' | 'manual' = 'install'): Promise<void> {
   const note = scope.getByTestId('engine-window-note');
   if (process.platform === 'win32') {
     await expect(note).toHaveCount(1);
     await expect(note).toHaveAttribute('role', 'note');
-    await expect(note).toContainText(/une fenêtre Ollama peut s’ouvrir.*Fermez-la simplement/);
+    await expect(note).toHaveAttribute('data-moment', moment);
+    await expect(note).toContainText(moment === 'manual'
+      ? /Terminez d’abord l’installation avec l’installateur d’Ollama \(bouton « Terminer »\)\..*si la fenêtre d’Ollama s’ouvre, fermez-la avec sa croix/
+      : /Pendant l’installation ou la mise à jour, une fenêtre Ollama peut s’ouvrir.*Fermez-la simplement/);
   } else {
     await expect(note).toHaveCount(0);
   }
@@ -691,8 +696,9 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     await expect(waiting.getByText('En attente de l’installation du moteur IA depuis sa page officielle…')).toBeVisible();
     await expect(waiting.getByRole('list', { name: 'Étapes de l’activation' })).toHaveCount(0);
     expect(await visibleText(waiting)).not.toMatch(/\d+ %|Go sur/);
-    // Installateur officiel lancé par l'enseignant : sous Windows, sa fenêtre peut s'ouvrir ; sous Linux, rien n'est annoncé.
-    await expectEngineWindowNote(waiting);
+    // Installateur officiel lancé par l'enseignant : sous Windows, la note lui dit de le terminer d'abord, puis de fermer la
+    // fenêtre d'Ollama ; sous Linux, rien n'est annoncé.
+    await expectEngineWindowNote(waiting, 'manual');
     expect(await openedUrls(app)).toEqual(['https://ollama.com/download']);
     await shot(page, '03c-reglages-attente-installation-manuelle');
     await waiting.getByRole('button', { name: 'Annuler', exact: true }).click();
@@ -755,7 +761,7 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     await expect(steps.nth(1)).toContainText(/Téléchargement de Magistra (Léger|Standard|Qualité)/);
     await expect(card.getByText('En attente de l’installation du moteur IA depuis sa page officielle…')).toBeVisible();
     // Hors Windows (ce test ne tourne pas sous Windows), l'installation se fait à la main : aucune fenêtre n'est annoncée.
-    await expectEngineWindowNote(card);
+    await expectEngineWindowNote(card, 'manual');
     await expect.poll(() => openedUrls(app)).toEqual(['https://ollama.com/download']);
     expect((await prefs(page)).aiSetupRequested).toBe(true);
     await shot(page, '03g-activation-attente-du-moteur');

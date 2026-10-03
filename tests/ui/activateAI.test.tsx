@@ -13,7 +13,7 @@ import type { RuntimeMode } from '@/lib/runtime/types';
 import { button, cleanup, click, fakeRuntime, flush, MemoryStore, PROFILE_COLLEGE, render } from './helpers';
 import { PROXY_RESTART_MESSAGE } from '../../electron/ollamaSetup';
 import { ENGINE_STARTING_MESSAGE } from '@shared/ipc';
-import { ENGINE_WINDOW_DONE_NOTE, ENGINE_WINDOW_NOTE } from '@/components/localEngine/texts';
+import { ENGINE_WINDOW_DONE_NOTE, ENGINE_WINDOW_MANUAL_NOTE, ENGINE_WINDOW_NOTE } from '@/components/localEngine/texts';
 import { hold, installFakeLocalAI, ipcError, removeFakeLocalAI, type FakeLocalAI } from './localAIHelpers';
 
 beforeEach(() => {
@@ -567,7 +567,7 @@ describe('Fenêtre d’Ollama pendant l’installation de l’IA (Windows)', () 
     expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
   });
 
-  it('page officielle (Windows, après l’échec de l’installation automatique) : l’installateur du site peut lui aussi ouvrir la fenêtre', async () => {
+  it('page officielle (Windows, après l’échec de l’installation automatique) : l’enseignant lance LUI-MÊME l’installateur, la note dit de le terminer d’abord', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const fake = installFakeLocalAI({ engine: 'not_installed' });
     fake.engineFailure = ipcError('ENGINE_NOT_INSTALLED', 'L’installation automatique n’a pas abouti.');
@@ -577,7 +577,14 @@ describe('Fenêtre d’Ollama pendant l’installation de l’IA (Windows)', () 
     await click(button(container.querySelector('[role="alert"]')!, /Ouvrir la page officielle d’installation/));
     await settle();
     expect(text(container)).toContain('En attente de l’installation du moteur IA depuis sa page officielle…');
-    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+    // Texte dédié (installateur à terminer, puis fenêtre de l'application à fermer), jamais « Fermez-la simplement » d'emblée.
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_MANUAL_NOTE]);
+    expect(notes(container)[0].getAttribute('data-moment')).toBe('manual');
+    expect(text(container)).not.toContain(ENGINE_WINDOW_NOTE);
+    expect(text(container)).toContain('Terminez d’abord l’installation avec l’installateur d’Ollama (bouton « Terminer »)');
+    // Le texte reste une note de page, comme les autres : ni région vivante, ni focus pris.
+    expect(notes(container)[0].getAttribute('role')).toBe('note');
+    expect(notes(container)[0].closest('[role="status"], [aria-live]')).toBeNull();
   });
 
   it('jamais : moteur déjà prêt, simple démarrage du moteur, modèle seul, serveur IA distant, moteur sur un autre ordinateur', async () => {

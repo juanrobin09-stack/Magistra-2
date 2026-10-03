@@ -14,6 +14,7 @@
 // Fenêtre d'Ollama (Windows, là où Magistra installe le moteur) : l'installateur officiel lance Ollama à la fin, qui
 // peut ouvrir sa fenêtre. Une note (EngineWindowNote) l'explique avant le clic, pendant l'installation du moteur, puis
 // quand il est installé (la fenêtre a pu rester ouverte) ; jamais pour un simple démarrage du moteur, ni hors Windows.
+// Page officielle (l'enseignant lance lui-même l'installateur) : la note lui dit de terminer d'abord l'installateur.
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -393,7 +394,9 @@ function ActivationOffer({ ai, status, plan, engineUpdate, variant, example, foc
                 l’installation, puis poursuit toute seule.
               </p>
             )}
-            {engineWindowMayOpen(status, plan.engine) && <EngineWindowNote moment="install" className="mt-2" />}
+            {engineWindowMayOpen(status, plan.engine) && (
+              <EngineWindowNote moment={plan.engine === 'manual' ? 'manual' : 'install'} className="mt-2" />
+            )}
             <p className="text-xs text-mg-200">
               {/* Demande mémorisée (arrêt sur erreur) : « rien avant votre clic » serait faux — voir plus bas. */}
               {!requested && 'Rien n’est téléchargé avant votre clic. '}
@@ -508,8 +511,10 @@ function ActivationProgressCard({ ai, status, variant, example, focus, target }:
   // Attente du moteur installé depuis sa page officielle : la page peut être rouverte (onglet fermé, reprise au lancement).
   const manualWait = plan.engine === 'manual' && view.current === 0;
   // Fenêtre d'Ollama : pendant l'étape du moteur (téléchargement, installation, démarrage) elle peut s'ouvrir ; ensuite
-  // (étape du modèle) elle a pu rester ouverte.
-  const windowMoment = engineWindowMayOpen(status, plan.engine) ? (view.steps[view.current]?.id === 'model' ? 'done' : 'install') : null;
+  // (étape du modèle) elle a pu rester ouverte. Page officielle : l'installateur lancé par l'enseignant se termine d'abord.
+  const windowMoment = engineWindowMayOpen(status, plan.engine)
+    ? (view.steps[view.current]?.id === 'model' ? 'done' : plan.engine === 'manual' ? 'manual' : 'install')
+    : null;
 
   return (
     <Frame titleId={titleId} title={title} icon={<Loader2 size={20} className="text-mg-900 animate-spin" />} focus={focus} target={target}>

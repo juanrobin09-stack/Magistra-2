@@ -10,7 +10,7 @@ import SetupChecklist from '@/components/ai/SetupChecklist';
 import TierPicker from '@/components/ai/TierPicker';
 import { MagistraError } from '@shared/errors';
 import { ENGINE_STARTING_MESSAGE } from '@shared/ipc';
-import { ENGINE_WINDOW_DONE_NOTE, ENGINE_WINDOW_NOTE } from '@/components/localEngine/texts';
+import { ENGINE_WINDOW_DONE_NOTE, ENGINE_WINDOW_MANUAL_NOTE, ENGINE_WINDOW_NOTE } from '@/components/localEngine/texts';
 import { ENGINE_WATCH_TIMEOUT_MESSAGE, PROXY_RESTART_MESSAGE } from '../../electron/ollamaSetup';
 import type { AIController } from '@/hooks/useAIStatus';
 import { EMPTY_PROGRESS, type AIProgressState } from '@/lib/ai-ui/progress';
@@ -273,6 +273,27 @@ describe('EngineSetupPanel (moteur IA absent ou arrêté)', () => {
     expect(html).not.toContain(ENGINE_STARTING_MESSAGE);
   });
 
+  it('état du moteur inconnu : ce que Magistra sait (elle ne peut pas savoir s’il est installé), sans « peut-être », avec le recours', () => {
+    const unknown = makeStatus({ engine: 'unknown', installed: [] });
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(unknown), status: unknown }));
+    expect(html).toContain('Magistra ne peut pas savoir si le moteur IA est installé sur cet ordinateur. Vous pouvez lancer son installation.');
+    expect(html).toMatch(/<button[^>]*>Installer le moteur IA<\/button>/);
+    expect(html).not.toMatch(/peut-être/);
+  });
+
+  it('moteur trouvé mais démarrage en échec : il est installé, l’installation n’est proposée que comme recours', () => {
+    const stopped = makeStatus({ engine: 'installed_stopped', installed: [] });
+    const errors = { engine: new MagistraError('ENGINE_NOT_RUNNING', 'Le moteur IA a été arrêté par l’antivirus.') };
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(stopped, EMPTY_PROGRESS, { errors }), status: stopped }));
+    expect(html).toContain('Magistra a trouvé le moteur IA sur cet ordinateur, mais il ne démarre pas. Vous pouvez relancer son installation.');
+    expect(html).toMatch(/<button[^>]*>Installer le moteur IA<\/button>/);
+    expect(html).not.toMatch(/peut-être|n&#x27;est pas installé/);
+    // Sans échec ni état inconnu : aucune phrase sur l'installation (le moteur est là, il suffit de le démarrer).
+    const calm = render(createElement(EngineSetupPanel, { ai: fakeController(stopped), status: stopped }));
+    expect(calm).not.toContain('relancer son installation');
+    expect(calm).not.toContain('savoir si le moteur IA est installé');
+  });
+
   it('pendant le démarrage : « Démarrage… » et message d’attente (jusqu’à 2 minutes au premier lancement)', () => {
     const stopped = makeStatus({ engine: 'installed_stopped', installed: [] });
     const pending = { status: false, engine: false, start: true, model: false, config: false };
@@ -365,10 +386,19 @@ describe('EngineSetupPanel : explication sur la fenêtre d’Ollama (Windows, in
     expect(html).toContain(ENGINE_WINDOW_NOTE);
   });
 
-  it('attente d’une installation depuis la page officielle (Windows) : la note est affichée', () => {
+  it('attente d’une installation depuis la page officielle (Windows) : la note dédiée (installateur à terminer d’abord), pas celle de l’installation par Magistra', () => {
     const progress: AIProgressState = { engine: { stage: 'waiting', message: 'En attente de l’installation d’Ollama…' }, model: null };
     const html = render(createElement(EngineSetupPanel, { ai: fakeController(missing, progress, { manualInstall: true }), status: missing }));
-    expect(windowNotes(html)).toHaveLength(1);
+    const notes = windowNotes(html);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('data-moment="manual"');
+    expect(notes[0]).toContain(ENGINE_WINDOW_MANUAL_NOTE);
+    expect(html).not.toContain(ENGINE_WINDOW_NOTE);
+    // Attente d'une installation lancée par Magistra (pas la page officielle) : la note d'installation habituelle.
+    const automatic = render(createElement(EngineSetupPanel, { ai: fakeController(missing, progress, { manualInstall: false }), status: missing }));
+    expect(windowNotes(automatic)[0]).toContain('data-moment="install"');
+    expect(automatic).toContain(ENGINE_WINDOW_NOTE);
+    expect(automatic).not.toContain(ENGINE_WINDOW_MANUAL_NOTE);
   });
 
   it('mise à jour du moteur (Windows) : avant le clic et pendant la mise à jour', () => {

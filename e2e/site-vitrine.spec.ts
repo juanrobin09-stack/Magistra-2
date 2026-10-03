@@ -263,7 +263,7 @@ test('« Magistra pour Windows » : aucune version publiée → bouton inactif e
 // ─── 4. Pages légales ───────────────────────────────────────────────────────
 
 const LEGAL_PAGES = [
-  { path: '/mentions-legales', title: 'Mentions légales', tab: 'Mentions légales', link: 'Mentions légales', contains: ['Éditeur du site', 'Hébergement', 'Hébergeur du site : Vercel Inc., États-Unis (https://vercel.com).', 'Magistra est conçu et développé par Juan Robin'] },
+  { path: '/mentions-legales', title: 'Mentions légales', tab: 'Mentions légales', link: 'Mentions légales', contains: ['Éditeur du site', 'Hébergement', 'Hébergeur du site : Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com).', 'Magistra est conçu et développé par Juan Robin'] },
   { path: '/confidentialite', title: 'Politique de confidentialité', tab: 'Politique de confidentialité', link: 'Politique de confidentialité', contains: ['Ce que ce site ne fait pas', 'Journaux techniques de l\'hébergeur', 'servi par GitHub'] },
   { path: '/cgu', title: 'Conditions générales d\'utilisation', tab: 'Conditions d\'utilisation', link: 'Conditions d\'utilisation', contains: ['Ce site présente Magistra', 'Usage du site'] },
 ] as const;

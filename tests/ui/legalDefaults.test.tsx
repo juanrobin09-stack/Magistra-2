@@ -71,9 +71,9 @@ describe('Valeurs par défaut', () => {
       publisher: 'Juan Robin',
       director: 'Juan Robin',
       contact: 'juanrobin89@gmail.com',
-      host: 'Vercel Inc., États-Unis (https://vercel.com)',
+      host: 'Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com)',
     });
-    expect(LEGAL_DEFAULT_HOST).toBe('Vercel Inc., États-Unis (https://vercel.com)');
+    expect(LEGAL_DEFAULT_HOST).toBe('Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com)');
     // Variables présentes mais vides (variables de dépôt GitHub non définies : chaîne vide) ou blanches : les mêmes défauts.
     const empty = Object.fromEntries(Object.keys(OVERRIDES).map(name => [name, '']));
     expect(readLegalInfo(empty)).toEqual(readLegalInfo({}));
@@ -97,7 +97,7 @@ describe('Valeurs par défaut', () => {
     for (const mode of ['showcase', 'web']) {
       cleanup();
       const { container } = await mount('mentions', mode);
-      expect(textOf(container), mode).toContain('Hébergeur du site : Vercel Inc., États-Unis (https://vercel.com).');
+      expect(textOf(container), mode).toContain('Hébergeur du site : Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com).');
       expect(container.querySelector('a[href="https://vercel.com/"]'), mode).not.toBeNull();
     }
     for (const mode of ['personal', 'demo', 'local']) {
@@ -111,7 +111,7 @@ describe('Valeurs par défaut', () => {
     for (const mode of ['showcase', 'web']) {
       cleanup();
       const { container } = await mount('confidentialite', mode);
-      expect(textOf(container), mode).toContain('Vercel Inc., États-Unis (https://vercel.com)');
+      expect(textOf(container), mode).toContain('Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com)');
     }
   });
 
@@ -235,6 +235,153 @@ describe('Conditions d\'utilisation selon le mode', () => {
   });
 });
 
+describe('Phrase de l\'éditeur non professionnel : liée à l\'éditeur et au directeur, pas seulement à l\'absence d\'adresse', () => {
+  const NOTICE = 'article 6, III, 2°';
+  const HOSTED = ['showcase', 'web'];
+
+  it('par défaut (éditeur, directeur et adresse absents) : la phrase, avec l\'adresse de l\'hébergeur qu\'elle suppose', async () => {
+    for (const mode of HOSTED) {
+      cleanup();
+      const { container } = await mount('mentions', mode);
+      const text = textOf(container);
+      expect(text, mode).toContain(NOTICE);
+      expect(text, mode).toContain('Hébergeur du site : Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis');
+      expect(text, mode).not.toContain('Adresse :');
+    }
+  });
+
+  it('éditeur surchargé sans adresse : pas de phrase, et pas de ligne « Adresse » vide', async () => {
+    stub({ VITE_LEGAL_PUBLISHER: 'Association Exemple' });
+    for (const mode of HOSTED) {
+      cleanup();
+      const { container } = await mount('mentions', mode);
+      const text = textOf(container);
+      expect(text, mode).toContain('Association Exemple');
+      expect(text, mode).not.toContain(NOTICE);
+      expect(text, mode).not.toContain('personne physique');
+      expect(text, mode).not.toContain('Adresse');
+      // Le directeur reste celui par défaut : seul l'éditeur change.
+      expect(text, mode).toContain('Directeur ou directrice de la publication : Juan Robin.');
+    }
+  });
+
+  it('directeur seul surchargé, sans adresse : pas de phrase non plus', async () => {
+    stub({ VITE_LEGAL_DIRECTOR: 'Mme Dupont' });
+    for (const mode of HOSTED) {
+      cleanup();
+      const { container } = await mount('mentions', mode);
+      expect(textOf(container), mode).toContain('Directeur ou directrice de la publication : Mme Dupont.');
+      expect(textOf(container), mode).not.toContain(NOTICE);
+    }
+  });
+
+  it('adresse définie (éditeur par défaut) : l\'adresse, pas la phrase', async () => {
+    stub({ VITE_LEGAL_ADDRESS: '1 rue de la Paix, 33000 Bordeaux' });
+    for (const mode of HOSTED) {
+      cleanup();
+      const { container } = await mount('mentions', mode);
+      const text = textOf(container);
+      expect(text, mode).toContain('Adresse : 1 rue de la Paix, 33000 Bordeaux');
+      expect(text, mode).not.toContain(NOTICE);
+      expect(text, mode).toContain('Juan Robin');
+    }
+  });
+
+  it('variables vides (variables de dépôt non définies) : le défaut, donc la phrase', async () => {
+    stub({ VITE_LEGAL_PUBLISHER: '', VITE_LEGAL_DIRECTOR: '', VITE_LEGAL_ADDRESS: '' });
+    for (const mode of HOSTED) {
+      cleanup();
+      const { container } = await mount('mentions', mode);
+      expect(textOf(container), mode).toContain(NOTICE);
+    }
+  });
+
+  it('modes sans hébergeur : jamais la phrase, quelles que soient les variables', async () => {
+    for (const vars of [{} as Record<string, string>, { VITE_LEGAL_PUBLISHER: 'Association Exemple' }]) {
+      vi.unstubAllEnvs();
+      stub(vars);
+      for (const mode of ['personal', 'demo', 'local']) {
+        cleanup();
+        const { container } = await mount('mentions', mode);
+        expect(textOf(container), mode).not.toContain(NOTICE);
+      }
+    }
+  });
+});
+
+describe('Hébergeur : la ponctuation qui suit l\'adresse n\'est jamais dans le lien', () => {
+  const HOSTED_PAGES = ['showcase', 'web'];
+  /** Lien de l'hébergeur de la page : texte et adresse (href). */
+  const hostLink = (container: HTMLElement, expectedHref: string) => {
+    const link = container.querySelector(`a[href="${expectedHref}"]`);
+    return { text: link?.textContent, href: link?.getAttribute('href') };
+  };
+
+  it('adresse suivie d\'une virgule : « OVH SAS, https://www.ovhcloud.com, 2 rue… »', async () => {
+    stub({ VITE_LEGAL_HOST: 'OVH SAS, https://www.ovhcloud.com, 2 rue Kellermann, 59100 Roubaix, France' });
+    for (const mode of HOSTED_PAGES) {
+      cleanup();
+      const { container } = await mount('mentions', mode);
+      expect(hostLink(container, 'https://www.ovhcloud.com/'), mode).toEqual({ text: 'https://www.ovhcloud.com', href: 'https://www.ovhcloud.com/' });
+      expect(textOf(container), mode).toContain('Hébergeur du site : OVH SAS, https://www.ovhcloud.com, 2 rue Kellermann, 59100 Roubaix, France.');
+      // La virgule reste du texte, hors du lien.
+      expect(container.querySelector('a[href^="https://www.ovhcloud.com"]')?.nextSibling?.textContent, mode).toMatch(/^, 2 rue Kellermann/);
+    }
+  });
+
+  it('adresse suivie d\'un point : le point n\'est pas dans le lien', async () => {
+    stub({ VITE_LEGAL_HOST: 'Hébergeur Exemple, https://hebergeur.exemple/accueil. France' });
+    const { container } = await mount('mentions', 'showcase');
+    expect(hostLink(container, 'https://hebergeur.exemple/accueil')).toEqual({
+      text: 'https://hebergeur.exemple/accueil',
+      href: 'https://hebergeur.exemple/accueil',
+    });
+    expect(textOf(container)).toContain('Hébergeur du site : Hébergeur Exemple, https://hebergeur.exemple/accueil. France.');
+  });
+
+  it('adresse entre parenthèses (valeur par défaut) : lien exact, parenthèse hors du lien', async () => {
+    for (const mode of HOSTED_PAGES) {
+      cleanup();
+      const { container } = await mount('mentions', mode);
+      expect(hostLink(container, 'https://vercel.com/'), mode).toEqual({ text: 'https://vercel.com', href: 'https://vercel.com/' });
+    }
+  });
+});
+
+describe('Politique de confidentialité de l\'application : plus de renvoi à la politique du site', () => {
+  /** Puces de la rubrique « 3. Ce qui peut sortir de votre ordinateur… » (modes sans compte). */
+  const outgoing = (container: HTMLElement) => {
+    const heading = [...container.querySelectorAll('h2')].find(h => h.textContent?.startsWith('3. Ce qui peut sortir'));
+    return [...(heading?.nextElementSibling?.querySelectorAll('li') ?? [])].map(li => textOf(li as HTMLElement));
+  };
+
+  it.each(['local', 'personal', 'demo'])('%s : aucune puce « site Magistra avec cet ordinateur » (le site vitrine n\'a plus de connecteur)', async mode => {
+    const { container } = await mount('confidentialite', mode);
+    const text = textOf(container);
+    expect(text).not.toMatch(/site Magistra|politique de confidentialité du site|avec cet ordinateur/);
+    expect(outgoing(container)[0]).toMatch(/^la recherche en ligne, si vous l'activez/);
+  });
+
+  it('la liste reste ponctuée : « ; » entre les puces, « . » à la dernière', async () => {
+    const local = outgoing((await mount('confidentialite', 'local')).container);
+    expect(local).toHaveLength(3);
+    expect(local[0]).toMatch(/jamais vos documents ;$/);
+    expect(local[1]).toMatch(/explicitement ;$/);
+    expect(local[2]).toMatch(/dépôt officiel du projet\.$/);
+    for (const mode of ['personal', 'demo']) {
+      cleanup();
+      const items = outgoing((await mount('confidentialite', mode)).container);
+      expect(items, mode).toHaveLength(1);
+      expect(items[0], mode).toMatch(/jamais vos documents\.$/);
+    }
+  });
+
+  it('site web (avec comptes) : n\'a jamais eu cette puce, rien n\'est ajouté', async () => {
+    const { container } = await mount('confidentialite', 'web');
+    expect(textOf(container)).not.toMatch(/politique de confidentialité du site|avec cet ordinateur/);
+  });
+});
+
 describe('Surcharges par variables VITE_LEGAL_*', () => {
   it('éditeur, directeur, adresse, hébergeur : affichés à la place des valeurs par défaut (site vitrine et site web)', async () => {
     stub(OVERRIDES);
@@ -286,6 +433,20 @@ describe('Surcharges par variables VITE_LEGAL_*', () => {
     );
     expect(second.container.querySelector('a[href="mailto:contact@exemple.test"]')).not.toBeNull();
     expect(second.container.querySelector('a[href="mailto:admin@exemple.test"]')).toBeNull();
+  });
+
+  it('site vitrine : ne lit jamais le contact de l\'administrateur du serveur (pas de GET /api/mode) : VITE_LEGAL_CONTACT ou le défaut', async () => {
+    setRuntimeConfig({ mode: 'web', clerkPublishableKey: 'pk_test_x', adminContact: 'admin@exemple.test' });
+    for (const page of PAGES) {
+      cleanup();
+      const { container } = await render(
+        <MemoryRouter>
+          <LegalPage page={page} mode="showcase" />
+        </MemoryRouter>,
+      );
+      expect(container.querySelector('a[href="mailto:admin@exemple.test"]'), page).toBeNull();
+      expect(container.querySelector(DEFAULT_MAILTO), page).not.toBeNull();
+    }
   });
 
   it('contact sans adresse e-mail (« par courrier ») : texte seul, jamais de lien « mailto: »', async () => {

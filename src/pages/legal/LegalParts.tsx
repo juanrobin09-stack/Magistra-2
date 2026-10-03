@@ -8,7 +8,7 @@ import { ArrowLeft, GraduationCap } from 'lucide-react';
 import ContactLink from '@/components/ContactLink';
 import LegalLinks from '@/components/LegalLinks';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { LEGAL_TITLES, type LegalInfo, type LegalPageKind } from '@/lib/legal';
+import { findHostUrl, LEGAL_TITLES, type LegalInfo, type LegalPageKind } from '@/lib/legal';
 import { safeExternalUrl } from '@/lib/links';
 import { getBridge } from '@/lib/runtime/local';
 
@@ -40,16 +40,19 @@ export function ContactField({ info }: { info: LegalInfo }) {
   return <ContactLink contact={info.contact} />;
 }
 
-/** Hébergeur du site : l'adresse https qu'il porte (« Vercel Inc., États-Unis (https://vercel.com) ») est un lien. */
+/**
+ * Hébergeur du site : l'adresse https qu'il porte (« Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723,
+ * États-Unis (https://vercel.com) ») est un lien ; la ponctuation qui la suit dans la phrase n'en fait pas partie.
+ */
 export function HostField({ info }: { info: LegalInfo }) {
-  const found = /https:\/\/[^\s)]+/.exec(info.host);
-  const href = found ? safeExternalUrl(found[0]) : null;
+  const found = findHostUrl(info.host);
+  const href = found ? safeExternalUrl(found.url) : null;
   if (!found || !href) return <>{info.host}</>;
   return (
     <>
       {info.host.slice(0, found.index)}
-      <Ext href={href}>{found[0]}</Ext>
-      {info.host.slice(found.index + found[0].length)}
+      <Ext href={href}>{found.url}</Ext>
+      {info.host.slice(found.index + found.url.length)}
     </>
   );
 }

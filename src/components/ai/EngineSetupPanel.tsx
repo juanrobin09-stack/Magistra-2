@@ -21,7 +21,8 @@ interface EngineSetupPanelProps {
  * Étape « moteur IA » : installation (avec consentement explicite avant tout téléchargement),
  * installation manuelle depuis la page officielle avec détection automatique, démarrage,
  * ou mise à jour d'un moteur trop ancien. Sous Windows, là où l'installateur officiel est lancé (consentement,
- * mise à jour, installation en cours, attente), la note « une fenêtre Ollama peut s'ouvrir : fermez-la » (EngineWindowNote).
+ * mise à jour, installation en cours, attente), la note « une fenêtre Ollama peut s'ouvrir : fermez-la » (EngineWindowNote) ;
+ * en attente d'une installation depuis la page officielle, elle dit de terminer d'abord l'installateur.
  */
 export default function EngineSetupPanel({ ai, status }: EngineSetupPanelProps) {
   const [wantInstall, setWantInstall] = useState(false);
@@ -81,7 +82,10 @@ export default function EngineSetupPanel({ ai, status }: EngineSetupPanelProps) 
         {ai.pending.start && <p className="text-sm text-mg-200" role="status" aria-live="polite">{ENGINE_STARTING_MESSAGE}</p>}
         {(engineState === 'unknown' || errorMessage) && (
           <p className="text-sm text-mg-200">
-            Le moteur IA n'est peut-être pas installé.{' '}
+            {/* État inconnu : Magistra n'a pas pu savoir si le moteur est installé. Autrement, il est installé mais n'a pas démarré. */}
+            {engineState === 'unknown'
+              ? 'Magistra ne peut pas savoir si le moteur IA est installé sur cet ordinateur. Vous pouvez lancer son installation.'
+              : 'Magistra a trouvé le moteur IA sur cet ordinateur, mais il ne démarre pas. Vous pouvez relancer son installation.'}{' '}
             <button type="button" className="text-accent underline underline-offset-2 hover:text-accent-bright" onClick={() => setWantInstall(true)}>
               Installer le moteur IA
             </button>
@@ -285,7 +289,7 @@ function WaitingView({ ai, status, manual, message }: { ai: AIController; status
         {message || "En attente de l'installation du moteur IA…"}
       </p>
       <ProgressBar percent={null} label="En attente du moteur IA" />
-      {engineWindowMayOpen(status, manual ? 'manual' : 'install') && <EngineWindowNote moment="install" />}
+      {engineWindowMayOpen(status, manual ? 'manual' : 'install') && <EngineWindowNote moment={manual ? 'manual' : 'install'} />}
       {manual && (
         <ol className="list-decimal pl-5 space-y-1.5 text-sm text-mg-100">
           <li>Sur la page qui s'est ouverte dans votre navigateur, téléchargez Ollama pour Windows.</li>

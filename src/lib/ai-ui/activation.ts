@@ -53,7 +53,8 @@ export function engineSelfUpdatable(status: AIStatus): boolean {
 /**
  * Une fenêtre d'Ollama peut-elle s'ouvrir pendant cette action sur le moteur ? Oui quand un installateur officiel
  * d'Ollama est lancé sur CET ordinateur sous Windows : « install » et « update » (Magistra le lance en silence),
- * « manual » (l'enseignant l'ouvre depuis la page officielle). L'installateur lance Ollama à la fin, sans les arguments
+ * « manual » (l'enseignant l'ouvre depuis la page officielle : l'installateur est alors lui-même une fenêtre visible, à
+ * terminer d'abord, d'où une note dédiée : ENGINE_WINDOW_MANUAL_NOTE). L'installateur lance Ollama à la fin, sans les arguments
  * qui le cachent (OLLAMA_APP_ARGS, electron/ollamaSetup.ts) : l'application ouvre alors sa fenêtre d'accueil.
  * Non pour « start » (Magistra lance elle-même Ollama sans fenêtre), pour « admin » (rien ne s'installe), hors Windows
  * (installation à la main, aucune fenêtre n'est promise), ni quand Magistra utilise un serveur IA ou un moteur placé

@@ -39,7 +39,7 @@ export const SERVER_CAPS: Capabilities = {
 
 /**
  * Tout ce qui ne doit JAMAIS apparaître à propos de Magistra locale (le site web) : adresse, port, nom du moteur.
- * Les deux textes sur la fenêtre d'Ollama (installation de l'IA, application Windows) nomment le moteur, et le site ne
+ * Les trois textes sur la fenêtre d'Ollama (installation de l'IA, application Windows) nomment le moteur, et le site ne
  * les affiche jamais : l'expression reste donc sans exception ici ; la règle « seuls ces textes nomment Ollama » est
  * contrôlée dans tests/ui/engineWindowNote.test.ts.
  */

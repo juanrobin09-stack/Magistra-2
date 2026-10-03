@@ -10,7 +10,9 @@
 
 import { Link } from 'react-router-dom';
 import { AUTHOR_NAME } from '@shared/author';
-import { LEGAL_NON_PROFESSIONAL_NOTICE, LEGAL_PATHS, readLegalInfo, type LegalInfo, type LegalPageKind } from '@/lib/legal';
+import {
+  LEGAL_NON_PROFESSIONAL_NOTICE, LEGAL_PATHS, readLegalInfo, showsNonProfessionalNotice, type LegalInfo, type LegalPageKind,
+} from '@/lib/legal';
 import { REPOSITORY_URL } from '@/lib/links';
 import { ContactField, Ext, HostField, LegalShell } from './LegalParts';
 
@@ -36,7 +38,7 @@ function Mentions({ info }: { info: LegalInfo }) {
       <p>
         Directeur ou directrice de la publication : {info.director}.
       </p>
-      {!info.address && <p>{LEGAL_NON_PROFESSIONAL_NOTICE}</p>}
+      {showsNonProfessionalNotice(info) && <p>{LEGAL_NON_PROFESSIONAL_NOTICE}</p>}
 
       <h2>Hébergement</h2>
       <p>

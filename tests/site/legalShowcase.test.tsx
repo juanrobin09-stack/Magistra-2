@@ -59,7 +59,7 @@ describe('Showcase : mentions légales', () => {
     expect(text).toContain('Directeur ou directrice de la publication : Juan Robin.');
     expect(text).toContain('Contact : juanrobin89@gmail.com');
     expect(container.querySelector('a[href="mailto:juanrobin89@gmail.com"]')).not.toBeNull();
-    expect(text).toContain('Hébergeur du site : Vercel Inc., États-Unis (https://vercel.com).');
+    expect(text).toContain('Hébergeur du site : Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com).');
     expect(text).not.toContain('Adresse :');
     expect(text).toContain(
       "L'éditeur, personne physique éditant le site à titre non professionnel, a communiqué ses éléments d'identification à l'hébergeur et ne publie pas son adresse personnelle (article 6, III, 2° de la loi n° 2004-575 du 21 juin 2004).",
@@ -140,7 +140,7 @@ describe('Showcase : politique de confidentialité', () => {
     const { text } = await privacyText({});
     expect(text).not.toMatch(/Clerk|Supabase|Cloudflare|Turnstile|OpenAI|Ollama|historique|favoris|profil enseignant/i);
     expect(text.match(/Vercel/g)).toHaveLength(2);
-    expect(text).toContain('L\'hébergeur du site : Vercel Inc., États-Unis (https://vercel.com).');
+    expect(text).toContain('L\'hébergeur du site : Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com).');
   });
 
   it('prudente : aucune durée de conservation inventée pour les journaux ; l’hébergeur est celui que le build donne', async () => {
