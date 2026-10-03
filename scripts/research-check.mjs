@@ -379,7 +379,8 @@ function wikipediaCheck(core, opts) {
 
 /** Résumé des sources officielles d'une recherche complète (runResearch) : avertissements du code compris. */
 function officialOutcome(core, outcome) {
-  const official = outcome.sources.filter(s => s.kind === 'institutional');
+  // Une plateforme ouverte (HAL, data.gouv.fr…) est « à recouper » : elle n'est pas comptée comme page officielle.
+  const official = outcome.sources.filter(s => s.kind === 'institutional' && core.sourceReliability(s).tier !== 'open');
   return {
     official,
     notes: outcome.warnings.map(w => `avertissement de Magistra : ${w.message}`),

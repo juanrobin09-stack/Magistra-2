@@ -620,6 +620,17 @@ describe('DOI et adresses de tiers : jamais un second lien dans « Sources utili
     'HTTPS://www.unesco.org/x)[c](HTTPS://evil.com/)',
   ];
 
+  it('adresse e-mail dans un auteur, un titre ou une revue : jamais de lien mailto: dans « Sources utilisées »', () => {
+    for (const kind of ['hal', 'crossref', 'openalex'] as const) {
+      const line = formatSourceLine({
+        n: 1, kind, title: 'Contact : evil@evil.example', authors: ['evil@evil.example', 'Jeanne Martin'], venue: 'Revue evil@evil.example', doi: '10.1234/ok',
+      });
+      const { links } = analyse(`- ${line}\n`);
+      expect(links.some(l => /^mailto:/i.test(l)), kind).toBe(false);
+      expect(links.every(l => l.startsWith('https://doi.org/')), kind).toBe(true);
+    }
+  });
+
   it('DOI piégé (HAL, Crossref, OpenAlex) : une seule ligne, un seul lien automatique vers doi.org, rien d’autre', () => {
     for (const doi of HOSTILE_DOIS) {
       for (const kind of ['hal', 'crossref', 'openalex'] as const) {

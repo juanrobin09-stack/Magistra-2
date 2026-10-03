@@ -76,6 +76,8 @@ function mdSafe(value: string): string {
   return singleLine(value)
     // Sans « https:// » ni « www. » : le rendu en ferait des liens cliquables (même après un échappement).
     .replace(/\b(?:https?:\/\/|www\.)/gi, '')
+    // Une adresse e-mail devient aussi un lien (mailto:), et aucun échappement ne l'en empêche : arobase pleine chasse.
+    .replace(/@/g, '＠')
     .replace(/[\\`<>[\]*_]/g, m => `\\${m}`);
 }
 

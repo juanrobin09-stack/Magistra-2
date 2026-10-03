@@ -39,7 +39,7 @@ describe('Réglages (application Windows) — recherche', () => {
     const { container } = await mountSettings();
     const section = text(container);
     expect(section).toContain('Recherche académique (HAL, Crossref, OpenAlex)');
-    expect(section).toContain('les sites officiels vérifiés que leurs références citent pour votre sujet');
+    expect(section).toContain('Sans moteur de recherche web (plus bas), les sites officiels vérifiés que leurs références citent pour votre sujet sont aussi consultés');
     expect(section).not.toMatch(/\btous les sites\b|tout le catalogue/);
   });
 
@@ -56,7 +56,7 @@ describe('Réglages (application Windows) — recherche', () => {
     expect(paragraph).toContain(`soit ${SEARCHED_DOMAIN_COUNT} domaines`);
     expect(trustedSearchGroups().flat()).toHaveLength(SEARCHED_DOMAIN_COUNT);
     expect(paragraph).toContain(`Ne sont pas interrogés directement : ${NOT_SEARCHED_SITES}.`);
-    expect(paragraph).toContain('Sans lui, Magistra consulte seulement les sites officiels vérifiés que Wikipédia cite pour le sujet');
+    expect(paragraph).toContain('Sans lui, et si Wikipédia est coché, Magistra consulte seulement les sites officiels vérifiés que ses articles citent pour le sujet');
     expect(paragraph).toContain("Aucun autre site n'est interrogé");
     // Plus d'annonce d'une « recherche web » générale ni de « sources institutionnelles (Bulletin officiel) ».
     expect(text(container)).not.toMatch(/Recherche web \(facultatif\)|[Ss]ources institutionnelles/);

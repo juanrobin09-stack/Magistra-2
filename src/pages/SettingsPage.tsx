@@ -473,7 +473,7 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
           checked={prefs.wikipediaEnabled}
           onChange={v => void update({ wikipediaEnabled: v }, 'wikipedia')}
           label="Wikipédia"
-          hint="Articles de l'encyclopédie en français, signalés « à recouper », et les sites officiels vérifiés que leurs références citent pour votre sujet."
+          hint="Articles de l'encyclopédie en français, signalés « à recouper ». Sans moteur de recherche web (plus bas), les sites officiels vérifiés que leurs références citent pour votre sujet sont aussi consultés."
         />
         {(saved === 'academic' || saved === 'wikipedia') && <SuccessNote>Enregistré.</SuccessNote>}
       </div>
@@ -505,8 +505,8 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
         <label htmlFor={searxId} className="block text-sm font-semibold text-white">Moteur de recherche web (facultatif)</label>
         <p className="text-xs text-mg-200">
           Adresse d'un moteur de recherche SearXNG. Il permet d'interroger directement {SEARCH_SCOPE_TEXT} Sans lui,
-          Magistra consulte seulement les sites officiels vérifiés que Wikipédia cite pour le sujet. Aucun autre site n'est
-          interrogé. Laissez vide si vous n'en avez pas.
+          et si Wikipédia est coché, Magistra consulte seulement les sites officiels vérifiés que ses articles citent pour le
+          sujet. Aucun autre site n'est interrogé. Laissez vide si vous n'en avez pas.
         </p>
         <input
           id={searxId}

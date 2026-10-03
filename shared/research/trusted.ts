@@ -160,19 +160,20 @@ export const TRUSTED_SITES: readonly TrustedSite[] = [
 ];
 
 /**
- * Rang de lecture d'une page : éducation, organisations internationales, recherche, le reste. Les plateformes ouvertes
- * (contenu déposé par des tiers) passent après tout le reste.
+ * Rang de lecture d'une page : éducation (ministères), organisations internationales, recherche, le reste, dont les sites
+ * des académies. Les plateformes ouvertes (contenu déposé par des tiers) passent après tout le reste.
  */
 export function trustedPriority(site: TrustedSite): number {
   if (site.tier === 'open') return 4;
   switch (site.category) {
     case 'education':
-    case 'academie':
       return 0;
     case 'international':
       return 1;
     case 'recherche':
       return 2;
+    case 'academie':
+      return 3;
     default:
       return 3;
   }
@@ -253,7 +254,7 @@ export const SEARCHED_DOMAIN_COUNT = GROUP_SIZE * MAX_GROUPS;
  * Sites reconnus (cités, étiquetés) mais jamais interrogés directement par les requêtes « site: », en toutes lettres :
  * affiché dans les réglages, à tenir à jour avec le catalogue (un test le vérifie).
  */
-export const NOT_SEARCHED_SITES = 'les sites des académies scolaires, Canal-U, HAL, OpenAlex, Crossref, l’Agence spatiale européenne, le CERN, la NOAA et le NIH';
+export const NOT_SEARCHED_SITES = 'les sites des académies scolaires, Canal-U, HAL, OpenAlex, Crossref, l’Agence spatiale européenne, le CERN, la NOAA et le NIH (et doi.org, reconnu pour les DOI mais jamais consulté)';
 
 /**
  * Ce que fait l'interrogation directe (moteur de recherche web), sans rien promettre de plus : les principaux sites, leur
@@ -293,7 +294,7 @@ export function trustedSearchGroups(): string[][] {
  * Racine d'un site, page de langue seule (« /fr ») ou page d'accueil nommée (« /index.html », « /fr/accueil ») : rien à
  * citer.
  */
-const HOME_PATH = /^\/(?:[a-z]{2}(?:[-_][a-z]{2})?(?:\/|$))?(?:(?:index|home|accueil)(?:\.[a-z0-9]{2,5})?\/?)?$/i;
+const HOME_PATH = /^\/(?:[a-z]{2,3}(?:[-_][a-z]{2})?(?:\/|$))?(?:(?:index|home|accueil)(?:\.[a-z0-9]{2,5})?\/?)?$/i;
 /** Page de recherche ou de connexion : jamais une source. */
 const TOOL_PATH = /(?:^|\/)(?:search|rechercher|login|logon|signin|sign-in|connexion|se-connecter|auth|sso|cas|account|compte)(?:[/.]|$)/i;
 /**
@@ -303,8 +304,23 @@ const TOOL_PATH = /(?:^|\/)(?:search|rechercher|login|logon|signin|sign-in|conne
 const SEARCH_PAGE = /(?:^|\/)recherche(?:\.[a-z0-9]{2,5})?\/?$/i;
 const SEARCH_PARAMS = ['q', 's', 'search', 'query', 'recherche', 'keywords'];
 
+/**
+ * Chemin sous sa forme canonique : « %69ndex.html » devient « index.html », « // » une seule barre et « /login;jsessionid=1 »
+ * « /login », pour qu'une écriture détournée de l'accueil ou de la connexion ne passe pas pour un article.
+ */
+function canonicalPath(pathname: string): string {
+  let path = pathname;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // Pourcentage mal formé : le chemin brut est contrôlé tel quel.
+  }
+  return path.split('/').map(segment => segment.replace(/;.*$/, '')).join('/').replace(/\/{2,}/g, '/');
+}
+
 function isArticleUrl(url: URL): boolean {
-  if (HOME_PATH.test(url.pathname) || TOOL_PATH.test(url.pathname) || SEARCH_PAGE.test(url.pathname)) return false;
+  const path = canonicalPath(url.pathname);
+  if (HOME_PATH.test(path) || TOOL_PATH.test(path) || SEARCH_PAGE.test(path)) return false;
   return !SEARCH_PARAMS.some(p => url.searchParams.has(p));
 }
 

@@ -2,7 +2,10 @@
 // trouvées pour le sujet, filtrées par le catalogue, puis pages récupérées par fetchPage. Réponses simulées.
 
 import { describe, expect, it } from 'vitest';
-import { NO_OFFICIAL_FOUND_MESSAGE, OFFICIAL_LINKS_UNAVAILABLE_MESSAGE, OFFICIAL_UNAVAILABLE_MESSAGE, officialSitesPath, runResearch } from '../../shared/research/index';
+import {
+  NO_OFFICIAL_FOUND_MESSAGE, OFFICIAL_LINKS_UNAVAILABLE_MESSAGE, OFFICIAL_UNAVAILABLE_MESSAGE, officialSitesPath, runResearch,
+  WIKIPEDIA_AND_OFFICIAL_UNREACHABLE_MESSAGE,
+} from '../../shared/research/index';
 import { searchWikipediaPages, wikipediaExternalLinks } from '../../shared/research/providers';
 import { jsonResponse, networkError, textResponse } from './helpers';
 import { CONFIG, deps, EXTERNAL_LINKS, fakePages, NO_SEARX, router, wikiHandler } from './researchFixtures';
@@ -124,6 +127,10 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
       'https://www.education.gouv.fr/index.html',
       'https://cas.education.gouv.fr/login?service=x',
       'https://www.education.gouv.fr/cas/',
+      'https://www.education.gouv.fr//',
+      'https://www.education.gouv.fr//index.html',
+      'https://www.education.gouv.fr/fra',
+      'https://www.education.gouv.fr/%69ndex.html',
     ]) {
       const fetchPage = fakePages({
         [EDUSCOL]: { url: final, text: 'Accueil du site : menu, actualités, espace presse, liens utiles, connexion à votre espace enseignant.' },
@@ -245,9 +252,10 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
     expect(outcome.sources).toEqual([]);
   });
 
-  it('Wikipédia injoignable mais un autre service répond : l’avertissement nomme Wikipédia', async () => {
+  it('Wikipédia injoignable mais un autre service répond : l’avertissement nomme Wikipédia et dit que les sites officiels qui en dépendent ne sont pas consultés', async () => {
     const outcome = await runResearch({ ...QUERY, group: 'master' }, NO_SEARX, deps(router({ wiki: () => textResponse('x', 503) }), fakePages()), BUDGET);
-    expect(outcome.warnings.map(w => w.message)).toEqual(['Wikipédia injoignable.']);
+    expect(outcome.warnings.map(w => w.message)).toEqual([WIKIPEDIA_AND_OFFICIAL_UNREACHABLE_MESSAGE]);
+    expect(outcome.warnings.map(w => w.message)).not.toContain(NO_OFFICIAL_FOUND_MESSAGE);
     expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'hal', 'crossref', 'openalex']);
   });
 
@@ -282,6 +290,15 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
     // Les références de la page 102 (OIT) n'ont pas pu être lues : seules celles de la page 101 sont suivies.
     expect(fetchPage.calls).toEqual([EDUSCOL, UNESCO, 'https://www.cnrs.fr/fr/gouvernance-des-donnees']);
     expect(fetchPage.calls).not.toContain(ILO);
+  });
+
+  it('seules des plateformes ouvertes (HAL, data.gouv.fr) dans les références : elles sont gardées « à recouper », mais « aucune source officielle » est signalé', async () => {
+    const wiki = (url: string) => (new URL(url).searchParams.get('prop') === 'extlinks'
+      ? jsonResponse({ query: { pages: [{ pageid: 1, extlinks: [{ url: 'https://hal.science/hal-01234567' }, { url: 'https://www.data.gouv.fr/fr/datasets/gouvernance-si' }] }] } })
+      : wikiHandler(url));
+    const outcome = await runResearch(QUERY, NO_SEARX, deps(router({ wiki }), fakePages()), BUDGET);
+    expect(outcome.sources.filter(s => s.kind === 'institutional').map(s => s.venue)).toEqual(['HAL', 'data.gouv.fr']);
+    expect(outcome.warnings).toEqual([{ code: 'INSTITUTIONAL_UNAVAILABLE', message: NO_OFFICIAL_FOUND_MESSAGE }]);
   });
 
   it('« Sources académiques » : références injoignables, même avertissement (sites officiels non consultés)', async () => {

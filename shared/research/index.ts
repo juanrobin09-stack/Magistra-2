@@ -21,6 +21,8 @@ export const OFFICIAL_UNAVAILABLE_MESSAGE =
 /** Un chemin a répondu, mais aucune page des sites vérifiés ne correspond au sujet. */
 export const NO_OFFICIAL_FOUND_MESSAGE = 'Aucune source officielle trouvée pour ce sujet : à vérifier.';
 /** Wikipédia a répondu, mais aucune requête de ses références (liens externes) n'a abouti : les sites officiels n'ont pas été consultés. */
+export const OFFICIAL_WIKIPEDIA_UNREACHABLE_MESSAGE = 'Sites officiels non consultés : Wikipédia, qui indique où les trouver, est injoignable.';
+export const WIKIPEDIA_AND_OFFICIAL_UNREACHABLE_MESSAGE = 'Wikipédia injoignable : les sites officiels qu’elle indique ne sont pas consultés non plus.';
 export const OFFICIAL_LINKS_UNAVAILABLE_MESSAGE = 'Sites officiels non consultés : les références de Wikipédia n’ont pas pu être lues.';
 
 const UNIVERSITY: LevelGroup[] = ['bts_but', 'cpge', 'licence', 'master', 'doctorat'];
@@ -314,10 +316,11 @@ export async function runResearch(
   // 3. Wikipédia : encyclopédie (complément signalé) et, sans SearXNG, références vers les sites vérifiés.
   const wikiPagesTask: Promise<WikipediaPage[] | null> = config.wikipedia && (plan.wikipedia || (plan.institutional && viaWikipedia))
     ? track(searchWikipediaPages(topic, deps, { max: 2, timeoutMs: t, signal: options.signal })).catch(() => {
-        warnings.push({
-          code: 'RESEARCH_UNAVAILABLE',
-          message: plan.wikipedia ? 'Wikipédia injoignable.' : 'Sites officiels non consultés : Wikipédia, qui indique où les trouver, est injoignable.',
-        });
+        // Sans SearXNG, les sites officiels ne sont atteints que par les références de Wikipédia : pas consultés non plus.
+        const message = !plan.wikipedia
+          ? OFFICIAL_WIKIPEDIA_UNREACHABLE_MESSAGE
+          : plan.institutional && viaWikipedia ? WIKIPEDIA_AND_OFFICIAL_UNREACHABLE_MESSAGE : 'Wikipédia injoignable.';
+        warnings.push({ code: 'RESEARCH_UNAVAILABLE', message });
         return null;
       })
     : Promise.resolve(null);
@@ -352,7 +355,8 @@ export async function runResearch(
 
   // Ordre de priorité : académique > sites vérifiés > Wikipédia.
   const [academic, web, official, wiki] = await Promise.all([academicTask, webTask.catch(() => []), officialViaWikipediaTask.catch(() => []), wikiTask]);
-  const officialFound = [...web, ...official].some(s => s.kind === 'institutional');
+  // Une plateforme ouverte (HAL, data.gouv.fr…) est étiquetée « à recouper » : elle ne vaut pas une source officielle.
+  const officialFound = [...web, ...official].some(s => s.kind === 'institutional' && trustedSiteFor(s.url ?? '')?.tier !== 'open');
   let sources = dedupe([...academic, ...web, ...official, ...wiki]).filter(s => s.text.trim().length > 0);
 
   // Répartition du budget : chaque source reçoit une part, recentrée sur la question.

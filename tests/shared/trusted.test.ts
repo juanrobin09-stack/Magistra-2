@@ -265,7 +265,7 @@ describe('selectTrustedLinks — pages à citer parmi les références d’un ar
     expect(selectTrustedLinks(links, 3).map(l => l.url)).toEqual(['https://www.unesco.org/fr/articles/eau-et-assainissement']);
   });
 
-  it('classe éducation > organisations internationales > recherche > reste, à rang égal dans l’ordre des liens', () => {
+  it('classe éducation > organisations internationales > recherche > reste (dont les académies), à rang égal dans l’ordre des liens', () => {
     const links = [
       'https://theses.fr/2019SACLS001',
       'https://www.cnrs.fr/fr/photosynthese',
@@ -275,7 +275,19 @@ describe('selectTrustedLinks — pages à citer parmi les références d’un ar
       'https://www.ac-lyon.fr/ressources/x',
     ];
     const picked = selectTrustedLinks(links, 10);
-    expect(picked.map(l => l.site.domain)).toEqual(['eduscol.education.fr', 'ac-lyon.fr', 'unesco.org', 'who.int', 'cnrs.fr', 'theses.fr']);
+    expect(picked.map(l => l.site.domain)).toEqual(['eduscol.education.fr', 'unesco.org', 'who.int', 'cnrs.fr', 'theses.fr', 'ac-lyon.fr']);
+  });
+
+  it('les académies passent après les ministères, les organisations internationales et la recherche publique', () => {
+    const links = [
+      'https://www.ac-lyon.fr/mathematiques-fractions-123',
+      'https://www.unesco.org/fr/articles/fractions',
+      'https://www.who.int/fr/news/fractions',
+      'https://www.cnrs.fr/fr/fractions',
+      'https://www.education.gouv.fr/fractions-1',
+    ];
+    expect(selectTrustedLinks(links, 3).map(l => l.site.domain)).toEqual(['education.gouv.fr', 'unesco.org', 'who.int']);
+    expect(selectTrustedLinks(links, 10).map(l => l.site.domain).at(-1)).toBe('ac-lyon.fr');
   });
 
   it('une seule page par hôte (« www. » compris), au plus `max` pages', () => {
@@ -371,6 +383,13 @@ describe('isCitablePage — page qu’une source peut citer (adresse FINALE d’
     'https://www.education.gouv.fr/accueil/',
     'https://www.unesco.org/en/home',
     'https://www.unesco.org/fr-ca/accueil',
+    // Écritures détournées de l'accueil ou de la connexion : barres doublées, pourcentage, paramètre de chemin, langue sur trois lettres.
+    'https://www.education.gouv.fr//',
+    'https://www.education.gouv.fr//index.html',
+    'https://www.education.gouv.fr/fr//',
+    'https://www.education.gouv.fr/%69ndex.html',
+    'https://www.education.gouv.fr/fra',
+    'https://www.education.gouv.fr/login;jsessionid=1',
     // Connexion et authentification (S2).
     'https://cas.education.gouv.fr/login?service=x',
     'https://www.education.gouv.fr/login',
