@@ -7,7 +7,7 @@ import { MockProvider } from '../../shared/ai/mock';
 import { ALL_MATIERES, ALL_TYPES, isMatiereAvailableFor, type Matiere, type TypeContenu } from '../../shared/catalog';
 import { DISCIPLINE_RULE_MAX_CHARS, DISCIPLINES, disciplineRule } from '../../shared/disciplines';
 import { ALL_NIVEAUX, getLevelGroup, LEVEL_GROUP_LABELS, type LevelGroup, type NiveauScolaire } from '../../shared/levels';
-import { computeBudgets } from '../../shared/pipeline';
+import { computeBudgets, SOURCES_PROMPT_MARGIN_TOKENS } from '../../shared/pipeline';
 import { buildMessages, buildSystemPrompt, estimateTokens } from '../../shared/prompts/index';
 import { toolInstructions } from '../../shared/prompts/tools';
 import type { GenerationRequest } from '../../shared/types';
@@ -279,7 +279,7 @@ describe('disciplines : budget de tokens', () => {
       const messages = buildMessages({ ...r, documents: undefined }, []);
       const without = messages.map(m => ({ content: m.content.replace(`${line}\n\n`, '') }));
       expect(without[0].content, matiere).not.toContain('DISCIPLINE :');
-      const sum = (ms: { content: string }[]) => ms.reduce((n, m) => n + estimateTokens(m.content) + 8, 0) + 250;
+      const sum = (ms: { content: string }[]) => ms.reduce((n, m) => n + estimateTokens(m.content) + 8, 0) + SOURCES_PROMPT_MARGIN_TOKENS;
       const b = computeBudgets(provider, r);
       expect(b.promptTokens, matiere).toBe(sum(messages));
       const added = b.promptTokens - sum(without);

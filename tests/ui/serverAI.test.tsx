@@ -116,6 +116,20 @@ describe('Réglages — IA du serveur', () => {
     expect(access.forget).toHaveBeenCalledOnce();
   });
 
+  it('sources de recherche du serveur : les sites officiels vérifiés sont distingués du moteur de recherche web', async () => {
+    const caps: Capabilities = { ...READY, research: { academic: true, web: false, institutional: true, wikipedia: true } };
+    const { container } = await mount(<SettingsPage />, 'personal', caps);
+    const state = (label: string) => [...container.querySelectorAll('dl > div')]
+      .find(row => row.querySelector('dt')?.textContent === label)?.querySelector('dd')?.textContent;
+    expect(state('Sources académiques (HAL, Crossref, OpenAlex)')).toBe('Disponible');
+    expect(state('Sites officiels vérifiés (UNESCO, Éduscol, ministères…)')).toBe('Disponible');
+    expect(state('Moteur de recherche web')).toBe('Non disponible');
+    expect(state('Wikipédia')).toBe('Disponible');
+    const none: Capabilities = { ...READY, research: { academic: true, web: false, institutional: false, wikipedia: false } };
+    const unavailable = (await mount(<SettingsPage />, 'personal', none)).container;
+    expect([...unavailable.querySelectorAll('dl > div')].find(row => row.textContent?.startsWith('Sites officiels vérifiés'))?.querySelector('dd')?.textContent).toBe('Non disponible');
+  });
+
   it('démonstration : carte « Passez à la vraie IA »', async () => {
     const { container } = await mount(<SettingsPage />, 'demo', READY);
     expect(container.querySelector('[data-testid="connect-real-ai"]')?.textContent).toContain('Passez à la vraie IA');

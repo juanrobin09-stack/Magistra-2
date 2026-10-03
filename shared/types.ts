@@ -12,9 +12,9 @@ export type ResearchMode = 'documents' | 'academic' | 'internet' | 'documents_in
 
 export const RESEARCH_MODES: { value: ResearchMode; label: string; description: string; network: boolean }[] = [
   { value: 'documents', label: 'Mes documents uniquement', description: 'Aucune recherche externe. Fonctionne hors ligne.', network: false },
-  { value: 'academic', label: 'Sources académiques', description: 'Vos documents + publications scientifiques (HAL, Crossref).', network: true },
-  { value: 'internet', label: 'Internet', description: 'Sources en ligne vérifiables, sans vos documents.', network: true },
-  { value: 'documents_internet', label: 'Documents + Internet', description: 'Vos documents en priorité, complétés par des sources en ligne.', network: true },
+  { value: 'academic', label: 'Sources académiques', description: 'Vos documents + publications scientifiques (HAL, Crossref, OpenAlex) et sites officiels vérifiés.', network: true },
+  { value: 'internet', label: 'Internet', description: 'Sites officiels vérifiés (UNESCO, Éduscol, ministères…) et Wikipédia, sans vos documents.', network: true },
+  { value: 'documents_internet', label: 'Documents + Internet', description: 'Vos documents en priorité, complétés par les sites officiels vérifiés et Wikipédia.', network: true },
 ];
 
 export function isResearchMode(value: unknown): value is ResearchMode {
@@ -70,7 +70,7 @@ export interface DocumentPassage {
 
 // ─── Sources et citations ───────────────────────────────────────────────────
 
-export type SourceKind = 'document' | 'hal' | 'crossref' | 'web' | 'institutional' | 'wikipedia';
+export type SourceKind = 'document' | 'hal' | 'crossref' | 'openalex' | 'web' | 'institutional' | 'wikipedia';
 
 export interface SourceRef {
   /** Numéro de citation [n], attribué par le code — jamais par le modèle. */

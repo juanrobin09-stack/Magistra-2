@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import ResultPanel, { LOADING_MODEL_HINT } from '@/components/generate/ResultPanel';
 import { initialGenerationState, type GenerationState } from '@/lib/generation/state';
-import type { GenerationRequest } from '@shared/types';
+import type { GenerationRequest, SourceRef } from '@shared/types';
 import { button, cleanup, MemoryStore, render } from '../ui/helpers';
 
 afterEach(cleanup);
@@ -53,6 +53,36 @@ describe('ResultPanel — « Arrêter » et « Recommencer » au même endroit',
     const { container } = await panel(done);
     const status = container.querySelector('[role="status"]');
     expect(status?.textContent).toBe('Génération terminée, contenu enregistré.');
+  });
+});
+
+describe('ResultPanel — fiabilité des sources citées', () => {
+  const sources: SourceRef[] = [
+    { n: 1, kind: 'document', title: 'cours.pdf', docName: 'cours.pdf' },
+    { n: 2, kind: 'institutional', title: 'Éducation', venue: 'UNESCO', url: 'https://www.unesco.org/fr/esd' },
+    { n: 3, kind: 'institutional', title: 'Programme', venue: 'Éduscol', url: 'https://eduscol.education.fr/x' },
+    { n: 4, kind: 'openalex', title: 'Photosynthesis', doi: '10.1000/x1' },
+    { n: 5, kind: 'wikipedia', title: 'Photosynthèse', venue: 'Wikipédia', url: 'https://fr.wikipedia.org/wiki/P' },
+  ];
+  const done = (cited: SourceRef[]): GenerationState => ({
+    ...initialGenerationState(), phase: 'done', runId: 1, request: REQ, text: 'Contenu',
+    result: { type: 'done', content: 'Contenu', sources: cited, truncated: false, internetUsed: true, saved: true, id: 'x', model: 'm' },
+  });
+
+  it('un badge par niveau, du plus fiable au moins fiable, avec le nombre de sources ; Wikipédia ressort « à recouper »', async () => {
+    const { container } = await panel(done(sources));
+    const list = container.querySelector('[aria-label="Fiabilité des sources citées"]');
+    expect([...list!.querySelectorAll('li')].map(li => li.textContent?.trim())).toEqual([
+      "Document de l'enseignant : 1", 'Source officielle : 2', 'Publication scientifique : 1', 'Encyclopédie collaborative (à recouper) : 1',
+    ]);
+    expect(list!.querySelectorAll('li')[3].className).toContain('text-warning');
+    expect(list!.querySelectorAll('li')[1].className).toContain('badge-success');
+  });
+
+  it('aucune source citée, ou génération en cours : aucun badge', async () => {
+    expect((await panel(done([]))).container.querySelector('[aria-label="Fiabilité des sources citées"]')).toBeNull();
+    const running: GenerationState = { ...initialGenerationState(), phase: 'running', runId: 1, request: REQ, sources };
+    expect((await panel(running)).container.querySelector('[aria-label="Fiabilité des sources citées"]')).toBeNull();
   });
 });
 

@@ -15,12 +15,17 @@ export interface ResearchSource {
 }
 
 export interface ResearchConfig {
-  /** HAL + Crossref (API publiques, sans clé). */
+  /** HAL + Crossref + OpenAlex (API publiques, sans clé). */
   academic: boolean;
   /** URL d'une instance SearXNG (recherche web), facultative. */
   searxngUrl?: string;
-  /** Wikipédia en français (API publique). */
+  /** Wikipédia en français (API publique) : encyclopédie, et références vers les sites officiels sans SearXNG. */
   wikipedia: boolean;
+  /**
+   * Seuls les sites du catalogue des sites vérifiés sont retenus (défaut : vrai). Faux seulement sur décision de
+   * l'administrateur d'un serveur auto-hébergé (RESEARCH_TRUSTED_ONLY=false) : le web général est alors admis.
+   */
+  trustedOnly?: boolean;
   /** Adresse de contact transmise à Crossref (« polite pool »), facultative. */
   crossrefMailto?: string;
   /** Délai maximal par requête externe. */
@@ -57,5 +62,6 @@ export interface ResearchDeps {
 export const DEFAULT_RESEARCH_CONFIG: ResearchConfig = {
   academic: true,
   wikipedia: true,
+  trustedOnly: true,
   timeoutMs: 8_000,
 };

@@ -3,6 +3,7 @@
 // à partir des sources réellement fournies au modèle. Le modèle ne peut ni inventer une page,
 // ni un document, ni une référence : toute citation inconnue est retirée.
 
+import { trustedSiteFor } from './research/trusted.js';
 import type { DocumentPassage, Locator, SourceRef } from './types.js';
 
 /**
@@ -78,6 +79,70 @@ function mdSafe(value: string): string {
     .replace(/[\\`<>[\]*_]/g, m => `\\${m}`);
 }
 
+export type ReliabilityTier = 'document' | 'official' | 'scientific' | 'encyclopedic' | 'web';
+
+export interface SourceReliability {
+  tier: ReliabilityTier;
+  /** Niveau de fiabilité en toutes lettres, tel qu'il est affiché (« Source officielle »). */
+  label: string;
+}
+
+/**
+ * Niveau de fiabilité d'une source, déduit de son origine : document de l'enseignant, source officielle (site du catalogue
+ * des sites vérifiés), publication scientifique, encyclopédie collaborative (Wikipédia : à recouper) ou web non vérifié.
+ */
+export function sourceReliability(ref: Pick<SourceRef, 'kind' | 'url'>): SourceReliability {
+  switch (ref.kind) {
+    case 'document':
+      return { tier: 'document', label: "Document de l'enseignant" };
+    case 'hal':
+    case 'crossref':
+    case 'openalex':
+      return { tier: 'scientific', label: 'Publication scientifique' };
+    case 'institutional':
+      // Organisme de recherche, agence scientifique ou archive ouverte du catalogue : source scientifique ; sinon officielle.
+      return ref.url && trustedSiteFor(ref.url)?.tier === 'scientific'
+        ? { tier: 'scientific', label: 'Source scientifique' }
+        : { tier: 'official', label: 'Source officielle' };
+    case 'wikipedia':
+      return { tier: 'encyclopedic', label: 'Encyclopédie collaborative (à recouper)' };
+    case 'web':
+      return { tier: 'web', label: 'Page web non vérifiée' };
+  }
+}
+
+/** Service d'où vient la source : le site (« UNESCO ») pour une source officielle, la base pour une publication. */
+export function sourceOrigin(ref: Pick<SourceRef, 'kind' | 'url' | 'venue'>): string | undefined {
+  switch (ref.kind) {
+    case 'hal':
+      return 'HAL';
+    case 'crossref':
+      return 'Crossref';
+    case 'openalex':
+      return 'OpenAlex';
+    case 'wikipedia':
+      return 'Wikipédia';
+    case 'institutional':
+      return (ref.url ? trustedSiteFor(ref.url)?.label : undefined) ?? (ref.venue?.trim() || undefined);
+    default:
+      return undefined;
+  }
+}
+
+const TIER_ORDER: readonly ReliabilityTier[] = ['document', 'official', 'scientific', 'encyclopedic', 'web'];
+
+/** Nombre de sources par niveau de fiabilité, du plus fiable au moins fiable ; les niveaux absents ne figurent pas. */
+export function reliabilitySummary(refs: readonly Pick<SourceRef, 'kind' | 'url'>[]): (SourceReliability & { count: number })[] {
+  const found = new Map<ReliabilityTier, SourceReliability & { count: number }>();
+  for (const ref of refs) {
+    const reliability = sourceReliability(ref);
+    const entry = found.get(reliability.tier);
+    if (entry) entry.count++;
+    else found.set(reliability.tier, { ...reliability, count: 1 });
+  }
+  return TIER_ORDER.flatMap(tier => found.get(tier) ?? []);
+}
+
 export function formatSourceLine(s: SourceRef): string {
   if (s.kind === 'document') {
     return `[S${s.n}] ${mdSafe(s.docName ?? s.title)}${s.locator ? ` — ${formatLocatorFull(s.locator, mdSafe)}` : ''}`;
@@ -88,15 +153,13 @@ export function formatSourceLine(s: SourceRef): string {
   const authors = authorList ? `${authorList.replace(/\.+$/, '')}. ` : '';
   const title = mdSafe(s.title).replace(/[.\s]+$/, '');
   const year = s.year ? ` (${s.year})` : '';
-  const venue = s.venue ? `. *${mdSafe(s.venue)}*` : '';
-  const originLabel = s.kind === 'hal' ? 'HAL'
-    : s.kind === 'crossref' ? 'Crossref'
-      : s.kind === 'wikipedia' ? 'Wikipédia'
-        : s.kind === 'institutional' ? 'Source institutionnelle'
-          : '';
-  const origin = originLabel && originLabel !== s.venue ? ` — ${originLabel}` : '';
+  const origin = sourceOrigin(s);
+  const venue = s.venue && s.venue !== origin ? `. *${mdSafe(s.venue)}*` : '';
+  // « Source officielle · UNESCO » : le niveau de fiabilité, puis le site ou la base.
+  const { label } = sourceReliability(s);
+  const reliability = origin ? `${label} · ${mdSafe(origin)}` : label;
   const link = s.doi ? ` https://doi.org/${s.doi}` : s.url ? ` ${s.url}` : '';
-  return `[S${s.n}] ${authors}${title}${year}${venue}${origin}.${link}`;
+  return `[S${s.n}] ${authors}${title}${year}${venue} — ${reliability}.${link}`;
 }
 
 /**

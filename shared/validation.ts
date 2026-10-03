@@ -276,7 +276,7 @@ export const RECORD_LIMITS = {
 
 /** Toutes les origines de source connues (Record : un nouveau SourceKind oublié ici ne compile pas). */
 const SOURCE_KINDS: Readonly<Record<SourceKind, true>> = {
-  document: true, hal: true, crossref: true, web: true, institutional: true, wikipedia: true,
+  document: true, hal: true, crossref: true, openalex: true, web: true, institutional: true, wikipedia: true,
 };
 
 function isSourceKind(value: unknown): value is SourceKind {

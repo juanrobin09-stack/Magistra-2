@@ -1,6 +1,7 @@
-// Connecteurs de recherche : HAL, Crossref, SearXNG, Wikipédia.
+// Connecteurs de recherche : HAL, Crossref, OpenAlex, SearXNG, Wikipédia.
 // Chaque connecteur renvoie des sources réelles avec leurs métadonnées d'origine.
 
+import { isTrustedUrl, TRUSTED_SITES } from './trusted.js';
 import type { ResearchDeps, ResearchSource } from './types.js';
 
 function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
@@ -237,6 +238,108 @@ export async function searchCrossref(
     .filter((s): s is ResearchSource => s !== null);
 }
 
+// ─── OpenAlex (catalogue ouvert de publications) ────────────────────────────
+
+interface OpenAlexWork {
+  doi?: string | null;
+  title?: string | null;
+  publication_year?: number | null;
+  authorships?: ({ author?: { display_name?: string | null } | null } | null)[] | null;
+  primary_location?: { source?: { display_name?: string | null } | null; landing_page_url?: string | null } | null;
+  abstract_inverted_index?: unknown;
+}
+
+/**
+ * Bornes de la reconstruction d'un résumé : une réponse démesurée ou piégée ne coûte ni mémoire ni temps (le tableau des
+ * mots a une taille fixe, les entrées et les positions parcourues sont comptées).
+ */
+const ABSTRACT_MAX_WORDS = 3_000;
+const ABSTRACT_MAX_WORD_CHARS = 100;
+const ABSTRACT_MAX_ENTRIES = 5_000;
+const ABSTRACT_MAX_VISITS = 20_000;
+
+/**
+ * Résumé reconstruit depuis l'« index inversé » d'OpenAlex ({ mot: [positions] }), en temps linéaire. Sont ignorés sans
+ * être parcourus : valeurs qui ne sont pas des tableaux, tableaux de plus de 3 000 positions, mots vides ou démesurés ;
+ * et toute position qui n'est pas un entier entre 0 et 2 999.
+ */
+export function abstractFromInvertedIndex(index: unknown): string {
+  if (typeof index !== 'object' || index === null || Array.isArray(index)) return '';
+  const words = new Array<string | undefined>(ABSTRACT_MAX_WORDS);
+  let entries = 0;
+  let visits = 0;
+  for (const word in index) {
+    if (++entries > ABSTRACT_MAX_ENTRIES || visits > ABSTRACT_MAX_VISITS) break;
+    if (!Object.prototype.hasOwnProperty.call(index, word) || !word || word.length > ABSTRACT_MAX_WORD_CHARS) continue;
+    const positions = (index as Record<string, unknown>)[word];
+    if (!Array.isArray(positions) || positions.length > ABSTRACT_MAX_WORDS) continue;
+    for (const position of positions) {
+      visits++;
+      if (typeof position === 'number' && Number.isInteger(position) && position >= 0 && position < ABSTRACT_MAX_WORDS && words[position] === undefined) {
+        words[position] = word;
+      }
+    }
+  }
+  return words.filter((w): w is string => w !== undefined).join(' ');
+}
+
+/** DOI sans le préfixe « https://doi.org/ » (OpenAlex le fournit sous forme d'adresse) ; undefined s'il n'en a pas la forme. */
+function normalizeDoi(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const doi = raw.trim().replace(/^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)/i, '');
+  return /^10\.\d{4,9}\/\S{1,200}$/.test(doi) ? doi : undefined;
+}
+
+/** Adresse https sans identifiants ; undefined pour toute autre. */
+function httpsUrl(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  try {
+    const url = new URL(raw.trim());
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function searchOpenAlex(
+  query: string,
+  deps: ResearchDeps,
+  opts: { rows: number; timeoutMs: number; mailto?: string; signal?: AbortSignal },
+): Promise<ResearchSource[]> {
+  const params = new URLSearchParams({
+    search: query,
+    filter: 'has_abstract:true',
+    'per-page': String(opts.rows),
+    select: 'id,doi,title,publication_year,authorships,primary_location,abstract_inverted_index,type',
+  });
+  if (opts.mailto) params.set('mailto', opts.mailto);
+  const data = await getJson<{ results?: OpenAlexWork[] }>(deps, `https://api.openalex.org/works?${params}`, opts.signal, opts.timeoutMs);
+  const works = data.results;
+  return (Array.isArray(works) ? works : [])
+    .map((w): ResearchSource | null => {
+      const title = typeof w?.title === 'string' ? stripTags(w.title) : '';
+      if (!title) return null;
+      const authors = (Array.isArray(w.authorships) ? w.authorships : [])
+        .map(a => a?.author?.display_name)
+        .filter((name): name is string => typeof name === 'string' && name.trim() !== '')
+        .slice(0, 8);
+      const venue = w.primary_location?.source?.display_name;
+      const doi = normalizeDoi(w.doi);
+      const abstract = stripTags(abstractFromInvertedIndex(w.abstract_inverted_index));
+      return {
+        kind: 'openalex',
+        title,
+        authors,
+        year: typeof w.publication_year === 'number' && Number.isFinite(w.publication_year) ? w.publication_year : undefined,
+        venue: typeof venue === 'string' && venue.trim() ? venue : undefined,
+        doi,
+        url: doi ? `https://doi.org/${doi}` : httpsUrl(w.primary_location?.landing_page_url),
+        text: abstract ? clip(abstract, 2_000) : NO_ABSTRACT_TEXT,
+      };
+    })
+    .filter((s): s is ResearchSource => s !== null);
+}
+
 // ─── SearXNG (recherche web configurable) ───────────────────────────────────
 
 interface SearxResult {
@@ -261,7 +364,17 @@ export async function searchSearxng(
 
 // ─── Wikipédia (français) ───────────────────────────────────────────────────
 
-export async function searchWikipedia(query: string, deps: ResearchDeps, opts: { max: number; timeoutMs: number; signal?: AbortSignal }): Promise<ResearchSource[]> {
+export interface WikipediaPage {
+  pageId: number;
+  title: string;
+}
+
+/** Pages de Wikipédia qui répondent à la recherche (identifiant et titre seulement). */
+export async function searchWikipediaPages(
+  query: string,
+  deps: ResearchDeps,
+  opts: { max: number; timeoutMs: number; signal?: AbortSignal },
+): Promise<WikipediaPage[]> {
   const search = new URLSearchParams({
     action: 'query', list: 'search', srsearch: query, srlimit: String(opts.max), format: 'json', origin: '*',
   });
@@ -269,24 +382,34 @@ export async function searchWikipedia(query: string, deps: ResearchDeps, opts: {
     deps, `https://fr.wikipedia.org/w/api.php?${search}`, opts.signal, opts.timeoutMs,
   );
   const hits = found.query?.search;
-  const pages = Array.isArray(hits) ? hits.filter(h => typeof h?.pageid === 'number') : [];
+  return (Array.isArray(hits) ? hits : [])
+    .filter(h => typeof h?.pageid === 'number')
+    .map(h => ({ pageId: h.pageid, title: typeof h.title === 'string' ? h.title : '' }));
+}
+
+/** Texte des pages trouvées ; une page en échec n'empêche pas les autres. */
+export async function readWikipediaPages(
+  pages: readonly WikipediaPage[],
+  deps: ResearchDeps,
+  opts: { timeoutMs: number; signal?: AbortSignal },
+): Promise<ResearchSource[]> {
   const out: ResearchSource[] = [];
   for (const page of pages) {
     const params = new URLSearchParams({
       action: 'query', prop: 'extracts|info', inprop: 'url', explaintext: '1', exsectionformat: 'plain',
-      pageids: String(page.pageid), format: 'json', origin: '*',
+      pageids: String(page.pageId), format: 'json', origin: '*',
     });
     try {
       const data = await getJson<{ query?: { pages?: Record<string, { title?: string; extract?: string; fullurl?: string }> } }>(
         deps, `https://fr.wikipedia.org/w/api.php?${params}`, opts.signal, opts.timeoutMs,
       );
-      const p = data.query?.pages?.[String(page.pageid)];
+      const p = data.query?.pages?.[String(page.pageId)];
       if (typeof p?.extract === 'string' && p.extract.trim()) {
         out.push({
           kind: 'wikipedia',
           title: p.title ?? page.title,
           venue: 'Wikipédia',
-          url: p.fullurl ?? `https://fr.wikipedia.org/?curid=${page.pageid}`,
+          url: p.fullurl ?? `https://fr.wikipedia.org/?curid=${page.pageId}`,
           text: p.extract.slice(0, 60_000),
         });
       }
@@ -297,13 +420,30 @@ export async function searchWikipedia(query: string, deps: ResearchDeps, opts: {
   return out;
 }
 
-export const INSTITUTIONAL_SITES = ['eduscol.education.fr', 'education.gouv.fr'];
-
-export function isInstitutionalUrl(url: string): boolean {
-  try {
-    const host = new URL(url).hostname;
-    return INSTITUTIONAL_SITES.some(site => host === site || host.endsWith(`.${site}`)) || host.endsWith('.gouv.fr');
-  } catch {
-    return false;
-  }
+export async function searchWikipedia(query: string, deps: ResearchDeps, opts: { max: number; timeoutMs: number; signal?: AbortSignal }): Promise<ResearchSource[]> {
+  return readWikipediaPages(await searchWikipediaPages(query, deps, opts), deps, opts);
 }
+
+/**
+ * Liens externes (https) d'une page de Wikipédia, c'est-à-dire ses références. MediaWiki applique la limite à la requête
+ * entière : une requête par page. Seul le champ `url` de chaque lien est lu.
+ */
+export async function wikipediaExternalLinks(pageId: number, deps: ResearchDeps, opts: { timeoutMs: number; signal?: AbortSignal }): Promise<string[]> {
+  const params = new URLSearchParams({
+    action: 'query', prop: 'extlinks', ellimit: '500', elprotocol: 'https', pageids: String(pageId), format: 'json', formatversion: '2',
+  });
+  const data = await getJson<{ query?: { pages?: { extlinks?: { url?: unknown }[] }[] } }>(
+    deps, `https://fr.wikipedia.org/w/api.php?${params}`, opts.signal, opts.timeoutMs,
+  );
+  const pages = data.query?.pages;
+  const links = Array.isArray(pages) ? pages[0]?.extlinks : undefined;
+  return (Array.isArray(links) ? links : [])
+    .map(link => link?.url)
+    .filter((url): url is string => typeof url === 'string');
+}
+
+/** Domaines du catalogue des sites vérifiés (shared/research/trusted.ts). */
+export const INSTITUTIONAL_SITES: readonly string[] = TRUSTED_SITES.map(site => site.domain);
+
+/** Adresse d'un site vérifié : nom d'hôte exact ou sous-domaine réel d'un domaine du catalogue, jamais une sous-chaîne. */
+export const isInstitutionalUrl = isTrustedUrl;

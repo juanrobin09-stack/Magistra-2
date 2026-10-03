@@ -14,6 +14,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:real-ai": "node scripts/real-ai-check.mjs",
+    "research:check": "node scripts/research-check.mjs",
     "preview": "vite preview",
     "build:site": "tsc -b && vite build --config vite.site.config.ts",
     "preview:site": "vite preview --config vite.site.config.ts --port 4174 --strictPort --host 127.0.0.1",

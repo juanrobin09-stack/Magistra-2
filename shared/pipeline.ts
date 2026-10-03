@@ -106,6 +106,12 @@ function messagesTokens(messages: { content: string }[]): number {
 }
 
 /**
+ * Surcoût estimé du prompt quand des sources sont fournies : règles d'utilisation des sources et hiérarchie de leur
+ * fiabilité, en-tête du bloc, consigne de citation finale.
+ */
+export const SOURCES_PROMPT_MARGIN_TOKENS = 330;
+
+/**
  * Calcule la place disponible pour les sources, selon la taille de contexte du modèle.
  * Garantit : prompt (hors sources) + sources + sortie ≤ contextTokens.
  * `fits` est faux si la demande seule (texte collé, consignes…) ne laisse pas assez de place à la réponse.
@@ -113,8 +119,8 @@ function messagesTokens(messages: { content: string }[]): number {
 export function computeBudgets(provider: AIProvider, req: GenerationRequest, maxOutputTokens?: number) {
   const ctx = provider.contextTokens;
   const base = buildMessages({ ...req, documents: undefined }, []);
-  // Le prompt avec sources est un peu plus long (règles d'utilisation des sources, en-tête du bloc).
-  const baseTokens = messagesTokens(base) + 250;
+  // Le prompt avec sources est plus long (règles d'utilisation des sources, hiérarchie, en-tête du bloc).
+  const baseTokens = messagesTokens(base) + SOURCES_PROMPT_MARGIN_TOKENS;
   const wanted = Math.max(1, Math.min(maxOutputTokens ?? 6_000, Math.floor(ctx * 0.4)));
   const minOutputTokens = Math.min(MIN_OUTPUT_TOKENS, wanted);
   const output = Math.max(0, Math.min(wanted, ctx - baseTokens - SAFETY_TOKENS));
@@ -391,7 +397,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     } else if (wantsResearch && !deps.research) {
       yield { type: 'warning', code: 'RESEARCH_UNAVAILABLE', message: 'La recherche en ligne n’est pas disponible ici : génération à partir des autres sources.' };
     } else if (wantsResearch && deps.research) {
-      yield { type: 'status', stage: 'research', message: plan.academic && !plan.web ? 'Recherche de publications académiques…' : 'Recherche de sources en ligne…' };
+      yield { type: 'status', stage: 'research', message: plan.academic && !plan.web ? 'Recherche de publications et de sites officiels…' : 'Recherche de sources en ligne…' };
       const usedChars = fitted.passages.reduce((n, p) => n + passageCost(p), 0);
       let outcome: ResearchOutcome;
       try {

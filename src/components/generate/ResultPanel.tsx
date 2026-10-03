@@ -18,6 +18,7 @@ import type { GenerationRequest } from '@shared/types';
 import { toMagistraError, type ErrorCode } from '@shared/errors';
 import LoadingSkeleton from './LoadingSkeleton';
 import { FOCUS_RING } from './fieldUtils';
+import SourceReliability from './SourceReliability';
 import SpeedDetails from './SpeedDetails';
 
 interface ResultPanelProps {
@@ -106,6 +107,7 @@ export default function ResultPanel({ state, mode, store, onStop, onRestart, con
               )}
             </div>
           )}
+          {result && !example && <SourceReliability sources={result.sources} />}
         </div>
         {/* « Arrêter » et « Recommencer » occupent la même place : le second clic d'un double-clic
             (e.detail > 1) est ignoré pour ne pas déclencher aussitôt l'action inverse. */}

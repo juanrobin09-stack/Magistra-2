@@ -19,7 +19,7 @@ import type { AIProvider } from '../shared/ai/provider.js';
 import { MagistraError, toMagistraError } from '../shared/errors.js';
 import type { LocalPreferences } from '../shared/ipc.js';
 import { runGeneration, type NewGenerationRecord } from '../shared/pipeline.js';
-import type { FetchedPage, ResearchConfig, ResearchDeps } from '../shared/research/index.js';
+import { officialSitesPath, type FetchedPage, type ResearchConfig, type ResearchDeps } from '../shared/research/index.js';
 import type { AINotice, Capabilities, GenerationEvent, GenerationRequest, PrivacyInfo, ProviderInfo } from '../shared/types.js';
 import { validateGenerationRequest } from '../shared/validation.js';
 import type { LocalStore } from './localStore.js';
@@ -89,6 +89,8 @@ export function researchConfigFrom(prefs: LocalPreferences): ResearchConfig {
   return {
     academic: prefs.academicEnabled,
     wikipedia: prefs.wikipediaEnabled,
+    // Application Windows : toujours les sites vérifiés seulement (aucune option).
+    trustedOnly: true,
     timeoutMs: 8_000,
     ...(prefs.searxngUrl ? { searxngUrl: prefs.searxngUrl } : {}),
   };
@@ -250,7 +252,12 @@ export class GenerationManager {
     const [prefs, active] = await Promise.all([this.deps.store.getPreferences(), this.deps.describeActive()]);
     return {
       maxDocumentChars: maxDocumentCharsFor(active.contextTokens),
-      research: { academic: prefs.academicEnabled, web: !!prefs.searxngUrl, institutional: !!prefs.searxngUrl, wikipedia: prefs.wikipediaEnabled },
+      research: {
+        academic: prefs.academicEnabled,
+        web: !!prefs.searxngUrl,
+        institutional: officialSitesPath(researchConfigFrom(prefs), this.deps) !== null,
+        wikipedia: prefs.wikipediaEnabled,
+      },
       privacy: active.privacy,
       engineLabel: active.label,
       ready: active.ready,

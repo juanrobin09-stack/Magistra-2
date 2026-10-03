@@ -328,7 +328,21 @@ describe('ResearchModePicker', () => {
       <ResearchModePicker options={options} value="internet" onChange={noop} hints={researchHints('internet', 2, 'master_1', options)} />,
     );
     expect(html).toContain('Vos documents ne seront pas utilisés dans ce mode');
-    expect(html).toContain('Internet : Wikipédia et sources académiques seulement (aucun moteur web configuré)');
+    // Ce qui sera réellement consulté, et ce qui ne le sera pas, dit sous le mode.
+    expect(html.replace(/&#x27;/g, "'")).toContain('Consulté : publications HAL, Crossref et OpenAlex, Wikipédia (à recouper). Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.');
+  });
+});
+
+describe('ResearchModePicker — sites officiels vérifiés', () => {
+  it('sans moteur web mais avec Wikipédia : annonce les sites officiels cités par Wikipédia, sans avertissement', () => {
+    const caps: Capabilities = { ...CAPS, research: { academic: true, web: false, institutional: true, wikipedia: true } };
+    const options = describeResearchOptions(caps, 'local', '4eme');
+    const html = renderToStaticMarkup(
+      <ResearchModePicker options={options} value="internet" onChange={noop} hints={researchHints('internet', 0, '4eme', options)} />,
+    );
+    expect(html).toContain('Consulté : sites officiels vérifiés cités par Wikipédia, Wikipédia (à recouper).');
+    expect(html).not.toContain('non consultés');
+    expect(html).toContain('Sites officiels vérifiés (UNESCO, Éduscol, ministères…) et Wikipédia, sans vos documents.');
   });
 });
 

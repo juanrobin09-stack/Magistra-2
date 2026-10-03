@@ -462,14 +462,14 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
         <Checkbox
           checked={prefs.academicEnabled}
           onChange={v => void update({ academicEnabled: v }, 'academic')}
-          label="Recherche académique (HAL, Crossref)"
+          label="Recherche académique (HAL, Crossref, OpenAlex)"
           hint="Publications scientifiques en accès ouvert, citées avec leurs références."
         />
         <Checkbox
           checked={prefs.wikipediaEnabled}
           onChange={v => void update({ wikipediaEnabled: v }, 'wikipedia')}
           label="Wikipédia"
-          hint="Articles de l'encyclopédie en français, pour compléter les sources."
+          hint="Articles de l'encyclopédie en français, signalés « à recouper », et les sites officiels vérifiés (UNESCO, Éduscol, ministères…) que leurs références citent."
         />
         {(saved === 'academic' || saved === 'wikipedia') && <SuccessNote>Enregistré.</SuccessNote>}
       </div>
@@ -498,10 +498,11 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
       </div>
 
       <form onSubmit={e => void submitSearx(e)} className="space-y-2 border-t border-white/5 pt-4">
-        <label htmlFor={searxId} className="block text-sm font-semibold text-white">Recherche web (facultatif)</label>
+        <label htmlFor={searxId} className="block text-sm font-semibold text-white">Moteur de recherche web (facultatif)</label>
         <p className="text-xs text-mg-200">
-          Adresse d'un moteur de recherche SearXNG. Nécessaire pour la recherche web et les sources institutionnelles
-          (Éduscol, Bulletin officiel). Laissez vide si vous n'en avez pas.
+          Adresse d'un moteur de recherche SearXNG. Il permet d'interroger directement tous les sites officiels vérifiés
+          (UNESCO, Éduscol, ministères…) ; sans lui, Magistra consulte ceux que Wikipédia cite. Aucun autre site n'est
+          interrogé. Laissez vide si vous n'en avez pas.
         </p>
         <input
           id={searxId}
@@ -528,9 +529,9 @@ function WebResearchSettings({ caps }: { caps: CapabilitiesState }) {
   // Magistra locale pas encore prête : ses sources ne sont pas connues (jamais « non disponible » à tort).
   const r = c && !(c.route === 'local-connector' && !c.ready) ? c.research : undefined;
   const rows: { label: string; ok: boolean | undefined }[] = [
-    { label: 'Sources académiques (HAL, Crossref)', ok: r?.academic },
-    { label: 'Recherche web', ok: r?.web },
-    { label: 'Sources institutionnelles (Éduscol, Bulletin officiel)', ok: r?.institutional },
+    { label: 'Sources académiques (HAL, Crossref, OpenAlex)', ok: r?.academic },
+    { label: 'Sites officiels vérifiés (UNESCO, Éduscol, ministères…)', ok: r?.institutional },
+    { label: 'Moteur de recherche web', ok: r?.web },
     { label: 'Wikipédia', ok: r?.wikipedia },
   ];
   return (

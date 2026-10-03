@@ -164,6 +164,20 @@ describe('Contenu', () => {
     expect(text).not.toContain('Supabase');
   });
 
+  it('recherche en ligne : OpenAlex et « les sites officiels vérifiés cités par Wikipédia » figurent parmi les services contactés avec le sujet', async () => {
+    for (const mode of ['web', 'local'] as const) {
+      setRuntimeConfig(mode === 'web' ? { mode: 'web', clerkPublishableKey: 'pk_test_x', providerInfo: PROVIDER } : { mode: 'local' });
+      const { container } = await mountPage('confidentialite');
+      const text = (container.textContent ?? '').replace(/\s+/g, ' ');
+      expect(text, mode).toMatch(/sujet et les mots-clés[^.]*Wikipédia, HAL, Crossref, OpenAlex, les sites officiels vérifiés cités par Wikipédia/);
+      expect(text, mode).toMatch(/moteur de recherche web/);
+      // Plus de « web » en général : seuls ces services sont nommés.
+      expect(text, mode).not.toMatch(/sites institutionnels ou web/);
+      expect(text, mode).toMatch(/jamais vos documents/);
+      cleanup();
+    }
+  });
+
   it('CGU : relecture des contenus d\'IA et pas de données d\'élèves', async () => {
     const { container } = await mountPage('cgu');
     expect(container.textContent).toContain('relit, vérifie');

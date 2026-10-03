@@ -3,7 +3,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MockProvider } from '../../shared/ai/mock.js';
 import type { GenerationEvent, HistoryPage } from '../../shared/types.js';
+import { loadConfig } from '../../server/config.js';
 import { MemoryStore } from '../../server/store.js';
+import { jsonResponse, mockFetch } from '../shared/helpers.js';
 import { call, readNdjson, startApi, testDeps, validRequest, waitFor, type TestServer } from './helpers.js';
 
 let server: TestServer | undefined;
@@ -45,6 +47,29 @@ describe('POST /api/generate', () => {
     expect(done.model).toBe('mock-model');
     expect(store.ownerOf(done.id!)).toBe('user_A');
     expect(provider.calls[0].maxTokens).toBeGreaterThan(0);
+  });
+
+  it('recherche en ligne : le serveur ne retient que les sites vérifiés (RESEARCH_TRUSTED_ONLY), le web général seulement sur décision de l’administrateur', async () => {
+    const searx = mockFetch(url => {
+      const q = new URL(url).searchParams.get('q') ?? '';
+      const official = { url: 'https://www.unesco.org/fr/articles/graphes', title: 'Les graphes', content: 'L’UNESCO publie des ressources sur l’enseignement des graphes et des mathématiques discrètes à l’université.' };
+      const blog = { url: 'https://blog.example.org/graphes', title: 'Mon blog sur les graphes', content: 'Un blog d’étudiant explique les graphes orientés, leurs parcours et leurs applications aux réseaux.' };
+      return jsonResponse({ results: q.includes('site:') ? (q.includes('site:education.gouv.fr') ? [official, blog] : []) : [blog] });
+    });
+    const sourcesFor = async (env: Record<string, string>) => {
+      const research = { config: loadConfig({ SEARXNG_URL: 'https://searx.example.fr', RESEARCH_ACADEMIC: 'false', RESEARCH_WIKIPEDIA: 'false', ...env }).research, deps: { fetch: searx } };
+      server = await startApi(testDeps({ overrides: { research } }));
+      const res = await call(server.url, '/api/generate', 'token-A', { method: 'POST', body: JSON.stringify({ ...validRequest, researchMode: 'internet' }) });
+      const events = await readNdjson(res);
+      await server.close();
+      server = undefined;
+      return (events.find(e => e.type === 'sources') as Extract<GenerationEvent, { type: 'sources' }>).sources.map(s => [s.kind, s.url]);
+    };
+    expect(await sourcesFor({})).toEqual([['institutional', 'https://www.unesco.org/fr/articles/graphes']]);
+    expect(await sourcesFor({ RESEARCH_TRUSTED_ONLY: 'false' })).toEqual([
+      ['institutional', 'https://www.unesco.org/fr/articles/graphes'],
+      ['web', 'https://blog.example.org/graphes'],
+    ]);
   });
 
   it('interrompt le fournisseur d’IA quand le client ferme la connexion', async () => {

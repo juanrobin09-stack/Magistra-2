@@ -9,6 +9,7 @@
 import type { ServerStatus } from '../shared/apiContract.js';
 import { isMagistraError, MagistraError, toMagistraError, type ErrorCode } from '../shared/errors.js';
 import { runGeneration } from '../shared/pipeline.js';
+import { officialSitesPath } from '../shared/research/index.js';
 import type { GenerationEvent, TeacherProfile } from '../shared/types.js';
 import { validateGenerationRecordDraft, validateGenerationRequest } from '../shared/validation.js';
 import { authenticate } from './auth.js';
@@ -212,7 +213,7 @@ async function status(deps: ServerDeps): Promise<ApiResult> {
     research: {
       academic: research.academic,
       web: Boolean(research.searxngUrl),
-      institutional: Boolean(research.searxngUrl),
+      institutional: officialSitesPath(research, deps.research.deps) !== null,
       wikipedia: research.wikipedia,
     },
     maxDocumentChars,

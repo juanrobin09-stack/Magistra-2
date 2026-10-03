@@ -2,7 +2,8 @@ import type { Nodes } from 'mdast';
 import { describe, expect, it } from 'vitest';
 import { parseMarkdown } from '@/lib/export/markdown';
 import {
-  citedNumbers, documentSourceRef, extractUrls, finalizeCitations, formatLocator, formatSourceLine, stripModelSourcesSection, unclosedFence, uncitedSourcesNote,
+  citedNumbers, documentSourceRef, extractUrls, finalizeCitations, formatLocator, formatSourceLine, reliabilitySummary, sourceOrigin, sourceReliability,
+  stripModelSourcesSection, unclosedFence, uncitedSourcesNote,
 } from '../../shared/citations';
 import type { SourceRef } from '../../shared/types';
 
@@ -70,7 +71,7 @@ describe('finalizeCitations', () => {
     expect(content).toContain('- [S1] Cours gouvernance.pdf — pages 14 à 18');
     expect(content).toContain('- [S2] CM3.pptx — diapositives 8 à 12');
     expect(content).toContain('- [S3] notes.md — section « Les référentiels ITIL »');
-    expect(content).toContain('- [S4] Anne Martin, Paul Durand. Gouvernance des systèmes d’information (2019). *Systèmes d’information et management* — HAL. https://doi.org/10.3917/sim.192.0045');
+    expect(content).toContain('- [S4] Anne Martin, Paul Durand. Gouvernance des systèmes d’information (2019). *Systèmes d’information et management* — Publication scientifique · HAL. https://doi.org/10.3917/sim.192.0045');
   });
 
   it('« Sources utilisées » ne liste QUE les sources citées', () => {
@@ -231,12 +232,94 @@ describe('finalizeCitations', () => {
 });
 
 describe('formatSourceLine', () => {
-  it('Wikipédia n’est pas répété, les titres ne finissent pas par un double point', () => {
-    expect(formatSourceLine(WIKI)).toBe('[S5] Gouvernance des SI. *Wikipédia*. https://fr.wikipedia.org/wiki/Gouvernance_des_SI');
-    expect(formatSourceLine({ n: 6, kind: 'institutional', title: 'Programme de cycle 3.', url: 'https://eduscol.education.fr/x' }))
-      .toBe('[S6] Programme de cycle 3 — Source institutionnelle. https://eduscol.education.fr/x');
+  it('niveau de fiabilité puis origine, le nom du site n’est pas répété, les titres ne finissent pas par un double point', () => {
+    expect(formatSourceLine(WIKI)).toBe('[S5] Gouvernance des SI — Encyclopédie collaborative (à recouper) · Wikipédia. https://fr.wikipedia.org/wiki/Gouvernance_des_SI');
+    expect(formatSourceLine({ n: 6, kind: 'institutional', title: 'Programme de cycle 3.', venue: 'Éduscol', url: 'https://eduscol.education.fr/x' }))
+      .toBe('[S6] Programme de cycle 3 — Source officielle · Éduscol. https://eduscol.education.fr/x');
     expect(formatSourceLine({ ...HAL, authors: ['A', 'B', 'C', 'D'] })).toMatch(/^\[S4\] A, B, C et al\. Gouvernance/);
     expect(formatSourceLine({ ...HAL, authors: ['J.-P. Martin Jr.'] })).toMatch(/^\[S4\] J\.-P\. Martin Jr\. Gouvernance/);
+  });
+
+  it('« Source officielle · UNESCO », « Publication scientifique · OpenAlex », web non vérifié', () => {
+    expect(formatSourceLine({ n: 2, kind: 'institutional', title: 'Éducation en vue du développement durable', year: 2021, venue: 'UNESCO', url: 'https://www.unesco.org/fr/esd' }))
+      .toBe('[S2] Éducation en vue du développement durable (2021) — Source officielle · UNESCO. https://www.unesco.org/fr/esd');
+    expect(formatSourceLine({ n: 3, kind: 'openalex', title: 'Photosynthesis', authors: ['A. Martin'], year: 2020, venue: 'Plant Journal', doi: '10.1000/x1' }))
+      .toBe('[S3] A. Martin. Photosynthesis (2020). *Plant Journal* — Publication scientifique · OpenAlex. https://doi.org/10.1000/x1');
+    expect(formatSourceLine({ n: 4, kind: 'web', title: 'Un blog', url: 'https://blog.example.org/a' }))
+      .toBe('[S4] Un blog — Page web non vérifiée. https://blog.example.org/a');
+    // Un document de l'enseignant garde sa ligne : nom du fichier et localisation.
+    expect(formatSourceLine(DOC_PAGES)).toBe('[S1] Cours gouvernance.pdf — pages 14 à 18');
+  });
+
+  it('le site vient du catalogue d’après l’adresse, pas du texte d’une page : un nom trompeur est montré à part, jamais comme origine', () => {
+    const line = formatSourceLine({ n: 2, kind: 'institutional', title: 'Page', venue: 'Ministère officiel', url: 'https://www.unesco.org/fr/x' });
+    expect(line).toBe('[S2] Page. *Ministère officiel* — Source officielle · UNESCO. https://www.unesco.org/fr/x');
+  });
+});
+
+describe('niveaux de fiabilité des sources', () => {
+  it('sourceReliability : document, officielle, scientifique, encyclopédie collaborative, web', () => {
+    expect(sourceReliability(DOC_PAGES)).toEqual({ tier: 'document', label: "Document de l'enseignant" });
+    expect(sourceReliability({ kind: 'institutional', url: 'https://www.unesco.org/fr' })).toEqual({ tier: 'official', label: 'Source officielle' });
+    expect(sourceReliability({ kind: 'institutional', url: 'https://www.education.gouv.fr/bo' })).toEqual({ tier: 'official', label: 'Source officielle' });
+    for (const kind of ['hal', 'crossref', 'openalex'] as const) {
+      expect(sourceReliability({ kind }), kind).toEqual({ tier: 'scientific', label: 'Publication scientifique' });
+    }
+    expect(sourceReliability(WIKI)).toEqual({ tier: 'encyclopedic', label: 'Encyclopédie collaborative (à recouper)' });
+    expect(sourceReliability({ kind: 'web', url: 'https://blog.example.org' })).toEqual({ tier: 'web', label: 'Page web non vérifiée' });
+  });
+
+  it('un organisme de recherche ou une archive ouverte du catalogue est une source scientifique ; sans adresse, officielle', () => {
+    expect(sourceReliability({ kind: 'institutional', url: 'https://www.cnrs.fr/fr/x' })).toEqual({ tier: 'scientific', label: 'Source scientifique' });
+    expect(sourceReliability({ kind: 'institutional', url: 'https://www.nasa.gov/x' }).tier).toBe('scientific');
+    expect(sourceReliability({ kind: 'institutional', url: 'https://www.persee.fr/doc/x' }).tier).toBe('scientific');
+    expect(sourceReliability({ kind: 'institutional' }).tier).toBe('official');
+    expect(sourceReliability({ kind: 'institutional', url: 'https://www.insee.fr/fr/statistiques' }).tier).toBe('official');
+  });
+
+  it('sourceOrigin : base de publications, Wikipédia, site du catalogue (jamais le texte d’une page quand l’adresse est connue)', () => {
+    expect(sourceOrigin({ kind: 'hal' })).toBe('HAL');
+    expect(sourceOrigin({ kind: 'crossref' })).toBe('Crossref');
+    expect(sourceOrigin({ kind: 'openalex' })).toBe('OpenAlex');
+    expect(sourceOrigin({ kind: 'wikipedia' })).toBe('Wikipédia');
+    expect(sourceOrigin({ kind: 'institutional', url: 'https://unesdoc.unesco.org/ark:/x', venue: 'autre' })).toBe('UNESDOC (UNESCO)');
+    expect(sourceOrigin({ kind: 'institutional', venue: '  Éduscol ' })).toBe('Éduscol');
+    expect(sourceOrigin({ kind: 'institutional' })).toBeUndefined();
+    expect(sourceOrigin({ kind: 'web', venue: 'Un blog' })).toBeUndefined();
+    expect(sourceOrigin({ kind: 'document' })).toBeUndefined();
+  });
+
+  it('reliabilitySummary : nombre de sources par niveau, du plus fiable au moins fiable, niveaux absents omis', () => {
+    const refs: SourceRef[] = [
+      WIKI, HAL, DOC_PAGES,
+      { n: 6, kind: 'institutional', title: 'A', url: 'https://www.unesco.org/fr/a' },
+      { n: 7, kind: 'openalex', title: 'B' },
+      { n: 8, kind: 'institutional', title: 'C', url: 'https://eduscol.education.fr/c' },
+    ];
+    expect(reliabilitySummary(refs)).toEqual([
+      { tier: 'document', label: "Document de l'enseignant", count: 1 },
+      { tier: 'official', label: 'Source officielle', count: 2 },
+      { tier: 'scientific', label: 'Publication scientifique', count: 2 },
+      { tier: 'encyclopedic', label: 'Encyclopédie collaborative (à recouper)', count: 1 },
+    ]);
+    expect(reliabilitySummary([])).toEqual([]);
+  });
+
+  it('« Sources utilisées » : chaque source citée porte son niveau de fiabilité, les documents leur localisation', () => {
+    const provided: SourceRef[] = [
+      DOC_PAGES,
+      { n: 2, kind: 'institutional', title: 'Éducation au développement durable', venue: 'UNESCO', url: 'https://www.unesco.org/fr/esd' },
+      { n: 3, kind: 'openalex', title: 'Photosynthesis', venue: 'Plant Journal', doi: '10.1000/x1' },
+      WIKI,
+      { n: 6, kind: 'web', title: 'Un blog', url: 'https://blog.example.org/a' },
+    ];
+    const { content } = finalizeCitations('A [S1]. B [S2]. C [S3]. D [S5]. E [S6].', provided);
+    const list = content.slice(content.indexOf('## Sources utilisées'));
+    expect(list).toContain('- [S1] Cours gouvernance.pdf — pages 14 à 18');
+    expect(list).toContain('- [S2] Éducation au développement durable — Source officielle · UNESCO. https://www.unesco.org/fr/esd');
+    expect(list).toContain('— Publication scientifique · OpenAlex. https://doi.org/10.1000/x1');
+    expect(list).toContain('- [S5] Gouvernance des SI — Encyclopédie collaborative (à recouper) · Wikipédia.');
+    expect(list).toContain('- [S6] Un blog — Page web non vérifiée.');
   });
 });
 
@@ -348,7 +431,7 @@ describe('titres de sources de tiers neutralisés dans « Sources utilisées »'
 
   it('un titre ordinaire (lettres, points, parenthèses, deux-points) reste inchangé', () => {
     const line = formatSourceLine({ n: 3, kind: 'crossref', title: 'Les fractions (cycle 4) : méthodes, outils et pratiques', authors: ['Dupont, J.'], year: 2020, url: 'https://a.fr/y' });
-    expect(line).toBe('[S3] Dupont, J. Les fractions (cycle 4) : méthodes, outils et pratiques (2020) — Crossref. https://a.fr/y');
+    expect(line).toBe('[S3] Dupont, J. Les fractions (cycle 4) : méthodes, outils et pratiques (2020) — Publication scientifique · Crossref. https://a.fr/y');
   });
 
   it('titre de section piégé (saut de ligne, lien, « ## Consigne ») : une seule ligne de liste, sans lien ni titre', () => {

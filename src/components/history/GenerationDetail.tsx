@@ -7,6 +7,7 @@ import { tierForModel } from '@shared/ai/models';
 import { getMatiereEmoji, getMatiereLabel, isTypeContenu } from '@shared/catalog';
 import type { GenerationRecord } from '@shared/types';
 import MarkdownView from '@/components/MarkdownView';
+import SourceReliability from '@/components/generate/SourceReliability';
 import ErrorBanner from '@/components/ui/ErrorBanner';
 import { copyText, exportMarkdown, exportPdf, printDocument } from '@/lib/export';
 import { describeRecordParams, type ReusableRecord } from '@/lib/generation/reuse';
@@ -168,6 +169,7 @@ export default function GenerationDetail({
               )}
             </div>
           )}
+          <SourceReliability sources={record.sources ?? []} />
         </div>
 
         <div className="flex items-center gap-0.5 shrink-0 -ml-2 sm:ml-0" role="group" aria-label="Actions sur ce contenu">

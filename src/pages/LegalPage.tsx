@@ -179,8 +179,9 @@ function PrivacyWeb({ info, provider }: { info: LegalInfo; provider: ProviderInf
         </li>
         <li>
           <strong>Recherche en ligne</strong> (si vous l'activez) : seuls le sujet et les mots-clés de la demande sont
-          envoyés aux sources interrogées (Wikipédia, HAL, Crossref, sites institutionnels ou web), jamais vos documents
-          ni votre profil.
+          envoyés aux sources interrogées (Wikipédia, HAL, Crossref, OpenAlex, les sites officiels vérifiés cités par
+          Wikipédia et, si l'administrateur en a configuré un, un moteur de recherche web), jamais vos documents ni votre
+          profil.
         </li>
         <li>
           <strong>Journal technique</strong> : identifiant du compte et horaire des demandes de génération, pour limiter
@@ -299,7 +300,8 @@ function PrivacyLocal({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
       <ul>
         <li>
           la <strong>recherche en ligne</strong>, si vous l'activez : le sujet et les mots-clés de la demande sont envoyés
-          aux sources interrogées (Wikipédia, HAL, Crossref, sites institutionnels ou web), jamais vos documents ;
+          aux sources interrogées (Wikipédia, HAL, Crossref, OpenAlex, les sites officiels vérifiés cités par Wikipédia et,
+          si vous en avez indiqué un, un moteur de recherche web), jamais vos documents ;
         </li>
         {mode === 'local' && (
           <>

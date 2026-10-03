@@ -73,7 +73,7 @@ const MESSAGES: Record<ErrorCode, string> = {
   DOCUMENT_PROTECTED: 'Ce document est protégé par un mot de passe.',
   RESEARCH_UNAVAILABLE: 'Recherche Internet indisponible : génération à partir des autres sources.',
   ACADEMIC_UNAVAILABLE: 'Recherche académique indisponible : génération à partir des autres sources.',
-  INSTITUTIONAL_UNAVAILABLE: 'Sources institutionnelles (Éduscol, BO) indisponibles : aucun moteur de recherche web configuré.',
+  INSTITUTIONAL_UNAVAILABLE: 'Sites officiels (Éduscol, UNESCO, ministères…) non consultés. Ajoutez vos documents officiels (programmes, textes) pour les utiliser.',
   INVALID_REQUEST: 'Demande invalide.',
   UNAUTHENTICATED: 'Session expirée : reconnectez-vous.',
   FORBIDDEN: 'Accès refusé.',

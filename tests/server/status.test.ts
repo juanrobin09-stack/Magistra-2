@@ -71,6 +71,21 @@ describe('configuration', () => {
     expect(cfg.problems.join(' ')).toContain('AI_BASE_URL');
   });
 
+  it('RESEARCH_TRUSTED_ONLY : sites vérifiés seulement par défaut, le web général seulement sur décision de l’administrateur', () => {
+    expect(loadConfig({}).research.trustedOnly).toBe(true);
+    expect(loadConfig({ RESEARCH_TRUSTED_ONLY: 'true' }).research.trustedOnly).toBe(true);
+    for (const value of ['false', 'FALSE', '0', 'non', 'off']) {
+      expect(loadConfig({ RESEARCH_TRUSTED_ONLY: value }).research.trustedOnly, value).toBe(false);
+    }
+    expect(loadConfig({ RESEARCH_TRUSTED_ONLY: 'false' }).problems.join(' ')).not.toContain('RESEARCH_TRUSTED_ONLY');
+  });
+
+  it('RESEARCH_TRUSTED_ONLY invalide : problème journalisé comme les autres variables, restriction conservée', () => {
+    const cfg = loadConfig({ RESEARCH_TRUSTED_ONLY: 'peut-être' });
+    expect(cfg.research.trustedOnly).toBe(true);
+    expect(cfg.problems).toContain('RESEARCH_TRUSTED_ONLY doit valoir « true » ou « false » : valeur par défaut (true) utilisée.');
+  });
+
   it('taille des extraits dérivée du contexte, bornée à 120 000 caractères', () => {
     expect(maxDocumentCharsFor(32_768)).toBe(Math.floor((32_768 * 0.55 - 3_000) * 3.2));
     expect(maxDocumentCharsFor(1_000_000)).toBe(120_000);
@@ -108,6 +123,33 @@ describe('GET /api/status', () => {
       research: { academic: true, web: true, institutional: true, wikipedia: true },
       maxDocumentChars: maxDocumentCharsFor(32_768),
     });
+  });
+
+  it('sites officiels vérifiés : disponibles par SearXNG, ou sans lui par les références de Wikipédia (page récupérée par le serveur)', async () => {
+    const research = async (env: Record<string, string>) => {
+      const deps = createServerDeps(
+        { AI_BASE_URL: 'https://ia.univ.fr/v1', AI_MODEL: 'mistral-small', ...env, ...SECRETS },
+        { verifier: fakeVerifier, store: new MemoryStore(), providerFactory: () => new MockProvider({ model: 'mistral-small' }), log: silentLog },
+      );
+      server = await startApi(deps);
+      const status = await (await call(server.url, '/api/status', 'token-A')).json() as ServerStatus;
+      await server.close();
+      server = undefined;
+      return status.research;
+    };
+    // Cas normal d'un serveur sans SearXNG : Wikipédia actif (défaut) et récupération de pages.
+    expect(await research({})).toEqual({ academic: true, web: false, institutional: true, wikipedia: true });
+    // Wikipédia désactivé, aucun moteur : plus aucun chemin vers les sites officiels.
+    expect(await research({ RESEARCH_WIKIPEDIA: 'false' })).toEqual({ academic: true, web: false, institutional: false, wikipedia: false });
+    // SearXNG suffit, même sans Wikipédia.
+    expect(await research({ RESEARCH_WIKIPEDIA: 'false', SEARXNG_URL: 'https://searx.univ.fr' })).toEqual({ academic: true, web: true, institutional: true, wikipedia: false });
+  });
+
+  it('sans récupération de pages (hébergement qui n’en fournit pas) et sans SearXNG : sites officiels non disponibles', async () => {
+    const research = { config: { academic: true, wikipedia: true, timeoutMs: 1_000 }, deps: { fetch: () => Promise.reject(new Error('réseau interdit')) } };
+    server = await startApi(testDeps({ overrides: { research } }));
+    const status = await (await call(server.url, '/api/status', 'token-A')).json() as ServerStatus;
+    expect(status.research).toEqual({ academic: true, web: false, institutional: false, wikipedia: true });
   });
 
   it('serveur d’IA non configuré : ai.ok = false avec un message clair', async () => {

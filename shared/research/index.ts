@@ -5,11 +5,19 @@ import { rankChunks, splitText } from '../documents/retrieve.js';
 import type { LevelGroup } from '../levels.js';
 import type { ResearchMode } from '../types.js';
 import {
-  INSTITUTIONAL_SITES, isInstitutionalUrl, NO_ABSTRACT_TEXT, searchCrossref, searchHal, searchSearxng, searchWikipedia, stripTags,
+  NO_ABSTRACT_TEXT, readWikipediaPages, searchCrossref, searchHal, searchOpenAlex, searchSearxng, searchWikipediaPages, stripTags,
+  wikipediaExternalLinks, type WikipediaPage,
 } from './providers.js';
-import type { ResearchConfig, ResearchDeps, ResearchOutcome, ResearchSource, ResearchWarning } from './types.js';
+import { isTrustedHttpsUrl, selectTrustedLinks, trustedPriority, trustedSearchGroups, trustedSiteFor } from './trusted.js';
+import type { FetchedPage, ResearchConfig, ResearchDeps, ResearchOutcome, ResearchSource, ResearchWarning } from './types.js';
 
 export * from './types.js';
+
+/** Aucun chemin vers les sites vérifiés (ni moteur de recherche web, ni Wikipédia avec récupération de pages). */
+export const OFFICIAL_UNAVAILABLE_MESSAGE =
+  'Sites officiels (Éduscol, UNESCO, ministères…) non consultés. Ajoutez vos documents officiels (programmes, textes) pour les utiliser.';
+/** Un chemin a répondu, mais aucune page des sites vérifiés ne correspond au sujet. */
+export const NO_OFFICIAL_FOUND_MESSAGE = 'Aucune source officielle trouvée pour ce sujet : à vérifier.';
 
 const UNIVERSITY: LevelGroup[] = ['bts_but', 'cpge', 'licence', 'master', 'doctorat'];
 
@@ -32,14 +40,6 @@ export interface ResearchPlan {
   wikipedia: boolean;
 }
 
-/**
- * Sources consultées selon le mode et le niveau :
- * - « Mes documents » : aucune recherche (hors ligne) ;
- * - « Sources académiques » : HAL puis Crossref ;
- * - « Internet » / « Documents + Internet » :
- *   - supérieur : HAL > Crossref > web (SearXNG) > Wikipédia ;
- *   - scolaire : sources institutionnelles (Éduscol, education.gouv.fr via SearXNG) > web > Wikipédia.
- */
 /**
  * Récupération d'une page, bornée dans le temps quoi qu'il arrive (défense en profondeur :
  * une page lente ou un flux bloqué ne peut jamais suspendre la génération).
@@ -77,14 +77,34 @@ function boundedFetchPage(
   });
 }
 
+/**
+ * Sources consultées selon le mode et le niveau :
+ * - « Mes documents » : aucune recherche (hors ligne) ;
+ * - « Sources académiques » : HAL, Crossref et OpenAlex, puis les sites vérifiés ;
+ * - « Internet » / « Documents + Internet » :
+ *   - supérieur : HAL, Crossref et OpenAlex > sites vérifiés > Wikipédia ;
+ *   - scolaire : sites vérifiés (Éduscol, UNESCO, ministères…) > Wikipédia.
+ * Les sites vérifiés (`institutional`) sont interrogés par SearXNG (requêtes « site: ») ou, sans lui, par les références
+ * de Wikipédia. `web` (web général) n'est consulté que si l'administrateur a levé la restriction `trustedOnly`.
+ */
 export function planResearch(mode: ResearchMode, group: LevelGroup): ResearchPlan {
   const university = UNIVERSITY.includes(group);
   if (mode === 'documents') return { academic: false, institutional: false, web: false, wikipedia: false };
-  if (mode === 'academic') return { academic: true, institutional: false, web: false, wikipedia: false };
+  if (mode === 'academic') return { academic: true, institutional: true, web: false, wikipedia: false };
   // Internet (avec ou sans documents)
-  return university
-    ? { academic: true, institutional: false, web: true, wikipedia: true }
-    : { academic: false, institutional: true, web: true, wikipedia: true };
+  return { academic: university, institutional: true, web: true, wikipedia: true };
+}
+
+/**
+ * Chemin vers les sites vérifiés : SearXNG (requêtes « site: » sur tout le catalogue) ; à défaut, les références de
+ * Wikipédia, dont les pages sont récupérées avec `fetchPage` (absente dans le navigateur) ; sinon aucun.
+ */
+export function officialSitesPath(
+  config: Pick<ResearchConfig, 'searxngUrl' | 'wikipedia'>,
+  deps: Pick<ResearchDeps, 'fetchPage'>,
+): 'searxng' | 'wikipedia' | null {
+  if (config.searxngUrl) return 'searxng';
+  return config.wikipedia && deps.fetchPage ? 'wikipedia' : null;
 }
 
 /** Ne garde que les passages d'une source longue les plus pertinents pour la question. */
@@ -116,6 +136,17 @@ function normalizeTitle(title: string): string {
 
 function normalizeUrl(url: string): string {
   return url.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[#?].*$/, '').replace(/\/+$/, '');
+}
+
+/** Rang de lecture d'une adresse : éducation, organisations internationales, recherche, reste du catalogue ; 5 hors catalogue. */
+function trustRank(url: string): number {
+  const site = trustedSiteFor(url);
+  return site ? trustedPriority(site) : 5;
+}
+
+/** Redirection hors du catalogue : sous la restriction aux sites vérifiés, l'adresse finale de la page doit en faire partie (https). */
+function leftCatalogue(page: FetchedPage, trustedOnly: boolean): boolean {
+  return trustedOnly && !isTrustedHttpsUrl(page.url);
 }
 
 /** Dédoublonne par DOI, URL ou titre : la première occurrence (la plus prioritaire) est conservée. */
@@ -166,91 +197,126 @@ export async function runResearch(
     }
   };
 
-  // 1. Académique : HAL puis Crossref (priorité université).
+  // Sous la restriction aux sites vérifiés (défaut), rien d'autre que le catalogue n'est retenu.
+  const trustedOnly = config.trustedOnly !== false;
+
+  // 1. Académique : HAL, Crossref puis OpenAlex.
   const academicTask = plan.academic && config.academic
     ? Promise.allSettled([
-        track(searchHal(topic, deps, { rows: 4, timeoutMs: t, signal: options.signal })),
-        track(searchCrossref(q, deps, { rows: 4, timeoutMs: t, mailto: config.crossrefMailto, signal: options.signal })),
-      ]).then(([hal, crossref]) => {
-        const ok = [hal, crossref].filter((r): r is PromiseFulfilledResult<ResearchSource[]> => r.status === 'fulfilled');
-        if (ok.length === 0) warnings.push({ code: 'ACADEMIC_UNAVAILABLE', message: 'Recherche académique indisponible (HAL et Crossref injoignables).' });
-        const halSources = hal.status === 'fulfilled' ? withAbstractsFirst(hal.value) : [];
-        const crossrefSources = crossref.status === 'fulfilled' ? withAbstractsFirst(crossref.value) : [];
-        return [...halSources, ...crossrefSources];
+        track(searchHal(topic, deps, { rows: 3, timeoutMs: t, signal: options.signal })),
+        track(searchCrossref(q, deps, { rows: 3, timeoutMs: t, mailto: config.crossrefMailto, signal: options.signal })),
+        track(searchOpenAlex(topic, deps, { rows: 3, timeoutMs: t, mailto: config.crossrefMailto, signal: options.signal })),
+      ]).then(results => {
+        if (results.every(r => r.status === 'rejected')) {
+          warnings.push({ code: 'ACADEMIC_UNAVAILABLE', message: 'Recherche académique indisponible (HAL, Crossref et OpenAlex injoignables).' });
+        }
+        return results.flatMap(r => (r.status === 'fulfilled' ? withAbstractsFirst(r.value) : []));
       })
     : Promise.resolve<ResearchSource[]>([]);
   if (plan.academic && !config.academic) {
     warnings.push({ code: 'ACADEMIC_UNAVAILABLE', message: 'Recherche académique désactivée dans les réglages.' });
   }
 
-  // 2. Sources institutionnelles (scolaire) et web général, via SearXNG si configuré.
+  // 2. Sites vérifiés : par SearXNG (requêtes « site: » sur tout le catalogue) ou, sans lui, par les références de Wikipédia.
+  const officialPath = officialSitesPath(config, deps);
+  const viaSearx = officialPath === 'searxng';
+  const viaWikipedia = officialPath === 'wikipedia';
+  if (plan.institutional && !officialPath) {
+    warnings.push({ code: 'INSTITUTIONAL_UNAVAILABLE', message: OFFICIAL_UNAVAILABLE_MESSAGE });
+  }
+  // Vrai dès qu'un chemin vers les sites vérifiés a répondu : « aucune source officielle » n'a de sens qu'alors.
+  let officialResponded = false;
+
   let webTask: Promise<ResearchSource[]> = Promise.resolve([]);
-  if (plan.institutional || plan.web) {
-    if (!config.searxngUrl) {
-      if (plan.institutional) {
-        warnings.push({ code: 'INSTITUTIONAL_UNAVAILABLE', message: 'Sources institutionnelles (Éduscol, BO) indisponibles : aucun serveur de recherche web (SearXNG) configuré.' });
+  if (viaSearx && (plan.institutional || (plan.web && !trustedOnly))) {
+    const base = config.searxngUrl!;
+    webTask = (async (): Promise<ResearchSource[]> => {
+      const queries = [
+        ...(plan.institutional ? trustedSearchGroups().map(group => `${q} (${group.map(domain => `site:${domain}`).join(' OR ')})`) : []),
+        // Le web général n'est jamais interrogé sous la restriction aux sites vérifiés.
+        ...(plan.web && !trustedOnly ? [q] : []),
+      ];
+      const settled = await Promise.allSettled(queries.map(qq => track(searchSearxng(base, qq, deps, { max: 4, timeoutMs: t, signal: options.signal }))));
+      if (settled.every(r => r.status === 'rejected')) {
+        warnings.push({ code: 'RESEARCH_UNAVAILABLE', message: 'Recherche Internet indisponible (serveur SearXNG injoignable).' });
+        return [];
       }
-    } else {
-      const base = config.searxngUrl;
-      webTask = (async (): Promise<ResearchSource[]> => {
-        const queries = [
-          ...(plan.institutional ? INSTITUTIONAL_SITES.map(site => `${q} site:${site}`) : []),
-          ...(plan.web ? [q] : []),
-        ];
-        const settled = await Promise.allSettled(queries.map(qq => track(searchSearxng(base, qq, deps, { max: 4, timeoutMs: t, signal: options.signal }))));
-        if (settled.every(r => r.status === 'rejected')) {
-          warnings.push({ code: 'RESEARCH_UNAVAILABLE', message: 'Recherche Internet indisponible (serveur SearXNG injoignable).' });
-          return [];
-        }
-        const results = settled.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
-        // Institutionnel d'abord, puis le reste ; dédoublonnage par URL.
-        const seen = new Set<string>();
-        const ordered = [...results.filter(r => isInstitutionalUrl(r.url!)), ...results.filter(r => !isInstitutionalUrl(r.url!))]
-          .filter(r => {
-            const key = normalizeUrl(r.url!);
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          })
-          .slice(0, 4);
-        const pages = await Promise.all(ordered.map(async r => {
-          let text = stripTags(r.content ?? '');
-          let title = (r.title ?? '').trim() || r.url!;
-          if (deps.fetchPage) {
-            try {
-              const page = await boundedFetchPage(deps.fetchPage, r.url!, config.timeoutMs * 2, options.signal);
-              if (page?.text && page.text.length > text.length) {
-                text = page.text;
-                title = (r.title ?? '').trim() || page.title || title;
-              }
-            } catch {
-              // on garde l'extrait fourni par le moteur de recherche
+      officialResponded = true;
+      const results = settled.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
+      // Sites vérifiés d'abord (éducation, organisations internationales, recherche, le reste), puis le reste ; dédoublonnage par URL.
+      const seen = new Set<string>();
+      const ordered = results
+        .filter(r => !trustedOnly || isTrustedHttpsUrl(r.url!))
+        .sort((a, b) => trustRank(a.url!) - trustRank(b.url!))
+        .filter(r => {
+          const key = normalizeUrl(r.url!);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, 4);
+      const pages = await Promise.all(ordered.map(async (r): Promise<ResearchSource | null> => {
+        let text = stripTags(r.content ?? '');
+        let title = (r.title ?? '').trim() || r.url!;
+        if (deps.fetchPage) {
+          try {
+            const page = await boundedFetchPage(deps.fetchPage, r.url!, config.timeoutMs * 2, options.signal);
+            // Redirection hors du catalogue : la page est écartée.
+            if (page && leftCatalogue(page, trustedOnly)) return null;
+            if (page?.text && page.text.length > text.length) {
+              text = page.text;
+              title = (r.title ?? '').trim() || page.title || title;
             }
+          } catch {
+            // on garde l'extrait fourni par le moteur de recherche
           }
-          const source: ResearchSource = {
-            kind: isInstitutionalUrl(r.url!) ? 'institutional' : 'web',
-            title,
-            url: r.url,
-            text,
-          };
-          return source;
-        }));
-        return pages.filter(p => p.text.trim().length > 40);
-      })();
-    }
+        }
+        // Officielle seulement si le site est du catalogue ET servi en https ; sinon « web » (restriction levée).
+        const site = isTrustedHttpsUrl(r.url!) ? trustedSiteFor(r.url!) : null;
+        return { kind: site ? 'institutional' : 'web', title, ...(site ? { venue: site.label } : {}), url: r.url, text };
+      }));
+      return pages.filter((p): p is ResearchSource => p !== null && p.text.trim().length > 40);
+    })();
   }
 
-  // 3. Wikipédia (complément général, sans configuration).
+  // 3. Wikipédia : encyclopédie (complément signalé) et, sans SearXNG, références vers les sites vérifiés.
+  const wikiPagesTask: Promise<WikipediaPage[] | null> = config.wikipedia && (plan.wikipedia || (plan.institutional && viaWikipedia))
+    ? track(searchWikipediaPages(topic, deps, { max: 2, timeoutMs: t, signal: options.signal })).catch(() => {
+        warnings.push({
+          code: 'RESEARCH_UNAVAILABLE',
+          message: plan.wikipedia ? 'Wikipédia injoignable.' : 'Sites officiels non consultés : Wikipédia, qui indique où les trouver, est injoignable.',
+        });
+        return null;
+      })
+    : Promise.resolve(null);
   const wikiTask = plan.wikipedia && config.wikipedia
-    ? track(searchWikipedia(topic, deps, { max: 2, timeoutMs: t, signal: options.signal })).catch(() => {
-        warnings.push({ code: 'RESEARCH_UNAVAILABLE', message: 'Wikipédia injoignable.' });
-        return [] as ResearchSource[];
+    ? wikiPagesTask.then(pages => (pages ? readWikipediaPages(pages, deps, { timeoutMs: t, signal: options.signal }) : []))
+    : Promise.resolve<ResearchSource[]>([]);
+  const officialViaWikipediaTask = plan.institutional && viaWikipedia
+    ? wikiPagesTask.then(async (pages): Promise<ResearchSource[]> => {
+        if (!pages) return [];
+        officialResponded = true;
+        // Liens externes des pages trouvées (une requête par page), puis au plus 3 pages des sites vérifiés.
+        const linkSets = await Promise.allSettled(pages.map(page => track(wikipediaExternalLinks(page.pageId, deps, { timeoutMs: t, signal: options.signal }))));
+        const links = selectTrustedLinks(linkSets.flatMap(r => (r.status === 'fulfilled' ? r.value : [])), 3);
+        const found = await Promise.all(links.map(async ({ url }): Promise<ResearchSource | null> => {
+          try {
+            const page = await boundedFetchPage(deps.fetchPage!, url, config.timeoutMs * 2, options.signal);
+            if (!page || page.text.trim().length <= 40 || leftCatalogue(page, trustedOnly)) return null;
+            const site = isTrustedHttpsUrl(page.url) ? trustedSiteFor(page.url) : null;
+            return { kind: site ? 'institutional' : 'web', title: page.title?.trim() || new URL(page.url).hostname, ...(site ? { venue: site.label } : {}), url: page.url, text: page.text };
+          } catch {
+            return null;
+          }
+        }));
+        return found.filter((s): s is ResearchSource => s !== null);
       })
     : Promise.resolve<ResearchSource[]>([]);
 
-  // Ordre de priorité : académique > institutionnel / web > Wikipédia.
-  const [academic, web, wiki] = await Promise.all([academicTask, webTask.catch(() => []), wikiTask]);
-  let sources = dedupe([...academic, ...web, ...wiki]).filter(s => s.text.trim().length > 0);
+  // Ordre de priorité : académique > sites vérifiés > Wikipédia.
+  const [academic, web, official, wiki] = await Promise.all([academicTask, webTask.catch(() => []), officialViaWikipediaTask.catch(() => []), wikiTask]);
+  const officialFound = [...web, ...official].some(s => s.kind === 'institutional');
+  let sources = dedupe([...academic, ...web, ...official, ...wiki]).filter(s => s.text.trim().length > 0);
 
   // Répartition du budget : chaque source reçoit une part, recentrée sur la question.
   if (sources.length) {
@@ -266,6 +332,9 @@ export async function runResearch(
     });
   }
 
+  if (plan.institutional && officialResponded && !officialFound) {
+    warnings.push({ code: 'INSTITUTIONAL_UNAVAILABLE', message: NO_OFFICIAL_FOUND_MESSAGE });
+  }
   if (attempted > 0 && failed === attempted) {
     // Aucun appel réseau n'a abouti : un seul message clair, la génération continue.
     const keep = warnings.filter(w => w.code === 'INSTITUTIONAL_UNAVAILABLE' || w.message.includes('désactivée'));

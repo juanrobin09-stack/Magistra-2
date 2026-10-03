@@ -80,7 +80,10 @@ describe('Landing — affirmations', () => {
     expect(text).toMatch(/ni abonnement, ni compte à créer\. Une fois l’IA activée, elle fonctionne sur votre ordinateur, même sans Internet/);
     // Aucun nom de moteur à connaître sur l'accueil public.
     expect(text).not.toMatch(/ollama/i);
-    expect(text).toMatch(/HAL, Crossref/);
+    expect(text).toMatch(/HAL, Crossref, OpenAlex et des sites officiels vérifiés \(UNESCO, Éduscol…\)/);
+    // Les sources sont celles du catalogue des sites vérifiés : jamais « le web » en général, et le niveau de fiabilité est annoncé.
+    expect(text).not.toMatch(/Crossref et le web|Crossref ou web/);
+    expect(text).toMatch(/avec leur niveau de fiabilité/);
     expect(text).toMatch(/relire et adapter/);
     expect(text).not.toMatch(COMMERCIAL_VENDOR);
     // Seule mention permise : la négation « Aucune clé API » de la section « Magistra pour Windows » (demandée

@@ -407,6 +407,7 @@ function loadResearch(env: Env, problems: string[]): ResearchConfig {
   return {
     academic: boolVar(env, 'RESEARCH_ACADEMIC', true, problems),
     wikipedia: boolVar(env, 'RESEARCH_WIKIPEDIA', true, problems),
+    trustedOnly: boolVar(env, 'RESEARCH_TRUSTED_ONLY', true, problems),
     searxngUrl,
     crossrefMailto: validMailto,
     timeoutMs: intVar(env, 'RESEARCH_TIMEOUT_MS', DEFAULTS.researchTimeoutMs, 1_000, 60_000, problems),

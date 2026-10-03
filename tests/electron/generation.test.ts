@@ -12,8 +12,9 @@ import type { AIProvider, PreloadOptions } from '../../shared/ai/provider.js';
 import { MagistraError } from '../../shared/errors.js';
 import type { GenerationEvent, PrivacyInfo } from '../../shared/types.js';
 import {
-  BUSY_EXTERNAL_MESSAGE, BUSY_WINDOW_MESSAGE, GenerationManager, maxDocumentCharsFor, type GenerationDeps, type GenerationPayload,
+  BUSY_EXTERNAL_MESSAGE, BUSY_WINDOW_MESSAGE, GenerationManager, maxDocumentCharsFor, researchConfigFrom, type GenerationDeps, type GenerationPayload,
 } from '../../electron/generation.js';
+import { DEFAULT_PREFERENCES } from '../../shared/ipc.js';
 import { LocalStore } from '../../electron/localStore.js';
 
 let dir: string;
@@ -39,11 +40,12 @@ type Active = Awaited<ReturnType<GenerationDeps['describeActive']>>;
 
 function manager(
   provider: AIProvider | (() => Promise<AIProvider>),
-  opts: { privacy?: PrivacyInfo; windowOpen?: () => boolean; active?: Partial<Active>; isLocalEngine?: () => boolean } = {},
+  opts: { privacy?: PrivacyInfo; windowOpen?: () => boolean; active?: Partial<Active>; isLocalEngine?: () => boolean; fetchPage?: GenerationDeps['fetchPage'] } = {},
 ) {
   const payloads: GenerationPayload[] = [];
   const gm = new GenerationManager({
     ...(opts.isLocalEngine ? { isLocalEngine: opts.isLocalEngine } : {}),
+    ...(opts.fetchPage ? { fetchPage: opts.fetchPage } : {}),
     store,
     resolveProvider: async (_signal, onStatus) => {
       onStatus('Démarrage du moteur IA…');
@@ -200,6 +202,27 @@ describe('capacités', () => {
       engineLabel: 'Magistra Standard',
       ready: true,
     });
+  });
+
+  it('sites officiels vérifiés : par SearXNG, ou par Wikipédia (activé) avec la récupération de pages de l’application', async () => {
+    const fetchPage = async () => null;
+    const research = async (deps: { fetchPage?: GenerationDeps['fetchPage'] } = {}) => (await manager(new MockProvider(), deps).gm.capabilities()).research;
+    // Cas normal d'un enseignant : Wikipédia actif (défaut), pas de SearXNG.
+    expect(await research({ fetchPage })).toEqual({ academic: true, web: false, institutional: true, wikipedia: true });
+    // Wikipédia désactivé : plus aucun chemin.
+    await store.setPreferences({ wikipediaEnabled: false });
+    expect(await research({ fetchPage })).toEqual({ academic: true, web: false, institutional: false, wikipedia: false });
+    // SearXNG indiqué : chemin direct, même sans Wikipédia.
+    await store.setPreferences({ searxngUrl: 'https://searx.univ.fr' });
+    expect(await research({ fetchPage })).toEqual({ academic: true, web: true, institutional: true, wikipedia: false });
+    // Sans récupération de pages, Wikipédia seul ne mène pas aux sites officiels.
+    await store.setPreferences({ wikipediaEnabled: true, searxngUrl: '' });
+    expect(await research()).toEqual({ academic: true, web: false, institutional: false, wikipedia: true });
+  });
+
+  it('application Windows : toujours les sites vérifiés seulement (aucune option pour le web général)', () => {
+    expect(researchConfigFrom(DEFAULT_PREFERENCES)).toMatchObject({ trustedOnly: true, academic: true, wikipedia: true });
+    expect(researchConfigFrom({ ...DEFAULT_PREFERENCES, searxngUrl: 'https://searx.univ.fr' })).toMatchObject({ trustedOnly: true, searxngUrl: 'https://searx.univ.fr' });
   });
 
   it('IA non prête : cause précise (notReady) ; serveur distant : prestataire annoncé (providerInfo)', async () => {
