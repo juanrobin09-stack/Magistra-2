@@ -13,11 +13,15 @@ import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import './index.css';
 import App from './App';
+import { installPreloadRecovery } from '@/lib/preloadRecovery';
 import { getBridge } from '@/lib/runtime/local';
 import { discoverRuntimeConfig, getRuntimeConfig, setRuntimeConfig, type RuntimeConfig } from '@/lib/runtime/mode';
 import { captureAccessFromUrl } from '@/lib/runtime/personal';
 
 const container = document.getElementById('root')!;
+
+// Nouvelle version déployée pendant que la page est ouverte : un seul rechargement automatique (voir preloadRecovery.ts).
+installPreloadRecovery();
 
 /**
  * Signale à l'application Windows que l'interface est affichée (test de démarrage automatisé) :

@@ -180,6 +180,40 @@ CREATE INDEX IF NOT EXISTS generations_user_created_idx
 CREATE INDEX IF NOT EXISTS generations_user_favorite_idx
   ON public.generations (user_id, created_at DESC, id DESC) WHERE is_favorite;
 
+-- Plafond de stockage par utilisateur (protection technique contre le remplissage de la base, pas un quota produit :
+-- très au-dessus d'un usage normal). Vérifié dans la base, sous un verrou propre à l'utilisateur : deux
+-- enregistrements simultanés (même par des instances différentes du serveur) ne peuvent pas dépasser ensemble le
+-- plafond. S'applique à TOUTE insertion (POST /api/generation et enregistrement qui suit POST /api/generate).
+-- Au-delà : erreur « magistra_storage_full » (SQLSTATE MG001), traduite par le serveur en message clair.
+-- Mêmes valeurs que STORAGE_LIMITS dans server/store.ts. Supprimer un contenu libère de la place.
+CREATE OR REPLACE FUNCTION public.magistra_check_storage_cap()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v_max_records CONSTANT integer := 5000;
+  v_max_bytes   CONSTANT bigint  := 104857600;
+  v_count       bigint;
+  v_bytes       bigint;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('magistra_storage:' || NEW.user_id, 0));
+  SELECT count(*), coalesce(sum(octet_length(contenu)), 0)
+    INTO v_count, v_bytes
+    FROM public.generations
+   WHERE user_id = NEW.user_id;
+  IF v_count >= v_max_records OR v_bytes + coalesce(octet_length(NEW.contenu), 0) > v_max_bytes THEN
+    RAISE EXCEPTION 'magistra_storage_full' USING ERRCODE = 'MG001';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS magistra_generations_storage_cap ON public.generations;
+CREATE TRIGGER magistra_generations_storage_cap
+  BEFORE INSERT ON public.generations
+  FOR EACH ROW EXECUTE FUNCTION public.magistra_check_storage_cap();
+
 -- ─── 4. Anti-abus technique (aucun quota produit) ───────────────────────────
 -- Horodatage des dernières demandes de génération, conservé quelques minutes seulement,
 -- pour limiter les rafales (RATE_LIMIT_PER_MINUTE et RATE_LIMIT_GLOBAL_PER_MINUTE côté serveur).
@@ -488,6 +522,7 @@ REVOKE ALL ON FUNCTION public.magistra_begin_generation(text, integer, integer, 
 REVOKE ALL ON FUNCTION public.magistra_end_generation(text, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.magistra_stats(text, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.magistra_touch_updated_at() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.magistra_check_storage_cap() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.magistra_register_request(text, integer, integer) TO service_role;
 GRANT EXECUTE ON FUNCTION public.magistra_begin_generation(text, integer, integer, integer, integer, integer, text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.magistra_end_generation(text, uuid) TO service_role;

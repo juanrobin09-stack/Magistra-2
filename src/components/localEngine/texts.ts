@@ -3,6 +3,11 @@
 //
 // Règles d'écriture : jamais d'adresse (localhost, 127.0.0.1…), jamais de port, jamais le nom du moteur (« Ollama »),
 // jamais de clé à saisir ; l'enseignant n'a qu'à ouvrir Magistra et cliquer.
+// Seule exception : le message sur la fenêtre d'Ollama pendant l'installation de l'IA (ENGINE_WINDOW_NOTE, sa variante
+// pour la page officielle ENGINE_WINDOW_MANUAL_NOTE et sa suite ENGINE_WINDOW_DONE_NOTE, tout en bas). Le nom est
+// nécessaire pour que l'enseignant reconnaisse la fenêtre à fermer ; ces trois textes ne s'affichent que dans
+// l'application Windows, jamais sur le site. Un test fait respecter la règle :
+// aucun autre texte de ce fichier ne nomme le moteur (tests/ui/engineWindowNote.test.ts).
 
 import { defaultMessage } from '@shared/errors';
 import type { LocalEngineState } from '@/lib/localConnector/controller';
@@ -65,9 +70,6 @@ export const ENGINE_BUSY_TEXT = 'Une génération est en cours dans l’applicat
 
 // ─── Boutons ────────────────────────────────────────────────────────────────
 
-export const DOWNLOAD_WINDOWS_LABEL = 'Télécharger Magistra pour Windows';
-/** Aucune version stable publiée : le bouton de téléchargement est inactif (jamais un renvoi vers une page vide). */
-export const NOT_PUBLISHED_TEXT = 'Pas encore disponible : la première version de Magistra pour Windows n’est pas encore publiée. Le téléchargement s’activera ici dès sa publication.';
 export const DOWNLOAD_SHORT_LABEL = 'Télécharger Magistra';
 export const SEARCH_EXISTING_LABEL = "J'ai déjà Magistra : la rechercher";
 export const CONNECT_LABEL = 'Connecter Magistra locale';
@@ -80,7 +82,6 @@ export const DISCONNECT_BLOCKED_TEXT =
   'Ce navigateur ne pourra plus utiliser l’intelligence artificielle de cet ordinateur. Votre navigateur bloque l’accès à l’application Magistra : l’autorisation ne pourra pas y être retirée d’ici. Retirez-la aussi dans Magistra → Réglages → « Site web Magistra ». Vous pourrez reconnecter Magistra locale à tout moment.';
 export const RETRY_LABEL = 'Réessayer';
 export const CANCEL_LABEL = 'Annuler';
-export const OPEN_APP_LABEL = 'Ouvrir Magistra';
 export const SEARCH_WITH_PERMISSION_LABEL = 'Rechercher Magistra…';
 export const CONTINUE_LABEL = 'Continuer';
 export const USE_SERVER_LABEL = 'Utiliser le serveur en ligne…';
@@ -95,24 +96,12 @@ export const SIGNED_OUT_DETECT_TEXT =
 export const DETECT_NOW_LABEL = 'Détecter maintenant';
 
 // ─── Installation de Magistra pour Windows ──────────────────────────────────
-// Mêmes trois étapes partout où l'on télécharge (carte du mode démonstration, section « Magistra pour Windows » de
-// l'accueil et des réglages) : l'installateur est un NSIS « oneClick », par utilisateur (perMachine: false,
-// allowElevation: false), qui lance Magistra à la fin (runAfterFinish: true) — electron-builder.json. Il n'est pas
-// encore signé : SmartScreen l'annonce, avec les libellés exacts de Windows en français.
+// Textes dans windowsTexts.ts (sans dépendance : le site vitrine les utilise sans le connecteur local).
 
-export const INSTALL_STEPS: readonly string[] = [
-  'Téléchargez Magistra.',
-  'Ouvrez le fichier téléchargé. Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur « Informations complémentaires » puis « Exécuter quand même ».',
-  'Magistra s’installe en quelques secondes, sans droits d’administrateur, et s’ouvre toute seule.',
-];
-export const INSTALL_STEPS_LABEL = 'Installation en trois étapes';
-/**
- * Ce qui suit l'installation, dit honnêtement : l'IA n'est pas dans l'installateur. L'application propose de
- * l'activer (moteur et modèle) et annonce la taille AVANT tout téléchargement ; jamais sans ce clic.
- */
-export const ACTIVATE_AI_NOTE =
-  'Ensuite, Magistra vous propose d’activer l’IA : un seul téléchargement de plusieurs Go, dont la taille est annoncée avant. L’IA fonctionne ensuite même sans Internet.';
-export const ALREADY_INSTALLED_TEXT = 'Déjà installée ?';
+export {
+  ACTIVATE_AI_NOTE, ALREADY_INSTALLED_TEXT, DOWNLOAD_WINDOWS_LABEL, INSTALL_STEPS, INSTALL_STEPS_LABEL, NOT_PUBLISHED_TEXT,
+  OPEN_APP_LABEL,
+} from './windowsTexts';
 
 // ─── Moteur de génération (site web) ────────────────────────────────────────
 
@@ -149,6 +138,33 @@ export const WEBSITE_TOGGLE_LABEL = 'Permettre au site Magistra d’utiliser l�
 /** Note affichée quand le système ne permet pas de chiffrer les autorisations sur le disque. */
 export const NOT_PERSISTENT_NOTE =
   'Ce système ne permet pas de protéger les autorisations sur le disque : elles durent jusqu’à la fermeture de Magistra. Il faudra reconnecter le site après chaque redémarrage de l’application.';
+
+// ─── Installation de l'IA dans l'application Windows : fenêtre d'Ollama ─────
+// Le seul endroit qui nomme le moteur. L'installateur officiel d'Ollama lance Ollama à la fin de l'installation, avec
+// sa fenêtre d'accueil (qui propose de se connecter à un compte), alors que Magistra, elle, le démarre sans fenêtre
+// (--hide). L'enseignant ne doit ni s'inquiéter ni se connecter : il ferme la fenêtre avec sa croix ; l'icône d'Ollama
+// près de l'horloge reste, car le moteur doit continuer à tourner pour que Magistra l'utilise. Quand l'enseignant lance
+// LUI-MÊME l'installateur (page officielle), cet installateur est une fenêtre visible qu'il doit d'abord terminer : la
+// fenêtre de l'application ne vient qu'après (ENGINE_WINDOW_MANUAL_NOTE).
+
+/**
+ * Avant le clic sur « Activer l'IA » et pendant le téléchargement, l'installation, la mise à jour et le démarrage du
+ * moteur : la fenêtre peut s'ouvrir. Texte unique, partagé par la carte d'activation et les réglages du moteur
+ * (EngineWindowNote).
+ */
+export const ENGINE_WINDOW_NOTE =
+  'Pendant l’installation ou la mise à jour, une fenêtre Ollama peut s’ouvrir : c’est normal (Ollama est le moteur d’IA qui fonctionne sur votre ordinateur). Fermez-la simplement avec sa croix, sans vous connecter : Magistra continue. L’icône d’Ollama près de l’horloge peut rester.';
+/**
+ * Installation depuis la page officielle (installateur lancé par l'enseignant) : l'installateur et l'application
+ * Ollama sont deux fenêtres différentes. « Fermez-la » (ENGINE_WINDOW_NOTE) pourrait faire fermer l'installateur avant
+ * la fin, et contredirait le message de l'attente (« cliquez sur « Terminer » dans son installateur ») : l'installateur
+ * se termine d'abord, la fenêtre de l'application se ferme ensuite.
+ */
+export const ENGINE_WINDOW_MANUAL_NOTE =
+  'Terminez d’abord l’installation avec l’installateur d’Ollama (bouton « Terminer »). Ensuite, si la fenêtre d’Ollama s’ouvre, fermez-la avec sa croix, sans vous connecter : Magistra continue. L’icône d’Ollama près de l’horloge peut rester.';
+/** Moteur installé (modèle en téléchargement, puis « L'IA est prête ») : la fenêtre a pu rester ouverte. */
+export const ENGINE_WINDOW_DONE_NOTE =
+  'Si une fenêtre Ollama est encore ouverte, vous pouvez la fermer avec sa croix : l’IA de Magistra continue de fonctionner. L’icône d’Ollama près de l’horloge peut rester.';
 
 // ─── Textes sûrs ────────────────────────────────────────────────────────────
 

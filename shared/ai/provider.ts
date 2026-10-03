@@ -2,6 +2,7 @@
 // Le reste de Magistra ne sait jamais s'il parle à Ollama, vLLM ou un autre serveur compatible OpenAI.
 
 import type { ErrorCode } from '../errors.js';
+import type { EnginePlacement, EngineTimings } from './timings.js';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -21,6 +22,12 @@ export type FinishReason = 'stop' | 'length' | 'unknown';
 export interface Usage {
   promptTokens?: number;
   completionTokens?: number;
+  /** Durées mesurées par le moteur (Ollama : dernier objet du flux), pour la fenêtre « Détails de vitesse ». */
+  timings?: EngineTimings;
+  /** Délai mesuré côté client entre l'envoi de la requête et le premier mot reçu. */
+  timeToFirstDeltaMs?: number;
+  /** Où le modèle s'exécute (carte graphique, processeur), relevé une fois pendant la génération (moteur local). */
+  placement?: EnginePlacement;
 }
 
 export type StreamEvent =
@@ -59,6 +66,11 @@ export interface HealthStatus {
   warning?: { code: ErrorCode; message: string };
 }
 
+/** Ce que le moteur annonce à la fin d'un préchargement : durée de chargement du modèle, en millisecondes. */
+export interface PreloadResult {
+  loadMs?: number;
+}
+
 export interface PreloadOptions {
   signal?: AbortSignal;
   /** Délai maximal du chargement (défaut propre au fournisseur, 10 min pour Ollama). */
@@ -87,7 +99,7 @@ export interface AIProvider {
    * premier mot ne compte plus le chargement. Lève une MagistraError (MODEL_NOT_INSTALLED, OUT_OF_MEMORY…).
    * La pipeline l'appelle si PipelineDeps.preloadModel est vrai, avec le statut « Chargement du modèle… ».
    */
-  preload?(options?: PreloadOptions): Promise<void>;
+  preload?(options?: PreloadOptions): Promise<PreloadResult | void>;
 }
 
 /** Implémentation générique de generate() à partir de stream(). */

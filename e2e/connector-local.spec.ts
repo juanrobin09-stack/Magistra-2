@@ -40,7 +40,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { defaultMessage } from '../shared/errors';
 import type { MagistraBridge } from '../shared/ipc';
-import { buildPairingUrl, parseAppUrl, type ConnectorAppStatus, type ConnectorStatus } from '../shared/localConnector';
+import { buildPairingUrl, OFFICIAL_WEB_ORIGINS, parseAppUrl, type ConnectorAppStatus, type ConnectorStatus } from '../shared/localConnector';
+import { SITE_ORIGIN as PUBLIC_SITE_ORIGIN } from '../shared/site';
 import type { GenerationRecordDraft } from '../shared/types';
 import { msedgeExecutable, MSEDGE_MISSING_REASON } from './browsers';
 import { OTHER_SITE_ORIGIN, OTHER_SITE_PORT, SITE_ORIGIN, SITE_PORT } from './connector-harness/sites';
@@ -234,6 +235,18 @@ function localNetworkPermissionState(page: Page): Promise<string> {
     return 'unsupported';
   }, [...LOCAL_NETWORK_PERMISSIONS]);
 }
+
+/**
+ * Variantes piégées du domaine du site public (OFFICIAL_WEB_ORIGINS, compilée dans l'application) : apex (non servi par le
+ * projet), http, autre port, identifiants intégrés, sous-domaine, suffixe et préfixe collés, majuscules, point final, chemin.
+ */
+const PUBLIC_SITE_TRAPS: readonly string[] = (() => {
+  const host = new URL(PUBLIC_SITE_ORIGIN).host;
+  return [
+    PUBLIC_SITE_ORIGIN.replace('://www.', '://'), `http://${host}`, `${PUBLIC_SITE_ORIGIN}:8443`, `https://user@${host}`, `https://sub.${host}`,
+    `${PUBLIC_SITE_ORIGIN}.evil.example`, `https://evil-${host}`, `https://${host.toUpperCase()}`, `https://${host}.`, `${PUBLIC_SITE_ORIGIN}/`, 'null',
+  ];
+})();
 
 /** URL magistra://pair valide (identifiant et défi aléatoires) pour l'origine donnée : ce que forgerait un autre site. */
 function forgedPairingUrl(origin: string): string {
@@ -966,15 +979,17 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
       });
       // Le texte est arrivé progressivement : plusieurs affichages successifs pendant le flux (la mise en forme
       // Markdown peut raccourcir un instant le texte visible, par exemple quand « **gras** » se referme).
+      // Pas de seuil de croissance fixe : sur une machine chargée, le premier relevé peut tomber tard dans le flux.
       expect(lengths.length, `longueurs successives : ${lengths.join(', ')}`).toBeGreaterThanOrEqual(3);
-      expect(Math.max(...lengths)).toBeGreaterThan(lengths[0] * 3);
+      expect(Math.max(...lengths), `longueurs successives : ${lengths.join(', ')}`).toBeGreaterThan(lengths[0]);
       await expect(result(page).getByRole('heading', { name: 'Cours : La photosynthèse' })).toBeVisible();
       expect(mock!.state.chats.length).toBeGreaterThan(chatsBefore);
       const { drafts, serverGenerations } = await probe(page);
       expect(serverGenerations).toBe(0);
       expect(drafts).toHaveLength(1);
       expect(drafts[0]).toMatchObject({ type: 'cours', niveau: '6eme', matiere: 'francais', sujet: 'La photosynthèse' });
-      expect(drafts[0].contenu).toContain('# Cours : La photosynthèse');
+      // Typographie française : espace insécable avant « : » dans le document final (shared/typography.ts).
+      expect(drafts[0].contenu.replaceAll('\u00a0', ' ')).toContain('# Cours : La photosynthèse');
       expect(drafts[0]).not.toHaveProperty('id');
       // Le site n'a rien demandé au serveur en ligne : ni génération, ni enregistrement direct.
       expect(site.apiRequests.filter(r => !r.endsWith('/api/windows-release'))).toEqual([]);
@@ -1205,10 +1220,40 @@ test.describe('Connecteur local : site web ⇄ application Windows réelle', () 
     expect(official?.status).toBe(200);
     expect(official?.headers['access-control-allow-origin']).toBe(SITE_ORIGIN);
 
+    // Domaine du site public (liste OFFICIAL_WEB_ORIGINS de l'application réelle) : l'ancienne adresse et « www » sont
+    // reconnues EXACTEMENT ; chaque variante piégée reçoit 403 sans aucun en-tête CORS.
+    expect([...OFFICIAL_WEB_ORIGINS]).toEqual(['https://magistra-2.vercel.app', PUBLIC_SITE_ORIGIN]);
+    for (const origin of OFFICIAL_WEB_ORIGINS) {
+      const reply = await connectorRequest(port, { origin });
+      expect(reply?.status, origin).toBe(200);
+      expect(reply?.headers['access-control-allow-origin'], origin).toBe(origin);
+    }
+    for (const origin of PUBLIC_SITE_TRAPS) {
+      const reply = await connectorRequest(port, { origin });
+      expect(reply?.status, origin).toBe(403);
+      expect(reply?.headers['access-control-allow-origin'], origin).toBeUndefined();
+    }
+
     // Demande d'appairage au nom de l'autre site : ignorée par l'application (aucune boîte).
     await d.openUrl(forgedPairingUrl(OTHER_SITE_ORIGIN));
     await expect.poll(() => d.log.some(l => l.includes(`Demande de connexion ignorée : site non autorisé (127.0.0.1:${OTHER_SITE_PORT})`))).toBe(true);
     expect(await d.consentCalls()).toEqual([]);
+
+    // Domaine du site public : une demande au nom de l'apex est ignorée (journal seulement) ; au nom de « www », l'application
+    // reconnaît le site et affiche la boîte, au nom d'hôte (la demande n'aboutit pas : personne ne la termine).
+    await d.openUrl(forgedPairingUrl(PUBLIC_SITE_TRAPS[0]));
+    await expect.poll(() => d.log.some(l => l.includes(`Demande de connexion ignorée : site non autorisé (${new URL(PUBLIC_SITE_TRAPS[0]).host})`))).toBe(true);
+    expect(await d.consentCalls()).toEqual([]);
+    await d.session!.app.evaluate(() => {
+      (globalThis as unknown as { __magistraE2EConsent: { auto: number | null } }).__magistraE2EConsent.auto = 1;
+    });
+    await d.openUrl(forgedPairingUrl(PUBLIC_SITE_ORIGIN));
+    await expect.poll(async () => (await d.consentCalls()).length).toBe(1);
+    expect((await d.consentCalls())[0]).toMatchObject({ message: `Autoriser ${new URL(PUBLIC_SITE_ORIGIN).host} à utiliser l’intelligence locale de cet ordinateur ?` });
+    await d.session!.app.evaluate(() => {
+      const state = (globalThis as unknown as { __magistraE2EConsent: { auto: number | null; calls: object[] } }).__magistraE2EConsent;
+      state.calls.length = 0;
+    });
 
     // L'autre site se fait passer pour le site officiel dans l'URL, et l'enseignant accepte : l'appairage reste
     // impossible, car la fin d'appairage doit venir de l'origine officielle (en-tête Origin fixé par le navigateur).

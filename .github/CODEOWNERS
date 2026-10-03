@@ -1,0 +1,12 @@
+# Propriétaire des fichiers qui commandent la chaîne de publication et les garanties de sécurité de Magistra.
+# GitHub demande automatiquement sa relecture ; la relecture obligatoire elle-même est un réglage du dépôt
+# (Settings → Branches → règle sur la branche principale → « Require review from Code Owners »).
+/.github/             @juanrobin09-stack
+/electron/            @juanrobin09-stack
+/electron-builder.json @juanrobin09-stack
+/server/              @juanrobin09-stack
+/api/                 @juanrobin09-stack
+/scripts/             @juanrobin09-stack
+/vercel.json          @juanrobin09-stack
+/supabase-schema.sql  @juanrobin09-stack
+/SECURITY.md          @juanrobin09-stack

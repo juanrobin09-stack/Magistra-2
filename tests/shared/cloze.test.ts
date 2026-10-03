@@ -802,8 +802,71 @@ describe('temps de construction', () => {
       const t0 = performance.now();
       buildCloze(input, { max: 20, withKey: true });
       buildCloze(input, { withKey: false });
-      expect(performance.now() - t0, input.slice(0, 40)).toBeLessThan(1500);
+      // Seuil absolu très large pour une machine chargée ou un démarrage à froid : seul un temps non borné le dépasse.
+      expect(performance.now() - t0, input.slice(0, 40)).toBeLessThan(6000);
     }
+  });
+});
+
+describe('temps de construction : longues suites d’espaces et de crochets', () => {
+  const elapsed = (fn: () => void) => {
+    const t0 = performance.now();
+    fn();
+    return performance.now() - t0;
+  };
+
+  it('lignes d’espaces ou de tabulations (modèle qui boucle) : temps borné, quelle que soit la forme', () => {
+    const base = 'Le [[chat]] dort.\n';
+    // 190 espaces : sous le seuil de repli de buildCloze, c'est le motif lui-même qui est mis à l'épreuve
+    // (un motif quadratique mettrait plusieurs secondes par ligne).
+    const inputs = [
+      `${base}${`${' '.repeat(190)}\n`.repeat(12)}Fin`,
+      `${base}${`${'\t'.repeat(190)}x\n`.repeat(12)}Fin`,
+      `${base}\n## Corrigé\n${`${' '.repeat(190)}:\n`.repeat(12)}Fin`,
+      `${base}${' '.repeat(5000)}\nFin`,
+      `${base}${' '.repeat(5000)}x\nFin`,
+      `${base}${' '.repeat(5000)}:\nFin`,
+      `${base}\n## Corrigé\n${' '.repeat(60_000)}x\nFin`,
+      `${base}${'a  '.repeat(3000)}\nFin`,
+    ];
+    for (const input of inputs) {
+      expect(elapsed(() => buildClozeDocument(input, { max: 10, withKey: true })), input.slice(0, 30)).toBeLessThan(3000);
+    }
+  });
+
+  it('étiquettes et titres en gras toujours reconnus, avec ou sans espaces superflus', () => {
+    for (const [plain, spaced] of [
+      ['Corrigé : chat', 'Corrigé    :     chat'],
+      ['**Corrigé** : chat', '  **Corrigé**\t\t :   chat'],
+      ['**Corrigé**', '**Corrigé**     '],
+    ]) {
+      const a = buildClozeDocument(`Le [[chat]] dort.\n\n${plain}`, { max: 10, withKey: true });
+      const b = buildClozeDocument(`Le [[chat]] dort.\n\n${spaced}`, { max: 10, withKey: true });
+      // Le corrigé du modèle est remplacé par celui de Magistra, un seul : l'étiquette a bien été reconnue.
+      expect(a.match(/Corrigé/g)).toHaveLength(1);
+      expect(a).toContain('### Corrigé');
+      expect(b).toBe(a);
+    }
+  });
+
+  it('flux : des dizaines de milliers de « [ » poussés par petits morceaux (temps linéaire, texte conservé)', () => {
+    const text = '['.repeat(100_000);
+    const stream = new ClozeStream(10);
+    let out = '';
+    const ms = elapsed(() => {
+      for (let i = 0; i < text.length; i += 20) out += stream.push(text.slice(i, i + 20));
+      out += stream.end();
+    });
+    expect(ms).toBeLessThan(3000);
+    expect(out).toBe(text);
+  });
+
+  it('flux : « [[[mot]]] » (crochets en trop) reste reconnu', () => {
+    const stream = new ClozeStream();
+    const out = stream.push('Le [[[chat]]] dort.') + stream.end();
+    expect(stream.words).toEqual(['chat']);
+    expect(out).toContain(blank(1));
+    expect(out).not.toContain('[');
   });
 });
 

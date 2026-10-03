@@ -11,6 +11,10 @@
 // Accessibilité : une région aria-live toujours présente annonce le lancement, l'interruption et la fin ; quand la
 // carte change sous le doigt de l'enseignant (le bouton utilisé disparaît), son titre reçoit le focus au lieu de le
 // laisser repartir au début de la page.
+// Fenêtre d'Ollama (Windows, là où Magistra installe le moteur) : l'installateur officiel lance Ollama à la fin, qui
+// peut ouvrir sa fenêtre. Une note (EngineWindowNote) l'explique avant le clic, pendant l'installation du moteur, puis
+// quand il est installé (la fenêtre a pu rester ouverte) ; jamais pour un simple démarrage du moteur, ni hors Windows.
+// Page officielle (l'enseignant lance lui-même l'installateur) : la note lui dit de terminer d'abord l'installateur.
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -23,12 +27,12 @@ import { FOCUS_RING } from '@/components/generate/fieldUtils';
 import { useAIStatus, type AIActivation, type AIController } from '@/hooks/useAIStatus';
 import {
   activationBlocker, activationPlan, activationProgress, activationSizeDetail, activationSizeText, engineSelfUpdatable,
-  missingDiskGB, planFromProgress, type ActivationBlocker, type ActivationPlan,
+  engineWindowMayOpen, missingDiskGB, planFromProgress, type ActivationBlocker, type ActivationPlan,
 } from '@/lib/ai-ui/activation';
 import { downloadDurationText, formatGB } from '@/lib/ai-ui/format';
 import { isEngineBusy, isModelPulling } from '@/lib/ai-ui/progress';
 import { engineHostIfRemote, engineManagedByAdminText, networkHint } from '@/lib/ai-ui/status';
-import { ENGINE_WINDOW_NOTE } from './EngineSetupPanel';
+import EngineWindowNote from './EngineWindowNote';
 import { ErrorBox, WarningNote } from './Notices';
 import ProgressBar from './ProgressBar';
 
@@ -390,6 +394,9 @@ function ActivationOffer({ ai, status, plan, engineUpdate, variant, example, foc
                 l’installation, puis poursuit toute seule.
               </p>
             )}
+            {engineWindowMayOpen(status, plan.engine) && (
+              <EngineWindowNote moment="install" className="mt-2" />
+            )}
             <p className="text-xs text-mg-200">
               {/* Demande mémorisée (arrêt sur erreur) : « rien avant votre clic » serait faux — voir plus bas. */}
               {!requested && 'Rien n’est téléchargé avant votre clic. '}
@@ -503,6 +510,11 @@ function ActivationProgressCard({ ai, status, variant, example, focus, target }:
   const valueText = [view.percent !== null ? `${view.percent} %` : null, transfer || null].filter(Boolean).join(', ');
   // Attente du moteur installé depuis sa page officielle : la page peut être rouverte (onglet fermé, reprise au lancement).
   const manualWait = plan.engine === 'manual' && view.current === 0;
+  // Fenêtre d'Ollama : pendant l'étape du moteur (téléchargement, installation, démarrage) elle peut s'ouvrir ; ensuite
+  // (étape du modèle) elle a pu rester ouverte. Page officielle : l'installateur lancé par l'enseignant se termine d'abord.
+  const windowMoment = engineWindowMayOpen(status, plan.engine)
+    ? (view.steps[view.current]?.id === 'model' ? 'done' : plan.engine === 'manual' ? 'manual' : 'install')
+    : null;
 
   return (
     <Frame titleId={titleId} title={title} icon={<Loader2 size={20} className="text-mg-900 animate-spin" />} focus={focus} target={target}>
@@ -540,7 +552,7 @@ function ActivationProgressCard({ ai, status, variant, example, focus, target }:
           {transfer}
         </p>
       )}
-      {step === 'engine' && engineStage === 'install' && <p className="text-xs text-mg-200">{ENGINE_WINDOW_NOTE}</p>}
+      {windowMoment && <EngineWindowNote moment={windowMoment} />}
       <p className="text-xs text-mg-200">
         Vous pouvez continuer à utiliser Magistra pendant ce temps.
         {/* Seule une activation est mémorisée (préférence aiSetupRequested) : jamais promis pour une autre opération. */}
@@ -581,12 +593,15 @@ function ReadyNote({ ai, status, variant, focus, target }: {
       data-testid="activate-ai-ready"
     >
       <CheckCircle2 size={18} className="text-success shrink-0" aria-hidden="true" />
-      <p className="min-w-0 flex-1 text-mg-50">
-        <strong className="text-success font-semibold">L’IA de Magistra est prête.</strong>{' '}
-        {host
-          ? `${status.activeLabel} génère désormais vos contenus sur le serveur « ${host} ».`
-          : `${status.activeLabel} génère désormais vos contenus sur cet ordinateur.`}
-      </p>
+      <div className="min-w-0 flex-1 space-y-2">
+        <p className="text-mg-50">
+          <strong className="text-success font-semibold">L’IA de Magistra est prête.</strong>{' '}
+          {host
+            ? `${status.activeLabel} génère désormais vos contenus sur le serveur « ${host} ».`
+            : `${status.activeLabel} génère désormais vos contenus sur cet ordinateur.`}
+        </p>
+        {engineWindowMayOpen(status, ai.activation.plan?.engine ?? null) && <EngineWindowNote moment="done" />}
+      </div>
       {variant === 'dashboard' && (
         <Link to="/app/generate" className={`btn-primary text-xs py-2 px-3 ${FOCUS_RING}`}>
           <Sparkles size={13} aria-hidden="true" /> Générer un contenu

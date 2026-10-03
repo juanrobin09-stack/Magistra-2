@@ -20,6 +20,8 @@ import { cleanupTempFiles, readJsonFile, withFileLock, writeJsonAtomic } from '.
 import { isSafeId, parseStoredPreferences, parseStoredProfile, sanitizeStoredDocument, type ListQuery } from './validate.js';
 
 export const EXCERPT_LENGTH = 240;
+/** Début du contenu analysé pour fabriquer l'extrait (largement plus que les 240 caractères conservés). */
+const EXCERPT_SOURCE_CHARS = 4_000;
 
 export interface LocalStoreOptions {
   now?: () => Date;
@@ -34,7 +36,9 @@ interface IndexEntry {
 
 /** Extrait lisible (~240 caractères) d'un contenu Markdown, pour la liste de l'historique. */
 export function excerptOf(markdown: string, max = EXCERPT_LENGTH): string {
+  // Seul le début compte : borner l'entrée évite tout traitement coûteux sur un très long contenu (listes de crochets…).
   const text = markdown
+    .slice(0, EXCERPT_SOURCE_CHARS)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
@@ -158,12 +162,20 @@ export class LocalStore {
 
   private async loadIndex(): Promise<void> {
     await fsp.mkdir(this.generationsDir, { recursive: true });
-    const names = (await fsp.readdir(this.generationsDir)).filter(n => n.endsWith('.json'));
+    const names = (await this.listJsonNames(this.generationsDir, 'L’historique')).filter(n => n.endsWith('.json'));
     const index = new Map<string, IndexEntry>();
     await mapLimit(names, 16, async name => {
       const id = name.slice(0, -'.json'.length);
       if (!isSafeId(id)) return;
-      const result = await readJsonFile(path.join(this.generationsDir, name), raw => parseStoredRecord(raw, id));
+      let result: Awaited<ReturnType<typeof readJsonFile<GenerationRecord>>>;
+      try {
+        result = await readJsonFile(path.join(this.generationsDir, name), raw => parseStoredRecord(raw, id));
+      } catch {
+        // Fichier verrouillé ou sans droits (antivirus, copie de sauvegarde) : il n'est pas corrompu, on ne le touche pas.
+        // Un seul fichier inaccessible ne doit jamais empêcher Magistra de démarrer ; il réapparaîtra au prochain lancement.
+        this.warn(`Génération inaccessible ignorée : ${name}`);
+        return;
+      }
       if (result.status === 'ok') {
         index.set(id, { t: Date.parse(result.value.createdAt), summary: summarize(result.value) });
       } else if (result.status === 'corrupt') {
@@ -172,6 +184,16 @@ export class LocalStore {
     });
     this.index = index;
     this.sorted = null;
+  }
+
+  /** Contenu d'un dossier ; un dossier illisible donne une liste vide (la liste reste vide, l'application démarre). */
+  private async listJsonNames(dir: string, what: string): Promise<string[]> {
+    try {
+      return await fsp.readdir(dir);
+    } catch {
+      this.warn(`${what} : dossier inaccessible, liste vide pour cette session.`);
+      return [];
+    }
   }
 
   private sortedEntries(): IndexEntry[] {
@@ -353,13 +375,17 @@ export class LocalStore {
   private async ensureDocIndex(): Promise<Map<string, Omit<StoredDocument, 'units'>>> {
     if (this.docIndex) return this.docIndex;
     await fsp.mkdir(this.documentsDir, { recursive: true });
-    const names = (await fsp.readdir(this.documentsDir)).filter(n => n.endsWith('.json'));
+    const names = (await this.listJsonNames(this.documentsDir, 'Les documents conservés')).filter(n => n.endsWith('.json'));
     const index = new Map<string, Omit<StoredDocument, 'units'>>();
     await mapLimit(names, 8, async name => {
       const id = name.slice(0, -'.json'.length);
       if (!isSafeId(id)) return;
-      const doc = await this.loadDocument(id);
-      if (doc) index.set(id, metaOf(doc));
+      try {
+        const doc = await this.loadDocument(id);
+        if (doc) index.set(id, metaOf(doc));
+      } catch {
+        this.warn(`Document inaccessible ignoré : ${name}`);
+      }
     });
     this.docIndex = index;
     return index;

@@ -23,6 +23,8 @@ export interface StatusOptions {
   installing?: 'install' | 'update';
   /** Adresse du moteur (par défaut : cet ordinateur). */
   ollamaUrl?: string;
+  /** Installation automatique du moteur possible (Windows) ; faux : macOS, Linux (installation à la main). Défaut : vrai. */
+  platformSupported?: boolean;
 }
 
 export function makeStatus(opts: StatusOptions = {}): AIStatus {
@@ -87,6 +89,6 @@ export function makeStatus(opts: StatusOptions = {}): AIStatus {
         ? { remote: { kind: 'openai-compatible' as const, baseUrl: 'https://ia.exemple.fr/v1', model: 'mistral-small', hasApiKey: true, label: 'Serveur du lycée' } }
         : {}),
     },
-    engineDownload: { approxSizeMB: 1100, requiredDiskGB: 5, platformSupported: true },
+    engineDownload: { approxSizeMB: 1100, requiredDiskGB: 5, platformSupported: opts.platformSupported ?? true },
   };
 }

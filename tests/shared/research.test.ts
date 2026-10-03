@@ -1,95 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { planResearch, runResearch, type ResearchConfig, type ResearchDeps } from '../../shared/research/index';
+import { NO_OFFICIAL_FOUND_MESSAGE, OFFICIAL_UNAVAILABLE_MESSAGE, planResearch, runResearch } from '../../shared/research/index';
 import {
   isInstitutionalUrl, NO_ABSTRACT_TEXT, searchCrossref, searchHal, searchSearxng, searchWikipedia, stripTags, toPlainQuery,
 } from '../../shared/research/providers';
+import { SEARCH_SCOPE_TEXT, SEARCHED_DOMAIN_COUNT, trustedSearchGroups } from '../../shared/research/trusted';
 import { jsonResponse, mockFetch, networkError, textResponse } from './helpers';
-
-const HAL_RESPONSE = {
-  response: {
-    docs: [
-      {
-        title_s: ['La gouvernance des systèmes d’information'],
-        authFullName_s: ['Anne Martin', 'Paul Durand'],
-        producedDateY_i: 2019,
-        doiId_s: '10.3917/sim.192.0045',
-        uri_s: 'https://hal.science/hal-01234567',
-        abstract_s: ['<p>Cet article analyse la gouvernance des SI &amp; son alignement stratégique dans les organisations publiques françaises.</p>'],
-        journalTitle_s: 'Systèmes d’information et management',
-      },
-      { title_s: 'Référentiels ITIL et COBIT : une comparaison', authFullName_s: ['Luc Petit'], producedDateY_i: 2021, uri_s: 'https://hal.science/hal-07654321' },
-      { authFullName_s: ['Sans titre'] },
-    ],
-  },
-};
-
-const CROSSREF_RESPONSE = {
-  message: {
-    items: [
-      {
-        DOI: '10.3917/SIM.192.0045', // même article que HAL (casse différente) : doit être dédoublonné
-        title: ['La gouvernance des systèmes d’information'],
-        author: [{ given: 'Anne', family: 'Martin' }],
-        issued: { 'date-parts': [[2019, 6]] },
-        'container-title': ['Systèmes d’information et management'],
-      },
-      {
-        DOI: '10.1016/j.im.2020.103245',
-        title: ['IT governance mechanisms and <i>performance</i>'],
-        author: [{ given: 'J.', family: 'Smith' }, { name: 'Consortium X' }],
-        issued: { 'date-parts': [[null]] },
-        'container-title': ['Information & Management'],
-        abstract: '<jats:p>We study IT governance mechanisms, decision rights and accountability in 120 firms across Europe.</jats:p>',
-      },
-      { title: ['Sans DOI'] },
-    ],
-  },
-};
-
-const LONG_WIKI = [
-  'La gouvernance des systèmes d’information désigne le dispositif qui encadre les décisions relatives au SI.',
-  ...Array.from({ length: 40 }, (_, i) => `Paragraphe annexe ${i} sur l’histoire des ordinateurs centraux et des mainframes, sans rapport direct avec le sujet traité.`),
-  'Les référentiels de gouvernance comme COBIT structurent l’alignement stratégique et la maîtrise des risques du système d’information.',
-].join('\n\n');
-
-function wikiHandler(url: string): Response {
-  if (url.includes('list=search')) return jsonResponse({ query: { search: [{ pageid: 101, title: 'Gouvernance des systèmes d’information' }, { pageid: 102, title: 'COBIT' }] } });
-  if (url.includes('pageids=101')) return jsonResponse({ query: { pages: { 101: { title: 'Gouvernance des systèmes d’information', extract: LONG_WIKI, fullurl: 'https://fr.wikipedia.org/wiki/Gouvernance_des_SI' } } } });
-  if (url.includes('pageids=102')) return textResponse('erreur', 500); // une page en échec n'empêche pas les autres
-  return textResponse('?', 404);
-}
-
-function searxHandler(url: string): Response {
-  const q = new URL(url).searchParams.get('q') ?? '';
-  if (q.includes('site:eduscol.education.fr')) {
-    return jsonResponse({ results: [
-      { url: 'https://eduscol.education.fr/1234/programme-cycle-3', title: 'Programme du cycle 3', content: 'Le programme du cycle 3 précise les attendus de fin de cycle en mathématiques, dont les fractions simples et décimales.' },
-      { url: 'javascript:alert(1)', title: 'piège', content: 'x' },
-    ] });
-  }
-  if (q.includes('site:education.gouv.fr')) {
-    return jsonResponse({ results: [{ url: 'https://www.education.gouv.fr/bo/2024/Hebdo1', title: 'Bulletin officiel', content: 'Bulletin officiel de l’éducation nationale : programmes en vigueur à la rentrée, mathématiques au cycle 3 et fractions.' }] });
-  }
-  return jsonResponse({ results: [
-    { url: 'https://blog.example.org/fractions', title: 'Enseigner les fractions', content: 'Un blog d’enseignant propose des activités de manipulation pour introduire les fractions au CM1.' },
-    { url: 'https://eduscol.education.fr/1234/programme-cycle-3/', title: 'Programme du cycle 3 (doublon)', content: 'Doublon de la page Éduscol déjà trouvée, avec une barre oblique finale en plus.' },
-    { url: 'https://court.example.org', title: 'Trop court', content: 'Trop court.' },
-  ] });
-}
-
-function router(overrides: Partial<Record<'hal' | 'crossref' | 'searx' | 'wiki', (url: string) => Response>> = {}) {
-  return mockFetch(url => {
-    const host = new URL(url).hostname;
-    if (host === 'api.archives-ouvertes.fr') return (overrides.hal ?? (() => jsonResponse(HAL_RESPONSE)))(url);
-    if (host === 'api.crossref.org') return (overrides.crossref ?? (() => jsonResponse(CROSSREF_RESPONSE)))(url);
-    if (host === 'searx.example.fr') return (overrides.searx ?? searxHandler)(url);
-    if (host === 'fr.wikipedia.org') return (overrides.wiki ?? wikiHandler)(url);
-    throw new Error(`Hôte inattendu : ${host}`);
-  });
-}
-
-const CONFIG: ResearchConfig = { academic: true, wikipedia: true, searxngUrl: 'https://searx.example.fr/', crossrefMailto: 'contact@magistra.example', timeoutMs: 2_000 };
-const deps = (fetchImpl: ReturnType<typeof mockFetch>): ResearchDeps => ({ fetch: fetchImpl });
+import { CONFIG, deps, fakePages, NO_SEARX, router, searxHandler, wikiHandler } from './researchFixtures';
 
 describe('connecteurs — parsing', () => {
   it('HAL : métadonnées, résumé nettoyé, référence sans résumé signalée, entrée sans titre ignorée', async () => {
@@ -134,8 +50,16 @@ describe('connecteurs — parsing', () => {
   });
 
   it('SearXNG : seules les URL http(s) avec un titre sont gardées', async () => {
-    const results = await searchSearxng('https://searx.example.fr/', 'fractions site:eduscol.education.fr', deps(router()), { max: 4, timeoutMs: 1_000 });
-    expect(results.map(r => r.url)).toEqual(['https://eduscol.education.fr/1234/programme-cycle-3']);
+    const fetchImpl = router();
+    const results = await searchSearxng('https://searx.example.fr/', 'fractions (site:education.gouv.fr OR site:eduscol.education.fr)', deps(fetchImpl), { max: 4, timeoutMs: 1_000 });
+    expect(results.map(r => r.url)).toEqual([
+      'https://eduscol.education.fr/1234/programme-cycle-3',
+      'https://www.education.gouv.fr/bo/2024/Hebdo1',
+      'https://blog.example.org/fractions',
+      'http://www.education.gouv.fr/ancien/fractions',
+    ]);
+    // Le filtre sur le catalogue est celui de runResearch : le connecteur, lui, ne fait que renvoyer les résultats web.
+    expect(new URL(fetchImpl.calls[0].url).searchParams.get('format')).toBe('json');
   });
 
   it('Wikipédia : recherche puis extraits ; une page en échec n’empêche pas les autres', async () => {
@@ -155,36 +79,55 @@ describe('connecteurs — parsing', () => {
 });
 
 describe('stripTags — temps linéaire et fidélité', () => {
-  const timed = (html: string) => {
-    const started = performance.now();
-    const text = stripTags(html);
-    return { text, ms: performance.now() - started };
+  /** Borne absolue très large (machine chargée) : un balayage quadratique la dépasse de loin sur ces entrées. */
+  const BOUND_MS = 3000;
+
+  /** Plus courte durée (ms) de 3 exécutions : un pic de charge de la machine ne fausse pas la mesure. */
+  const fastest = (html: string) => {
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const started = performance.now();
+      stripTags(html);
+      best = Math.min(best, performance.now() - started);
+    }
+    return best;
   };
 
-  it('20 000 balises <nav> jamais refermées sont traitées en moins de 200 ms', () => {
-    const { text, ms } = timed(`${'<nav>menu '.repeat(20_000)}Contenu utile`);
-    expect(ms).toBeLessThan(200);
-    expect(text).toContain('Contenu utile');
+  /**
+   * Temps linéaire : avec 4 fois plus de balises, le temps est multiplié par 4 (par 16 pour un balayage quadratique) ; il
+   * ne doit pas dépasser 8 fois celui de la taille de base (plancher de 50 ms : en dessous, la mesure ne dit rien), ni
+   * BOUND_MS. Les entrées sont construites hors mesure.
+   */
+  const expectLinear = (build: (n: number) => string, n: number) => {
+    const base = fastest(build(n));
+    const scaled = fastest(build(4 * n));
+    expect(scaled).toBeLessThan(8 * Math.max(base, 50));
+    expect(scaled).toBeLessThan(BOUND_MS);
+  };
+
+  it('des milliers de balises <nav> jamais refermées : temps linéaire, texte utile conservé', () => {
+    const build = (n: number) => `${'<nav>menu '.repeat(n)}Contenu utile`;
+    expect(stripTags(build(20_000))).toContain('Contenu utile');
+    expectLinear(build, 10_000);
   });
 
   it('autres entrées piégées : <script>/<aside> ouverts, chevrons sans fin, commentaires ouverts, blancs massifs', () => {
-    const traps = [
-      `${'<script>x'.repeat(20_000)}fin`,
-      `${'<aside a="1" '.repeat(20_000)}`,
-      `${'<'.repeat(100_000)}texte`,
-      `${'<!--'.repeat(20_000)}`,
-      `${'\n '.repeat(100_000)}x`,
-      `${'<nav>'.repeat(10_000)}${'</navbar>'.repeat(10_000)}`,
+    const traps: Array<[(n: number) => string, number]> = [
+      [n => `${'<script>x'.repeat(n)}fin`, 10_000],
+      [n => '<aside a="1" '.repeat(n), 20_000],
+      [n => `${'<'.repeat(n)}texte`, 100_000],
+      [n => '<!--'.repeat(n), 20_000],
+      [n => `${'\n '.repeat(n)}x`, 100_000],
+      [n => `${'<nav>'.repeat(n)}${'</navbar>'.repeat(n)}`, 5_000],
     ];
-    for (const html of traps) expect(timed(html).ms).toBeLessThan(200);
+    for (const [build, n] of traps) expectLinear(build, n);
     // Chevrons isolés = texte ; « <texte » sans « > » en fin de document = balise tronquée, écartée.
     expect(stripTags(`${'<'.repeat(1_000)} texte`)).toBe(`${'<'.repeat(1_000)} texte`);
     expect(stripTags('début <balise-tronquee')).toBe('début');
   });
 
   it('entrée démesurée plafonnée', () => {
-    const { ms } = timed('a'.repeat(5_000_000));
-    expect(ms).toBeLessThan(500);
+    expect(fastest('a'.repeat(5_000_000))).toBeLessThan(BOUND_MS);
     expect(stripTags('a'.repeat(5_000_000))).toHaveLength(2_000_000);
   });
 
@@ -196,7 +139,7 @@ describe('stripTags — temps linéaire et fidélité', () => {
     expect(stripTags(html)).toBe('Programme du cycle 3\nLes fractions\nsimples & décimales.\n\nSi a < b alors a < b et c > d.');
   });
 
-  it('<nav> imbriqués et </navbar> : même résultat que l’ancienne expression, sans blocage', () => {
+  it('<nav> imbriqués et </navbar> : résultat attendu, sans blocage', () => {
     expect(stripTags('<nav>a<nav>b</nav>c</nav>Texte')).toBe('c Texte');
     expect(stripTags('<nav>menu</navbar> suite</nav>Texte')).toBe('Texte');
     expect(stripTags('<svg/>Visible')).toBe('Visible');
@@ -204,18 +147,19 @@ describe('stripTags — temps linéaire et fidélité', () => {
 });
 
 describe('planResearch', () => {
-  it('par mode et par niveau', () => {
+  it('par mode et par niveau : les sites vérifiés sont demandés dès qu’une recherche en ligne l’est', () => {
     expect(planResearch('documents', 'licence')).toEqual({ academic: false, institutional: false, web: false, wikipedia: false });
-    expect(planResearch('academic', 'college')).toEqual({ academic: true, institutional: false, web: false, wikipedia: false });
-    expect(planResearch('internet', 'master')).toEqual({ academic: true, institutional: false, web: true, wikipedia: true });
-    expect(planResearch('documents_internet', 'doctorat')).toEqual({ academic: true, institutional: false, web: true, wikipedia: true });
+    expect(planResearch('academic', 'college')).toEqual({ academic: true, institutional: true, web: false, wikipedia: false });
+    expect(planResearch('academic', 'doctorat')).toEqual({ academic: true, institutional: true, web: false, wikipedia: false });
+    expect(planResearch('internet', 'master')).toEqual({ academic: true, institutional: true, web: true, wikipedia: true });
+    expect(planResearch('documents_internet', 'doctorat')).toEqual({ academic: true, institutional: true, web: true, wikipedia: true });
     expect(planResearch('internet', 'elementaire')).toEqual({ academic: false, institutional: true, web: true, wikipedia: true });
     expect(planResearch('documents_internet', 'lycee')).toEqual({ academic: false, institutional: true, web: true, wikipedia: true });
   });
 });
 
 describe('runResearch', () => {
-  it('université : HAL > Crossref > web > Wikipédia, dédoublonnage par DOI et URL', async () => {
+  it('université : HAL > Crossref > OpenAlex > sites vérifiés > Wikipédia, dédoublonnage par DOI et URL', async () => {
     const fetchImpl = router();
     const outcome = await runResearch(
       { text: 'gouvernance des systèmes d’information', mode: 'internet', group: 'master' },
@@ -226,34 +170,236 @@ describe('runResearch', () => {
     const kinds = outcome.sources.map(s => s.kind);
     expect(kinds.indexOf('hal')).toBe(0);
     expect(kinds.lastIndexOf('hal')).toBeLessThan(kinds.indexOf('crossref'));
-    expect(kinds.lastIndexOf('crossref')).toBeLessThan(kinds.indexOf('web'));
+    expect(kinds.lastIndexOf('crossref')).toBeLessThan(kinds.indexOf('openalex'));
+    expect(kinds.lastIndexOf('openalex')).toBeLessThan(kinds.indexOf('institutional'));
+    expect(kinds.lastIndexOf('institutional')).toBeLessThan(kinds.indexOf('wikipedia'));
     expect(kinds[kinds.length - 1]).toBe('wikipedia');
-    // L'article présent dans HAL et Crossref n'apparaît qu'une fois (version HAL, prioritaire).
+    // L'article présent dans HAL, Crossref et OpenAlex n'apparaît qu'une fois (version HAL, prioritaire).
     expect(outcome.sources.filter(s => s.doi?.toLowerCase() === '10.3917/sim.192.0045')).toHaveLength(1);
+    expect(outcome.sources.find(s => s.doi?.toLowerCase() === '10.3917/sim.192.0045')?.kind).toBe('hal');
+    expect(outcome.sources.filter(s => s.kind === 'openalex').map(s => s.doi)).toEqual(['10.1016/j.accinf.2021.100512']);
     // Doublon d'URL (barre oblique finale) et résultat trop court écartés.
     const urls = outcome.sources.map(s => s.url);
     expect(urls.filter(u => u?.startsWith('https://eduscol.education.fr/1234/programme-cycle-3'))).toHaveLength(1);
     expect(urls).not.toContain('https://court.example.org');
-    // Pas de sources institutionnelles demandées dans le supérieur.
-    expect(fetchImpl.calls.some(c => c.url.includes('site%3A'))).toBe(false);
+    // Le web général n'est jamais interrogé ni retenu.
+    expect(outcome.sources.some(s => s.kind === 'web')).toBe(false);
+    expect(urls).not.toContain('https://blog.example.org/fractions');
   });
 
-  it('scolaire : priorité Éduscol / education.gouv.fr via SearXNG (site:), pas d’HAL ni de Crossref', async () => {
+  it('université : priorité des connecteurs académiques HAL > Crossref > OpenAlex, résumés d’abord dans chacun', async () => {
+    const outcome = await runResearch({ text: 'gouvernance', mode: 'academic', group: 'master' }, NO_SEARX, deps(router()), { budgetChars: 50_000 });
+    expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'hal', 'crossref', 'openalex']);
+    // La référence HAL sans résumé passe après celle qui en a un.
+    expect(outcome.sources[0].text).toMatch(/gouvernance des SI/);
+    expect(outcome.sources[1].text).toBe(NO_ABSTRACT_TEXT);
+  });
+
+  it('scolaire avec SearXNG : requêtes « site: » par lots sur les principaux sites du catalogue, jamais de requête générale, sites vérifiés > Wikipédia', async () => {
     const fetchImpl = router();
     const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'elementaire' }, CONFIG, deps(fetchImpl), { budgetChars: 50_000 });
     const queries = fetchImpl.calls.filter(c => c.url.startsWith('https://searx.example.fr/search')).map(c => new URL(c.url).searchParams.get('q'));
-    expect(queries).toEqual(['les fractions site:eduscol.education.fr', 'les fractions site:education.gouv.fr', 'les fractions']);
-    expect(fetchImpl.calls.some(c => /archives-ouvertes|crossref/.test(c.url))).toBe(false);
-    expect(outcome.sources[0]).toMatchObject({ kind: 'institutional', url: 'https://eduscol.education.fr/1234/programme-cycle-3' });
-    expect(outcome.sources[1]).toMatchObject({ kind: 'institutional', url: 'https://www.education.gouv.fr/bo/2024/Hebdo1' });
-    expect(outcome.sources.map(s => s.kind)).toEqual(['institutional', 'institutional', 'web', 'wikipedia']);
+    expect(queries).toEqual(trustedSearchGroups().map(group => `les fractions (${group.map(d => `site:${d}`).join(' OR ')})`));
+    expect(queries.length).toBeGreaterThan(1);
+    expect(queries.length).toBeLessThanOrEqual(6);
+    expect(queries.every(q => q?.includes('site:'))).toBe(true);
+    // Les domaines de tous les lots forment ce qui est interrogé : éducation en premier. Leur nombre est celui qu'annoncent les réglages.
+    expect(queries[0]).toContain('site:education.gouv.fr');
+    expect(queries.join(' ')).toContain('site:unesco.org');
+    const queried = queries.flatMap(q => [...q!.matchAll(/site:([^\s)]+)/g)].map(m => m[1]));
+    expect(new Set(queried).size).toBe(queried.length);
+    expect(queried).toHaveLength(SEARCHED_DOMAIN_COUNT);
+    expect(SEARCH_SCOPE_TEXT).toContain(`${queried.length} domaines`);
+    expect(queried).toContain('openedition.org');
+    expect(queried.some(d => d.startsWith('ac-') || d === 'hal.science' || d === 'doi.org')).toBe(false);
+    expect(fetchImpl.calls.some(c => /archives-ouvertes|crossref|openalex/.test(c.url))).toBe(false);
+    expect(outcome.sources.map(s => [s.kind, s.url])).toEqual([
+      ['institutional', 'https://eduscol.education.fr/1234/programme-cycle-3'],
+      ['institutional', 'https://www.education.gouv.fr/bo/2024/Hebdo1'],
+      ['institutional', 'https://www.unesco.org/fr/articles/enseigner-les-fractions'],
+      ['institutional', 'https://www.cnrs.fr/fr/les-fractions'],
+      ['wikipedia', 'https://fr.wikipedia.org/wiki/Gouvernance_des_SI'],
+    ]);
+    // Le nom du site du catalogue est cité comme origine.
+    expect(outcome.sources.slice(0, 4).map(s => s.venue)).toEqual(['Éduscol', 'Ministère de l’Éducation nationale', 'UNESCO', 'CNRS']);
   });
 
-  it('scolaire sans SearXNG : avertissement institutionnel, Wikipédia utilisée quand même', async () => {
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, searxngUrl: undefined }, deps(router()), { budgetChars: 50_000 });
-    expect(outcome.warnings.map(w => w.code)).toEqual(['INSTITUTIONAL_UNAVAILABLE']);
+  it('SearXNG : le blog, l’adresse javascript: et l’adresse http sont écartés même s’ils répondent à une requête « site: »', async () => {
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router()), { budgetChars: 50_000 });
+    const urls = outcome.sources.map(s => s.url);
+    expect(urls).not.toContain('https://blog.example.org/fractions');
+    expect(urls).not.toContain('http://www.education.gouv.fr/ancien/fractions');
+    expect(urls.some(u => u?.startsWith('javascript'))).toBe(false);
+    expect(outcome.sources.every(s => s.kind === 'institutional' || s.kind === 'wikipedia')).toBe(true);
+  });
+
+  it('RESEARCH_TRUSTED_ONLY=false (administrateur) : requête générale ajoutée, résultats hors catalogue admis mais jamais présentés comme officiels', async () => {
+    // Un seul site vérifié répond, pour que les résultats du web général tiennent dans les 4 pages retenues.
+    const oneOfficialPage = (url: string) => {
+      const q = new URL(url).searchParams.get('q') ?? '';
+      if (!q.includes('site:')) return searxHandler(url);
+      return q.includes('site:education.gouv.fr')
+        ? jsonResponse({ results: [{ url: 'https://eduscol.education.fr/1234/programme-cycle-3', title: 'Programme du cycle 3', content: 'Le programme du cycle 3 précise les attendus de fin de cycle en mathématiques, dont les fractions simples et décimales.' }] })
+        : jsonResponse({ results: [] });
+    };
+    const fetchImpl = router({ searx: oneOfficialPage });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'elementaire' }, { ...CONFIG, trustedOnly: false }, deps(fetchImpl), { budgetChars: 50_000 });
+    const queries = fetchImpl.calls.filter(c => c.url.startsWith('https://searx.example.fr/search')).map(c => new URL(c.url).searchParams.get('q'));
+    expect(queries).toHaveLength(trustedSearchGroups().length + 1);
+    expect(queries[queries.length - 1]).toBe('les fractions');
+    const kinds = outcome.sources.map(s => s.kind);
+    expect(kinds.indexOf('web')).toBeGreaterThan(kinds.lastIndexOf('institutional'));
+    const blog = outcome.sources.find(s => s.url === 'https://blog.example.org/fractions');
+    expect(blog).toMatchObject({ kind: 'web' });
+    expect(blog?.venue).toBeUndefined();
+    expect(outcome.sources.filter(s => s.kind === 'institutional').every(s => s.venue)).toBe(true);
+  });
+
+  it('restriction levée : une adresse http d’un site du catalogue n’est pas présentée comme officielle', async () => {
+    const httpOnly = (url: string) => (new URL(url).searchParams.get('q')?.includes('site:education.gouv.fr')
+      ? jsonResponse({ results: [{ url: 'http://www.education.gouv.fr/ancien/fractions', title: 'Ancienne adresse en http', content: 'Ancienne page servie en http, que seule une adresse https remplace : fractions et décimaux au cycle 3.' }] })
+      : jsonResponse({ results: [] }));
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false, trustedOnly: false }, deps(router({ searx: httpOnly })), { budgetChars: 50_000 });
+    expect(outcome.sources).toHaveLength(1);
+    expect(outcome.sources[0]).toMatchObject({ kind: 'web', url: 'http://www.education.gouv.fr/ancien/fractions' });
+    expect(outcome.sources[0].venue).toBeUndefined();
+  });
+
+  it('trustedOnly vaut vrai par défaut (champ absent) : même comportement que vrai', async () => {
+    const fetchImpl = router();
+    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, trustedOnly: undefined }, deps(fetchImpl), { budgetChars: 50_000 });
+    expect(fetchImpl.calls.filter(c => c.url.startsWith('https://searx.example.fr/search')).every(c => new URL(c.url).searchParams.get('q')?.includes('site:'))).toBe(true);
+  });
+
+  it('SearXNG + fetchPage : une redirection hors du catalogue écarte la page, une redirection vers un site vérifié la garde', async () => {
+    const fetchPage = fakePages({
+      'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://pirate.example.net/faux-programme' },
+      'https://www.education.gouv.fr/bo/2024/Hebdo1': { url: 'https://www.education.gouv.fr/bo/2024/Hebdo1-final', title: 'BO final' },
+    });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router(), fetchPage), { budgetChars: 50_000 });
+    const urls = outcome.sources.map(s => s.url);
+    expect(urls).not.toContain('https://eduscol.education.fr/1234/programme-cycle-3');
+    expect(outcome.sources.some(s => /pirate/.test(s.text) || /pirate/.test(s.title))).toBe(false);
+    // La redirection vers un autre site vérifié est gardée : la source porte l'adresse FINALE et le titre de la page lue (P2).
+    expect(urls).not.toContain('https://www.education.gouv.fr/bo/2024/Hebdo1');
+    const bo = outcome.sources.find(s => s.url === 'https://www.education.gouv.fr/bo/2024/Hebdo1-final');
+    expect(bo).toMatchObject({ kind: 'institutional', venue: 'Ministère de l’Éducation nationale', title: 'BO final' });
+    expect(bo?.text).toMatch(/Contenu officiel de www\.education\.gouv\.fr/);
+    expect(fetchPage.calls).toContain('https://eduscol.education.fr/1234/programme-cycle-3');
+  });
+
+  it('SearXNG + fetchPage, redirection catalogue → catalogue : adresse, nom du site, niveau et titre de la page FINALE (comme pour les références de Wikipédia) ; dédoublonnage sur l’adresse finale', async () => {
+    const final = 'https://whc.unesco.org/fr/list/';
+    const page = { url: final, title: 'Liste du patrimoine mondial', text: 'Contenu officiel de whc.unesco.org : la liste du patrimoine mondial, les critères d’inscription et les sites inscrits, à utiliser en classe.' };
+    const fetchPage = fakePages({
+      'https://eduscol.education.fr/1234/programme-cycle-3': page,
+      'https://www.education.gouv.fr/bo/2024/Hebdo1': page,
+    });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    const moved = outcome.sources.filter(s => s.url === final);
+    expect(moved).toHaveLength(1);
+    expect(moved[0]).toMatchObject({ kind: 'institutional', venue: 'Patrimoine mondial (UNESCO)', title: 'Liste du patrimoine mondial' });
+    expect(moved[0].text).toMatch(/Contenu officiel de whc\.unesco\.org/);
+    // Ni l'adresse demandée ni le nom du premier site ne restent attachés au texte de la page finale.
+    expect(outcome.sources.some(s => s.url === 'https://eduscol.education.fr/1234/programme-cycle-3')).toBe(false);
+    expect(outcome.sources.some(s => s.venue === 'Éduscol')).toBe(false);
+  });
+
+  it('SearXNG + fetchPage : une redirection vers l’accueil, une page de connexion ou /cas/ du catalogue écarte la page (adresse finale non citable)', async () => {
+    const fetchPage = fakePages({
+      'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://eduscol.education.fr/' },
+      'https://www.education.gouv.fr/bo/2024/Hebdo1': { url: 'https://cas.education.gouv.fr/login?service=x' },
+    });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    const urls = outcome.sources.map(s => s.url);
+    expect(urls).not.toContain('https://eduscol.education.fr/1234/programme-cycle-3');
+    expect(urls).not.toContain('https://www.education.gouv.fr/bo/2024/Hebdo1');
+    expect(urls.some(u => /cas\.education|login/.test(u ?? ''))).toBe(false);
+    expect(outcome.sources.some(s => /Contenu officiel de (cas\.|eduscol\.)/.test(s.text))).toBe(false);
+    const cas = fakePages({ 'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://www.education.gouv.fr/cas/' } });
+    const again = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router(), cas), { budgetChars: 50_000 });
+    expect(again.sources.some(s => /Contenu officiel de www\.education/.test(s.text) && s.url?.includes('/cas/'))).toBe(false);
+  });
+
+  it('SearXNG : un résultat « site: » qui est l’accueil ou une page de connexion du catalogue n’est pas retenu (aucune page demandée)', async () => {
+    const homes = (url: string) => (new URL(url).searchParams.get('q')?.includes('site:')
+      ? jsonResponse({ results: [
+        { url: 'https://www.education.gouv.fr/', title: 'Accueil', content: 'Accueil du site du ministère : actualités, menu, espace presse et liens utiles pour les enseignants.' },
+        { url: 'https://cas.education.gouv.fr/login?service=x', title: 'Connexion', content: 'Connexion à l’espace enseignant : identifiant, mot de passe et assistance, pour accéder à vos services.' },
+      ] })
+      : jsonResponse({ results: [] }));
+    const fetchPage = fakePages();
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router({ searx: homes }), fetchPage), { budgetChars: 50_000 });
+    expect(outcome.sources).toEqual([]);
+    expect(fetchPage.calls).toEqual([]);
+  });
+
+  it('allowUrl : transmis à la récupération des pages sous la restriction aux sites vérifiés (https du catalogue seulement, jamais doi.org), absent sinon', async () => {
+    const seen: (((url: URL) => boolean) | undefined)[] = [];
+    const fetchPage = async (url: string, _signal?: AbortSignal, options?: { allowUrl?: (url: URL) => boolean }) => {
+      seen.push(options?.allowUrl);
+      return { url, title: 'Page', text: 'Contenu officiel suffisamment long pour être retenu comme source de la recherche en ligne.' };
+    };
+    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router(), fetchPage), { budgetChars: 50_000 });
+    expect(seen.length).toBeGreaterThan(0);
+    const allow = seen[0]!;
+    expect(seen.every(a => typeof a === 'function')).toBe(true);
+    for (const url of ['https://www.unesco.org/fr/a', 'https://eduscol.education.fr/x', 'https://cas.education.gouv.fr/login']) expect(allow(new URL(url)), url).toBe(true);
+    for (const url of ['http://www.unesco.org/fr/a', 'https://attacker.example/x', 'https://unesco.org.attacker.example/', 'https://doi.org/10.5555/x', 'https://user@www.unesco.org/', 'https://www.unesco.org:8443/'])
+      expect(allow(new URL(url)), url).toBe(false);
+
+    seen.length = 0;
+    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, trustedOnly: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every(a => a === undefined)).toBe(true);
+  });
+
+  it('SearXNG + fetchPage : redirection vers http, ou vers un hôte voisin (suffixe collé), écartée aussi', async () => {
+    const fetchPage = fakePages({
+      'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'http://eduscol.education.fr/1234/programme-cycle-3' },
+      'https://www.education.gouv.fr/bo/2024/Hebdo1': { url: 'https://education.gouv.fr.pirate.example.net/bo' },
+    });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router(), fetchPage), { budgetChars: 50_000 });
+    expect(outcome.sources.map(s => s.url)).not.toContain('https://eduscol.education.fr/1234/programme-cycle-3');
+    expect(outcome.sources.map(s => s.url)).not.toContain('https://www.education.gouv.fr/bo/2024/Hebdo1');
+    expect(outcome.sources.some(s => s.kind === 'institutional' && /unesco/.test(s.url ?? ''))).toBe(true);
+  });
+
+  it('SearXNG, restriction levée : une redirection hors du catalogue est admise (comportement du web général)', async () => {
+    const fetchPage = fakePages({ 'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://autre.example.net/x', title: 'Autre page', text: 'Texte de la page finale, bien plus long que l’extrait fourni par le moteur de recherche : les fractions au cycle 3, leurs écritures, leurs comparaisons, les opérations et les problèmes.' } });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, trustedOnly: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    // L'adresse de la source est celle du texte retenu ; hors catalogue, jamais « officielle ».
+    const moved = outcome.sources.find(s => s.url === 'https://autre.example.net/x');
+    expect(moved?.text).toMatch(/Texte de la page finale/);
+    expect(moved).toMatchObject({ kind: 'web', title: 'Autre page' });
+    expect(moved?.venue).toBeUndefined();
+    expect(outcome.sources.some(s => s.url === 'https://eduscol.education.fr/1234/programme-cycle-3')).toBe(false);
+  });
+
+  it('SearXNG sans aucune page du catalogue : « Aucune source officielle trouvée », jamais une source hors catalogue', async () => {
+    const onlyBlogs = (url: string) => (new URL(url).searchParams.get('q')?.includes('site:')
+      ? jsonResponse({ results: [{ url: 'https://blog.example.org/fractions', title: 'Enseigner les fractions', content: 'Un blog d’enseignant propose des activités de manipulation pour introduire les fractions au CM1.' }] })
+      : jsonResponse({ results: [] }));
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router({ searx: onlyBlogs })), { budgetChars: 50_000 });
+    expect(outcome.sources).toEqual([]);
+    expect(outcome.warnings).toContainEqual({ code: 'INSTITUTIONAL_UNAVAILABLE', message: NO_OFFICIAL_FOUND_MESSAGE });
+  });
+
+  it('SearXNG injoignable (Wikipédia répond) : avertissement de recherche, pas de « aucune source officielle » en plus', async () => {
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router({ searx: () => textResponse('x', 502) })), { budgetChars: 50_000 });
+    expect(outcome.warnings.map(w => w.message)).toEqual(['Recherche Internet indisponible (serveur SearXNG injoignable).']);
+    expect(outcome.sources.map(s => s.kind)).toEqual(['wikipedia']);
+  });
+
+  it('scolaire sans SearXNG ni fetchPage : sites officiels non consultés, Wikipédia utilisée quand même', async () => {
+    const fetchImpl = router();
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, NO_SEARX, deps(fetchImpl), { budgetChars: 50_000 });
+    expect(outcome.warnings).toEqual([{ code: 'INSTITUTIONAL_UNAVAILABLE', message: OFFICIAL_UNAVAILABLE_MESSAGE }]);
+    expect(OFFICIAL_UNAVAILABLE_MESSAGE).toBe('Sites officiels (Éduscol, UNESCO, ministères…) non consultés. Ajoutez vos documents officiels (programmes, textes) pour les utiliser.');
     expect(outcome.sources.map(s => s.kind)).toEqual(['wikipedia']);
     expect(outcome.internetUsed).toBe(true);
+    // Sans fetchPage, les références de Wikipédia ne sont pas demandées (chemin désactivé sans erreur).
+    expect(fetchImpl.calls.some(c => c.url.includes('prop=extlinks'))).toBe(false);
   });
 
   it('sans Internet : un seul avertissement clair, aucune exception, génération possible', async () => {
@@ -266,28 +412,46 @@ describe('runResearch', () => {
     expect(outcome.warnings[0].message).toMatch(/Pas de connexion Internet.*la génération continue/);
   });
 
-  it('panne partielle : HAL en erreur, Crossref répond → sources Crossref, pas d’avertissement académique', async () => {
-    const outcome = await runResearch(
-      { text: 'gouvernance', mode: 'academic', group: 'master' },
-      CONFIG, deps(router({ hal: () => textResponse('Solr error', 500) })), { budgetChars: 50_000 },
-    );
-    expect(outcome.sources.map(s => s.kind)).toEqual(['crossref', 'crossref']);
-    expect(outcome.warnings).toEqual([]);
+  it('sans Internet, sans chemin vers les sites officiels : l’avertissement « sites officiels » est conservé avec le message unique', async () => {
+    const offline = mockFetch(() => { throw networkError('ENOTFOUND'); });
+    const outcome = await runResearch({ text: 'gouvernance', mode: 'internet', group: 'college' }, NO_SEARX, deps(offline), { budgetChars: 50_000 });
+    expect(outcome.warnings.map(w => w.code)).toEqual(['INSTITUTIONAL_UNAVAILABLE', 'RESEARCH_UNAVAILABLE']);
   });
 
-  it('HAL et Crossref en erreur HTTP (réseau OK pour Wikipédia) → avertissement académique', async () => {
+  it('panne partielle : HAL en erreur, Crossref et OpenAlex répondent → pas d’avertissement académique', async () => {
+    const outcome = await runResearch(
+      { text: 'gouvernance', mode: 'academic', group: 'master' },
+      NO_SEARX, deps(router({ hal: () => textResponse('Solr error', 500) }), fakePages()), { budgetChars: 50_000 },
+    );
+    expect(outcome.sources.filter(s => ['hal', 'crossref', 'openalex'].includes(s.kind)).map(s => s.kind)).toEqual(['crossref', 'crossref', 'openalex']);
+    expect(outcome.warnings.some(w => w.code === 'ACADEMIC_UNAVAILABLE')).toBe(false);
+  });
+
+  it('HAL, Crossref et OpenAlex en erreur HTTP (réseau OK pour Wikipédia) → avertissement académique', async () => {
+    const down = () => textResponse('x', 503);
     const outcome = await runResearch(
       { text: 'gouvernance', mode: 'internet', group: 'doctorat' },
-      { ...CONFIG, searxngUrl: undefined },
-      deps(router({ hal: () => textResponse('x', 503), crossref: () => textResponse('x', 503) })), { budgetChars: 50_000 },
+      NO_SEARX,
+      deps(router({ hal: down, crossref: down, openalex: down }), fakePages()), { budgetChars: 50_000 },
     );
-    expect(outcome.warnings.map(w => w.code)).toEqual(['ACADEMIC_UNAVAILABLE']);
-    expect(outcome.sources.map(s => s.kind)).toEqual(['wikipedia']);
+    expect(outcome.warnings).toContainEqual({ code: 'ACADEMIC_UNAVAILABLE', message: 'Recherche académique indisponible (HAL, Crossref et OpenAlex injoignables).' });
+    expect(outcome.sources.filter(s => s.kind === 'hal' || s.kind === 'crossref' || s.kind === 'openalex')).toEqual([]);
+    expect(outcome.sources.some(s => s.kind === 'wikipedia')).toBe(true);
+  });
+
+  it('un seul des trois services académiques en panne : aucun avertissement', async () => {
+    const outcome = await runResearch(
+      { text: 'gouvernance', mode: 'academic', group: 'master' },
+      NO_SEARX, deps(router({ hal: () => textResponse('x', 503), crossref: () => textResponse('x', 503) }), fakePages()), { budgetChars: 50_000 },
+    );
+    expect(outcome.sources.filter(s => s.kind === 'openalex')).toHaveLength(2);
+    expect(outcome.warnings.some(w => w.code === 'ACADEMIC_UNAVAILABLE')).toBe(false);
   });
 
   it('recherche académique désactivée dans les réglages', async () => {
     const fetchImpl = router();
-    const outcome = await runResearch({ text: 'gouvernance', mode: 'academic', group: 'master' }, { ...CONFIG, academic: false }, deps(fetchImpl), { budgetChars: 50_000 });
+    // Sans fetchPage et sans SearXNG, les sites officiels ne sont pas consultables non plus : aucun appel réseau.
+    const outcome = await runResearch({ text: 'gouvernance', mode: 'academic', group: 'master' }, { ...NO_SEARX, academic: false }, deps(fetchImpl), { budgetChars: 50_000 });
     expect(fetchImpl.calls).toHaveLength(0);
     expect(outcome.warnings[0]).toMatchObject({ code: 'ACADEMIC_UNAVAILABLE', message: 'Recherche académique désactivée dans les réglages.' });
   });
@@ -308,7 +472,7 @@ describe('runResearch', () => {
     expect(outcome.sources.length).toBeGreaterThan(0);
     for (const s of outcome.sources) expect(s.text.trim().length).toBeGreaterThan(0);
 
-    const wiki = await runResearch({ text: 'gouvernance systèmes information COBIT', mode: 'internet', group: 'master' }, { ...CONFIG, academic: false, searxngUrl: undefined }, deps(router()), { budgetChars: 2_000 });
+    const wiki = await runResearch({ text: 'gouvernance systèmes information COBIT', mode: 'internet', group: 'master' }, { ...NO_SEARX, academic: false }, deps(router()), { budgetChars: 2_000 });
     const text = wiki.sources.find(s => s.kind === 'wikipedia')?.text ?? '';
     expect(text.length).toBeLessThanOrEqual(2_000);
     expect(text).toMatch(/COBIT/);
@@ -321,21 +485,27 @@ describe('runResearch', () => {
     expect(outcome.sources.reduce((n, s) => n + s.text.length, 0)).toBeLessThanOrEqual(300);
     for (const s of outcome.sources) expect(s.text.length).toBeGreaterThan(0);
 
-    const wiki = await runResearch({ text: 'gouvernance COBIT', mode: 'internet', group: 'master' }, { ...CONFIG, academic: false, searxngUrl: undefined }, deps(router()), { budgetChars: 300 });
+    const wiki = await runResearch({ text: 'gouvernance COBIT', mode: 'internet', group: 'master' }, { ...NO_SEARX, academic: false }, deps(router()), { budgetChars: 300 });
     expect(wiki.sources).toHaveLength(1);
     expect(wiki.sources[0].text.length).toBeLessThanOrEqual(300);
     expect(wiki.sources[0].text.length).toBeGreaterThan(50);
   });
 
-  it('la requête envoyée contient uniquement le texte de recherche fourni (sujet court pour HAL et Wikipédia)', async () => {
+  it('la requête envoyée contient uniquement le texte de recherche fourni (sujet court pour HAL, OpenAlex et Wikipédia)', async () => {
     const fetchImpl = router();
     await runResearch({ text: 'Le multiplicateur keynésien Économie Comprendre la relance', topic: 'Le multiplicateur keynésien', mode: 'internet', group: 'licence' }, CONFIG, deps(fetchImpl), { budgetChars: 10_000 });
     const hal = new URL(fetchImpl.calls.find(c => c.url.includes('archives-ouvertes'))!.url);
     expect(hal.searchParams.get('q')).toBe('Le multiplicateur keynésien');
+    const openalex = new URL(fetchImpl.calls.find(c => c.url.includes('openalex'))!.url);
+    expect(openalex.searchParams.get('search')).toBe('Le multiplicateur keynésien');
+    expect(openalex.searchParams.get('mailto')).toBe('contact@magistra.example');
     const wiki = new URL(fetchImpl.calls.find(c => c.url.includes('list=search'))!.url);
     expect(wiki.searchParams.get('srsearch')).toBe('Le multiplicateur keynésien');
     const crossref = new URL(fetchImpl.calls.find(c => c.url.includes('crossref'))!.url);
     expect(crossref.searchParams.get('query.bibliographic')).toBe('Le multiplicateur keynésien Économie Comprendre la relance');
+    // SearXNG reçoit la recherche complète, sans le texte des documents ni les consignes (jamais fournis à runResearch).
+    const searx = fetchImpl.calls.filter(c => c.url.startsWith('https://searx.example.fr/'));
+    expect(searx.every(c => new URL(c.url).searchParams.get('q')?.startsWith('Le multiplicateur keynésien Économie Comprendre la relance ('))).toBe(true);
   });
 
   it('annulation : les requêtes reçoivent le signal et la recherche se termine sans exception', async () => {
@@ -352,13 +522,13 @@ describe('runResearch', () => {
 
   it('délai dépassé sur un service lent → avertissement, les autres sources restent utilisées', async () => {
     const slowHal = mockFetch((url, init) => {
-      if (url.includes('archives-ouvertes') || url.includes('crossref')) {
+      if (url.includes('archives-ouvertes') || url.includes('crossref') || url.includes('openalex')) {
         return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('timeout', 'TimeoutError'))));
       }
       return wikiHandler(url);
     });
-    const outcome = await runResearch({ text: 'gouvernance', mode: 'internet', group: 'master' }, { ...CONFIG, searxngUrl: undefined, timeoutMs: 50 }, deps(slowHal), { budgetChars: 10_000 });
-    expect(outcome.warnings.map(w => w.code)).toEqual(['ACADEMIC_UNAVAILABLE']);
-    expect(outcome.sources.map(s => s.kind)).toEqual(['wikipedia']);
+    const outcome = await runResearch({ text: 'gouvernance', mode: 'internet', group: 'master' }, { ...NO_SEARX, timeoutMs: 50 }, deps(slowHal, fakePages()), { budgetChars: 10_000 });
+    expect(outcome.warnings.map(w => w.code)).toContain('ACADEMIC_UNAVAILABLE');
+    expect(outcome.sources.some(s => s.kind === 'wikipedia')).toBe(true);
   });
 });

@@ -28,11 +28,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MockProvider, type MockProviderOptions } from '@shared/ai/mock';
 import { defaultMessage } from '@shared/errors';
 import { DEFAULT_PREFERENCES } from '@shared/ipc';
-import { CONNECTOR_HEADERS, CONNECTOR_LIMITS, LOCAL_ENGINE_SITE_MESSAGES, parseAppUrl } from '@shared/localConnector';
+import { CONNECTOR_HEADERS, CONNECTOR_LIMITS, LOCAL_ENGINE_SITE_MESSAGES, OFFICIAL_WEB_ORIGINS, parseAppUrl } from '@shared/localConnector';
+import { SITE_ORIGIN } from '@shared/site';
 import type { Capabilities, GenerationEvent, GenerationRecordDraft, GenerationRequest } from '@shared/types';
 import type { SecretCipher } from '../../electron/aiConfig';
 import { toBase64Url } from '../../electron/connector/crypto';
 import { LocalConnector, type ConsentRequest } from '../../electron/connector/service';
+import { originTraps } from '../electron/officialOrigins';
 import { BUSY_WINDOW_MESSAGE, GenerationManager, type GenerationDeps } from '../../electron/generation';
 import {
   defaultSleep, LocalConnectorClient, STOPPED_BY_APP_MESSAGE, UNRECOGNIZED_BY_APP_MESSAGE, type LocalConnectorClientOptions,
@@ -200,7 +202,9 @@ let opened: string[];
 let current: App | null;
 
 /** `appFile` : local-connector.json de l'application (autre fichier : application d'une autre session Windows). */
-function startApp(ports: readonly number[], providerOptions: MockProviderOptions = {}, appFile = file, maxClients?: number): Promise<App> {
+function startApp(
+  ports: readonly number[], providerOptions: MockProviderOptions = {}, appFile = file, maxClients?: number, allowedOrigins: readonly string[] = [ORIGIN, DEV_ORIGIN],
+): Promise<App> {
   const provider = new MockProvider({ reply: REPLY, chunkSize: 12, model: 'ministral-3:8b', ...providerOptions });
   const saved = vi.fn(async () => ({ id: 'jamais' }));
   const deps: GenerationDeps = {
@@ -226,7 +230,7 @@ function startApp(ports: readonly number[], providerOptions: MockProviderOptions
     cipher,
     ...(maxClients ? { maxClients } : {}),
     version: VERSION,
-    allowedOrigins: [ORIGIN, DEV_ORIGIN],
+    allowedOrigins,
     ports,
     generation: manager,
     askConsent: async request => {
@@ -361,7 +365,7 @@ describe('site web ⇄ application : protocole réel', () => {
     expect(status).toEqual({
       version: VERSION,
       engine: { ready: true, local: true, label: 'Magistra Standard' },
-      capabilities: { maxDocumentChars: expect.any(Number), research: { academic: true, web: false, institutional: false, wikipedia: true } },
+      capabilities: { maxDocumentChars: expect.any(Number), research: { academic: true, web: false, institutional: false, wikipedia: true, trustedCatalogue: true } },
       busy: false,
     });
 
@@ -702,6 +706,78 @@ describe('site web ⇄ application : protocole réel', () => {
     app.manager.cancel(jobId);
     await until(() => !app.manager.busy);
     expect(app.provider.calls).toHaveLength(1);
+  });
+});
+
+describe('origines officielles du site (OFFICIAL_WEB_ORIGINS) : le vrai client du site face au vrai connecteur', () => {
+  const official = [...OFFICIAL_WEB_ORIGINS];
+
+  it.each(official)('%s : détection, appairage (boîte au nom d’hôte), état prouvé, génération en flux', async origin => {
+    const app = await startApp([0], {}, file, undefined, official);
+    const port = app.connector.port!;
+    const { client } = await pairedClient([port], { origin });
+    const host = new URL(origin).host;
+    expect(parseAppUrl(opened[0])).toMatchObject({ kind: 'pair', origin });
+    expect(app.consents).toHaveLength(1);
+    expect(app.consents[0]).toMatchObject({ origin, site: host, message: `Autoriser ${host} à utiliser l’intelligence locale de cet ordinateur ?` });
+    expect(app.connector.status().clients).toEqual([expect.objectContaining({ site: host, browser: 'Google Chrome' })]);
+    expect((await client.status()).engine).toEqual({ ready: true, local: true, label: 'Magistra Standard' });
+    const events = await collect(client);
+    expect(events.at(-1)?.type).toBe('done');
+    await until(() => !app.manager.busy);
+  });
+
+  it('variantes piégées du nouveau domaine : aucune réponse lisible (403 sans CORS), aucune boîte, aucun appairage', async () => {
+    const app = await startApp([0], {}, file, undefined, official);
+    const port = app.connector.port!;
+    // Origines qu'un en-tête peut porter (l'API fetch refuse les autres : un navigateur n'envoie que du punycode).
+    const sendable = originTraps(SITE_ORIGIN).filter(value => {
+      try {
+        new Headers({ Origin: value });
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    expect(sendable.length).toBeGreaterThan(60);
+    for (const trap of sendable) {
+      const reply = await browserFetch(trap)(`http://127.0.0.1:${port}/v1/hello`, {});
+      expect(reply.status, trap).toBe(403);
+      expect(reply.headers.get('access-control-allow-origin'), trap).toBeNull();
+      await reply.arrayBuffer();
+    }
+    // Le client du site, sur l'apex (non servi par le projet), ne trouve rien et ne peut pas s'appairer.
+    let virtual = 0;
+    const apex = new LocalConnectorClient(clientOptions([port], {
+      origin: 'https://mag-istra.fr',
+      now: () => Date.now() + virtual,
+      sleep: async (ms, signal) => {
+        virtual += ms;
+        await defaultSleep(1, signal);
+      },
+    }));
+    expect(await apex.hello()).toBeNull();
+    expect((await rejection(apex.pair(new AbortController().signal))).code).toBe('CONNECTOR_UNREACHABLE');
+    expect(app.consents).toHaveLength(0);
+    expect(app.connector.pairing.pending).toBeNull();
+    // Une demande d'appairage magistra://pair au nom de l'apex est ignorée par l'application.
+    await app.connector.handleAppUrl(`magistra://pair?v=2&id=${'A'.repeat(22)}&challenge=${'B'.repeat(43)}&origin=${encodeURIComponent('https://mag-istra.fr')}`, () => undefined);
+    expect(app.consents).toHaveLength(0);
+    expect(app.connector.status().clients).toEqual([]);
+  });
+
+  it('un appairage fait depuis l’ancienne adresse ne vaut pas pour le nouveau domaine : il faut se reconnecter (une autorisation est liée à son origine)', async () => {
+    const app = await startApp([0], {}, file, undefined, official);
+    const port = app.connector.port!;
+    const { store } = await pairedClient([port], { origin: official[0] });
+    const modern = new LocalConnectorClient(clientOptions([port], { origin: official[1], store }));
+    expect((await rejection(modern.status())).code).toBe('CONNECTOR_UNPAIRED');
+    expect(app.provider.calls).toHaveLength(0);
+    // Le nouveau domaine s'appaire à son tour, sans retirer l'autorisation de l'ancienne adresse.
+    const second = await pairedClient([port], { origin: official[1] });
+    expect(app.consents.map(c => c.origin)).toEqual(official);
+    expect(app.connector.status().clients.map(c => c.site).sort()).toEqual(['magistra-2.vercel.app', 'www.mag-istra.fr']);
+    expect((await second.client.status()).busy).toBe(false);
   });
 });
 

@@ -1,7 +1,7 @@
-// Référentiel métier : matières, outils de génération, suggestions.
+// Référentiel métier : matières, outils de génération.
 // Source unique partagée par l'interface, le serveur web et l'application Windows.
 
-import { getCycle, getLevelGroup, type Cycle, type LevelGroup, type NiveauScolaire } from './levels.js';
+import { getCycle, getLevelGroup, type Cycle, type NiveauScolaire } from './levels.js';
 
 export type Matiere =
   // Fondamentales
@@ -64,7 +64,7 @@ export const ALL_MATIERES: MatiereInfo[] = [
   // === SCIENCES ===
   { value: 'decouverte_monde', label: 'Questionner le monde', emoji: '🔍', cycles: ['cycle2'] },
   { value: 'sciences_primaire', label: 'Sciences et technologie', emoji: '🔬', cycles: ['cycle3'] },
-  { value: 'physique_chimie', label: 'Physique-Chimie', emoji: '⚛️', cycles: ['college', 'lycee', 'superieur'] },
+  { value: 'physique_chimie', label: 'Physique-Chimie', emoji: '⚛️', cycles: ['college', 'lycee', 'lycee_pro', 'superieur'] },
   { value: 'svt', label: 'SVT', emoji: '🧬', cycles: ['college', 'lycee'] },
   { value: 'sciences_ingenieur', label: "Sciences de l'ingénieur", emoji: '🏗️', cycles: ['lycee', 'superieur'] },
   { value: 'sciences_numeriques', label: 'SNT (Sciences numériques)', emoji: '🖥️', cycles: ['lycee'] },
@@ -267,142 +267,8 @@ export function getToolLabel(type: TypeContenu | string, niveau?: NiveauScolaire
   return getToolInfo(type, niveau).label;
 }
 
-// =============================================
-// SUGGESTIONS DE SUJETS (filtrées par classe)
-// =============================================
-
-/** Suggestion réservée à certaines classes (un groupe comme « collège » couvre plusieurs années de programme). */
-type Suggestion = string | { sujet: string; niveaux: readonly NiveauScolaire[] };
-type SuggestionMap = Partial<Record<Matiere, Suggestion[]>>;
-
-const only = (niveaux: readonly NiveauScolaire[], sujet: string): Suggestion => ({ sujet, niveaux });
-// Classes, d'après les programmes en vigueur (cycle 2 : CP-CE2 ; cycle 3 : CM1-6e ; cycle 4 : 5e-3e).
-const CE = ['ce1', 'ce2'] as const;
-const CM = ['cm1', 'cm2'] as const;
-const CYCLE_2 = ['cp', 'ce1', 'ce2'] as const;
-const CYCLE_4 = ['5eme', '4eme', '3eme'] as const;
-const SECONDE = ['2nde_gt'] as const;
-const PREMIERE = ['1ere_gen', '1ere_techno'] as const;
-const TERMINALE = ['terminale_gen', 'terminale_techno'] as const;
-
-const SUGGESTIONS: Partial<Record<LevelGroup, SuggestionMap>> = {
-  maternelle: {
-    langage_oral: ['Les comptines et jeux de doigts', 'Raconter une histoire', 'Le vocabulaire des émotions', 'Décrire une image'],
-    nombres_formes: ["Compter jusqu'à 10", 'Les formes géométriques', 'Petit / moyen / grand', 'Algorithmes et suites logiques'],
-    temps_espace: ['Les saisons', "Se repérer dans l'espace", 'Les jours de la semaine'],
-    explorer_monde: ['Les 5 sens', 'Les animaux de la ferme', 'Flotte ou coule ?'],
-    graphisme_ecriture: ['Les lignes droites et courbes', 'Écrire son prénom', 'Les boucles'],
-  },
-  elementaire: {
-    francais: [
-      only(['ce2', ...CM], 'La conjugaison du passé composé'), only([...CE, ...CM], 'Les types de phrases'), "Étude d'un conte",
-      only(['cp', ...CE], 'Le nom et le déterminant'), only(['cp'], 'Les sons et les syllabes'),
-    ],
-    mathematiques: [
-      only(CM, 'Les fractions simples'), only(CE, 'La soustraction posée'), only(CM, 'Les nombres décimaux'), only(CM, 'Le périmètre'),
-      only(['cp', 'ce1'], "Les nombres jusqu'à 100"), only(CYCLE_2, 'Se repérer sur un quadrillage'),
-    ],
-    histoire_geo: [only(['cm1'], 'Les Gaulois'), only(CM, 'Se repérer sur une carte'), only(['cm1'], 'Le Moyen Âge'), only(['cm1'], 'Mon quartier, ma ville')],
-    sciences_primaire: [only(CM, 'Les états de la matière'), only(CM, 'Le cycle de l’eau'), only(CM, 'Les chaînes alimentaires')],
-    decouverte_monde: [only(CYCLE_2, 'Les saisons'), only(CYCLE_2, 'Le vivant et le non-vivant'), only(CYCLE_2, 'Les objets techniques du quotidien')],
-    emc: ['Les règles de la classe', "Les droits de l'enfant", "L'égalité filles-garçons"],
-    anglais: [only(CYCLE_2, 'Colours and numbers'), only(['ce2', ...CM], 'Daily routine'), only([...CE, ...CM], 'Describing animals')],
-  },
-  college: {
-    francais: [
-      only(CYCLE_4, "L'accord du participe passé"), only(['6eme', '5eme'], 'Le récit d’aventure'), only(['4eme', '3eme'], 'La poésie lyrique'),
-      'Argumenter à l’oral', only(['6eme'], 'Les contes et récits merveilleux'),
-    ],
-    mathematiques: [
-      only(['4eme', '3eme'], 'Le théorème de Pythagore'), 'La proportionnalité', only(['3eme'], 'Les fonctions affines'),
-      only(['5eme', '4eme'], 'Les nombres relatifs'), only(['6eme'], 'Les nombres décimaux'), only(['6eme', '5eme'], 'Les fractions'),
-    ],
-    histoire_geo: [
-      only(['4eme'], 'La Révolution française'), only(['3eme'], 'La Première Guerre mondiale'), only(['3eme'], 'Les espaces productifs'),
-      only(['4eme'], 'La mondialisation'), only(['6eme'], 'Les premiers États, les premières écritures'), only(['5eme'], 'Le monde byzantin et le monde musulman'),
-    ],
-    physique_chimie: [only(CYCLE_4, "L'énergie électrique"), only(['4eme', '3eme'], "La structure de l'atome"), only(['4eme', '3eme'], 'Les forces'), only(['4eme', '3eme'], 'Les réactions chimiques')],
-    svt: [only(['6eme', '5eme'], 'La cellule'), only(['4eme'], 'La reproduction humaine'), only(['6eme', '5eme'], 'La photosynthèse'), only(['3eme'], 'Le système immunitaire')],
-    emc: ['Le harcèlement scolaire', 'Les symboles de la République', 'La laïcité'],
-    anglais: [only(['4eme', '3eme'], 'Present perfect vs simple past'), 'Describing a picture', 'Writing an email'],
-    technologie: [only(CYCLE_4, 'Les objets connectés'), only(CYCLE_4, 'La chaîne d’énergie'), only(CYCLE_4, 'Programmer un robot')],
-  },
-  lycee: {
-    francais: [
-      only([...SECONDE, ...PREMIERE], 'La dissertation'), only([...SECONDE, ...PREMIERE], 'Le commentaire littéraire'),
-      only([...SECONDE, ...PREMIERE], 'Le théâtre classique'), only([...SECONDE, ...PREMIERE], 'La poésie du XIXe siècle'),
-    ],
-    mathematiques: [
-      only([...PREMIERE, ...TERMINALE], 'Les suites numériques'), only([...PREMIERE, ...TERMINALE], 'La dérivation'),
-      only([...PREMIERE, ...TERMINALE], 'Les probabilités conditionnelles'), only([...SECONDE, ...PREMIERE], 'Les vecteurs'),
-      only(SECONDE, 'Les fonctions de référence'),
-    ],
-    histoire_geo: [
-      only(TERMINALE, 'La guerre froide'), only(TERMINALE, 'La décolonisation'), only(PREMIERE, 'Les métropoles mondiales'),
-      only(SECONDE, 'La Méditerranée antique'),
-    ],
-    physique_chimie: [only([...PREMIERE, ...TERMINALE], 'Les ondes'), only(TERMINALE, 'La mécanique de Newton'), only([...PREMIERE, ...TERMINALE], 'Les dosages'), only(SECONDE, 'La lumière et les spectres')],
-    svt: ["L'évolution", only(PREMIERE, 'La génétique'), only(TERMINALE, 'Le climat et ses variations')],
-    philosophie: [only(TERMINALE, 'La liberté'), only(TERMINALE, 'La justice'), only(TERMINALE, 'Le bonheur'), only(TERMINALE, 'La conscience'), only(TERMINALE, "L'art")],
-    ses: [
-      only([...SECONDE, ...PREMIERE], 'Le marché et la formation des prix'), only(TERMINALE, 'Les inégalités sociales'),
-      only(TERMINALE, 'Le chômage'), only([...SECONDE, ...PREMIERE], 'La socialisation'),
-    ],
-    nsi: [only(PREMIERE, 'Les listes et dictionnaires en Python'), only(TERMINALE, 'La récursivité'), only(TERMINALE, 'Les bases de données')],
-    anglais: ['Debating pros and cons', 'Identities and exchanges', 'Art and power'],
-  },
-  lycee_pro: {
-    francais: ['Écrire une lettre de motivation', 'Lire un récit contemporain', 'Argumenter à l’écrit'],
-    mathematiques: ['Les pourcentages', 'Les statistiques à une variable', 'Les fonctions linéaires'],
-    gestion: ['Le bilan comptable', 'La facturation', 'Le budget prévisionnel'],
-    management: ['La motivation au travail', 'La communication en entreprise'],
-  },
-  bts_but: {
-    gestion: ['Le seuil de rentabilité', "L'analyse financière", 'La gestion de trésorerie'],
-    management: ["Le pilotage de la performance", 'La conduite du changement'],
-    informatique: ['Les API REST', 'La modélisation UML', 'La sécurité des applications web'],
-    mathematiques: ['Les matrices', 'Les probabilités et lois usuelles'],
-  },
-  cpge: {
-    mathematiques: ['Les espaces vectoriels', 'Les séries entières', 'La réduction des endomorphismes'],
-    physique: ['La mécanique du point', 'Les circuits électriques en régime transitoire'],
-    philosophie: ['Le travail', 'La parole', 'Le temps'],
-  },
-  licence: {
-    economie: ['Le multiplicateur keynésien', 'La théorie du consommateur', 'Les défaillances de marché'],
-    droit: ['Les sources du droit', 'La responsabilité civile délictuelle', 'Le contrat : formation et effets'],
-    informatique: ['Les algorithmes de tri', 'Les graphes et parcours', 'Les bases de données relationnelles'],
-    systemes_information: ["L'urbanisation des SI", 'La modélisation des processus (BPMN)'],
-    psychologie: ['La mémoire de travail', 'Le développement cognitif selon Piaget'],
-    sociologie: ['La socialisation', 'Les classes sociales', 'Durkheim et le suicide'],
-    histoire: ['La Révolution française : historiographie', "L'empire romain"],
-    biologie: ['La mitose et la méiose', 'La régulation de l’expression génique'],
-    mathematiques: ['Les intégrales généralisées', 'Les espaces vectoriels normés'],
-  },
-  master: {
-    systemes_information: ['La gouvernance des SI', 'COBIT et ITIL : comparaison critique', 'La transformation numérique des organisations'],
-    economie: ["L'économie de l'innovation", 'Les politiques monétaires non conventionnelles'],
-    droit: ['Le RGPD et ses contentieux', 'La responsabilité des plateformes numériques'],
-    management: ['La gouvernance d’entreprise', 'Le management stratégique'],
-    sciences_education: ["L'évaluation formative", 'Les inégalités scolaires'],
-    informatique: ["L'apprentissage automatique supervisé", 'Les systèmes distribués'],
-    sociologie: ['Les méthodes qualitatives', 'La sociologie des organisations'],
-  },
-  doctorat: {
-    sciences_education: ["Méthodologie de l'état de l'art", 'Épistémologie des sciences de l’éducation'],
-    informatique: ["Reproductibilité en apprentissage automatique", 'Méthodologie d’évaluation expérimentale'],
-    economie: ['Méthodes économétriques d’évaluation des politiques publiques'],
-    autre: ["Construire une revue systématique de la littérature", 'Rédiger une problématique de thèse', 'Éthique de la recherche'],
-  },
-};
-
-/** Suggestions de sujets adaptées à la classe exacte (jamais « Pythagore » en CP, ni en 6e). */
-export function getSujetSuggestions(matiere: Matiere, niveau: NiveauScolaire): string[] {
-  const group = getLevelGroup(niveau);
-  return (SUGGESTIONS[group]?.[matiere] ?? [])
-    .filter(s => typeof s === 'string' || s.niveaux.includes(niveau))
-    .map(s => (typeof s === 'string' ? s : s.sujet));
-}
+// Les idées de sujets (getSujetSuggestions, pickSuggestions) sont dans shared/suggestions.ts : leurs données sont
+// volumineuses et ne doivent pas alourdir ce référentiel, chargé partout.
 
 // =============================================
 // PARAMÈTRES SPÉCIFIQUES AUX OUTILS
@@ -460,7 +326,7 @@ export const TOOL_FIELDS: Record<TypeContenu, readonly string[]> = {
   cours: ['sujet', 'duree', 'objectifs', 'consignes', 'format', 'modalite'],
   exercices: ['sujet', 'objectifs', 'consignes', 'difficulte', 'format', 'modalite', 'nombreExercices', 'bareme', 'sansCorrige'],
   evaluation: ['sujet', 'duree', 'objectifs', 'consignes', 'difficulte', 'modalite', 'typeEvaluation', 'bareme', 'sansCorrige'],
-  sequence: ['sujet', 'duree', 'objectifs', 'consignes', 'modalite', 'nombreSeances'],
+  sequence: ['sujet', 'duree', 'objectifs', 'consignes', 'modalite', 'nombreSeances', 'planSeulement'],
   fiche_prep: ['sujet', 'duree', 'objectifs', 'consignes', 'format', 'modalite'],
   progression: ['sujet', 'consignes', 'modalite'],
   appreciations: ['sujet', 'trimestre', 'profilEleve', 'nombreAppreciations', 'consignes', 'modalite', 'ton'],

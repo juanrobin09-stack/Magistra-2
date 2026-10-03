@@ -3,7 +3,8 @@
 Magistra est une application **gratuite pour les enseignants**. Il ne dépend d'**aucune API payante** :
 
 - **Application Windows** : une IA **locale**, open weights, qui tourne sur l'ordinateur de l'enseignant via [Ollama](https://ollama.com). Aucune clé, aucun compte, aucune limite d'utilisation.
-- **Site web** : un **préréglage** (`AI_PRESET`, voir § 11 ; `ovhcloud` est gratuit, sans clé, hébergé en France) ou un serveur d'IA **compatible OpenAI** ou **Ollama** configuré par l'administrateur (serveur GPU d'une université sous vLLM, Ollama distant…). Un prestataire en ligne est **toujours annoncé** à l'enseignant.
+- **Site public (Vercel)** : une **vitrine** (§ 20). Il présente Magistra, propose le téléchargement de l'application Windows et publie les pages légales ; il n'exécute **aucune IA**, n'a ni compte ni base de données, et ne contient pas l'application.
+- **Hébergement personnel** (serveur Node ou Vercel de l'enseignant ou de son établissement, code conservé et testé, **non déployé** par le dépôt) : un **préréglage** (`AI_PRESET`, voir § 11 ; `ovhcloud` est gratuit, sans clé, hébergé en France) ou un serveur d'IA **compatible OpenAI** ou **Ollama** configuré par l'administrateur (serveur GPU d'une université sous vLLM, Ollama distant…). Un prestataire en ligne est **toujours annoncé** à l'enseignant.
 - **En local** (`npm run dev`, `npm start` sur la boucle locale) : **mode personnel** sans compte (§ 12), avec l'IA de l'ordinateur **détectée automatiquement** (§ 13).
 - **Site web + application Windows** (« Magistra locale ») : le site confie la génération à l'IA locale de l'application par son **connecteur local**, après appairage accepté par l'enseignant ; le navigateur n'accède jamais au moteur lui-même (§ 19).
 
@@ -128,10 +129,15 @@ fichier (PDF, DOCX, PPTX, TXT, MD)
   → découpage intelligent (paragraphes puis phrases, ≈ 1 200 caractères)
   → recherche des passages utiles (BM25 + racinisation légère du français)
   → sélection sous budget (au moins un passage par document ; tout le document s'il tient)
-  → fusion des passages contigus (« pages 14 à 18 »)
+  → fusion des passages contigus, par passages d'au plus ≈ 3 000 caractères (« pages 14 à 15 ») : une citation désigne
+    1 à 3 pages ou quelques diapositives que l'enseignant peut relire
   → contexte du modèle, sous forme de sources numérotées [S1], [S2]…
 ```
 
+- **Sélection des passages.** Le classement BM25 ignore, dans la requête, les mots pédagogiques génériques (« élèves », « savoir », « expliquer »…) et donne plus de poids au sujet qu'aux objectifs et aux consignes ; quand le sujet est court (différenciation, correction), le début du texte à adapter ou de la copie complète la requête. Racinisation : les pluriels en -eaux et quelques noms en -yaux / -iaux (noyaux, tuyaux, matériaux) sont ramenés à -eau / -au ; les autres pluriels en -aux, à -al.
+- **Qualité d'extraction.** Les exposants et indices des PDF restent dans leur ligne (CO₂, mc²) ; l'en-tête et le pied de page répétés sont retirés des pages suivantes (première occurrence gardée) ; les lignes de tableau PPTX redeviennent « a | b | c » ; un DOCX avec un seul style « Titre » est découpé en blocs de paragraphes.
+- **Fichiers piégés.** L'extraction est en temps linéaire (aucune expression rationnelle à retour arrière sur le contenu) et la décompression des DOCX/PPTX est bornée (80 Mo par entrée XML, 200 Mo au total, 10 000 entrées), avec une erreur claire ; les documents sont analysés deux par deux au plus pour toute la liste de sources, tous dépôts confondus (limiteur unique par formulaire, `src/lib/documents/queue.ts`).
+- **Listes et colonnes.** Les paragraphes de liste d'un DOCX (`w:numPr`) reprennent leur numéro ou leur puce depuis `word/numbering.xml` (lecture bornée comme les autres parties : « 1. », « a) », « i. », « 1.1 », « - ») ; un fichier sans `numbering.xml` ou invalide se lit sans marqueurs. Un PDF sur deux colonnes dont le flux traverse la page (lignes écrites de gauche à droite) est relu colonne par colonne (`shared/documents/pdfColumns.ts`, module pur) ; la détection est volontairement prudente (gouttière unique, colonnes de texte longues, flux qui alterne ligne à ligne) et, au moindre doute (tableau, table des matières, formulaire, une colonne, flux déjà colonne par colonne), l'ordre d'origine est rendu tel quel. Limites connues : un article écrit ligne par ligne dont les paragraphes sont espacés garde son ordre d'origine ; un tableau écrit ligne par ligne dont les cellules ne diffèrent que d'une ligne peut passer pour deux colonnes.
 - **Pas de base vectorielle persistante.** La récupération est éphémère et recalculée à chaque génération.
 - **Le fichier original n'est jamais envoyé ni stocké.**
   - Sous Windows, seul le texte extrait peut être conservé, et seulement si l'enseignant l'a choisi dans les réglages.
@@ -157,7 +163,7 @@ Fichier : `shared/citations.ts`.
    - ne touche **jamais** aux blocs de code ni au code en ligne ;
    - ajoute la section **« Sources utilisées »**, construite **uniquement** à partir des sources citées dans le corps du texte, avec leurs localisations exactes :
      ```
-     [S1] Cours_Economie_M1.pdf — pages 14 à 18
+     [S1] Cours_Economie_M1.pdf — pages 14 à 15
      [S2] Chapitre_Strategie.docx — section « Stratégie d'entreprise »
      [S3] CM4.pptx — diapositives 8 à 12 (extrait)
      [S4] Dupont, J. Titre réel (2021). *Revue*. — HAL. https://doi.org/…
@@ -172,31 +178,56 @@ Fichier : `shared/citations.ts`.
 
 ## 6. Recherche sur Internet
 
-Fichier : `shared/research/`.
+Fichiers : `shared/research/` (`index.ts`, `providers.ts`, `trusted.ts`), `shared/citations.ts`.
 
 ```
-question (sujet, discipline, objectifs — JAMAIS le texte des documents)
-  → recherche : HAL · Crossref · SearXNG (facultatif) · Wikipédia
+question (sujet et discipline — JAMAIS les objectifs, les consignes ni le texte des documents)
+  → recherche : HAL · Crossref · OpenAlex · sites officiels vérifiés · Wikipédia
   → récupération de vraies sources (métadonnées d'origine : auteurs, année, DOI, URL)
   → extraction (résumés, pages web nettoyées et recentrées sur la question)
-  → modèle
+  → modèle (avec le niveau de fiabilité de chaque source)
   → réponse sourcée, avec citations vérifiées
 ```
 
 Le modèle n'est **pas réentraîné**. Les informations récentes arrivent par récupération dynamique, et l'interface affiche clairement quand Internet a été utilisé.
 
-| Mode choisi dans « Générer » | Scolaire (maternelle → lycée) | Supérieur |
-|---|---|---|
-| Mes documents uniquement | aucune recherche (hors ligne) | aucune recherche (hors ligne) |
-| Sources académiques | documents + HAL + Crossref | documents + HAL + Crossref |
-| Internet | Éduscol, education.gouv.fr (Bulletin officiel) *via SearXNG* → web → Wikipédia | HAL → Crossref → web → Wikipédia |
-| Documents + Internet | documents en priorité + le mode Internet | documents en priorité + le mode Internet |
+| Mode choisi dans « Générer » | Sources |
+|---|---|
+| Mes documents uniquement | aucune recherche (hors ligne) |
+| Sources académiques | documents + HAL, Crossref, OpenAlex, puis sites officiels vérifiés (sans l'article de Wikipédia) |
+| Internet | HAL → Crossref → OpenAlex → sites officiels vérifiés → Wikipédia (« à recouper ») |
+| Documents + Internet | documents en priorité + le mode Internet |
 
-- HAL, Crossref et Wikipédia sont des API publiques : **aucune configuration n'est nécessaire**.
-- SearXNG, qui donne la recherche web générale et les sites institutionnels, est **facultatif**. Il se configure avec `SEARXNG_URL` sur le serveur, ou dans les Réglages sous Windows.
-- Wikipédia peut être désactivé (`RESEARCH_WIKIPEDIA=false` sur le serveur, Réglages sous Windows). L'interface annonce ce qui sera réellement consulté : « Wikipédia seulement », « sources académiques seulement », ou mode Internet indisponible si rien n'est interrogeable.
+### Sites officiels et académiques vérifiés
+
+L'IA ne s'appuie sur le web **que** sur un catalogue de sites vérifiés (`shared/research/trusted.ts`, plus de quatre-vingts entrées) : ministères et Éduscol, UNESCO et ses sous-sites, ONU et agences, OCDE, Banque mondiale, Union européenne, Conseil de l'Europe, administrations (`*.gouv.fr` nommés), recherche publique (CNRS, Inserm, Inria, CEA…), bibliothèques et archives ouvertes, agences scientifiques. Un site est reconnu **par son nom d'hôte exact** (domaine ou vrai sous-domaine) : sous-chaînes, suffixes collés (`unesco.org.pirate.example`), identifiants dans l'adresse (`unesco.org@evil.com`), port inattendu, homographes (punycode, cyrillique) et schémas autres que http(s) sont refusés.
+
+Deux chemins mènent aux pages de ces sites :
+
+1. **Avec SearXNG** (`SEARXNG_URL`, facultatif) : requêtes `site:` par lots de 6 domaines, 6 lots au plus, soit `SEARCHED_DOMAIN_COUNT` = 36 domaines, pris dans l'ordre du catalogue (éducation, ONU et agences, OCDE, Banque mondiale, UE, Conseil de l'Europe, recherche publique, Service-Public.fr, portails de publications). Une requête **générale** n'est jamais envoyée tant que la restriction est active. **Non interrogés directement** (mais reconnus s'ils apparaissent) : les 30 sites d'académies, Canal-U, HAL, OpenAlex, Crossref, l'Agence spatiale européenne, le CERN, la NOAA, le NIH ; `doi.org` est reconnu pour étiqueter un DOI mais jamais consulté (il ne fait que rediriger vers un éditeur quelconque).
+2. **Sans SearXNG** (cas normal) : les **références** (liens externes, API MediaWiki `prop=extlinks`) des pages Wikipédia trouvées pour le sujet, filtrées par le catalogue ; 3 pages au plus, une par hôte, classées éducation > organisations internationales > recherche > reste (dont les académies) > plateformes ouvertes ; accueils, pages de recherche et de connexion écartés. Ce chemin dépend de ce que Wikipédia cite pour le sujet : il ne garantit pas qu'Éduscol ou l'UNESCO apparaissent.
+
+**Contrôles** :
+- **Avant la connexion** : `fetchPage` reçoit un prédicat `allowUrl` évalué avant la première connexion et avant **chaque saut de redirection** (`server/safeFetch.ts`) : un lien du catalogue qui redirige vers un hôte hors catalogue (redirection ouverte, DOI) n'est ni résolu ni contacté. Défense en profondeur : l'adresse finale d'une page récupérée est revérifiée (`isCitablePage` : catalogue, https, ni accueil ni recherche ni connexion, chemin canonisé : `//`, `%69ndex.html`, `;jsessionid`).
+- `RESEARCH_TRUSTED_ONLY` (`true` par défaut, **aucune option dans l'interface**) : à `false`, l'administrateur d'un serveur auto-hébergé admet aussi le web général (SearXNG non filtré) ; ces sources sont alors signalées « non vérifiées ». Cette capacité n'est pas exposée aux clients : le sélecteur de mode n'annonce donc pas ce cas.
+- Les adresses, DOI et noms d'auteur de tiers sont neutralisés avant d'entrer dans « Sources utilisées » (aucun second lien, aucune adresse e-mail cliquable : § 5).
+- Limite : le niveau de fiabilité est celui de l'**hôte**, jamais de l'auteur de la page ; des hôtes qui hébergent du contenu libre (pages personnelles de `cern.ch`, `*.education.gouv.fr`…) peuvent porter des textes de contributeurs.
+
+**Niveaux de fiabilité** (`sourceReliability` dans `shared/citations.ts`, affichés dans « Sources utilisées », dans les exports et dans le prompt) : documents de l'enseignant ; **source officielle** (administrations, organisations intergouvernementales, agences publiques, avec le nom du site : « Source officielle · UNESCO ») ; publication ou source scientifique (HAL, Crossref, OpenAlex, organismes de recherche) ; **plateforme ouverte, à recouper** (data.gouv.fr, HAL et archives ouvertes, Canal-U : contenu déposé par des tiers, jamais « officielle ») ; encyclopédie collaborative (Wikipédia, à recouper) ; web non vérifié. Règle du prompt, seulement quand des sources sont fournies (≈ 69 jetons) : documents de l'enseignant > sources officielles > publications > Wikipédia ; en cas de désaccord, la plus fiable l'emporte et le désaccord est signalé ; faits chiffrés, dates et lois : seulement ceux des sources (les nombres d'un exercice sont inchangés).
+
+**Avertissements honnêtes** : « Sites officiels (Éduscol, UNESCO, ministères…) non consultés » quand aucun chemin n'existe (ni SearXNG ni Wikipédia + `fetchPage`) ou que les références n'ont pas pu être lues ; « Aucune source officielle trouvée pour ce sujet : à vérifier » quand le chemin a répondu sans rien de vérifié (y compris quand seules des plateformes ouvertes ont été trouvées) ; « Wikipédia injoignable : les sites officiels qu'elle indique ne sont pas consultés non plus » sans SearXNG. Jamais une source hors catalogue en silence.
+
+**OpenAlex** (`searchOpenAlex`) : publications ouvertes, résumé reconstruit de façon bornée (3 000 mots, 20 000 positions), DOI normalisé ; dédoublonnage HAL > Crossref > OpenAlex ; `CROSSREF_MAILTO` est transmis aux deux (paramètre `mailto`, adresse de l'administrateur, jamais celle de l'enseignant).
+
+**Compatibilité** : la capacité facultative `research.trustedCatalogue` (serveur et application) indique que le catalogue vérifié est utilisé ; son absence (ancienne application) vaut « ancien comportement » et le sélecteur n'annonce alors ni l'UNESCO ni le filtrage. Aucune clé de protocole existante n'a changé.
+
+**Vérification réelle** : toutes les réponses des services sont simulées dans les tests (le bac à sable de développement refuse tout accès externe). Sur son ordinateur, le mainteneur lance **`npm run research:check`** (`scripts/research-check.mjs` ; `--searxng <https://…>` et `--catalogue`, qui vérifie l'existence DNS de chaque domaine du catalogue) : état, nombre de résultats, exemple, durée de HAL, Crossref, OpenAlex, Wikipédia (et ses liens externes), SearXNG et du chemin complet, et signale toute dérive d'API. Il ne tourne pas en CI.
+
+- HAL, Crossref, OpenAlex et Wikipédia sont des API publiques : **aucune configuration n'est nécessaire**.
+- SearXNG est **facultatif**. Il se configure avec `SEARXNG_URL` sur le serveur, ou dans les Réglages sous Windows.
+- Wikipédia peut être désactivé (`RESEARCH_WIKIPEDIA=false` sur le serveur, Réglages sous Windows) ; sans SearXNG, c'est aussi lui qui indique les sites officiels. L'interface annonce ce qui sera réellement consulté.
 - **Sans Internet**, Magistra continue de fonctionner avec le modèle local et les documents. Un avertissement est affiché.
-- Côté serveur et côté Windows, les pages web sont récupérées avec une protection SSRF (`server/safeFetch.ts`) : adresses privées refusées, redirections vérifiées, taille bornée.
+- Côté serveur et côté Windows, les pages web sont récupérées avec une protection SSRF (`server/safeFetch.ts`) : adresses privées refusées, redirections vérifiées (hôte contrôlé **avant** chaque connexion), taille bornée.
 
 ---
 
@@ -228,7 +259,13 @@ Les 11 outils ont des consignes adaptées au niveau. Au supérieur, par exemple,
 
 **Contrôles après génération** (sans appel supplémentaire au modèle) : la mise en page des QCM et des questions numérotées est rétablie en Markdown valide (`shared/exerciseLayout.ts`, choix en liste, une question par paragraphe) ; les formules écrites \( … \) ou \[ … \] sont affichées et exportées comme $…$ (`shared/markdownMath.ts`, à l'affichage seulement : le texte enregistré reste celui du modèle) ; quand le nombre d'exercices, de questions, d'affirmations, de mots à compléter, de séances ou d'appréciations ne correspond pas à la demande, un avertissement le dit à l'enseignant (`shared/outputChecks.ts`, jamais bloquant). Une application Windows antérieure à 2.0.3 appelée par le site n'applique pas ces options et ne connaît pas les matières ajoutées depuis (maternelle « Se repérer dans le temps et l'espace ») : le site refuse avant d'envoyer, en nommant les choix concernés et la version nécessaire ; si la version est inconnue, il vérifie les paramètres renvoyés, signale un choix non appliqué, et n'enregistre jamais dans l'historique un contenu rédigé pour une autre matière, un autre outil ou un autre niveau.
 
-**Qualité** : une section « QUALITÉ ATTENDUE » demande la structure exacte, les nombres exacts (vérifiés avant de terminer) et un français soigné ; les nombres et le format sont rappelés en fin de demande (un petit modèle suit mieux la dernière consigne lue). **Température** selon l'outil (`generationTemperature`) : 0,3 pour les documents qui doivent être exacts (évaluations, corrigés, exercices, plans), 0,4 pour les cours et la différenciation, 0,6 pour les textes rédigés (appréciations, courriers).
+**Qualité** : une section « QUALITÉ ATTENDUE » demande la structure exacte, les nombres exacts (vérifiés avant de terminer) et un français soigné ; les nombres et le format sont rappelés en fin de demande (un petit modèle suit mieux la dernière consigne lue). **Température** selon l'outil (`generationTemperature`) : 0,2 pour les documents qui doivent être exacts (évaluations, corrigés, exercices, plans ; Mistral recommande environ 0,15 pour ses modèles « instruct » : moins de fautes d'accord, d'orthographe et de calcul), 0,3 pour les cours et la différenciation, 0,45 pour les textes rédigés (appréciations, courriers) ; la variété des énoncés vient de la consigne « Variété », pas du hasard de l'échantillonnage.
+
+**Précision par matière** (`shared/disciplines.ts`) : 63 matières ont une règle de 300 caractères au plus (environ 80 jetons), injectée dans le prompt système (« DISCIPLINE : … ») pour le cours, les exercices, l'évaluation, la séquence, la fiche de préparation, la progression, la différenciation et le corrigé ; elle donne les attendus propres à la matière (démarche, vocabulaire, notations, erreurs fréquentes) sans citer de numéro de texte officiel. Une règle ne présente jamais un niveau comme un autre (la 6e est du cycle 3, pas du cycle 4) : une variante par groupe de niveaux la borne quand c'est nécessaire (EVARS au collège : contraception et IST seulement en 4e-3e, selon le programme), et un test de cohérence parcourt le catalogue. Les règles viennent des programmes en vigueur et de leurs sites officiels, que l'environnement de développement ne pouvait pas toujours consulter : une relecture par un enseignant de la matière reste recommandée.
+
+**Orthographe, variété et typographie** : une consigne demande d'accorder participes passés, adjectifs et verbes, de distinguer a/à, ce/se, on/ont, -é/-er et de relire chaque phrase (omise quand la règle de langue remplace la ligne « français soigné »). Pour les contenus destinés aux élèves, une consigne « Variété » demande de changer de situation, de support et de prénom d'un énoncé à l'autre. Sur le document FINAL seulement, `shared/typography.ts` met une espace insécable avant « : ; ! ? » et à l'intérieur des « guillemets » ; elle ne touche ni au code, ni aux formules (`$…$`, `\( … \)`, `\[ … \]`, `\\` compris), ni aux adresses, balises, destinations de liens, lignes de tableau et citations [S1], et elle est sautée pour les matières de langue (sauf appréciations et courriers, toujours rédigés en français). Ses expressions sont en temps linéaire, même sur une sortie dégénérée.
+
+**Citations dans les corrections de copies** : une citation de la copie introuvable dans la copie déclenche un avertissement (jamais bloquant) ; la correction proposée, elle, n'en déclenche pas (flèche, « correction proposée : », « on attend », « plutôt », « au lieu de »), et les textes des sources fournies comptent comme référence. Limite connue : une correction placée seule dans une cellule de tableau « Passage | Correction proposée » n'est pas reconnue.
 
 ---
 
@@ -275,7 +312,7 @@ Dans l'interface, le texte apparaît progressivement, avec trois commandes : **A
 | `AI_CONTEXT_TOKENS`, `AI_MAX_OUTPUT_TOKENS` | budget de contexte et de sortie (défaut : ceux du préréglage) |
 | `MAGISTRA_AUTH` | `auto` (défaut), `clerk` ou `personal` (§ 12) |
 | `MAGISTRA_ADMIN_CONTACT` | contact affiché aux enseignants quand l'IA ne répond pas |
-| `SEARXNG_URL`, `CROSSREF_MAILTO` | recherche (facultatif) |
+| `SEARXNG_URL`, `CROSSREF_MAILTO`, `RESEARCH_TRUSTED_ONLY` | recherche : moteur SearXNG (facultatif) ; adresse de contact transmise à Crossref et OpenAlex ; seuls les sites vérifiés sont retenus (`true` par défaut, § 6) |
 | `AI_TIMEOUT_SECONDS` | durée maximale d'une génération (280 s par défaut) |
 | `RATE_LIMIT_PER_MINUTE` | demandes de génération par minute et par utilisateur (10 ; 0 = désactivé) → `RATE_LIMITED` (429) |
 | `RATE_LIMIT_GLOBAL_PER_MINUTE` | demandes de génération par minute pour tout le déploiement (120 ; 0 = désactivé) → `AI_BUSY` (503, réessayable) |
@@ -341,6 +378,7 @@ Sécurité (tous les garde-fous s'appliquent ensemble) :
 - **boucle locale** : connexion venant de la machine elle-même ;
 - en-tête **`Host`** limité à `localhost`, `127.0.0.1` et `[::1]` avec le port du serveur (protection contre le « DNS rebinding ») ; en-tête **`Origin`** identique quand le navigateur l'envoie (requêtes d'autres sites refusées) ;
 - un seul utilisateur, d'identifiant fixe ; historique dans des fichiers (`MAGISTRA_STORE=file`), les limites anti-abus s'appliquent comme ailleurs.
+- **plafond de stockage** : 5 000 contenus ou 100 Mo par compte (protection technique très au-dessus d'un usage normal, `STORAGE_LIMITS` dans `server/store.ts`), appliqué par les stockages du serveur (fichiers, mémoire, et pour Supabase par le déclencheur SQL optionnel `magistra_check_storage_cap`) ; au-delà, « Votre historique est plein : supprimez d'anciens contenus ». L'application Windows enregistre son historique en local (`electron/localStore.ts`) et n'est pas concernée ; sans le déclencheur SQL, Supabase n'applique simplement pas de plafond.
 
 Un proxy inverse placé devant (nginx…) n'ouvre donc pas l'accès : le jeton reste exigé. Pour un accès depuis le réseau, il faut Clerk.
 
@@ -361,6 +399,7 @@ Fichier : `server/aiCheck.ts` (compilé à la volée par esbuild ; aussi `node d
 ```bash
 npm run ai:check                                     # serveur autonome : lit .env
 npm run ai:check -- --dev                            # comme npm run dev : .env, .env.local, .env.development
+# serveur de type Vercel hors site public (le site public n'exécute aucune IA) :
 npx vercel env pull --environment=production .env.prod.local && npm run ai:check -- --vercel --env-file .env.prod.local
 ```
 
@@ -383,7 +422,7 @@ Le test d'état (`AIProvider.health`, affiché par `/api/status`, l'indicateur e
 Fichier : `electron/ollamaSetup.ts`.
 - **Version minimale** : les modèles Ministral 3 exigent **Ollama 0.13.1** (`MIN_OLLAMA_VERSION`, `shared/ai/models.ts` ; [page du modèle](https://ollama.com/library/ministral-3), [v0.13.1](https://github.com/ollama/ollama/releases/tag/v0.13.1-rc1)). La version (`/api/version`) est comparée **avant** tout téléchargement de modèle : un moteur trop ancien est signalé (`AIStatus.engine.outdated`, phase « moteur trop ancien »), au lieu d'un téléchargement qui échouerait en boucle (412 du registre → `ENGINE_OUTDATED`, non réessayable, sans bouton « Reprendre »).
 - **Mise à jour du moteur** : « Mettre à jour le moteur IA » appelle `installEngine({ update: true })` (même canal IPC `ai:install-engine`) : installateur officiel, empreinte SHA-256 vérifiée, taille annoncée avant le clic, modèles conservés, version revérifiée après l'installation. Si Ollama est installé dans `%ProgramFiles%` (service informatique, droits d'administrateur), `managedByAdmin` : Magistra invite à **demander la mise à jour au service informatique**, sans jamais demander d'élévation de droits.
-- **Démarrage discret** : « ollama app.exe » est lancé avec `--hide --fast-startup`, comme la ligne de commande officielle d'Ollama : aucune fenêtre d'accueil ne s'ouvre par-dessus Magistra.
+- **Démarrage discret** : « ollama app.exe » est lancé avec `--hide --fast-startup`, comme la ligne de commande officielle d'Ollama : pour les lancements faits par Magistra, aucune fenêtre d'accueil ne s'ouvre par-dessus Magistra. `--hide` ne couvre que ces lancements : l'installateur officiel (installation, mise à jour, page officielle) lance Ollama lui-même, sans cet argument, et peut ouvrir la fenêtre d'Ollama ; Magistra l'annonce par une note (`ENGINE_WINDOW_NOTE`, `EngineWindowNote`, décision `engineWindowMayOpen` ; pour la page officielle, `ENGINE_WINDOW_MANUAL_NOTE` dit de terminer d'abord l'installateur).
 - **Démarrage lent ou impossible** : Magistra attend le moteur jusqu'à 120 s (détection des cartes graphiques, analyse antivirus au premier lancement) et affiche « Le moteur IA démarre, cela peut prendre une minute au premier lancement… » (`ENGINE_STARTING_MESSAGE`, `shared/ipc.ts`), pendant une génération comme sous le bouton « Démarrage… ». En cas d'échec, `ai:start-engine` lève une erreur qui donne la cause probable (exécutable mis en quarantaine par un antivirus, port déjà utilisé, dernières erreurs du journal du moteur, filtrées) au lieu de renvoyer simplement « faux ».
 - **Proxy** : Ollama n'utilise pas le proxy de Windows, seulement `HTTPS_PROXY` ([FAQ Ollama](https://docs.ollama.com/faq#how-do-i-use-ollama-behind-a-proxy)). Quand Magistra démarre Ollama, il lui transmet le proxy du système (résolu par Electron) ; aucun identifiant de proxy n'est journalisé. Si Ollama tournait déjà sans proxy et que le téléchargement échoue, le message parle du proxy et « Reprendre le téléchargement » propose, avec l'accord de l'enseignant, de relancer le moteur avec ce réglage.
 
@@ -450,7 +489,7 @@ Le protocole est versionné (`CONNECTOR_PROTOCOL_VERSION` = 2). Un site et une a
 2. en-tête `Host` unique et **exactement** `127.0.0.1:<port d'écoute>` (anti DNS rebinding), sinon 403 **sans** en-tête CORS et connexion fermée ;
 3. en-tête `Origin` présent, unique et **exactement** dans la liste autorisée (`OFFICIAL_WEB_ORIGINS`), sinon 403 sans CORS (`null`, absent, autre site, `localhost`…). Jamais `Access-Control-Allow-Origin: *`, jamais `Access-Control-Allow-Credentials` ;
 4. route exacte (404), puis méthode (405) ;
-5. `OPTIONS` (pré-vérification CORS) : si la méthode demandée est autorisée pour la route et si tous les en-têtes demandés figurent dans `CONNECTOR_ALLOWED_REQUEST_HEADERS` (casse ignorée), réponse 204 avec l'origine exacte, `Access-Control-Max-Age: 600` et, quand le navigateur le demande, `Access-Control-Allow-Private-Network: true` (ancien mécanisme « Private Network Access » de Chrome) ; sinon 403. Ensuite, après plus de 30 échecs d'authentification en une minute, 429 pendant 60 s (toutes les routes sauf `hello`) ;
+5. `OPTIONS` (pré-vérification CORS) : si la méthode demandée est autorisée pour la route et si tous les en-têtes demandés figurent dans `CONNECTOR_ALLOWED_REQUEST_HEADERS` (casse ignorée), réponse 204 avec l'origine exacte, `Access-Control-Max-Age: 600` et, quand le navigateur le demande, `Access-Control-Allow-Private-Network: true` (ancien mécanisme « Private Network Access » de Chrome) ; sinon 403. Ensuite, après plus de 30 échecs d'authentification d'un même navigateur appairé (signature, horodatage ou nonce faux) en une minute, 429 pendant 60 s pour CE navigateur seulement, sur les routes signées ; `hello` et `POST /v1/pair` ne sont jamais bloqués, et une requête sans en-têtes valides, d'un navigateur inconnu ou d'une autre origine ne compte pas (un autre programme de l'ordinateur ne peut donc pas verrouiller le site) ;
 6. `POST` : `Content-Type: application/json` (`charset=utf-8` toléré), sinon 415 ; taille annoncée au plus 1 100 000 octets pour `/v1/generate` et 4 096 pour les autres routes, sinon 413 ;
 7. routes signées, **avant** de lire le corps :
    - format des en-têtes ;
@@ -594,3 +633,72 @@ Options ignorées dans l'application installée (`electron/devOptions.ts`) :
   - En face tourne la vraie application Electron, avec un Ollama simulé. Le test joue seulement le rôle du système : remise des URL `magistra://`, réponse à la boîte native, trousseau de clés sous Linux.
   - Parcours couverts : parcours complet (absente, trouvée, refus, accord, flux, arrêt, fermeture, relance sans nouvel appairage, retrait), moteur non prêt, autre site refusé, programme sur le premier port, explication puis refus puis accord de l'autorisation du navigateur.
 - **Vraie IA** : le test « vraie IA » du même fichier exécute appairage puis génération d'un cours en français, en flux, par site → connecteur → application → vrai Ollama. Il est ignoré sans `MAGISTRA_E2E_REAL_OLLAMA_URL` et n'est pas lancé par la CI. Exemple : `MAGISTRA_E2E_REAL_OLLAMA_URL=http://127.0.0.1:11434 xvfb-run -a npx playwright test --project=connector -g "vraie IA"`, avec `ministral-3:8b` installé.
+
+---
+
+## 20. Site vitrine (Vercel) et application Windows
+
+Le site public n'est **pas** l'application : c'est une vitrine. L'application tourne dans la fenêtre Windows (même code React, construit dans `dist/`, chargé par Electron) ; le site ne la contient pas.
+
+| | Site public | Application Windows |
+|---|---|---|
+| Construction | `npm run build:site` → `dist-site/` (`vite.site.config.ts`, point d'entrée `site/index.html` → `src/site/main.tsx`) | `npx vite build` → `dist/` (`vite.config.ts`) |
+| Contenu | présentation, téléchargement de l'application Windows, mentions légales, confidentialité, CGU | tout Magistra (profil, génération, historique, favoris, réglages) |
+| Routes servies | `/`, `/mentions-legales`, `/confidentialite`, `/cgu`, `/telecharger` ; toute autre adresse (dont `/app`, `/onboarding`) revient à l'accueil | `app://` (protocole interne) |
+| Fonctions Vercel | **deux seulement** : `api/windows-release.ts` (dernière version stable publiée) et `api/download.ts` (téléchargement direct) | aucune |
+| IA, compte, base | aucun : pas de Clerk, de Supabase, de connecteur local, de clé `AI_API_KEY` | Ollama local, ou serveur distant choisi par l'enseignant |
+
+**Contrôles** (les trois tournent dans la CI) :
+- `scripts/verify-site.mjs` lit `dist-site/` sans rien lancer et refuse : un service de connexion, une base de données, jsPDF / pdf.js, une route de l'API de l'application, le port ou le code du connecteur local, une clé secrète, un script en ligne dans `index.html`, une ressource d'un autre domaine, une sourcemap ;
+- la politique de sécurité de `vercel.json` (`script-src 'self'`, `connect-src 'self'`, ni Clerk, ni Cloudflare, ni `127.0.0.1`) est testée sur la page réellement construite (`tests/server/deploy.test.ts`, `tests/site/siteBuild.test.ts`) ;
+- `e2e/site-vitrine.spec.ts` (projet Playwright `site`, port 4174) : aucun bouton « Commencer », aucune entrée vers l'application, la page légale et le téléchargement fonctionnent.
+
+Seules les variables d'identité publiques atteignent le code du site (`VITE_LEGAL_*`, `VITE_AUTHOR_*`, `envPrefix` de `vite.site.config.ts`) : une clé de connexion présente dans l'environnement de construction n'y entre pas.
+
+**Conservé, non déployé** : le mode web (comptes Clerk, historique Supabase), le mode personnel (`npm run dev`, `npm start`) et le connecteur local (§ 19) restent dans le code et dans les tests, pour un hébergement personnel. Comme le site n'a plus aucun client du connecteur, **le connecteur n'est plus qu'une surface d'attaque locale sans usage dans le déploiement officiel** : le retirer (ou le désactiver par défaut) serait la suite logique, mais ce n'est pas fait ici faute de décision du mainteneur.
+
+### Attribution
+
+`shared/author.ts` : « Magistra, créé par Juan Robin », une courte présentation et un lien vers le profil professionnel (`VITE_AUTHOR_PROFILE_URL`, https seulement, sans identifiants ni jeton, 300 caractères au plus ; à défaut le profil GitHub). Le composant `AuthorCredit` (badge, bloc « Qui est derrière Magistra ? », pied de page) est affiché sur le site, sur l'accueil de l'application et dans Réglages → « À propos ». FutureAI reste nommé (éditeur) ; les notices de licence (`LICENSE`) et l’attribution du copyright restent conservées.
+
+---
+
+## 21. Mesure de la vitesse (moteur local)
+
+Une génération lente peut venir de quatre endroits différents ; Magistra les sépare au lieu de les additionner :
+
+| Mesure | D'où elle vient | Ce qu'elle dit |
+|---|---|---|
+| préparation (`prepMs`) | Magistra : sélection des passages de documents, recherche de sources | temps avant que le moteur reçoive la demande |
+| chargement du modèle (`engine.loadMs`, `waitModelMs`, `preloadLoadMs`) | Ollama (`load_duration`) et attente du préchargement | modèle lu depuis le disque et placé en mémoire ; nul quand il est déjà chargé |
+| lecture de la demande (`engine.promptTokens` / `promptMs`) | Ollama (`prompt_eval_count`, `prompt_eval_duration`) | vitesse de lecture du prompt et des documents |
+| rédaction (`engine.outputTokens` / `outputMs`) | Ollama (`eval_count`, `eval_duration`) | vitesse d'écriture en jetons par seconde |
+| calcul (`placement`) | `GET /api/ps` (taille, `size_vram`, `context_length`), lu une fois après le premier mot | processeur, carte graphique ou les deux |
+
+- **Code** : `shared/ai/timings.ts` (`ollamaTimingsFromChunk`, `placementFromPs`, nettoyage des valeurs reçues), `shared/ai/ollama.ts` (le préchargement renvoie sa durée), `shared/pipeline.ts` (`GenerationMetrics`, horloge injectable), `src/lib/generation/speed.ts` et `src/components/generate/SpeedDetails.tsx` (« Détails de la vitesse » sous le résultat).
+- **Compatibilité** : `metrics` est facultatif dans l'évènement `done`. Une application plus ancienne ne l'envoie pas, un site plus ancien l'ignore. Les mesures ne contiennent **jamais de texte** (ni de la demande, ni de la réponse), ne sont **pas enregistrées dans l'historique** et ne quittent pas l'ordinateur.
+- **Limites vérifiées sur un vrai Ollama 0.34.4** :
+  - `prompt_eval_count` **inclut** les jetons déjà en cache (`prompt_eval_cached_count`) : la vitesse de lecture est calculée sur les jetons réellement lus ;
+  - sur un processeur à instructions **AMX** (Xeon récents), Ollama compte une partie des poids du processeur comme de la mémoire de carte graphique : `size_vram > 0` ne prouve pas l'usage d'une carte. Le placement « partagé » est donc présenté avec prudence (`MIXED_EXPLANATION`), et le journal d'Ollama (« inference compute ») fait foi ;
+  - Ollama ne renvoie pas toujours `load_duration` pour la requête de chargement à vide : Magistra n'affiche alors aucune durée de chargement inventée (le banc de mesure, lui, utilise la durée d'horloge de cette requête).
+- **Banc de mesure du mainteneur** : `node scripts/ai-bench.mjs --model ministral-3:3b --ctx 8192,12288 --scenario court,moyen --runs 3 --json bench.json`. Il mesure chargement à froid, lecture, rédaction, premier mot, placement, rechargement et empreinte du texte (température 0, graine fixe) pour chaque taille de contexte, sur le moteur **de cet ordinateur seulement** (autre adresse : `--allow-remote`), avec des textes synthétiques, sans rien télécharger. Tests : `tests/ci/aiBench.test.ts` et un Ollama simulé qui renvoie des durées (`scripts/mock-ollama.mjs`).
+
+---
+
+## 22. Taille de contexte adaptée à la demande : étude et décision
+
+**Idée** : Magistra demande 12 288 jetons de contexte (`num_ctx`) à Léger et à Standard même pour une petite demande ; un contexte plus petit pour les tâches courtes économiserait de la mémoire. L'étude a été faite avant toute généralisation (Ollama 0.34.4, Xeon 4 cœurs sans carte graphique, 15,7 Gio de RAM, **modèle 3B** `ministral-3:3b` : l'alias `ministral-3:8b` du bac à sable pointait le même fichier, **aucune mesure sur 8B, 14B ou 24B**) ; données brutes et scripts conservés par le mainteneur.
+
+| Constat | Mesure |
+|---|---|
+| Mémoire | le cache de contexte (KV) coûte **104 Kio par jeton** sur ce 3B (couches × têtes KV × dimension × 2 × 2 octets) : −416 Mo de 12 288 à 8 192 (−10,6 % de l'empreinte), −624 Mo à 6 144 |
+| Vitesse | lecture et rédaction **identiques à ± 5 %** de 4 096 à 16 384 jetons ; seul le chargement à froid gagne ≈ 0,5 s (12 288 → 8 192) |
+| Qualité du texte | texte **identique** d'un contexte à l'autre (30/30, température 0, graine fixe) ; le contexte en soi ne change pas la qualité |
+| Rechargements | **chaque changement de `num_ctx` recharge le modèle**, même vers un contexte plus petit : ≈ 3,7-4,2 s sur le 3B (extrapolation non mesurée : 9-15 s pour 8B/14B) et cache de prompt perdu |
+| Débordement | prompt seul trop grand : erreur 400 nette. **Prompt + sortie trop grands : décalage de contexte silencieux** (Ollama jette ≈ 2 045 jetons juste après les 5 premiers, c'est-à-dire tout le message système de Magistra) sans aucun signal dans la réponse |
+| Estimation des jetons | 3,2 caractères par jeton supposés, 3,8-4,1 réels pour du français courant : surestimation de 22 à 31 % (sûre) ; **sous-estimation jusqu'à −32 %** sur du texte collé dense en symboles (maths Unicode ×1,9, grec polytonique ×1,66, URL ou base64 ×1,5, LaTeX ×1,36, émojis ×5,5) |
+| Sortie | `computeBudgets` fixe la sortie à min(6 000 ; 40 % du contexte) : un contexte de 8 192 réduirait la sortie de 4 915 à 3 276 jetons (documents coupés) |
+
+**Décision : le contexte adaptatif n'est PAS adopté.** Le gain est une économie de mémoire modeste (≈ 5-10 %, inconnue pour 8B/14B), sans aucun gain de vitesse, et le seul défaut possible est silencieux et grave (le message système supprimé). Léger et Standard gardent 12 288 jetons, Qualité 16 384.
+
+**Si un besoin réel de mémoire apparaît** (Léger sur 8 Go), la seule version défendable serait minimale, à deux paliers (8 192 / 12 288), avec ces garde-fous obligatoires : jamais de palier réduit avec un document, une recherche ou un texte collé de plus d'environ 2 000 caractères (ou contenant émojis, symboles mathématiques, grec polytonique, URL, base64) ; texte collé compté deux fois ; sortie découplée du contexte (garder 4 915) ; palier choisi **avant** le préchargement et « montée seule » via `/api/ps` (le contexte ne fait que monter tant que le modèle est chargé, sinon chaque changement recharge) ; comparaison de `prompt_eval_count` à l'estimation avec retour à 12 288 au premier écart. Autre piste, non testée : la quantification du cache KV (`q8_0`, ≈ −50 % de KV sans changer de contexte).

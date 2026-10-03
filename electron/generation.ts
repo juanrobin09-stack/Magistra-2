@@ -19,7 +19,7 @@ import type { AIProvider } from '../shared/ai/provider.js';
 import { MagistraError, toMagistraError } from '../shared/errors.js';
 import type { LocalPreferences } from '../shared/ipc.js';
 import { runGeneration, type NewGenerationRecord } from '../shared/pipeline.js';
-import type { FetchedPage, ResearchConfig, ResearchDeps } from '../shared/research/index.js';
+import { officialSitesPath, type ResearchConfig, type ResearchDeps } from '../shared/research/index.js';
 import type { AINotice, Capabilities, GenerationEvent, GenerationRequest, PrivacyInfo, ProviderInfo } from '../shared/types.js';
 import { validateGenerationRequest } from '../shared/validation.js';
 import type { LocalStore } from './localStore.js';
@@ -46,7 +46,8 @@ export interface GenerationDeps {
   /** Envoi d'un évènement à la fenêtre ; renvoie faux si la fenêtre n'existe plus. */
   send: (payload: GenerationPayload) => boolean;
   fetch: ResearchDeps['fetch'];
-  fetchPage?: (url: string, signal?: AbortSignal) => Promise<FetchedPage | null>;
+  /** Récupération sécurisée d'une page (server/safeFetch.ts), avec le prédicat facultatif `allowUrl` de la recherche. */
+  fetchPage?: ResearchDeps['fetchPage'];
   idFactory?: () => string;
   /**
    * Réglage du moteur actif, sans accès réseau : vrai si c'est le moteur de CET ordinateur (mode local, adresse de
@@ -89,6 +90,8 @@ export function researchConfigFrom(prefs: LocalPreferences): ResearchConfig {
   return {
     academic: prefs.academicEnabled,
     wikipedia: prefs.wikipediaEnabled,
+    // Application Windows : toujours les sites vérifiés seulement (aucune option).
+    trustedOnly: true,
     timeoutMs: 8_000,
     ...(prefs.searxngUrl ? { searxngUrl: prefs.searxngUrl } : {}),
   };
@@ -250,7 +253,14 @@ export class GenerationManager {
     const [prefs, active] = await Promise.all([this.deps.store.getPreferences(), this.deps.describeActive()]);
     return {
       maxDocumentChars: maxDocumentCharsFor(active.contextTokens),
-      research: { academic: prefs.academicEnabled, web: !!prefs.searxngUrl, institutional: !!prefs.searxngUrl, wikipedia: prefs.wikipediaEnabled },
+      research: {
+        academic: prefs.academicEnabled,
+        web: !!prefs.searxngUrl,
+        institutional: officialSitesPath(researchConfigFrom(prefs), this.deps) !== null,
+        wikipedia: prefs.wikipediaEnabled,
+        // Cette version s'appuie sur le catalogue des sites officiels vérifiés (absent d'une application plus ancienne).
+        trustedCatalogue: true,
+      },
       privacy: active.privacy,
       engineLabel: active.label,
       ready: active.ready,

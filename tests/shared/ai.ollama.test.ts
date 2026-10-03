@@ -40,7 +40,10 @@ describe('OllamaProvider — /api/chat (NDJSON)', () => {
     const events = await collect(localProvider(fetchImpl).stream({ messages: MESSAGES, maxTokens: 900, temperature: 0.2 }));
     expect(textOf(events)).toBe('# Les fractions\n\nUne fraction représente un partage équitable.');
     expect(textOf(events)).not.toContain('réfléchis');
-    expect(endOf(events)).toEqual({ type: 'end', finishReason: 'stop', usage: { promptTokens: 321, completionTokens: 45 } });
+    expect(endOf(events)).toMatchObject({ type: 'end', finishReason: 'stop', usage: { promptTokens: 321, completionTokens: 45 } });
+    // Dernier objet sans aucune durée : pas de mesures du moteur inventées ; le premier mot est mesuré côté client.
+    expect(endOf(events).usage?.timings).toBeUndefined();
+    expect(endOf(events).usage?.timeToFirstDeltaMs).toBeGreaterThanOrEqual(0);
 
     const call = fetchImpl.calls[0];
     expect(call.url).toBe(`${DEFAULT_OLLAMA_URL}/api/chat`);
@@ -253,7 +256,13 @@ describe('utilitaires Ollama', () => {
     expect(isLoopbackUrl('http://127.0.0.1:11434')).toBe(true);
     expect(isLoopbackUrl('http://localhost:11434')).toBe(true);
     expect(isLoopbackUrl('http://[::1]:11434')).toBe(true);
+    expect(isLoopbackUrl('http://127.0.0.2:11434')).toBe(true);
+    expect(isLoopbackUrl('http://127.1:11434')).toBe(true);
     expect(isLoopbackUrl('http://192.168.1.20:11434')).toBe(false);
+    // Un nom de domaine commençant par « 127. » n'est PAS la boucle locale.
+    expect(isLoopbackUrl('http://127.evil.com:11434')).toBe(false);
+    expect(isLoopbackUrl('http://127.0.0.1.evil.com')).toBe(false);
+    expect(isLoopbackUrl('http://localhost.evil.com:11434')).toBe(false);
     expect(isLoopbackUrl('pas une url')).toBe(false);
   });
 
@@ -406,6 +415,19 @@ describe('OllamaProvider.preload — chargement du modèle sans génération', (
     expect(fetchImpl.calls[0].url).toBe(`${DEFAULT_OLLAMA_URL}/api/chat`);
     expect(fetchImpl.calls[0].body).toEqual({ model: 'ministral-3:14b', messages: [], stream: false, keep_alive: '15m', options: { num_ctx: STANDARD.contextTokens } });
     expect(PRELOAD_TIMEOUT_MS).toBe(600_000);
+  });
+
+  it('durée de chargement annoncée par le moteur (load_duration, en nanosecondes) rendue en millisecondes', async () => {
+    const withDuration = () => jsonResponse({ model: 'ministral-3:14b', message: { role: 'assistant', content: '' }, done: true, done_reason: 'load', total_duration: 4_300_000_000, load_duration: 4_200_000_000 });
+    expect(await localProvider(mockFetch(() => withDuration())).preload()).toEqual({ loadMs: 4_200 });
+  });
+
+  it('sans durée, ou durée inexploitable : aucun résultat (jamais une valeur inventée)', async () => {
+    expect(await localProvider(mockFetch(() => loaded())).preload()).toBeUndefined();
+    for (const load_duration of [-1, 'long', null, Number.NaN]) {
+      const odd = () => jsonResponse({ done: true, done_reason: 'load', load_duration });
+      expect(await localProvider(mockFetch(() => odd())).preload(), String(load_duration)).toBeUndefined();
+    }
   });
 
   it('serveur qui répond par un flux (faux Ollama) : la première ligne suffit, la connexion est libérée', async () => {

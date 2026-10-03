@@ -124,6 +124,16 @@ export function isSafeExternalUrl(value: unknown): value is string {
   }
 }
 
+/**
+ * Lien « mailto: » autorisé à s'ouvrir dans le client de messagerie du système (adresse de contact de l'éditeur, pages
+ * légales et Réglages) : une seule adresse simple, sans paramètres (« ?subject=… », « ?attach=… »), longueur bornée.
+ */
+export function isSafeMailtoUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 320) return false;
+  if (hasControlChars(value) || /\s/.test(value)) return false;
+  return /^mailto:[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/i.test(value);
+}
+
 /** Vrai si la chaîne contient un caractère de contrôle (U+0000 à U+001F, U+007F). */
 export function hasControlChars(value: string): boolean {
   for (let i = 0; i < value.length; i++) {
@@ -138,8 +148,5 @@ export function stripNul(value: string): string {
   return value.split(String.fromCharCode(0)).join('');
 }
 
-/** Adresse de boucle locale (Ollama sur cet ordinateur). */
-export function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  return host === 'localhost' || host === '::1' || /^127(\.\d{1,3}){3}$/.test(host);
-}
+/** Adresse de boucle locale (Ollama sur cet ordinateur) : prédicat unique, partagé avec l'interface et les fournisseurs. */
+export { isLoopbackHostname as isLoopbackHost } from '../shared/ai/loopback.js';

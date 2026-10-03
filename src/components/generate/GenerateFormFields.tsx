@@ -3,10 +3,10 @@
 // Ordre : niveau et matière, puis le choix principal de l'outil (format normé : « Type d'exercice », « Format de
 // l'épreuve »…), les champs propres à l'outil, une grille compacte de réglages, enfin objectifs et consignes.
 
-import type { ReactElement } from 'react';
-import { Clock } from 'lucide-react';
+import { useMemo, useState, type ReactElement } from 'react';
+import { Clock, Shuffle } from 'lucide-react';
 import {
-  DIFFICULTES, FORMATS_SEANCE, getMatieresForNiveau, getSujetSuggestions, PROFILS_DIFFERENCIATION, PROFILS_ELEVE,
+  DIFFICULTES, FORMATS_SEANCE, getMatieresForNiveau, PROFILS_DIFFERENCIATION, PROFILS_ELEVE,
   TOOL_FIELDS, TOOL_REQUIRES_SUJET, TYPES_LETTRE,
   type DifficulteExercice, type FormatSeance, type Matiere, type ProfilDifferenciation, type ProfilEleve, type TypeContenu,
 } from '@shared/catalog';
@@ -16,13 +16,16 @@ import {
   type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
 } from '@shared/formats';
 import { getLevelGroup, isNiveau, isSuperieur, NIVEAUX, type NiveauScolaire } from '@shared/levels';
+import { getSujetSuggestions } from '@shared/suggestions';
 import SelectField from '@/components/ui/SelectField';
 import {
-  appreciationSummary, chosenCount, fieldLimit, formDefaultNotation, MAX_APPRECIATIONS, MIN_APPRECIATIONS, normalizeAppreciationInput, visibleFields,
+  appreciationSummary, chosenCount, fieldLimit, formDefaultNotation, isLargeSequence, MAX_APPRECIATIONS, MIN_APPRECIATIONS,
+  normalizeAppreciationInput, visibleFields,
   type FormField, type FormProblem, type GenerateForm, type Trimestre,
 } from '@/lib/generation/request';
 import { ChipGroup, ChoiceButton, Field, type ChipOption } from './fields';
 import { describedBy, FOCUS_RING, LABEL_CLASS } from './fieldUtils';
+import { useSuggestionDeck } from '@/lib/useSuggestionDeck';
 
 interface GenerateFormFieldsProps {
   form: GenerateForm;
@@ -41,6 +44,13 @@ const CONTENT_TOOLS: TypeContenu[] = ['cours', 'exercices', 'evaluation', 'seque
  */
 const CAPTIONED_TOOLS: TypeContenu[] = ['exercices', 'evaluation', 'corrige'];
 
+/** Nombre d'idées de sujets affichées (« Autres idées » en propose d'autres). */
+const SUGGESTION_COUNT = 6;
+
+/** À ne pas saisir : l'outil ne sert pas à nommer un élève, et le texte part chez le prestataire d'IA puis dans l'historique. */
+const NO_NAMES = (sup: boolean) =>
+  `N'indiquez ni nom, ni prénom, ni information permettant d'identifier ${sup ? 'un étudiant' : 'un élève'} (écrivez « ${sup ? 'un étudiant' : 'un élève'} », « ${sup ? 'Étudiant' : 'Élève'} A ») : ajoutez les noms vous-même dans le document final.`;
+
 const FORMAT_SHORT: Record<FormatSeance, string> = { cm: 'CM', td: 'TD', tp: 'TP', seminaire: 'Séminaire' };
 
 function sujetText(tool: TypeContenu, sup: boolean): { label: string; placeholder: string; hint?: string } {
@@ -51,7 +61,7 @@ function sujetText(tool: TypeContenu, sup: boolean): { label: string; placeholde
         placeholder: sup ? 'Ex : 12 semaines, 24 h de CM et 12 h de TD…' : 'Ex : inclure un projet théâtre au 2e trimestre…',
       };
     case 'appreciations':
-      return { label: 'Contexte', placeholder: 'Ex : chapitre sur les fractions, travail en groupe…' };
+      return { label: 'Contexte', placeholder: 'Ex : chapitre sur les fractions, travail en groupe…', hint: NO_NAMES(sup) };
     case 'differenciation':
       return {
         label: 'Sujet / notion',
@@ -78,7 +88,7 @@ function consignesText(tool: TypeContenu, sup: boolean): { label: string; placeh
         placeholder: sup
           ? 'Ex : changement de salle pour le TD du 12 mars, rendu du dossier repoussé…'
           : "Ex : l'élève a été absent 5 fois ce mois-ci sans justificatif…",
-        hint: "Magistra est invité à ne rien inventer et à laisser entre crochets ce qui manque ([Date], [Nom]…) : relisez chaque information avant envoi.",
+        hint: `Magistra est invité à ne rien inventer et à laisser entre crochets ce qui manque ([Date], [Nom]…) : relisez chaque information avant envoi. ${NO_NAMES(sup)}`,
         rows: 4,
       };
     case 'corrige':
@@ -119,9 +129,16 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
     options: g.niveaux.map(n => ({ value: n.value, label: n.label })),
   }));
   const matieres = getMatieresForNiveau(form.niveau).map(m => ({ value: m.value, label: m.label, prefix: m.emoji }));
-  const suggestions = has('sujet') && CONTENT_TOOLS.includes(tool) && !form.sujet.trim()
-    ? getSujetSuggestions(form.matiere, form.niveau).slice(0, 4)
-    : [];
+  // Idées de sujets : tirées une fois par classe et matière (stables pendant la saisie), renouvelables par « Autres idées ».
+  const allIdeas = useMemo(() => getSujetSuggestions(form.matiere, form.niveau), [form.matiere, form.niveau]);
+  const ideas = useSuggestionDeck(allIdeas, SUGGESTION_COUNT, `${form.niveau}|${form.matiere}`);
+  const suggestions = has('sujet') && CONTENT_TOOLS.includes(tool) && !form.sujet.trim() ? ideas.shown : [];
+  // Nombre de renouvellements : annonce aux lecteurs d'écran, qui ne voient pas les idées changer (le focus reste sur le bouton).
+  const [shuffles, setShuffles] = useState(0);
+  const shuffleIdeas = () => {
+    ideas.shuffle();
+    setShuffles(n => n + 1);
+  };
   const sujet = sujetText(tool, sup);
   const consignes = consignesText(tool, sup);
   const learner = sup ? "l'étudiant" : "l'élève";
@@ -198,6 +215,49 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
         onChange={v => onChange({ nombreSeances: v })}
         options={[{ value: '', label: 'Auto', title: '4 à 6 séances' }, ...NOMBRES_SEANCES.map(n => ({ value: n, label: String(n) }))]}
       />,
+    );
+  }
+  if (has('planSeulement')) {
+    // Séquence en deux temps : le plan d'abord, puis les séances à développer (« Développer une séance » sous le plan).
+    // Une grosse séquence (5 séances ou plus, durée très longue) : conseil discret, jamais de case cochée à la place de
+    // l'enseignant.
+    const advise = !form.planSeulement && isLargeSequence(form.nombreSeances, form.duree);
+    settings.push(
+      <div key="planSeulement" className="md:col-span-2">
+        <div
+          className={`flex items-start gap-2.5 p-3 rounded-lg border transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/70 ${
+            form.planSeulement ? 'bg-accent/10 border-accent/40' : 'bg-mg-700 border-white/5 hover:border-white/15'
+          }`}
+        >
+          <input
+            id="gen-plan-seulement"
+            type="checkbox"
+            checked={form.planSeulement === true}
+            onChange={e => onChange({ planSeulement: e.target.checked })}
+            aria-describedby={`gen-plan-seulement-hint${advise ? ' gen-plan-seulement-advice' : ''}`}
+            className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[#c8b6ff]"
+          />
+          <div className="min-w-0">
+            <label
+              htmlFor="gen-plan-seulement"
+              className={`block cursor-pointer text-sm font-medium ${form.planSeulement ? 'text-white' : 'text-mg-100'}`}
+            >
+              Commencer par le plan
+            </label>
+            <p id="gen-plan-seulement-hint" className="text-[11px] text-mg-300 leading-snug">
+              Plus rapide : vous obtenez d’abord le plan {sup ? 'du module' : 'de la séquence'}, puis vous choisissez les séances à développer.
+            </p>
+          </div>
+        </div>
+        {/* Annoncé poliment quand il apparaît (nombre de séances ou durée choisis) : l'enseignant décide. */}
+        <div aria-live="polite">
+          {advise && (
+            <p id="gen-plan-seulement-advice" className="mt-1.5 text-xs text-mg-200 leading-relaxed">
+              Conseil : pour {sup ? 'un gros module' : 'une grosse séquence'}, commencer par le plan donne plus vite un premier résultat utile. Cochez la case ci-dessus si vous le souhaitez.
+            </p>
+          )}
+        </div>
+      </div>,
     );
   }
   if (has('typeEvaluation')) {
@@ -494,6 +554,21 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
                   {s}
                 </button>
               ))}
+              {ideas.canShuffle && (
+                <>
+                  <button
+                    type="button"
+                    onClick={shuffleIdeas}
+                    title="Proposer d'autres idées de sujets"
+                    className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg text-accent hover:bg-accent/10 border border-accent/20 transition-colors ${FOCUS_RING}`}
+                  >
+                    <Shuffle size={12} aria-hidden="true" /> Autres idées
+                  </button>
+                  <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                    {shuffles > 0 && <span key={shuffles}>{suggestions.length} nouvelles idées affichées</span>}
+                  </span>
+                </>
+              )}
             </div>
           )}
         </Field>
@@ -569,7 +644,7 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
         <Field
           id="gen-copie"
           label="Travail à corriger"
-          hint={`Collez le texte de ${learner} (copie, rédaction, réponse). Il n'est pas enregistré tel quel dans l'historique, mais le corrigé enregistré peut en citer des passages.`}
+          hint={`Collez le texte de ${learner} (copie, rédaction, réponse) après avoir retiré son nom. Il n'est pas enregistré tel quel dans l'historique, mais le corrigé enregistré peut en citer des passages.`}
           error={errorOf('texteEleve')}
         >
           {textArea('texteEleve', 'gen-copie', {

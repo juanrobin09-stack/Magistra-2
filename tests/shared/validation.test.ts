@@ -223,6 +223,23 @@ describe('validateGenerationRecordDraft — génération valide', () => {
     expect(out.contenu).toBe(record.contenu);
   });
 
+  it('demi-paires de substitution isolées retirées (sujet, paramètres, contenu), paires complètes conservées', () => {
+    const out = validateGenerationRecordDraft({
+      ...structuredClone(record), sujet: 'Les graphes 😀\ud83d', contenu: '# Titre 😀\ud83d\n\nTexte \ude00 fin.\n', params: { ...record.params, objectifs: 'Définir 😀\ud83d' },
+    });
+    expect(out.sujet).toBe('Les graphes 😀');
+    expect(out.contenu).toBe('# Titre 😀\n\nTexte  fin.\n');
+    expect(out.params.objectifs).toBe('Définir 😀');
+  });
+
+  it('tous les types de source sont acceptés, dont OpenAlex et les sites officiels vérifiés', () => {
+    for (const kind of ['document', 'hal', 'crossref', 'openalex', 'web', 'institutional', 'wikipedia']) {
+      expect(validateGenerationRecordDraft(withSource({ kind })).sources[1].kind, kind).toBe(kind);
+    }
+    const official = validateGenerationRecordDraft(withSource({ kind: 'institutional', venue: 'UNESCO', url: 'https://www.unesco.org/fr/esd' })).sources[1];
+    expect(official).toMatchObject({ kind: 'institutional', venue: 'UNESCO', url: 'https://www.unesco.org/fr/esd' });
+  });
+
   it('identifiant, date, favori, utilisateur et champs inconnus ignorés (jamais repris du corps)', () => {
     const out = validateGenerationRecordDraft({
       ...record, id: '00000000-0000-4000-8000-000000000000', createdAt: '1999-01-01T00:00:00Z', isFavorite: true, userId: 'user_B',

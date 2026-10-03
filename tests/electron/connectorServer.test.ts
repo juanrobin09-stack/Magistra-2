@@ -16,8 +16,9 @@ import { MagistraError } from '../../shared/errors.js';
 import { DEFAULT_PREFERENCES } from '../../shared/ipc.js';
 import {
   buildPairingUrl, canonicalPairAck, canonicalProof, canonicalRequest, canonicalRevoked, CONNECTOR_ALLOWED_REQUEST_HEADERS, CONNECTOR_CRYPTO,
-  CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS, parseAppUrl, type ConnectorStatus,
+  CONNECTOR_FORMATS, CONNECTOR_HEADERS, CONNECTOR_LIMITS, OFFICIAL_WEB_ORIGINS, parseAppUrl, type ConnectorStatus,
 } from '../../shared/localConnector.js';
+import { SITE_ORIGIN } from '../../shared/site.js';
 import type { GenerationEvent, PrivacyInfo } from '../../shared/types.js';
 import type { SecretCipher } from '../../electron/aiConfig.js';
 import { ConnectorClientStore } from '../../electron/connector/clients.js';
@@ -26,6 +27,7 @@ import { PairingRegistry, type PairingTicket } from '../../electron/connector/pa
 import { ConnectorServer, type ConnectorServerOptions } from '../../electron/connector/server.js';
 import { buildConnectorStatus } from '../../electron/connector/status.js';
 import { BUSY_EXTERNAL_MESSAGE, BUSY_WINDOW_MESSAGE, GenerationManager, type GenerationDeps, type GenerationPayload } from '../../electron/generation.js';
+import { originTraps, SITE_APEX_ORIGIN } from './officialOrigins.js';
 
 const ORIGIN = 'https://magistra-2.vercel.app';
 /** Seconde origine autorisée (origine de développement) : sert aux contrôles « autre origine ». */
@@ -650,6 +652,137 @@ describe('présence et contrôles d’accès (avant toute authentification)', ()
   });
 });
 
+/** En-têtes bruts (liste « nom, valeur, nom, valeur… ») : permet d'envoyer deux fois Origin, que `send` ne sait pas faire. */
+function sendRaw(headers: string[], path = '/v1/hello'): Promise<Reply> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, method: 'GET', path, agent: false, setHost: false, headers }, res => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        const reply: Reply = { status: res.statusCode ?? 0, headers: res.headers, text, json: parseOrNull(text) };
+        seen.push(reply);
+        resolve(reply);
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+describe('origines officielles (OFFICIAL_WEB_ORIGINS) : exactes, et rien d’autre', () => {
+  beforeEach(async () => {
+    // Le serveur reçoit EXACTEMENT la liste compilée dans l'application (aucune origine de développement), comme main.ts.
+    await server.stop();
+    server = new ConnectorServer({ ...serverOptions, allowedOrigins: [...OFFICIAL_WEB_ORIGINS] });
+    port = (await server.start())!;
+  });
+
+  it('la liste du serveur est celle de l’application : l’ancienne adresse ET le nouveau domaine', () => {
+    expect([...OFFICIAL_WEB_ORIGINS]).toEqual(['https://magistra-2.vercel.app', 'https://www.mag-istra.fr']);
+    expect(OFFICIAL_WEB_ORIGINS).toContain(ORIGIN);
+    expect(OFFICIAL_WEB_ORIGINS).toContain(SITE_ORIGIN);
+  });
+
+  it.each([...OFFICIAL_WEB_ORIGINS])('%s : présence, CORS exact (cette origine, jamais « * »), pré-vérification, hôte exact toujours exigé', async origin => {
+    const hello = await send({ headers: { origin } });
+    expect(hello.status).toBe(200);
+    expect(hello.json).toEqual({ app: 'magistra', protocol: 2, version: VERSION });
+    expectCors(hello, origin);
+    expect(hello.headers['access-control-allow-credentials']).toBeUndefined();
+
+    const requested = CONNECTOR_ALLOWED_REQUEST_HEADERS.map(h => h.toLowerCase()).join(', ');
+    const preflight = await send({ method: 'OPTIONS', path: '/v1/generate', headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': requested } });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe(origin);
+    expect(preflight.headers['access-control-allow-methods']).toBe('POST');
+
+    // L'origine officielle ne dispense pas du contrôle de l'hôte (anti DNS rebinding).
+    const rebinding = await send({ headers: { origin, host: 'evil.example' } });
+    expectError(rebinding, 403, 'FORBIDDEN');
+    expectNoCors(rebinding);
+  });
+
+  it.each([...OFFICIAL_WEB_ORIGINS])('%s : appairage complet, puis requête signée, navigateur listé sous son nom d’hôte', async origin => {
+    const browser = await paired(origin);
+    const host = new URL(origin).host;
+    expect(clients.list()).toEqual([expect.objectContaining({ clientId: browser.clientId, site: host, browser: 'Microsoft Edge' })]);
+    const { reply, nonce } = await browser.call('GET', '/v1/status');
+    expect(reply.status).toBe(200);
+    expectCors(reply, origin);
+    expect(await browser.proofValid(reply.headers, nonce)).toBe(true);
+  });
+
+  it.each([...OFFICIAL_WEB_ORIGINS])('variantes piégées de %s : 403 sans aucun en-tête CORS, sur chaque route', async official => {
+    const traps = originTraps(official);
+    expect(traps.length).toBeGreaterThan(60);
+    for (const origin of traps) {
+      for (const [method, route] of [['GET', '/v1/hello'], ['POST', '/v1/pair'], ['GET', '/v1/status'], ['OPTIONS', '/v1/generate']]) {
+        const reply = await send({ method, path: route, headers: { origin, 'access-control-request-method': 'POST' } });
+        expect(reply.status, `${origin} ${method} ${route}`).toBe(403);
+        expectNoCors(reply);
+      }
+    }
+  });
+
+  it('Origin absent : 403 sans CORS ; deux en-têtes Origin (même valeur, ou les deux origines officielles) : 403 sans CORS', async () => {
+    const absent = await send({ headers: { origin: undefined } });
+    expectError(absent, 403, 'FORBIDDEN');
+    expectNoCors(absent);
+    const host = `127.0.0.1:${port}`;
+    for (const origins of [[SITE_ORIGIN, SITE_ORIGIN], [SITE_ORIGIN, ORIGIN], [ORIGIN, SITE_ORIGIN], [SITE_ORIGIN, 'https://evil.example'], ['https://evil.example', SITE_ORIGIN]]) {
+      const reply = await sendRaw(['Host', host, 'Origin', origins[0], 'Origin', origins[1]]);
+      expect(reply.status, origins.join(' + ')).toBe(403);
+      expectNoCors(reply);
+    }
+    // Un seul Origin, exact : accepté (le contrôle précédent n'est pas un refus systématique).
+    const single = await sendRaw(['Host', host, 'Origin', SITE_ORIGIN]);
+    expect(single.status).toBe(200);
+    expectCors(single, SITE_ORIGIN);
+  });
+
+  it('l’apex (https://mag-istra.fr) n’est pas servi par le projet : refusé, comme tout sous-domaine', async () => {
+    for (const origin of [SITE_APEX_ORIGIN, 'https://app.mag-istra.fr', 'https://sub.www.mag-istra.fr']) {
+      const reply = await send({ headers: { origin } });
+      expectError(reply, 403, 'FORBIDDEN');
+      expectNoCors(reply);
+    }
+  });
+
+  it('un appairage ne vaut que pour son origine : celui de l’ancienne adresse est refusé depuis le nouveau domaine (et inversement)', async () => {
+    const legacy = await paired(ORIGIN);
+    const modern = await paired(SITE_ORIGIN);
+    expect(clients.list().map(c => c.site).sort()).toEqual(['magistra-2.vercel.app', 'www.mag-istra.fr']);
+    // Requêtes correctement signées pour leur propre origine : acceptées.
+    expect((await legacy.call('GET', '/v1/status')).reply.status).toBe(200);
+    expect((await modern.call('GET', '/v1/status')).reply.status).toBe(200);
+    // Clé de l'un présentée avec l'origine de l'autre (en-tête et signature alignés) : navigateur inconnu pour cette origine.
+    const crossed = await legacy.call('GET', '/v1/status', '', { origin: SITE_ORIGIN }, { origin: SITE_ORIGIN });
+    expectError(crossed.reply, 401, 'CONNECTOR_UNPAIRED');
+    const reverse = await modern.call('GET', '/v1/status', '', { origin: ORIGIN }, { origin: ORIGIN });
+    expectError(reverse.reply, 401, 'CONNECTOR_UNPAIRED');
+    // Origine annoncée dans la signature différente de l'en-tête : signature invalide.
+    const mismatch = await modern.call('GET', '/v1/status', '', { origin: ORIGIN });
+    expect(mismatch.reply.status).toBe(401);
+  });
+
+  it('appairage commencé depuis une origine, terminé depuis l’autre origine officielle : 403 FORBIDDEN (rien d’enregistré)', async () => {
+    const browser = new Browser(SITE_ORIGIN);
+    const p = await browser.begin();
+    pairing.answer(openPairing(p, SITE_ORIGIN), true);
+    const stolen = await send({
+      method: 'POST',
+      path: '/v1/pair',
+      headers: { origin: ORIGIN, 'content-type': 'application/json', 'user-agent': EDGE_UA },
+      body: JSON.stringify({ pairingId: p.pairingId, verifier: p.verifier, clientPublicKey: p.clientPublicKey }),
+    });
+    expectError(stolen, 403, 'FORBIDDEN');
+    expect(clients.list()).toEqual([]);
+    // Depuis la bonne origine, la même demande aboutit encore (aucun essai consommé par l'autre origine).
+    expect((await browser.pairRequest(p)).status).toBe(200);
+  });
+});
+
 describe('appairage', () => {
   it('complet : preuve de réception en attente (202) → accord → « consented » → fin d’appairage (200, clé du connecteur) ; requêtes signées ensuite', async () => {
     const browser = new Browser();
@@ -967,18 +1100,49 @@ describe('requêtes signées', () => {
     expectCors(reply, DEV_ORIGIN);
   });
 
-  it(`au-delà de ${CONNECTOR_LIMITS.maxAuthFailuresPerMinute} échecs par minute : 429 pendant une minute (sauf hello)`, async () => {
+  const MANY = CONNECTOR_LIMITS.maxAuthFailuresPerMinute + 5;
+
+  it('échecs SANS secret (en-têtes absents, navigateur inconnu, mauvaise origine) : jamais comptés, aucun blocage', async () => {
     const browser = await paired();
+    const other = await paired();
+    for (let i = 0; i < MANY; i++) {
+      expectError(await send({ path: '/v1/status', headers: { origin: ORIGIN } }), 401, 'UNAUTHENTICATED');
+      const unknown = await browser.sign('GET', '/v1/status', '', { clientId: randomToken(16) });
+      expectError(await send({ path: '/v1/status', headers: unknown.headers }), 401, 'CONNECTOR_UNPAIRED');
+      const wrongOrigin = await browser.sign('GET', '/v1/status', '', { origin: DEV_ORIGIN });
+      expectError(await send({ path: '/v1/status', headers: { ...wrongOrigin.headers, origin: DEV_ORIGIN } }), 401, 'CONNECTOR_UNPAIRED');
+    }
+    expect((await browser.call('GET', '/v1/status')).reply.status).toBe(200);
+    expect((await other.call('GET', '/v1/status')).reply.status).toBe(200);
+    expect((await browser.call('POST', '/v1/generate', JSON.stringify(REQUEST))).reply.status).not.toBe(429);
+    expect((await paired()).clientId).toBeTruthy();
+  });
+
+  it(`plus de ${CONNECTOR_LIMITS.maxAuthFailuresPerMinute} signatures fausses d'un navigateur appairé : 429 pour lui seul, pendant une minute`, async () => {
+    const browser = await paired();
+    const other = await paired();
     for (let i = 0; i <= CONNECTOR_LIMITS.maxAuthFailuresPerMinute; i++) {
       expectError((await browser.call('GET', '/v1/status', '', { timestamp: '1000000000000' })).reply, 401, 'UNAUTHENTICATED');
     }
     const blocked = await browser.call('GET', '/v1/status');
     expectError(blocked.reply, 429, 'RATE_LIMITED');
     expect(Number(blocked.reply.headers['retry-after'])).toBeGreaterThan(0);
-    expectError(await send({ method: 'POST', path: '/v1/pair', headers: { 'content-type': 'application/json' }, body: '{}' }), 429, 'RATE_LIMITED');
+    expectError((await browser.call('POST', '/v1/generate', JSON.stringify(REQUEST))).reply, 429, 'RATE_LIMITED');
+    // Les autres navigateurs, l'appairage et hello ne sont pas touchés.
+    expect((await other.call('GET', '/v1/status')).reply.status).toBe(200);
+    expect((await paired()).clientId).toBeTruthy();
     expect((await send()).status).toBe(200);
     clock += 60_001;
     expect((await browser.call('GET', '/v1/status')).reply.status).toBe(200);
+  });
+
+  it('signature HMAC fausse : comptée pour le navigateur connu', async () => {
+    const browser = await paired();
+    const wrong = await subtle.importKey('raw', new Uint8Array(32).fill(7), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    for (let i = 0; i <= CONNECTOR_LIMITS.maxAuthFailuresPerMinute; i++) {
+      expectError((await browser.call('GET', '/v1/status', '', { key: wrong })).reply, 401, 'UNAUTHENTICATED');
+    }
+    expectError((await browser.call('GET', '/v1/status')).reply, 429, 'RATE_LIMITED');
   });
 
   it('GET /v1/status : état du moteur sans adresse, port, chemin ni réglage', async () => {
@@ -992,7 +1156,7 @@ describe('requêtes signées', () => {
     expect(reply.json).toEqual({
       version: VERSION,
       engine: { ready: false, local: true, label: 'Magistra Standard', notReady: { code: 'AI_SERVER_UNAVAILABLE', message: "Serveur d'IA indisponible. Réessayez dans quelques instants." } },
-      capabilities: { maxDocumentChars: expect.any(Number), research: { academic: true, web: false, institutional: false, wikipedia: true } },
+      capabilities: { maxDocumentChars: expect.any(Number), research: { academic: true, web: false, institutional: false, wikipedia: true, trustedCatalogue: true } },
       busy: false,
     });
     for (const leak of ['127.0.0.1', 'localhost', 'http', '11434', String(port), 'Users', '.ollama', 'ministral']) expect(reply.text).not.toContain(leak);
@@ -1033,6 +1197,31 @@ describe('génération (flux NDJSON)', () => {
     // Rien n'est envoyé à la fenêtre de l'application.
     expect(windowPayloads).toEqual([]);
     expect(gm.busy).toBe(false);
+  });
+
+  it('séquence « plan d’abord » : le champ traverse le connecteur (protocole inchangé) jusqu’au moteur et à la génération à enregistrer', async () => {
+    const browser = await paired();
+    const sequence = { type: 'sequence', niveau: '4eme', matiere: 'histoire_geo', sujet: 'La Révolution', researchMode: 'documents', nombreSeances: 2 };
+    const run = async (body: Record<string, unknown>) => {
+      const text = JSON.stringify(body);
+      const { headers } = await browser.sign('POST', '/v1/generate', text);
+      const s = await stream({ method: 'POST', path: '/v1/generate', headers, body: text });
+      expect(s.status).toBe(200);
+      return (await s.done).at(-1) as Extract<GenerationEvent, { type: 'done' }>;
+    };
+    const mock = provider as MockProvider;
+    const prompt = (n: number) => mock.calls[n].messages.map(m => m.content).join('\n');
+
+    const plan = await run({ ...sequence, planSeulement: true });
+    expect(prompt(0)).toContain('concevoir le PLAN d\'une séquence pédagogique de EXACTEMENT 2 séances');
+    expect(plan.record).toMatchObject({ type: 'sequence', params: { nombreSeances: 2, planSeulement: true } });
+
+    // Ancien site (sans le champ) ou valeur non booléenne : séquence complète, rien ne change.
+    const full = await run(sequence);
+    expect(prompt(1)).not.toContain('PLAN d\'');
+    expect(full.record?.params).not.toHaveProperty('planSeulement');
+    await run({ ...sequence, planSeulement: 'true' });
+    expect(prompt(2)).not.toContain('PLAN d\'');
   });
 
   it('une seule génération à la fois (fenêtre ou site) : 409 GENERATION_BUSY avec preuve', async () => {

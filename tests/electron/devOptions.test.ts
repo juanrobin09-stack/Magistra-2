@@ -59,12 +59,14 @@ describe('options de développement du connecteur local', () => {
     for (const ok of ['http://localhost:5173', 'http://127.0.0.1:4173', 'https://localhost:5173', 'http://localhost']) expect(isLoopbackDevOrigin(ok), ok).toBe(true);
     for (const bad of [
       'https://evil.example', 'http://192.168.1.10:5173', 'http://localhost:5173/', 'http://localhost:5173/app', 'http://[::1]:5173',
-      'file:///C:/magistra', 'null', '*', 'http://localhost.evil.example', 'http://user@localhost:5173', 'https://magistra-2.vercel.app',
+      'file:///C:/magistra', 'null', '*', 'http://localhost.evil.example', 'http://user@localhost:5173', 'https://magistra-2.vercel.app', 'https://www.mag-istra.fr',
     ]) {
       expect(isLoopbackDevOrigin(bad), bad).toBe(false);
     }
     expect(parseConnectorDevOrigins('https://evil.example, http://localhost:5173 ,http://localhost:5173')).toEqual(['http://localhost:5173']);
     expect(parseConnectorDevOrigins('https://evil.example')).toBeUndefined();
+    // Les origines officielles du site ne s'ajoutent pas par l'environnement : elles viennent de OFFICIAL_WEB_ORIGINS.
+    expect(parseConnectorDevOrigins('https://www.mag-istra.fr,https://magistra-2.vercel.app')).toBeUndefined();
     expect(parseConnectorDevOrigins(undefined)).toBeUndefined();
   });
 

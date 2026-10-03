@@ -3,8 +3,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  activationBlocker, activationPlan, activationProgress, activationSizeDetail, activationSizeText, activationSteps, missingDiskGB,
-  planFromProgress,
+  activationBlocker, activationPlan, activationProgress, activationSizeDetail, activationSizeText, activationSteps, engineWindowMayOpen,
+  missingDiskGB, planFromProgress, type EngineAction,
 } from '@/lib/ai-ui/activation';
 import { downloadDurationText } from '@/lib/ai-ui/format';
 import { EMPTY_PROGRESS, type AIProgressState } from '@/lib/ai-ui/progress';
@@ -249,5 +249,44 @@ describe('activationProgress', () => {
     expect(model.current).toBe(1);
     expect(model.percent).toBe(25);
     expect(plain(model.transferText)).toBe('2,3 Go sur 9 Go');
+  });
+});
+
+describe('engineWindowMayOpen : quand une fenêtre d’Ollama peut s’ouvrir', () => {
+  const missing = makeStatus({ engine: 'not_installed' });
+
+  it('Windows, installateur officiel lancé sur cet ordinateur (installation, mise à jour, page officielle) : oui', () => {
+    for (const action of ['install', 'update', 'manual'] as const) {
+      expect(engineWindowMayOpen(missing, action), action).toBe(true);
+    }
+  });
+
+  it('simple démarrage du moteur (Magistra le lance sans fenêtre), rien à faire, service informatique : non', () => {
+    for (const action of ['start', 'admin', null] as const satisfies readonly (EngineAction | null)[]) {
+      expect(engineWindowMayOpen(missing, action), String(action)).toBe(false);
+    }
+  });
+
+  it('hors Windows (installation à la main, aucune fenêtre promise) : non', () => {
+    const other = makeStatus({ engine: 'not_installed', platformSupported: false, hardware: { platform: 'linux' } });
+    expect(engineWindowMayOpen(other, 'manual')).toBe(false);
+    expect(engineWindowMayOpen(other, 'install')).toBe(false);
+  });
+
+  it('serveur IA distant ou moteur sur un autre ordinateur : rien ne s’installe ici, non', () => {
+    expect(engineWindowMayOpen(makeStatus({ engine: 'not_installed', mode: 'remote' }), 'install')).toBe(false);
+    expect(engineWindowMayOpen(makeStatus({ engine: 'unknown', ollamaUrl: 'http://192.168.1.20:11434' }), 'install')).toBe(false);
+  });
+
+  it('suit le plan d’activation : moteur absent → oui ; moteur arrêté ou en marche → non', () => {
+    expect(engineWindowMayOpen(missing, activationPlan(missing)!.engine)).toBe(true);
+    const stopped = makeStatus({ engine: 'installed_stopped', installed: ['standard'], ready: false });
+    expect(engineWindowMayOpen(stopped, activationPlan(stopped)!.engine)).toBe(false);
+    const running = makeStatus({ engine: 'running', installed: [] });
+    expect(engineWindowMayOpen(running, activationPlan(running)!.engine)).toBe(false);
+    const outdated = makeStatus({ engine: 'running', installed: [], engineVersion: '0.12.3', outdated: true });
+    expect(engineWindowMayOpen(outdated, activationPlan(outdated)!.engine)).toBe(true);
+    const managed = makeStatus({ engine: 'running', installed: [], engineVersion: '0.12.3', outdated: true, managedByAdmin: true });
+    expect(engineWindowMayOpen(managed, activationPlan(managed)!.engine)).toBe(false);
   });
 });

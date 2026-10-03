@@ -4,8 +4,14 @@ interface State {
   hasError: boolean;
 }
 
+interface Props {
+  children: ReactNode;
+  /** Action supplémentaire à côté de « Recharger » et « Revenir à l'accueil » (AppErrorBoundary : « Refaire mon profil »). */
+  extraAction?: ReactNode;
+}
+
 /** Dernier filet de sécurité : jamais d'écran blanc, jamais de trace technique affichée. */
-export default class ErrorBoundary extends Component<{ children: ReactNode }, State> {
+export default class ErrorBoundary extends Component<Props, State> {
   state: State = { hasError: false };
 
   static getDerivedStateFromError(): State {
@@ -40,16 +46,7 @@ export default class ErrorBoundary extends Component<{ children: ReactNode }, St
             >
               Revenir à l’accueil
             </button>
-            <button
-              type="button"
-              className="btn-ghost text-sm py-2 px-5"
-              onClick={() => {
-                // Un profil illisible est la cause la plus fréquente : il peut être ressaisi.
-                window.location.href = '/onboarding?edit=1';
-              }}
-            >
-              Refaire mon profil
-            </button>
+            {this.props.extraAction}
           </div>
         </div>
       </div>

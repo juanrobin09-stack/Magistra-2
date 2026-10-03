@@ -35,6 +35,15 @@ describe('serverCapabilities', () => {
     expect(caps.aiWarning).toBeUndefined();
   });
 
+  it('« trustedCatalogue » : transmis tel quel par un serveur actuel, jamais inventé pour un ancien serveur', () => {
+    const ai = { ok: true, label: 'x' } as const;
+    const current = serverCapabilities({ ai, research: { ...RESEARCH, institutional: true, web: true, trustedCatalogue: true }, maxDocumentChars: 30_000 });
+    expect(current.research).toEqual({ academic: true, web: true, institutional: true, wikipedia: true, trustedCatalogue: true });
+    const older = serverCapabilities(status(ai));
+    expect(older.research).toEqual({ academic: true, web: false, institutional: false, wikipedia: true });
+    expect(older.research).not.toHaveProperty('trustedCatalogue');
+  });
+
   it('IA non prête sans code (ancien serveur) : cause générique, jamais vide', () => {
     const caps = serverCapabilities(status({ ok: false, label: "Serveur d'IA" }));
     expect(caps.notReady?.code).toBe('AI_SERVER_UNAVAILABLE');

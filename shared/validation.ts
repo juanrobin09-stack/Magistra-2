@@ -3,7 +3,7 @@
 
 import {
   defaultMatiereFor, isMatiere, isTypeContenu, TOOL_FIELDS, TOOL_REQUIRES_SUJET,
-  type DifficulteExercice, type FormatSeance, type ProfilDifferenciation, type ProfilEleve, type TypeLettre,
+  type DifficulteExercice, type FormatSeance, type ProfilDifferenciation, type ProfilEleve, type TypeContenu, type TypeLettre,
 } from './catalog.js';
 import { MagistraError } from './errors.js';
 import {
@@ -48,12 +48,17 @@ const BESOINS: BesoinParticulier[] = BESOINS_PARTICULIERS.map(b => b.value);
 /** Identifiant de format enregistré avec une génération (liste ouverte : une application plus récente peut en ajouter). */
 const MODALITE_ID = /^[a-z][a-z_]{0,39}$/;
 
-/** Retire les caractères de contrôle invisibles (sauf tabulation et retours à la ligne). */
+/**
+ * Retire les caractères de contrôle invisibles (sauf tabulation et retours à la ligne) et les demi-paires de substitution
+ * isolées (un texte coupé au milieu d'un emoji : JSON refusé par certains fournisseurs d'IA, U+FFFD après un aller-retour
+ * UTF-8). Une paire complète (« ch » de deux unités) est conservée.
+ */
 function stripControlChars(value: string): string {
   let out = '';
   for (const ch of value) {
     const code = ch.charCodeAt(0);
     if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) continue;
+    if (ch.length === 1 && code >= 0xd800 && code <= 0xdfff) continue;
     out += ch;
   }
   return out;
@@ -222,6 +227,8 @@ export function validateGenerationRequest(input: unknown): GenerationRequest {
     setIfDefined(req, 'nombreExercices', boundedInteger(raw.nombreExercices, LIMITES_NOMBRES.exercices));
   }
   if (allowed('nombreSeances')) setIfDefined(req, 'nombreSeances', boundedInteger(raw.nombreSeances, LIMITES_NOMBRES.seances));
+  // Séquence en deux temps (plan d'abord) : booléen strict, comme « sansCorrige » ; ignoré hors de l'outil séquence.
+  if (allowed('planSeulement') && raw.planSeulement === true) req.planSeulement = true;
   if (allowed('ton')) setIfDefined(req, 'ton', oneOf(raw.ton, TON_VALUES));
   if (allowed('besoins') && Array.isArray(raw.besoins)) {
     const besoins = BESOINS.filter(b => (raw.besoins as unknown[]).includes(b));
@@ -276,7 +283,7 @@ export const RECORD_LIMITS = {
 
 /** Toutes les origines de source connues (Record : un nouveau SourceKind oublié ici ne compile pas). */
 const SOURCE_KINDS: Readonly<Record<SourceKind, true>> = {
-  document: true, hal: true, crossref: true, web: true, institutional: true, wikipedia: true,
+  document: true, hal: true, crossref: true, openalex: true, web: true, institutional: true, wikipedia: true,
 };
 
 function isSourceKind(value: unknown): value is SourceKind {
@@ -296,6 +303,13 @@ function optionalBoolean(value: unknown, field: string): boolean | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'boolean') throw invalidRecord(`Champ « ${field} » invalide.`);
   return value;
+}
+
+/** « Plan d'abord » : booléen strict, et seulement pour une séquence (les autres outils n'ont pas cette option). */
+function optionalPlanSeulement(value: unknown, type: TypeContenu): boolean | undefined {
+  const planSeulement = optionalBoolean(value, 'plan d’abord');
+  if (planSeulement !== undefined && !TOOL_FIELDS[type].includes('planSeulement')) throw invalidRecord('Champ « plan d’abord » invalide.');
+  return planSeulement;
 }
 
 /** Entier facultatif dans [min, max] (jamais converti depuis une chaîne). */
@@ -415,7 +429,7 @@ function recordSources(value: unknown): SourceRef[] {
  * que le site : l'enregistrement reste possible) ; une clé connue de type ou de valeur inattendus est refusée.
  * Jamais le texte des documents ni le travail d'un élève (seule sa longueur).
  */
-function recordParams(value: unknown): Record<string, unknown> {
+function recordParams(value: unknown, type: TypeContenu): Record<string, unknown> {
   if (value === undefined || value === null) return {};
   if (!isPlainObject(value)) throw invalidRecord('Paramètres de la génération invalides.');
   const params: Record<string, unknown> = {
@@ -437,6 +451,7 @@ function recordParams(value: unknown): Record<string, unknown> {
     sansCorrige: optionalBoolean(value.sansCorrige, 'sans corrigé'),
     nombreExercices: optionalInteger(value.nombreExercices, LIMITES_NOMBRES.exercices.min, LIMITES_NOMBRES.exercices.max, 'nombre d’exercices'),
     nombreSeances: optionalInteger(value.nombreSeances, LIMITES_NOMBRES.seances.min, LIMITES_NOMBRES.seances.max, 'nombre de séances'),
+    planSeulement: optionalPlanSeulement(value.planSeulement, type),
     ton: optionalOneOf(value.ton, TON_VALUES, 'ton'),
     besoins: optionalOneOfList(value.besoins, BESOINS, 'besoins particuliers'),
     texteEleveLength: optionalInteger(value.texteEleveLength, 1, REQUEST_LIMITS.texteEleve, 'longueur du travail corrigé'),
@@ -486,7 +501,7 @@ export function validateGenerationRecordDraft(input: unknown): GenerationRecordD
     sujet,
     contenu,
     sources: recordSources(input.sources),
-    params: recordParams(input.params),
+    params: recordParams(input.params, input.type),
     ...(truncated !== undefined ? { truncated } : {}),
     ...(internetUsed !== undefined ? { internetUsed } : {}),
     ...(model ? { model } : {}),

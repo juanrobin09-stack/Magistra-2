@@ -37,7 +37,12 @@ export const SERVER_CAPS: Capabilities = {
   providerInfo: OVH_INFO,
 };
 
-/** Tout ce qui ne doit JAMAIS apparaître à propos de Magistra locale : adresse, port, nom du moteur. */
+/**
+ * Tout ce qui ne doit JAMAIS apparaître à propos de Magistra locale (le site web) : adresse, port, nom du moteur.
+ * Les trois textes sur la fenêtre d'Ollama (installation de l'IA, application Windows) nomment le moteur, et le site ne
+ * les affiche jamais : l'expression reste donc sans exception ici ; la règle « seuls ces textes nomment Ollama » est
+ * contrôlée dans tests/ui/engineWindowNote.test.ts.
+ */
 export const FORBIDDEN_LOCAL_TEXT = /localhost|127\.0\.0\.1|ollama|:4783\d|11434/i;
 
 export function engineState(kind: LocalEngineState['kind'], extra: Partial<LocalEngineState> = {}): LocalEngineState {

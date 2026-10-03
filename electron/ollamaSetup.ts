@@ -13,7 +13,9 @@
 //   0.13.1) est signalé (AIStatus.engine.outdated) AVANT tout téléchargement de modèle, avec une mise à jour en un
 //   clic (installEngine({ update: true })) ou « demandez au service informatique » (Ollama dans Program Files) ;
 // - Ollama est lancé sans fenêtre (« ollama app.exe » --hide --fast-startup, comme sa propre ligne de commande), avec
-//   le proxy du système en HTTPS_PROXY : Ollama ignore le proxy de Windows. Aucun identifiant de proxy n'est journalisé ;
+//   le proxy du système en HTTPS_PROXY : Ollama ignore le proxy de Windows. Aucun identifiant de proxy n'est journalisé.
+//   Seul l'installateur officiel le lance à la fin de l'installation, sans ces arguments : sa fenêtre d'accueil peut
+//   alors s'ouvrir ; l'interface l'annonce avant et pendant l'installation (ENGINE_WINDOW_NOTE, texts.ts) ;
 // - si le moteur ne démarre pas, la cause probable est donnée (journal du moteur filtré, antivirus, port occupé).
 
 import { createHash } from 'node:crypto';
@@ -28,7 +30,7 @@ import {
 import { OllamaClient, OllamaProvider, sameModel, type OllamaModel, type PullProgress } from '../shared/ai/ollama.js';
 import { isOllamaCloudName, isRemoteOllamaModel, ollamaDestination, REMOTE_MODEL_REFUSED } from '../shared/ai/ollamaRemote.js';
 import { providerInfoFor } from '../shared/ai/presets.js';
-import type { AIProvider, ChatOptions, FetchLike, HealthStatus, PreloadOptions, StreamEvent } from '../shared/ai/provider.js';
+import type { AIProvider, ChatOptions, FetchLike, HealthStatus, PreloadOptions, PreloadResult, StreamEvent } from '../shared/ai/provider.js';
 import { networkFailureKind } from '../shared/ai/streams.js';
 import { MagistraError, isMagistraError } from '../shared/errors.js';
 import {
@@ -36,7 +38,7 @@ import {
 } from '../shared/ipc.js';
 import type { AINotice, PrivacyInfo, ProviderInfo } from '../shared/types.js';
 import type { AIConfigStore } from './aiConfig.js';
-import { isLoopbackHost } from './security.js';
+import { isLoopbackUrl } from '../shared/ai/loopback.js';
 
 export const OLLAMA_DOWNLOAD_PAGE = 'https://ollama.com/download';
 export const OLLAMA_RELEASE_API = 'https://api.github.com/repos/ollama/ollama/releases/latest';
@@ -164,9 +166,9 @@ export class LocalOllamaProvider extends OllamaProvider {
     }
   }
 
-  override async preload(options?: PreloadOptions): Promise<void> {
+  override async preload(options?: PreloadOptions): Promise<PreloadResult | void> {
     try {
-      await super.preload(options);
+      return await super.preload(options);
     } catch (err) {
       throw this.adapt(err);
     }
@@ -320,14 +322,6 @@ async function defaultReadFileTail(file: string, maxBytes: number): Promise<stri
     return undefined;
   } finally {
     await handle?.close().catch(() => undefined);
-  }
-}
-
-function isLoopbackUrl(url: string): boolean {
-  try {
-    return isLoopbackHost(new URL(url).hostname);
-  } catch {
-    return false;
   }
 }
 

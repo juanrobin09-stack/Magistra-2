@@ -27,9 +27,14 @@
 // Cache mémoire (WindowsReleaseCache, un par instance du serveur) : une requête vers GitHub toutes les 10 min au plus,
 // requêtes simultanées regroupées ; GitHub en panne → la dernière réponse valide (24 h au plus) est resservie, et un
 // nouvel essai a lieu après 1 min. Sans jeton, l'API GitHub n'accepte que 60 requêtes par heure et par adresse IP.
+//
+// Fonctions publiques du site (api/windows-release.ts, api/download.ts) : createPublicRouteHandler, en fin de fichier, sert
+// ces deux routes SANS le reste du serveur (ni configuration des comptes ou de l'IA, ni Clerk, ni Supabase).
 
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { FetchLike } from '../shared/ai/provider.js';
 import type { WindowsReleaseInfo, WindowsReleaseResponse } from '../shared/apiContract.js';
+import { MagistraError } from '../shared/errors.js';
 
 /** Dépôt officiel de Magistra (celui que l'application Windows interroge pour « Rechercher une mise à jour »). */
 export const DEFAULT_RELEASES_REPO = 'juanrobin09-stack/magistra-downloads';
@@ -466,4 +471,137 @@ export async function fetchLatestWindowsRelease(options: WindowsReleaseOptions):
 /** En-tête Cache-Control de la réponse HTTP (cache court tant qu'aucun installateur n'est proposé). */
 export function windowsReleaseCacheControl(response: WindowsReleaseResponse): string {
   return response.available ? WINDOWS_RELEASE_CACHE_CONTROL : WINDOWS_RELEASE_SHORT_CACHE_CONTROL;
+}
+
+// ─── Fonctions publiques du site (Vercel) ───────────────────────────────────
+
+/**
+ * Le site déployé est une vitrine : il n'y existe que GET /api/windows-release et GET /api/download (/telecharger).
+ * Ces deux fonctions ne lisent que MAGISTRA_RELEASES_REPO et GITHUB_TOKEN et n'importent que ce fichier (et les
+ * erreurs métier) : ni la configuration complète du serveur, ni Clerk, ni Supabase, ni le serveur d'IA ne sont chargés.
+ * Une variable de comptes ou d'IA absente, ou invalide, ne les touche pas, et rien n'est écrit dans le journal tant que
+ * ces deux variables sont valides.
+ */
+export type PublicRouteName = 'windows-release' | 'download';
+
+export type PublicEnv = Record<string, string | undefined>;
+
+// Jetons GitHub (ghp_…, github_pat_…, ghs_…) : lettres, chiffres et « _ » uniquement. Toute autre valeur (retour à la
+// ligne, espace…) est refusée sans jamais être recopiée dans un journal.
+const GITHUB_TOKEN_RE = /^[A-Za-z0-9_]{20,255}$/;
+
+export interface WindowsReleaseSettings {
+  /** « propriétaire/dépôt » validé (MAGISTRA_RELEASES_REPO, sinon DEFAULT_RELEASES_REPO). */
+  repo: string;
+  /** GITHUB_TOKEN valide ; serveur uniquement. */
+  token?: string;
+}
+
+/** Dépôt et jeton lus dans l'environnement ; `problems` : causes à journaliser (jamais la valeur recopiée). */
+export function loadWindowsReleaseSettings(env: PublicEnv): { settings: WindowsReleaseSettings; problems: string[] } {
+  const problems: string[] = [];
+  const rawRepo = env.MAGISTRA_RELEASES_REPO?.trim();
+  let repo = DEFAULT_RELEASES_REPO;
+  if (rawRepo) {
+    const parsed = parseReleasesRepo(rawRepo);
+    if (parsed) repo = parsed;
+    else problems.push(`MAGISTRA_RELEASES_REPO doit être de la forme « propriétaire/dépôt » (dépôt GitHub) : dépôt officiel (${DEFAULT_RELEASES_REPO}) utilisé.`);
+  }
+  const rawToken = env.GITHUB_TOKEN?.trim();
+  if (rawToken && !GITHUB_TOKEN_RE.test(rawToken)) {
+    problems.push('GITHUB_TOKEN invalide (lettres, chiffres et « _ » attendus) : ignoré, l’API GitHub est interrogée sans jeton.');
+  }
+  return { settings: { repo, ...(rawToken && GITHUB_TOKEN_RE.test(rawToken) ? { token: rawToken } : {}) }, problems };
+}
+
+/**
+ * Cible de GET /telecharger : l'installateur de la version connue ; GitHub injoignable : le même installateur sous son
+ * nom fixe (dernière version stable) ; aucune version : la section « Magistra pour Windows » de l'accueil. Adresse
+ * construite à partir du dépôt configuré, jamais tirée de la requête.
+ */
+export function downloadLocation(release: WindowsReleaseResponse, repo: string): string {
+  if (release.available) return release.downloadUrl;
+  if (release.reason === 'unavailable') return `https://github.com/${repo}/releases/latest/download/${STABLE_INSTALLER_NAME}`;
+  return '/#magistra-windows';
+}
+
+/** En-têtes de toutes les réponses des fonctions publiques (pas de CORS : même origine uniquement). */
+const PUBLIC_HEADERS: Readonly<Record<string, string>> = {
+  'X-Content-Type-Options': 'nosniff',
+  'Cache-Control': 'no-store',
+  'Referrer-Policy': 'no-referrer',
+};
+
+function respond(res: ServerResponse, status: number, headers: Record<string, string>, body = ''): void {
+  if (res.headersSent) {
+    if (!res.writableEnded) res.end();
+    return;
+  }
+  res.statusCode = status;
+  for (const [key, value] of Object.entries({ ...PUBLIC_HEADERS, ...headers })) res.setHeader(key, value);
+  res.setHeader('Content-Length', Buffer.byteLength(body));
+  res.end(body);
+}
+
+function respondJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+  respond(res, status, { ...headers, 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify(body));
+}
+
+export interface PublicRouteOptions {
+  /** Variables d'environnement (défaut : process.env, lu à la première requête valide). */
+  env?: PublicEnv;
+  /** Requêtes vers GitHub (tests : réponses simulées). */
+  fetch?: FetchLike;
+  now?: () => number;
+  /** Journal de l'administrateur : causes seulement (défaut : console.error). */
+  log?: (message: string) => void;
+}
+
+/**
+ * Gestionnaire d'une fonction Vercel publique : GET /api/windows-release (JSON, cache du CDN) ou GET /api/download
+ * (redirection vers l'installateur). Méthode autre que GET : 405 sans lire la configuration ni interroger GitHub.
+ * Ne lève jamais ; aucune trace ni variable d'environnement dans les réponses ni dans le journal.
+ */
+export function createPublicRouteHandler(
+  route: PublicRouteName, options: PublicRouteOptions = {},
+): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const log = options.log ?? ((message: string) => console.error(`[magistra] ${message}`));
+  const fetchImpl: FetchLike = options.fetch ?? ((input, init) => fetch(input, init));
+  const now = options.now ?? Date.now;
+  // Une instance de la fonction : configuration lue une fois, cache mémoire des versions (10 min).
+  let state: { settings: WindowsReleaseSettings; cache: WindowsReleaseCache } | undefined;
+  const load = () => {
+    if (!state) {
+      const { settings, problems } = loadWindowsReleaseSettings(options.env ?? process.env);
+      for (const problem of problems) log(`Configuration : ${problem}`);
+      state = { settings, cache: createWindowsReleaseCache() };
+    }
+    return state;
+  };
+
+  return async (req, res) => {
+    try {
+      if ((req.method ?? 'GET').toUpperCase() !== 'GET') {
+        respondJson(res, 405, { error: new MagistraError('INVALID_REQUEST', 'Méthode non autorisée pour cette adresse.').toJSON() }, { Allow: 'GET' });
+        return;
+      }
+      const { settings, cache } = load();
+      const release = await fetchLatestWindowsRelease({
+        fetch: fetchImpl,
+        repo: settings.repo,
+        ...(settings.token ? { token: settings.token } : {}),
+        now,
+        cache,
+        log,
+      });
+      if (route === 'windows-release') {
+        respondJson(res, 200, release, { 'Cache-Control': windowsReleaseCacheControl(release) });
+      } else {
+        respond(res, 302, { Location: downloadLocation(release, settings.repo) });
+      }
+    } catch (err) {
+      log(`Erreur INTERNAL (${err instanceof Error ? err.name : typeof err}).`);
+      respondJson(res, 500, { error: new MagistraError('INTERNAL').toJSON() });
+    }
+  };
 }

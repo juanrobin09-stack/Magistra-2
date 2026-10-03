@@ -145,6 +145,58 @@ describe('fichiers corrompus', () => {
   });
 });
 
+/** Lecture refusée (antivirus, droits cassés) pour les fichiers dont le nom contient `needle`. */
+function denyReads(needle: string, code = 'EPERM') {
+  const real = fsp.readFile.bind(fsp);
+  return vi.spyOn(fsp, 'readFile').mockImplementation((async (file: unknown, ...rest: unknown[]) => {
+    if (typeof file === 'string' && file.includes(needle)) throw Object.assign(new Error(`${code}: accès refusé`), { code });
+    return (real as (...a: unknown[]) => unknown)(file, ...rest);
+  }) as never);
+}
+
+describe('fichiers inaccessibles (EPERM, EBUSY)', () => {
+  it('une génération verrouillée n’empêche pas le démarrage : les autres sont listées, le fichier n’est pas renommé', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.saveGeneration(record(1));
+    const locked = await store.saveGeneration(record(2));
+    await store.saveGeneration(record(3));
+    for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+      const spy = denyReads(`${locked.id}.json`, code);
+      const warnings: string[] = [];
+      const fresh = new LocalStore(dir, { warn: m => void warnings.push(m) });
+      await expect(fresh.init()).resolves.toBeUndefined();
+      const page = await fresh.list({ favoritesOnly: false, limit: 50 });
+      expect(page.items.map(i => i.sujet).sort()).toEqual(['Sujet 1', 'Sujet 3']);
+      expect(warnings).toEqual([`Génération inaccessible ignorée : ${locked.id}.json`]);
+      spy.mockRestore();
+    }
+    expect(readdirSync(path.join(dir, 'generations')).filter(n => n.includes('.corrupt-'))).toEqual([]);
+    // Redevenu lisible : le fichier réapparaît au lancement suivant.
+    const later = makeStore();
+    await later.init();
+    expect((await later.list({ favoritesOnly: false, limit: 50 })).items).toHaveLength(3);
+  });
+
+  it('un document verrouillé : les autres documents restent listés', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.setPreferences({ keepDocuments: true });
+    const doc = (id: string): StoredDocument => ({
+      id, name: `${id}.pdf`, kind: 'pdf', description: '', savedAt: '2026-09-28T10:00:00.000Z',
+      units: [{ locator: { type: 'pages', start: 1, end: 1 }, text: 'texte' }], chars: 5,
+    });
+    await store.saveDocument(doc('doc-1'));
+    await store.saveDocument(doc('doc-2'));
+    const spy = denyReads('doc-1.json', 'EBUSY');
+    const fresh = makeStore();
+    await fresh.init();
+    expect((await fresh.listDocuments()).map(d => d.id)).toEqual(['doc-2']);
+    spy.mockRestore();
+    expect(readdirSync(path.join(dir, 'documents')).filter(n => n.includes('.corrupt-'))).toEqual([]);
+  });
+});
+
 describe('historique', () => {
   it('pagination par curseur, sans limite de taille, plus récent d’abord', async () => {
     const store = makeStore();
@@ -183,6 +235,16 @@ describe('historique', () => {
     expect(item.excerpt).not.toMatch(/[#*]/);
     expect(item.excerpt.startsWith('Titre 1 Contenu important numéro 1.')).toBe(true);
     expect(excerptOf('[lien](https://x.fr) et `code`')).toBe('lien et code');
+  });
+
+  it('extrait d’un contenu démesuré (100 000 crochets) : immédiat, et identique pour un contenu ordinaire', () => {
+    const t0 = Date.now();
+    excerptOf('['.repeat(100_000));
+    excerptOf(`${'Texte utile. '.repeat(10)}${'[]('.repeat(60_000)}`);
+    // Borne très large (machine chargée) : une quinzaine de millisecondes en temps normal.
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(excerptOf('# Titre\n\nUn paragraphe **important**.')).toBe(excerptOf('# Titre\n\nUn paragraphe **important**.'.slice(0, 4_000)));
+    expect(excerptOf('# Titre\n\nUn paragraphe **important**.').startsWith('Titre Un paragraphe important')).toBe(true);
   });
 
   it('favoris, lecture, suppression', async () => {

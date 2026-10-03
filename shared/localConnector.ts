@@ -55,6 +55,7 @@
 // Encodage de tous les octets : base64url sans remplissage.
 
 import type { ErrorCode } from './errors.js';
+import { SITE_LEGACY_ORIGIN, SITE_ORIGIN } from './site.js';
 import type { AINotice, Capabilities } from './types.js';
 
 /**
@@ -83,9 +84,15 @@ export function connectorHost(port: number): string {
 /**
  * Origines officielles du site Magistra : les SEULES autorisées à appairer et à utiliser le connecteur de
  * l'application installée. Une origine absente de cette liste est refusée (aucune réponse lisible, aucun appairage).
- * Nom de domaine personnalisé : l'ajouter ici, puis publier une nouvelle version de l'application.
+ *
+ * Comparaison EXACTE de l'en-tête Origin (ou de l'origine de l'URL magistra://pair), caractère pour caractère : aucun
+ * joker, aucun sous-domaine, aucun http, aucun port, aucune casse différente. L'apex (https://mag-istra.fr) n'en fait
+ * pas partie : le projet ne le sert pas (redirection vers « www » chez l'hébergeur), aucune page du site ne s'exécute
+ * donc jamais sous cette origine.
+ * Nom de domaine personnalisé : l'ajouter dans shared/site.ts, puis publier une nouvelle version de l'application
+ * (la liste est compilée dans l'application ; garder l'ancienne origine tant qu'elle sert).
  */
-export const OFFICIAL_WEB_ORIGINS: readonly string[] = ['https://magistra-2.vercel.app'];
+export const OFFICIAL_WEB_ORIGINS: readonly string[] = Object.freeze([SITE_LEGACY_ORIGIN, SITE_ORIGIN]);
 
 /** Schéma d'URL enregistré par l'installateur Windows (ouvre l'application depuis le site). */
 export const CONNECTOR_URL_SCHEME = 'magistra';
@@ -348,7 +355,7 @@ export function parseAppUrl(raw: unknown): ParsedAppUrl | null {
   return { kind: 'pair', pairingId, challenge, origin };
 }
 
-/** Nom d'hôte affiché à l'enseignant (« magistra-2.vercel.app ») : jamais d'adresse de la boucle locale côté site. */
+/** Nom d'hôte affiché à l'enseignant (« www.mag-istra.fr ») : jamais d'adresse de la boucle locale côté site. */
 export function originLabel(origin: string): string {
   try {
     return new URL(origin).host;
@@ -452,7 +459,7 @@ export const LOCAL_ENGINE_SITE_MESSAGES: Readonly<Partial<Record<ErrorCode, stri
 /** Navigateur autorisé, tel qu'affiché dans les réglages de l'application (aucun secret). */
 export interface ConnectorClientInfo {
   clientId: string;
-  /** Site autorisé (« magistra-2.vercel.app »). */
+  /** Site autorisé (« www.mag-istra.fr », « magistra-2.vercel.app »). */
   site: string;
   /** Navigateur déduit de l'en-tête User-Agent à l'appairage (« Google Chrome », « Microsoft Edge »…). */
   browser: string;

@@ -132,6 +132,27 @@ describe('Historique — détail et actions', () => {
     expect(container.querySelector('a[aria-current="true"]')?.textContent).toContain('Les sources du droit');
   });
 
+  it('fiabilité des sources citées : un badge par niveau (officielles, publications, Wikipédia « à recouper »)', async () => {
+    const store = new MemoryStore([
+      makeRecord(0, {
+        internetUsed: true,
+        sources: [
+          { n: 1, kind: 'institutional', title: 'Éducation', venue: 'UNESCO', url: 'https://www.unesco.org/fr/esd' },
+          { n: 2, kind: 'openalex', title: 'Photosynthesis', doi: '10.1000/x1' },
+          { n: 3, kind: 'wikipedia', title: 'Photosynthèse', venue: 'Wikipédia', url: 'https://fr.wikipedia.org/wiki/P' },
+        ],
+      }),
+      makeRecord(1),
+    ]);
+    const { container } = await mount(store, '/app/history?id=gen-0');
+    const badges = [...detailRegion(container).querySelectorAll('[aria-label="Fiabilité des sources citées"] li')].map(li => li.textContent?.trim());
+    expect(badges).toEqual(['Source officielle : 1', 'Publication scientifique : 1', 'Encyclopédie collaborative (à recouper) : 1']);
+    // Sans source citée : aucun badge de fiabilité.
+    await click(listItems(container)[1]);
+    await flush();
+    expect(detailRegion(container).querySelector('[aria-label="Fiabilité des sources citées"]')).toBeNull();
+  });
+
   it('un clic dans la liste met à jour l’URL (?id=) et « Retour » revient à la liste', async () => {
     const store = new MemoryStore([makeRecord(0), makeRecord(1)]);
     const { container } = await mount(store);

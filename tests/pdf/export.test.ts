@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { copyText, exportMarkdown, exportPdf, printDocument, safeFileName, type ExportDoc } from '@/lib/export';
+import { finalizeCitations } from '@shared/citations';
 import { FONT_DIR } from './helpers';
 
 describe('safeFileName', () => {
@@ -66,6 +67,19 @@ describe('exports navigateur', () => {
     expect(downloads[0].blob.type).toBe('text/markdown;charset=utf-8');
     const bytes = new Uint8Array(await downloads[0].blob.arrayBuffer());
     expect(new TextDecoder('utf-8', { fatal: true }).decode(bytes)).toBe('# Cours : les fractions\n\nTexte avec é, œ, H₂O et x > 3.\n');
+  });
+
+  it('exportMarkdown : « Sources utilisées » garde le niveau de fiabilité de chaque source', async () => {
+    const { content } = finalizeCitations('Cadre officiel [S1], publication [S2], encyclopédie [S3].', [
+      { n: 1, kind: 'institutional', title: 'Éducation en vue du développement durable', venue: 'UNESCO', url: 'https://www.unesco.org/fr/esd' },
+      { n: 2, kind: 'openalex', title: 'Photosynthesis', venue: 'Plant Journal', doi: '10.1000/x1' },
+      { n: 3, kind: 'wikipedia', title: 'Photosynthèse', venue: 'Wikipédia', url: 'https://fr.wikipedia.org/wiki/P' },
+    ]);
+    exportMarkdown({ title: 'Cours', content });
+    const text = await downloads[0].blob.text();
+    expect(text).toContain('- [S1] Éducation en vue du développement durable — Source officielle · UNESCO. https://www.unesco.org/fr/esd');
+    expect(text).toContain('*Plant Journal* — Publication scientifique · OpenAlex. https://doi.org/10.1000/x1');
+    expect(text).toContain('- [S3] Photosynthèse — Encyclopédie collaborative (à recouper) · Wikipédia. https://fr.wikipedia.org/wiki/P');
   });
 
   it('exportMarkdown ne duplique pas un titre déjà présent', async () => {

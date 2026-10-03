@@ -9,7 +9,7 @@ import { getMatieresForNiveau, isMatiere, type Matiere } from '../../shared/cata
 import { isModaliteAvailable, MODALITES, modalitePrompt } from '../../shared/formats.js';
 import { isLangueAncienne, isLangueVivante, LANGUES_ANCIENNES, LANGUES_VIVANTES, targetLanguage } from '../../shared/languages.js';
 import { ALL_NIVEAUX, type NiveauScolaire } from '../../shared/levels.js';
-import { buildSystemPrompt, buildUserPrompt } from '../../shared/prompts/index.js';
+import { buildSystemPrompt, buildUserPrompt, estimateTokens } from '../../shared/prompts/index.js';
 import { defaultEvaluationNotation, hasOwnBareme, isPracticeFormat } from '../../shared/prompts/tools.js';
 import type { GenerationRequest } from '../../shared/types.js';
 
@@ -593,5 +593,54 @@ describe('différenciation : le haut potentiel relève de l’approfondissement,
     expect(text).toMatch(/un « Défi » facultatif/);
     expect(text).not.toMatch(/tâches ouvertes à plusieurs solutions, défis de transfert, autonomie/);
     expect(text).not.toMatch(/Version « Approfondissement »/);
+  });
+});
+
+describe('orthographe et variété : deux lignes courtes, jamais au détriment de l’exactitude', () => {
+  const ortho = (text: string) => text.split('\n').find(l => l.startsWith('- Orthographe :')) ?? '';
+  const variete = (text: string) => text.split('\n').find(l => l.startsWith('- Variété :')) ?? '';
+
+  it('orthographe : en français, juste après « français soigné » ; absente quand la langue est celle de la matière', () => {
+    const text = sys({});
+    const lines = text.split('\n');
+    expect(ortho(text)).toMatch(/accorde participes passés, adjectifs et verbes avec leur sujet/);
+    expect(lines.indexOf(ortho(text))).toBe(lines.findIndex(l => l.startsWith('- Écris un français soigné')) + 1);
+    // Appréciations, corrigé, matière de français : toujours rédigés en français.
+    for (const r of [{ type: 'appreciations' as const }, { type: 'corrige' as const, texteEleve: 'Copie' }, { matiere: 'francais' as const }]) {
+      expect(ortho(sys(r)), JSON.stringify(r)).not.toBe('');
+    }
+    // Contenu élève en langue étrangère : la règle de langue remplace « français soigné », l'orthographe française disparaît.
+    for (const matiere of ['anglais', 'espagnol', 'latin'] as const) {
+      const foreign = sys({ matiere, niveau: '5eme' });
+      expect(ortho(foreign), matiere).toBe('');
+      expect(foreign, matiere).not.toMatch(/Orthographe :|a\/à/);
+    }
+    // Courrier : le prompt de courrier n'a pas d'exigences de qualité.
+    expect(sys({ type: 'lettre_parents' })).not.toMatch(/Orthographe :/);
+  });
+
+  it('variété : contenus élèves seulement (cours, exercices, évaluation, différenciation), jamais corrigé, texte à trous ni autres outils', () => {
+    for (const type of ['cours', 'exercices', 'evaluation', 'differenciation'] as const) {
+      const text = sys({ type });
+      expect(variete(text), type).toMatch(/change de situation, de support et de prénom/);
+      expect(variete(text), type).toMatch(/Jamais au détriment de l'exactitude/);
+    }
+    for (const type of ['corrige', 'appreciations', 'sequence', 'fiche_prep', 'progression', 'cahier_journal', 'lettre_parents'] as const) {
+      expect(sys({ type, texteEleve: 'Copie' }), type).not.toMatch(/Variété :/);
+    }
+    for (const type of ['exercices', 'evaluation'] as const) {
+      expect(sys({ type, niveau: '6eme', matiere: 'svt', modalite: 'texte_trous' }), type).not.toMatch(/Variété :/);
+    }
+    // Les nombres demandés restent exigés ; la ligne ne les touche pas.
+    const text = sys({ niveau: '6eme', modalite: 'qcm', nombreExercices: 10 });
+    expect(text).toMatch(/EXACTEMENT 10 questions/);
+    expect(text).toMatch(/Respecte exactement les nombres demandés/);
+    // Matière de langue : la variété s'applique, dans la langue de la matière.
+    expect(variete(sys({ matiere: 'anglais', niveau: '5eme' }))).not.toBe('');
+  });
+
+  it('les deux lignes sont courtes (≤ 60 tokens estimés)', () => {
+    expect(estimateTokens(variete(sys({})))).toBeLessThanOrEqual(60);
+    expect(estimateTokens(ortho(sys({})))).toBeLessThanOrEqual(60);
   });
 });

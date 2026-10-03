@@ -3,9 +3,14 @@
 // à partir des sources réellement fournies au modèle. Le modèle ne peut ni inventer une page,
 // ni un document, ni une référence : toute citation inconnue est retirée.
 
+import { trustedSiteFor } from './research/trusted.js';
 import type { DocumentPassage, Locator, SourceRef } from './types.js';
 
-export function formatLocator(locator: Locator): string {
+/**
+ * Localisation en toute lettre, toujours sur une seule ligne. Le titre de section vient du document (texte de tiers : un
+ * « <w:br/> » de Word, un titre Markdown en lien) : `clean` le rend inoffensif là où il est affiché.
+ */
+export function formatLocator(locator: Locator, clean: (title: string) => string = singleLine): string {
   const range = (singular: string, plural: string) =>
     locator.start === locator.end ? `${singular} ${locator.start}` : `${plural} ${locator.start} à ${locator.end}`;
   switch (locator.type) {
@@ -24,16 +29,18 @@ export function formatLocator(locator: Locator): string {
       return range('ligne', 'lignes');
     case 'paragraphs':
       return range('paragraphe', 'paragraphes');
-    case 'section':
-      return locator.title ? `section « ${truncate(locator.title, 80)} »` : range('section', 'sections');
+    case 'section': {
+      const title = locator.title ? clean(truncate(locator.title, 80)) : '';
+      return title ? `section « ${title} »` : range('section', 'sections');
+    }
     default:
       return '';
   }
 }
 
 /** Localisation affichée, avec « (extrait) » quand seule une partie du passage a été transmise au modèle. */
-export function formatLocatorFull(locator: Locator): string {
-  const base = formatLocator(locator);
+export function formatLocatorFull(locator: Locator, clean?: (title: string) => string): string {
+  const base = formatLocator(locator, clean);
   return locator.partial ? `${base} (extrait)` : base;
 }
 
@@ -53,25 +60,156 @@ export function documentSourceRef(p: DocumentPassage, n: number): SourceRef {
   return { n, kind: 'document', title: p.docName, docName: p.docName, locator: p.locator };
 }
 
+/** Texte de tiers ramené à une seule ligne (retours à la ligne, tabulations et caractères de contrôle deviennent une espace). */
+function singleLine(value: string): string {
+  return value.replace(/[\s\p{Cc}]+/gu, ' ').trim();
+}
+
+/**
+ * Titre, auteur ou revue d'une source (texte de tiers : page web, notice Crossref, nom de fichier) rendu inoffensif
+ * dans la liste « Sources utilisées » : une seule ligne, aucune syntaxe de lien, d'image, de code ou de HTML (un titre
+ * ne doit jamais devenir un lien cliquable ni ajouter un titre ou une ligne), et pas d'adresse que le rendu
+ * transformerait en lien : « https://exemple.fr/x » devient « exemple.fr/x ». Un titre ordinaire (lettres, points,
+ * parenthèses) est inchangé.
+ */
+function mdSafe(value: string): string {
+  return singleLine(value)
+    // Sans « https:// » ni « www. » : le rendu en ferait des liens cliquables (même après un échappement).
+    .replace(/\b(?:https?:\/\/|www\.)/gi, '')
+    // Une adresse e-mail devient aussi un lien (mailto:), et aucun échappement ne l'en empêche : arobase pleine chasse.
+    .replace(/@/g, '＠')
+    .replace(/[\\`<>[\]*_]/g, m => `\\${m}`);
+}
+
+/** Nom d'hôte à au moins deux segments : la condition pour que le rendu (GFM) fasse un lien automatique d'une adresse. */
+const HOST_NAME = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+';
+/** Adresse web qui commence par un nom d'hôte valide (« https://www.unesco.org/… »). */
+const WEB_ADDRESS = new RegExp(`^https?://${HOST_NAME}(?=[/?#:]|$)`, 'i');
+
+/** « %XX » (UTF-8 pour un caractère non ASCII) ; un demi-caractère isolé devient U+FFFD. */
+function percentEncode(char: string): string {
+  const code = char.codePointAt(0)!;
+  if (code < 0x80) return `%${code.toString(16).toUpperCase().padStart(2, '0')}`;
+  try {
+    return encodeURIComponent(char);
+  } catch {
+    return '%EF%BF%BD';
+  }
+}
+
+/**
+ * DOI ou adresse (texte de tiers : notice Crossref, page web, lien de Wikipédia) ajouté à une ligne Markdown, sans jamais
+ * pouvoir y ajouter un lien, du code, de la mise en forme ou une ligne.
+ * - Adresse web qui commence par un hôte valide (le DOI est toujours préfixé de « https://doi.org/ ») : le rendu (GFM) en
+ *   fait UN lien automatique qui avale tout ce qui suit, jusqu'à une espace, un « < », un crochet ou une parenthèse :
+ *   ces caractères, le code (`), la barre oblique inverse, les espaces et les caractères de contrôle sont encodés en
+ *   pourcentage, comme « * ». Le soulignement « _ » reste (courant dans les adresses de Wikipédia) : dans un lien qui
+ *   commence ainsi, il ne peut rien ouvrir ni fermer.
+ * - Toute autre valeur n'est pas une adresse : tout est encodé sauf lettres, chiffres et « - » (aucun « https:// »,
+ *   « www. » ou « @ » ne subsiste, que le rendu transformerait en lien après un chiffre ou une parenthèse).
+ */
+function mdUrlSafe(value: string): string {
+  // Une notice mal formée (nombre, objet) ne doit jamais faire échouer la génération : le texte, jamais d'exception.
+  const text = String(value);
+  if (WEB_ADDRESS.test(text)) return text.replace(/[\s\p{Cc}()[\]<>*`\\]/gu, percentEncode);
+  return text.replace(/[^A-Za-z0-9-]/gu, percentEncode);
+}
+
+/**
+ * Niveaux de fiabilité, du plus au moins fiable. « open » : plateforme ouverte dont n'importe qui peut déposer le contenu
+ * (HAL, data.gouv.fr, Canal-U) : à recouper, jamais « officielle ».
+ */
+export type ReliabilityTier = 'document' | 'official' | 'scientific' | 'open' | 'encyclopedic' | 'web';
+
+export interface SourceReliability {
+  tier: ReliabilityTier;
+  /** Niveau de fiabilité en toutes lettres, tel qu'il est affiché (« Source officielle »). */
+  label: string;
+}
+
+/**
+ * Niveau de fiabilité d'une source, déduit de son origine : document de l'enseignant, source officielle (administration,
+ * organisation intergouvernementale ou agence publique du catalogue des sites vérifiés), publication scientifique,
+ * plateforme ouverte (à recouper), encyclopédie collaborative (Wikipédia : à recouper) ou web non vérifié.
+ */
+export function sourceReliability(ref: Pick<SourceRef, 'kind' | 'url'>): SourceReliability {
+  switch (ref.kind) {
+    case 'document':
+      return { tier: 'document', label: "Document de l'enseignant" };
+    case 'hal':
+    case 'crossref':
+    case 'openalex':
+      return { tier: 'scientific', label: 'Publication scientifique' };
+    case 'institutional': {
+      // Organisme de recherche, agence scientifique ou bibliothèque du catalogue : source scientifique ; plateforme ouverte
+      // (contenu déposé par des tiers) : à recouper, jamais officielle ; sinon officielle.
+      const tier = ref.url ? trustedSiteFor(ref.url)?.tier : undefined;
+      if (tier === 'scientific') return { tier: 'scientific', label: 'Source scientifique' };
+      if (tier === 'open') return { tier: 'open', label: 'Plateforme ouverte, à recouper' };
+      return { tier: 'official', label: 'Source officielle' };
+    }
+    case 'wikipedia':
+      return { tier: 'encyclopedic', label: 'Encyclopédie collaborative (à recouper)' };
+    case 'web':
+      return { tier: 'web', label: 'Page web non vérifiée' };
+  }
+}
+
+/** Service d'où vient la source : le site (« UNESCO ») pour une source officielle, la base pour une publication. */
+export function sourceOrigin(ref: Pick<SourceRef, 'kind' | 'url' | 'venue'>): string | undefined {
+  switch (ref.kind) {
+    case 'hal':
+      return 'HAL';
+    case 'crossref':
+      return 'Crossref';
+    case 'openalex':
+      return 'OpenAlex';
+    case 'wikipedia':
+      return 'Wikipédia';
+    case 'institutional':
+      return (ref.url ? trustedSiteFor(ref.url)?.label : undefined) ?? (ref.venue?.trim() || undefined);
+    default:
+      return undefined;
+  }
+}
+
+const TIER_ORDER: readonly ReliabilityTier[] = ['document', 'official', 'scientific', 'open', 'encyclopedic', 'web'];
+
+/**
+ * Nombre de sources par libellé de fiabilité, du plus fiable au moins fiable ; les niveaux absents ne figurent pas. Le
+ * regroupement se fait par LIBELLÉ (« Publication scientifique » et « Source scientifique » sont deux lignes) : le
+ * libellé affiché est toujours celui des sources comptées, quel que soit leur ordre. À niveau égal, ordre alphabétique.
+ */
+export function reliabilitySummary(refs: readonly Pick<SourceRef, 'kind' | 'url'>[]): (SourceReliability & { count: number })[] {
+  const found = new Map<string, SourceReliability & { count: number }>();
+  for (const ref of refs) {
+    const reliability = sourceReliability(ref);
+    const entry = found.get(reliability.label);
+    if (entry) entry.count++;
+    else found.set(reliability.label, { ...reliability, count: 1 });
+  }
+  return [...found.values()].sort((a, b) => TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) || a.label.localeCompare(b.label, 'fr'));
+}
+
 export function formatSourceLine(s: SourceRef): string {
   if (s.kind === 'document') {
-    return `[S${s.n}] ${s.docName ?? s.title}${s.locator ? ` — ${formatLocatorFull(s.locator)}` : ''}`;
+    return `[S${s.n}] ${mdSafe(s.docName ?? s.title)}${s.locator ? ` — ${formatLocatorFull(s.locator, mdSafe)}` : ''}`;
   }
   const authorList = s.authors && s.authors.length
-    ? `${s.authors.slice(0, 3).join(', ')}${s.authors.length > 3 ? ' et al.' : ''}`
+    ? `${s.authors.slice(0, 3).map(mdSafe).join(', ')}${s.authors.length > 3 ? ' et al.' : ''}`
     : '';
   const authors = authorList ? `${authorList.replace(/\.+$/, '')}. ` : '';
-  const title = s.title.trim().replace(/[.\s]+$/, '');
+  const title = mdSafe(s.title).replace(/[.\s]+$/, '');
   const year = s.year ? ` (${s.year})` : '';
-  const venue = s.venue ? `. *${s.venue}*` : '';
-  const originLabel = s.kind === 'hal' ? 'HAL'
-    : s.kind === 'crossref' ? 'Crossref'
-      : s.kind === 'wikipedia' ? 'Wikipédia'
-        : s.kind === 'institutional' ? 'Source institutionnelle'
-          : '';
-  const origin = originLabel && originLabel !== s.venue ? ` — ${originLabel}` : '';
-  const link = s.doi ? ` https://doi.org/${s.doi}` : s.url ? ` ${s.url}` : '';
-  return `[S${s.n}] ${authors}${title}${year}${venue}${origin}.${link}`;
+  const origin = sourceOrigin(s);
+  const venue = s.venue && s.venue !== origin ? `. *${mdSafe(s.venue)}*` : '';
+  // « Source officielle · UNESCO » : le niveau de fiabilité, puis le site ou la base.
+  const { label } = sourceReliability(s);
+  const reliability = origin ? `${label} · ${mdSafe(origin)}` : label;
+  // DOI et adresse viennent de tiers (notice Crossref, page web, lien de Wikipédia) : encodés, ils ne peuvent ajouter ni lien,
+  // ni mise en forme, ni ligne à la liste.
+  const link = s.doi ? ` ${mdUrlSafe(`https://doi.org/${s.doi}`)}` : s.url ? ` ${mdUrlSafe(s.url)}` : '';
+  return `[S${s.n}] ${authors}${title}${year}${venue} — ${reliability}.${link}`;
 }
 
 /**
@@ -274,20 +412,25 @@ export function stripModelSourcesSection(text: string): string {
 /** DOI nu, préfixé (« doi: ») ou sous forme d'URL (https://doi.org/…). */
 const DOI_RE = /(?:https?:\/\/(?:dx\.)?doi\.org\/|\bdoi:\s*)?\b(10\.\d{4,9}\/[^\s"<>)\]]*[^\s"<>)\].,;:])/gi;
 /** Lien Markdown pointant vers un DOI : [texte](https://doi.org/10.…). */
-const DOI_LINK_RE = /\[([^\]\n]*)\]\(\s*(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[^\s)]+)\s*\)/gi;
+const DOI_LINK_RE = /\[([^\]\n]{0,300})\]\(\s*(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[^\s)]+)\s*\)/gi;
 const UNVERIFIED = '[référence non vérifiée retirée]';
 /** URL http(s) nue ; la ponctuation qui la suit n'en fait pas partie. */
 const URL_RE = /\bhttps?:\/\/[^\s<>"'[\]()]*[^\s<>"'[\]().,;:!?»]/gi;
 /** Lien (ou image) Markdown vers une URL http(s) : [texte](https://…). */
-const MD_LINK_RE = /(!?)\[([^\]\n]*)\]\(\s*<?(https?:\/\/[^\s)>]+)>?(?:\s+"[^"\n]*")?\s*\)/gi;
-/** Lien automatique : <https://…>. */
-const AUTOLINK_RE = /<(https?:\/\/[^\s>]+)>/gi;
+const MD_LINK_RE = /(!?)\[([^\]\n]{0,300})\]\(\s*<?((?:https?:\/\/|www\.|mailto:)[^\s)>]+)>?(?:\s+"[^"\n]*")?\s*\)/gi;
+/** Lien automatique : <https://…> (ou <mailto:…>). */
+const AUTOLINK_RE = /<((?:https?:\/\/|mailto:)[^\s>]+)>/gi;
+/**
+ * Adresse « www.… » nue : le rendu Markdown (GFM) en fait un lien cliquable, comme « https://… ». Jamais celle qui
+ * suit « / », « @ » ou « . » (déjà une partie d'une adresse complète ou d'un courriel).
+ */
+const WWW_RE = /(?<![\w/@.:-])www\.[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[/?#][^\s<>"'[\]()]*[^\s<>"'[\]().,;:!?»])?/gi;
 const UNVERIFIED_LINK = '[lien non vérifié retiré]';
 
 /** Hôte (sans « www. ») + chemin, pour comparer deux adresses. */
 function urlKey(raw: string): string | null {
   try {
-    const u = new URL(raw);
+    const u = new URL(/^www\./i.test(raw) ? `https://${raw}` : raw);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
     return `${u.host.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`;
   } catch {
@@ -295,9 +438,9 @@ function urlKey(raw: string): string | null {
   }
 }
 
-/** Adresses http(s) présentes dans un texte (documents, demande de l'enseignant). */
+/** Adresses http(s) (et « www.… ») présentes dans un texte (documents, demande de l'enseignant). */
 export function extractUrls(text: string): string[] {
-  return text.match(URL_RE) ?? [];
+  return [...(text.match(URL_RE) ?? []), ...(text.match(WWW_RE) ?? [])];
 }
 /** Marqueur interne d'une citation retirée (caractère d'usage privé, absent des textes réels). */
 const REMOVED = '\uE000';
@@ -316,6 +459,11 @@ export interface FinalizeOptions {
    * ou dans la demande de l'enseignant.
    */
   allowedUrls?: readonly string[];
+  /**
+   * Adresses légitimes mais seulement TELLES QUELLES (même hôte, même chemin, même paramètres) : celles trouvées dans le
+   * texte de pages web ou d'encyclopédie. Une page qui cite « https://exemple.fr » n'autorise pas « https://exemple.fr/x?d=… ».
+   */
+  allowedExactUrls?: readonly string[];
   /**
    * Texte COMPLET (et non partiel) : si des sources ont été fournies mais qu'aucune n'est citée, une mention
    * le signale à l'enseignant (sinon rien n'indiquerait que le contenu ne s'appuie pas sur ses documents).
@@ -346,11 +494,12 @@ export function finalizeCitations(text: string, provided: SourceRef[], options: 
   const knownUrls = [...provided.map(s => s.url), ...(options.allowedUrls ?? [])]
     .map(u => (u ? urlKey(u) : null))
     .filter((k): k is string => Boolean(k));
+  const exactUrls = new Set((options.allowedExactUrls ?? []).map(u => urlKey(u)).filter((k): k is string => Boolean(k)));
   // Même adresse, ou page située sous une adresse fournie (même site, chemin plus précis).
   const isKnownUrl = (url: string) => {
     if (url.includes('\uE001')) return true; // DOI fourni, déjà protégé
     const key = urlKey(url);
-    return key !== null && knownUrls.some(k => key === k || key.startsWith(`${k}/`));
+    return key !== null && (exactUrls.has(key) || knownUrls.some(k => key === k || key.startsWith(`${k}/`)));
   };
 
   const normalize = (match: string, first: string, rest: string | undefined) => {
@@ -411,6 +560,11 @@ export function finalizeCitations(text: string, provided: SourceRef[], options: 
       return UNVERIFIED_LINK;
     });
     out = out.replace(URL_RE, url => {
+      if (isKnownUrl(url)) return url;
+      unverifiedLinks++;
+      return UNVERIFIED_LINK;
+    });
+    out = out.replace(WWW_RE, url => {
       if (isKnownUrl(url)) return url;
       unverifiedLinks++;
       return UNVERIFIED_LINK;

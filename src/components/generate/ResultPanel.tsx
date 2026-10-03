@@ -17,7 +17,11 @@ import { getDemoExample } from '@shared/demo';
 import type { GenerationRequest } from '@shared/types';
 import { toMagistraError, type ErrorCode } from '@shared/errors';
 import LoadingSkeleton from './LoadingSkeleton';
+import { planOriginFromRequest } from '@/lib/generation/plan';
+import DevelopSessions from './DevelopSessions';
 import { FOCUS_RING } from './fieldUtils';
+import SourceReliability from './SourceReliability';
+import SpeedDetails from './SpeedDetails';
 
 interface ResultPanelProps {
   state: GenerationState;
@@ -105,6 +109,7 @@ export default function ResultPanel({ state, mode, store, onStop, onRestart, con
               )}
             </div>
           )}
+          {result && !example && <SourceReliability sources={result.sources} />}
         </div>
         {/* « Arrêter » et « Recommencer » occupent la même place : le second clic d'un double-clic
             (e.detail > 1) est ignoré pour ne pas déclencher aussitôt l'action inverse. */}
@@ -205,6 +210,19 @@ export default function ResultPanel({ state, mode, store, onStop, onRestart, con
         <ResultActions key={state.runId} request={req} heading={heading} content={text} resultId={result?.id} store={store} />
       )}
 
+      {/* Plan d'une séquence (« Commencer par le plan ») : les séances à développer ensuite. Jamais pour une autre demande,
+          ni pour un exemple pré-rédigé, ni avant la fin de la génération, ni en démonstration (le « plan » y est un exemple
+          fixe, sans rapport avec le sujet saisi : les séances proposées ne seraient pas celles de l'enseignant). */}
+      {state.phase === 'done' && !example && mode !== 'demo' && text && req.type === 'sequence' && req.planSeulement === true && (
+        <DevelopSessions
+          key={`plan-${state.runId}`}
+          content={text}
+          origin={planOriginFromRequest(req)}
+          requested={req.nombreSeances}
+          planId={save?.saved ? result?.id : undefined}
+        />
+      )}
+
       {save && (
         <div className="mt-4 text-xs" role="status">
           {save.saved ? (
@@ -224,6 +242,9 @@ export default function ResultPanel({ state, mode, store, onStop, onRestart, con
           )}
         </div>
       )}
+
+      {/* Vitesse : moteur de cet ordinateur seulement, jamais pour un exemple pré-rédigé. */}
+      {!running && !example && result && <SpeedDetails metrics={result.metrics} />}
     </section>
   );
 }

@@ -38,4 +38,13 @@ export const DOCUMENT_LIMITS = {
   maxCharsPerDocument: 3_000_000,
   maxDocuments: 12,
   maxPdfPages: 2_000,
+  /** DOCX / PPTX : une entrée XML décompressée au-delà de cette taille est refusée (bombe de décompression). */
+  maxXmlEntryBytes: 80 * 1024 * 1024,
+  /** DOCX / PPTX : total décompressé lu dans un même fichier. */
+  maxUncompressedBytes: 200 * 1024 * 1024,
+  /** DOCX / PPTX : nombre d'entrées du zip (un vrai fichier Office en a quelques centaines). */
+  maxZipEntries: 10_000,
+  /** DOCX : définitions de listes (numbering.xml) et styles de paragraphe (styles.xml) lus ; au-delà, ignorés. */
+  maxNumberingEntries: 10_000,
+  maxSlides: 2_000,
 };

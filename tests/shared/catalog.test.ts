@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ALL_MATIERES, getSujetSuggestions } from '../../shared/catalog';
+import { ALL_MATIERES, getMatieresForNiveau } from '../../shared/catalog';
+import { getSujetSuggestions } from '../../shared/suggestions';
+import { modalitesFor } from '../../shared/formats';
 import { ALL_NIVEAUX } from '../../shared/levels';
 
 describe('suggestions de sujets', () => {
@@ -11,8 +13,8 @@ describe('suggestions de sujets', () => {
     expect(getSujetSuggestions('mathematiques', 'cp')).not.toContain('Les nombres décimaux');
     expect(getSujetSuggestions('histoire_geo', 'cm2')).not.toContain('Les Gaulois');
     expect(getSujetSuggestions('philosophie', 'terminale_gen')).toContain('La liberté');
-    expect(getSujetSuggestions('philosophie', '2nde_gt')).toEqual([]);
-    expect(getSujetSuggestions('francais', 'terminale_gen')).toEqual([]);
+    expect(getSujetSuggestions('philosophie', '2nde_gt')).not.toContain('La liberté');
+    expect(getSujetSuggestions('francais', 'terminale_gen')).not.toContain('La poésie du XIXe siècle');
   });
 
   it('chaque classe courante a au moins une suggestion dans sa matière principale', () => {
@@ -29,6 +31,27 @@ describe('suggestions de sujets', () => {
         expect(new Set(list).size).toBe(list.length);
       }
     }
+  });
+});
+
+describe('lycée professionnel : Physique-Chimie (maths-sciences)', () => {
+  const PRO = ['cap_1', 'cap_2', '2nde_pro', '1ere_pro', 'terminale_pro'] as const;
+
+  it('proposée à tous les niveaux de la voie professionnelle, avec les formats scientifiques et sans épreuve de bac général', () => {
+    for (const niveau of PRO) {
+      expect(getMatieresForNiveau(niveau).map(m => m.value), niveau).toContain('physique_chimie');
+      expect(getSujetSuggestions('physique_chimie', niveau).length, niveau).toBeGreaterThanOrEqual(8);
+    }
+    const formats = modalitesFor('evaluation', 'terminale_pro', 'physique_chimie').map(m => m.value);
+    expect(formats).toContain('demarche_experimentale');
+    expect(formats).not.toContain('sujet_bac');
+    expect(formats).not.toContain('sujet_bac_pro');
+  });
+
+  it('le libellé et le collège / lycée général ne changent pas', () => {
+    expect(getMatieresForNiveau('terminale_pro').find(m => m.value === 'physique_chimie')?.label).toBe('Physique-Chimie');
+    expect(getMatieresForNiveau('3eme').map(m => m.value)).toContain('physique_chimie');
+    expect(getMatieresForNiveau('terminale_gen').map(m => m.value)).toContain('physique_chimie');
   });
 });
 

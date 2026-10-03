@@ -18,21 +18,23 @@ export interface ResearchOption {
   note?: string;
 }
 
-export const WEB_LIMITED_ACADEMIC_NOTE = 'Internet : Wikipédia et sources académiques seulement (aucun moteur web configuré)';
-export const WEB_LIMITED_NOTE = 'Internet : Wikipédia seulement (aucun moteur web configuré)';
-/** Scolaire : Éduscol et le Bulletin officiel passent par le moteur web ; sans lui, on le dit. */
-export const WEB_LIMITED_SCOLAIRE_LOCAL_NOTE =
-  'Internet : Wikipédia seulement. Éduscol et le Bulletin officiel demandent un moteur de recherche web (SearXNG), à indiquer dans les réglages.';
-export const WEB_LIMITED_SCOLAIRE_SERVER_NOTE =
-  'Internet : Wikipédia seulement. Éduscol et le Bulletin officiel ne sont pas interrogés : aucun moteur de recherche web configuré sur ce serveur.';
-export const ACADEMIC_ONLY_NOTE = 'Internet : sources académiques seulement (aucun moteur web configuré, Wikipédia désactivé)';
+/** Ce que la recherche consulte : ces libellés sont ceux de la note affichée sous chaque mode. */
+export const PUBLICATIONS_CONSULTED = 'publications HAL, Crossref et OpenAlex';
+/** Moteur de recherche web : les principaux sites du catalogue (pas chacun), jamais « tous » les sites vérifiés. */
+export const OFFICIAL_VIA_SEARCH_CONSULTED = 'principaux sites officiels vérifiés (UNESCO, Éduscol, ministères, ONU…)';
+/** Sans moteur de recherche web : seulement les pages que Wikipédia cite pour le sujet, aucun site nommé comme garanti. */
+export const OFFICIAL_VIA_WIKIPEDIA_CONSULTED = 'sites officiels vérifiés cités par Wikipédia';
+/**
+ * Application plus ancienne (même version du protocole, sans « trustedCatalogue ») : elle n'interroge que quelques sites,
+ * avec le web général non filtré ; ni UNESCO ni « vérifiés » (aucun filtrage promis).
+ */
+export const OFFICIAL_LEGACY_CONSULTED = 'sites officiels (Éduscol, education.gouv.fr…)';
+export const WIKIPEDIA_CONSULTED = 'Wikipédia (à recouper)';
 export const NO_INTERNET_LOCAL_NOTE = 'Internet indisponible : aucun moteur web configuré et Wikipédia désactivé dans les réglages.';
 export const ACADEMIC_DISABLED_LOCAL_NOTE = 'Recherche académique désactivée dans les réglages.';
 export const ACADEMIC_DISABLED_SERVER_NOTE = 'Recherche académique non activée sur ce serveur.';
 // Site web, Magistra locale (route 'local-connector') : les sources sont celles de l'application Windows, réglées dans
 // SES réglages (ceux du site sont en lecture seule) ; aucun nom technique (moteur de recherche web, sans « SearXNG »).
-export const WEB_LIMITED_SCOLAIRE_CONNECTOR_NOTE =
-  'Internet : Wikipédia seulement. Éduscol et le Bulletin officiel demandent un moteur de recherche web, à indiquer dans les réglages de l’application Magistra (Windows).';
 export const NO_INTERNET_CONNECTOR_NOTE =
   'Internet indisponible : aucun moteur web configuré et Wikipédia désactivé dans les réglages de l’application Magistra (Windows).';
 export const ACADEMIC_DISABLED_CONNECTOR_NOTE = 'Recherche académique désactivée dans les réglages de l’application Magistra (Windows).';
@@ -63,14 +65,37 @@ export const LOCAL_CONNECTOR_NETWORK_NOTE =
 /** Où se règlent les sources : application Windows (sur place), application depuis le site, serveur en ligne. */
 type ResearchSettingsSide = 'app' | 'connector' | 'server';
 
-const NOTES_BY_SIDE: Record<ResearchSettingsSide, { academicDisabled: string; noInternet: string; scolaireLimited: string }> = {
-  app: { academicDisabled: ACADEMIC_DISABLED_LOCAL_NOTE, noInternet: NO_INTERNET_LOCAL_NOTE, scolaireLimited: WEB_LIMITED_SCOLAIRE_LOCAL_NOTE },
-  connector: { academicDisabled: ACADEMIC_DISABLED_CONNECTOR_NOTE, noInternet: NO_INTERNET_CONNECTOR_NOTE, scolaireLimited: WEB_LIMITED_SCOLAIRE_CONNECTOR_NOTE },
-  server: { academicDisabled: ACADEMIC_DISABLED_SERVER_NOTE, noInternet: NO_INTERNET_SERVER_NOTE, scolaireLimited: WEB_LIMITED_SCOLAIRE_SERVER_NOTE },
+/**
+ * Sites officiels non consultés (ni moteur de recherche web, ni Wikipédia pour lire ses références) : ce qu'il faut
+ * changer, là où ça se règle. `wikipedia` : Wikipédia est déjà actif, seul le moteur web peut encore s'ajouter.
+ */
+function officialMissingNote(side: ResearchSettingsSide, wikipedia: boolean): string {
+  if (side === 'server') {
+    return wikipedia
+      ? 'Sites officiels non consultés : aucun moteur de recherche web configuré sur ce serveur.'
+      : 'Sites officiels non consultés : ni Wikipédia ni moteur de recherche web ne sont activés sur ce serveur.';
+  }
+  const where = side === 'app' ? 'dans les réglages' : 'dans les réglages de l’application Magistra (Windows)';
+  const engine = side === 'app' ? 'un moteur de recherche web (SearXNG)' : 'un moteur de recherche web';
+  return wikipedia
+    ? `Sites officiels non consultés : indiquez ${engine} ${where}.`
+    : `Sites officiels non consultés : activez Wikipédia, ou indiquez ${engine}, ${where}.`;
+}
+
+const NOTES_BY_SIDE: Record<ResearchSettingsSide, { academicDisabled: string; noInternet: string }> = {
+  app: { academicDisabled: ACADEMIC_DISABLED_LOCAL_NOTE, noInternet: NO_INTERNET_LOCAL_NOTE },
+  connector: { academicDisabled: ACADEMIC_DISABLED_CONNECTOR_NOTE, noInternet: NO_INTERNET_CONNECTOR_NOTE },
+  server: { academicDisabled: ACADEMIC_DISABLED_SERVER_NOTE, noInternet: NO_INTERNET_SERVER_NOTE },
 };
 
+/** « Consulté : … » : ce que la recherche interrogera, dans l'ordre de priorité, et ce qu'elle ne peut pas interroger. */
+function consultedNote(parts: (string | null)[], missingOfficial: string | null): string {
+  return `Consulté : ${parts.filter(Boolean).join(', ')}.${missingOfficial ? ` ${missingOfficial}` : ''}`;
+}
+
 /**
- * Décrit les 4 modes de recherche selon les capacités du moteur.
+ * Décrit les 4 modes de recherche selon les capacités du moteur, et annonce ce qui sera réellement consulté : sites
+ * officiels vérifiés (par un moteur de recherche web, sinon par les références de Wikipédia), publications, Wikipédia.
  * `caps` null = capacités encore inconnues : tout reste sélectionnable, sans promesse.
  * `mode` : mode d'exécution RÉEL (« Fonctionne hors ligne » dans l'application Windows seulement) ; `route` : sur le
  * site, moteur qui traitera la génération ('local-connector' : sources et réglages de l'application Windows).
@@ -89,20 +114,24 @@ export function describeResearchOptions(
     if (mode === 'demo') return { ...base, available: false, note: DEMO_RESEARCH_NOTE };
     if (!caps) return base;
 
+    const { academic, institutional, web, wikipedia, trustedCatalogue } = caps.research;
+    // Le catalogue (UNESCO…) n'est annoncé que par un moteur qui l'annonce lui-même : avec un moteur de recherche web,
+    // l'absence de `trustedCatalogue` signale une version plus ancienne. Sans moteur web, « institutional » ne peut venir
+    // que du chemin par Wikipédia, que seules les versions actuelles ont.
+    const official = !institutional
+      ? null
+      : !web ? OFFICIAL_VIA_WIKIPEDIA_CONSULTED : trustedCatalogue === true ? OFFICIAL_VIA_SEARCH_CONSULTED : OFFICIAL_LEGACY_CONSULTED;
+    const missingOfficial = institutional ? null : officialMissingNote(side, wikipedia);
+
     if (m.value === 'academic') {
-      if (caps.research.academic) return base;
-      return { ...base, available: false, note: notes.academicDisabled };
+      if (!academic) return { ...base, available: false, note: notes.academicDisabled };
+      return { ...base, note: consultedNote([PUBLICATIONS_CONSULTED, official], missingOfficial) };
     }
 
     // Internet / Documents + Internet : on annonce seulement ce qui sera réellement consulté.
-    if (caps.research.web) return base;
-    const academicUsed = isSuperieur(niveau) && caps.research.academic;
-    const wikipedia = caps.research.wikipedia;
-    if (!academicUsed && !wikipedia) return { ...base, available: false, note: notes.noInternet };
-    if (!wikipedia) return { ...base, note: ACADEMIC_ONLY_NOTE };
-    if (academicUsed) return { ...base, note: WEB_LIMITED_ACADEMIC_NOTE };
-    if (!isSuperieur(niveau)) return { ...base, note: notes.scolaireLimited };
-    return { ...base, note: WEB_LIMITED_NOTE };
+    const parts = [isSuperieur(niveau) && academic ? PUBLICATIONS_CONSULTED : null, official, wikipedia ? WIKIPEDIA_CONSULTED : null];
+    if (!parts.some(Boolean)) return { ...base, available: false, note: notes.noInternet };
+    return { ...base, note: consultedNote(parts, missingOfficial) };
   });
 }
 

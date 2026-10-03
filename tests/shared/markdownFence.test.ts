@@ -162,7 +162,7 @@ describe('pipeline : réponse entourée de « ```markdown »', () => {
     const events = await collect<GenerationEvent>(runGeneration(request(), { provider: new MockProvider({ reply, chunkSize: 9 }) }));
     const done = events.find((e): e is Extract<GenerationEvent, { type: 'done' }> => e.type === 'done');
     expect(done!.content).not.toContain('```');
-    expect(done!.content).toContain('**Note** : relire le texte fourni [S1].');
+    expect(done!.content.replace(/\u00a0/g, ' ')).toContain('**Note** : relire le texte fourni [S1].');
     expect(done!.content).toMatch(/\n## Sources utilisées\n\n- \[S1\] cycle-de-l-eau\.txt/);
   });
 

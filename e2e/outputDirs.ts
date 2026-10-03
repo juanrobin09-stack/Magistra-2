@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Projets du connecteur local : même fichier de tests, un navigateur chacun (Chromium de Playwright, Microsoft Edge). */
 export type ConnectorProject = 'connector' | 'connector-edge';
-export type E2EProject = 'web' | 'electron' | ConnectorProject;
+export type E2EProject = 'web' | 'electron' | 'site' | ConnectorProject;
 
 export const CONNECTOR_PROJECTS: readonly ConnectorProject[] = ['connector', 'connector-edge'];
 
@@ -20,6 +20,7 @@ export const CONNECTOR_PROJECTS: readonly ConnectorProject[] = ['connector', 'co
 export const E2E_OUTPUT_DIRS: Readonly<Record<E2EProject, string>> = {
   web: 'test-results/web',
   electron: 'test-results/electron',
+  site: 'test-results/site',
   connector: 'test-results/connector',
   'connector-edge': 'test-results/connector-edge',
 };
@@ -49,4 +50,25 @@ export function connectorProject(name: string): ConnectorProject {
 /** Chemin absolu d'un de ces dossiers. */
 export function fromRoot(relative: string): string {
   return path.join(root, ...relative.split('/'));
+}
+
+/**
+ * Projets demandés sur la ligne de commande (`--project=site`, `--project site web`) ; null s'il n'y en a pas, ou si l'un
+ * n'est pas reconnu (nom inconnu, motif avec « * ») : tous les projets sont alors supposés lancés.
+ * Sert à ne démarrer que les serveurs d'aperçu dont les projets lancés ont besoin (playwright.config.ts) : le site vitrine
+ * n'exige que dist-site/, les autres projets que dist/.
+ */
+export function requestedProjects(argv: readonly string[]): E2EProject[] | null {
+  const names: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith('--project=')) {
+      names.push(arg.slice('--project='.length));
+    } else if (arg === '--project') {
+      for (let j = i + 1; j < argv.length && !argv[j].startsWith('-'); j++) names.push(argv[j]);
+    }
+  }
+  if (names.length === 0) return null;
+  const known = Object.keys(E2E_OUTPUT_DIRS);
+  return names.every(name => known.includes(name)) ? (names as E2EProject[]) : null;
 }

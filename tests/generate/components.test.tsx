@@ -211,6 +211,75 @@ describe('GenerateFormFields — formats normés et réglages', () => {
   });
 });
 
+describe('GenerateFormFields — « Commencer par le plan » (séquence en deux temps)', () => {
+  const sequence = (patch: Partial<GenerateForm> = {}) => fields({ ...createInitialForm(PROFILE, { type: 'sequence' }), ...patch });
+  const ADVICE = 'Conseil : pour une grosse séquence, commencer par le plan donne plus vite un premier résultat utile.';
+
+  it('outil Séquence : case non cochée, libellée, avec sa phrase d’aide reliée (aria-describedby)', () => {
+    const html = sequence();
+    expect(html).toContain('Commencer par le plan');
+    expect(html).toMatch(/<input id="gen-plan-seulement" type="checkbox"[^>]*aria-describedby="gen-plan-seulement-hint"/);
+    expect(html).toContain('<label for="gen-plan-seulement"');
+    expect(html).toContain('id="gen-plan-seulement-hint"');
+    expect(html).toContain('Plus rapide : vous obtenez d’abord le plan de la séquence, puis vous choisissez les séances à développer.');
+    expect(html).not.toMatch(/id="gen-plan-seulement"[^>]*checked/);
+  });
+
+  it('case cochée quand le formulaire le dit (reprise d’une demande) ; jamais cochée d’office', () => {
+    expect(sequence({ planSeulement: true })).toMatch(/id="gen-plan-seulement" type="checkbox"[^>]*checked=""/);
+    expect(sequence({ nombreSeances: 10, duree: '2 mois' })).not.toMatch(/id="gen-plan-seulement"[^>]*checked/);
+  });
+
+  it('module du supérieur : même case, formulée pour un module', () => {
+    const html = sequence({ niveau: 'master_1', matiere: 'informatique' });
+    expect(html).toContain('Commencer par le plan');
+    expect(html).toContain('le plan du module');
+    expect(html).not.toContain('le plan de la séquence');
+  });
+
+  it('maternelle et école primaire : la case est proposée aussi', () => {
+    for (const niveau of ['maternelle_gs', 'cm1', 'terminale_gen'] as const) {
+      expect(sequence({ niveau, matiere: getMatieresForNiveau(niveau)[0].value }), niveau).toContain('id="gen-plan-seulement"');
+    }
+  });
+
+  it('autres outils : aucune case', () => {
+    for (const type of ['cours', 'exercices', 'evaluation', 'fiche_prep', 'progression', 'differenciation'] as const) {
+      expect(fields(createInitialForm(PROFILE, { type })), type).not.toContain('gen-plan-seulement');
+    }
+  });
+
+  it('conseil discret à partir de 5 séances (ou d’une durée très longue), jamais pour une petite séquence', () => {
+    expect(sequence()).not.toContain('Conseil :');
+    for (const nombreSeances of ['', 3, 4] as const) expect(sequence({ nombreSeances }), String(nombreSeances)).not.toContain('Conseil :');
+    for (const nombreSeances of [5, 6, 8, 10] as const) {
+      const html = sequence({ nombreSeances });
+      expect(html, String(nombreSeances)).toContain(ADVICE);
+      // La case n'est pas cochée à la place de l'enseignant ; le conseil est relié à la case.
+      expect(html).not.toMatch(/id="gen-plan-seulement"[^>]*checked/);
+      expect(html).toContain('aria-describedby="gen-plan-seulement-hint gen-plan-seulement-advice"');
+      expect(html).toContain('id="gen-plan-seulement-advice"');
+    }
+    for (const duree of ['3 semaines', '12 semaines', '10 heures', '15h', 'un mois', '2 mois', 'un trimestre', 'toute l’année']) {
+      expect(sequence({ duree }), duree).toContain(ADVICE);
+    }
+    for (const duree of ['55 minutes', '2 semaines', '2 heures', '1h30', '45 min']) expect(sequence({ duree }), duree).not.toContain('Conseil :');
+  });
+
+  it('case cochée : plus de conseil ; l’annonce (aria-live) existe toujours pour être lue quand le conseil apparaît', () => {
+    const checked = sequence({ nombreSeances: 8, planSeulement: true });
+    expect(checked).not.toContain('Conseil :');
+    expect(checked).not.toContain('gen-plan-seulement-advice');
+    expect(sequence({ nombreSeances: 8 })).toMatch(/<div aria-live="polite"><p id="gen-plan-seulement-advice"/);
+    expect(checked).toContain('<div aria-live="polite"></div>');
+  });
+
+  it('module du supérieur : conseil formulé pour un module', () => {
+    const html = sequence({ niveau: 'master_1', matiere: 'informatique', nombreSeances: 8 });
+    expect(html).toContain('Conseil : pour un gros module, commencer par le plan');
+  });
+});
+
 describe('GenerateFormFields', () => {
   it('libellés associés aux champs', () => {
     const html = fields(createInitialForm(PROFILE, { type: 'cours' }));
@@ -328,7 +397,22 @@ describe('ResearchModePicker', () => {
       <ResearchModePicker options={options} value="internet" onChange={noop} hints={researchHints('internet', 2, 'master_1', options)} />,
     );
     expect(html).toContain('Vos documents ne seront pas utilisés dans ce mode');
-    expect(html).toContain('Internet : Wikipédia et sources académiques seulement (aucun moteur web configuré)');
+    // Ce qui sera réellement consulté, et ce qui ne le sera pas, dit sous le mode.
+    expect(html.replace(/&#x27;/g, "'")).toContain('Consulté : publications HAL, Crossref et OpenAlex, Wikipédia (à recouper). Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.');
+  });
+});
+
+describe('ResearchModePicker — sites officiels vérifiés', () => {
+  it('sans moteur web mais avec Wikipédia : annonce les sites officiels cités par Wikipédia, sans avertissement', () => {
+    const caps: Capabilities = { ...CAPS, research: { academic: true, web: false, institutional: true, wikipedia: true } };
+    const options = describeResearchOptions(caps, 'local', '4eme');
+    const html = renderToStaticMarkup(
+      <ResearchModePicker options={options} value="internet" onChange={noop} hints={researchHints('internet', 0, '4eme', options)} />,
+    );
+    expect(html).toContain('Consulté : sites officiels vérifiés cités par Wikipédia, Wikipédia (à recouper).');
+    expect(html).not.toContain('non consultés');
+    expect(html).toContain('Sites officiels vérifiés et Wikipédia, sans vos documents.');
+    expect(html).not.toMatch(/UNESCO|Éduscol/);
   });
 });
 

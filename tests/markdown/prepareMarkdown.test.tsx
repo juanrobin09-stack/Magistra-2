@@ -43,7 +43,7 @@ describe('formules \\( \\) et \\[ \\] : écran et export PDF', () => {
   it('MarkdownView : \\( \\frac{3}{4} \\) rendu par KaTeX dans les choix d’un QCM', () => {
     const html = render('**Question 1.** Quelle fraction ?\nA) \\( \\frac{3}{4} \\)\nB) \\( \\frac{1}{2} \\)');
     expect(html.match(/class="math-inline"/g)).toHaveLength(2);
-    expect(html).toContain('<li>A) <span class="math-inline">');
+    expect(html).toContain('<li dir="auto">A) <span class="math-inline">');
     expect(html).not.toContain('\\(');
   });
 });
@@ -54,8 +54,8 @@ describe('mise en page des QCM et vrai/faux : écran et export PDF', () => {
     expect(tree.children.map(n => n.type)).toEqual(['paragraph', 'list']);
     expect(nodesOfType(tree, 'listItem')).toHaveLength(4);
     const html = render('**Question 1.** Q ?\nA) 7\nB) 12\nC) 34\nD) 1');
-    expect(html).toContain('<li>A) 7</li>');
-    expect(html).toContain('<li>D) 1</li>');
+    expect(html).toContain('<li dir="auto">A) 7</li>');
+    expect(html).toContain('<li dir="auto">D) 1</li>');
   });
 
   it('deux affirmations consécutives → deux paragraphes', () => {

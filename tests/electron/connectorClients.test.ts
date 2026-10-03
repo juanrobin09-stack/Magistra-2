@@ -7,10 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SecretCipher } from '../../electron/aiConfig.js';
-import { canonicalRevoked } from '../../shared/localConnector.js';
+import { canonicalRevoked, OFFICIAL_WEB_ORIGINS } from '../../shared/localConnector.js';
+import { SITE_ORIGIN } from '../../shared/site.js';
 import { ConnectorClientStore, MAX_REVOKED_MARKS } from '../../electron/connector/clients.js';
 import { hmacBase64Url, toBase64Url } from '../../electron/connector/crypto.js';
 import { withFileLock } from '../../electron/jsonFile.js';
+import { unicodeTraps } from './officialOrigins.js';
 
 const ORIGIN = 'https://magistra-2.vercel.app';
 
@@ -343,5 +345,39 @@ describe('fichier et erreurs', () => {
     await s.load();
     await expect(s.add({ origin: 'https://magistra-2.vercel.app/chemin', browser: 'x', key: key(1) })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     await expect(s.add({ origin: ORIGIN, browser: 'x', key: Buffer.alloc(16) })).rejects.toMatchObject({ code: 'INTERNAL' });
+  });
+});
+
+describe('origines officielles (OFFICIAL_WEB_ORIGINS) : autorisations liées à l’origine exacte', () => {
+  it('l’ancienne adresse et le nouveau domaine : chacun son autorisation, relue telle quelle, affichée sous son nom d’hôte', async () => {
+    const s = store();
+    await s.load();
+    const added = [];
+    for (const [index, origin] of OFFICIAL_WEB_ORIGINS.entries()) added.push({ origin, info: await s.add({ origin, browser: 'Google Chrome', key: key(10 + index) }) });
+    expect(s.list().map(c => c.site)).toEqual(['magistra-2.vercel.app', 'www.mag-istra.fr']);
+
+    // Fichier écrit par la version précédente (origine de l'ancienne adresse seulement) : relu sans changement.
+    const reloaded = store();
+    await reloaded.load();
+    for (const { origin, info } of added) expect(reloaded.find(info.clientId)).toMatchObject({ clientId: info.clientId, origin });
+    expect(reloaded.list().map(c => c.site)).toEqual(['magistra-2.vercel.app', 'www.mag-istra.fr']);
+    // Marque de retrait : liée à l'origine du navigateur retiré, jamais valable pour l'autre origine officielle.
+    const [legacy, modern] = added.map(a => a.info.clientId);
+    await reloaded.revoke(legacy);
+    expect(reloaded.revokedMark(legacy, OFFICIAL_WEB_ORIGINS[0])).toEqual(expect.any(String));
+    expect(reloaded.revokedMark(legacy, OFFICIAL_WEB_ORIGINS[1])).toBeUndefined();
+    expect(reloaded.find(modern)).toMatchObject({ origin: OFFICIAL_WEB_ORIGINS[1] });
+  });
+
+  it('origine mal formée ou piégée (casse, http, port par défaut, chemin, identifiants, Unicode) : jamais enregistrée', async () => {
+    const s = store();
+    await s.load();
+    const host = SITE_ORIGIN.replace('https://', '');
+    for (const origin of [
+      `http://${host}`, 'HTTPS://WWW.MAG-ISTRA.FR', `${SITE_ORIGIN}/`, `${SITE_ORIGIN}/chemin`, `${SITE_ORIGIN}:443`, `https://user@${host}`, ...unicodeTraps(SITE_ORIGIN),
+    ]) {
+      await expect(s.add({ origin, browser: 'x', key: key(1) }), origin).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    }
+    expect(s.list()).toEqual([]);
   });
 });

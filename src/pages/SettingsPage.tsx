@@ -6,18 +6,19 @@
 // « Magistra pour Windows ». Application Windows : « Site web Magistra » (navigateurs autorisés à utiliser l'IA de
 // cet ordinateur). Jamais d'adresse, de port ni de nom de moteur local pour Magistra locale.
 
-import { useCallback, useEffect, useId, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useClerk } from '@clerk/react';
 import {
-  BookOpen, Cpu, FileText, Globe, Info, Loader2, Monitor, RefreshCw, Search, Settings, Shield, Trash2, User, UserCog, Wand2,
+  BookOpen, Cpu, Download, FileText, Globe, Info, Loader2, Monitor, RefreshCw, Search, Settings, Shield, Trash2, User, UserCog, Wand2,
   type LucideIcon,
 } from 'lucide-react';
 import { getMatiereLabel } from '@shared/catalog';
 import { isMagistraError } from '@shared/errors';
 import type { AppInfo, LocalPreferences } from '@shared/ipc';
 import { getNiveauLabel } from '@shared/levels';
-import { RESEARCH_MODES, type ResearchMode } from '@shared/types';
+import { SEARCH_SCOPE_TEXT } from '@shared/research/trusted';
+import { RESEARCH_MODES, type Capabilities, type ResearchMode } from '@shared/types';
 import ActivateAICard from '@/components/ai/ActivateAICard';
 import AdminContactLine from '@/components/ai/AdminContactLine';
 import AdvancedAIOptions from '@/components/ai/AdvancedAIOptions';
@@ -30,9 +31,14 @@ import { engineStateKey, useEngineRoute, useRouteCapsHeal } from '@/components/l
 import EngineSettings from '@/components/localEngine/EngineSettings';
 import { WEBSITE_SECTION_TITLE } from '@/components/localEngine/texts';
 import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSection';
+import AuthorCredit from '@/components/AuthorCredit';
+import ContactLink from '@/components/ContactLink';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import UpdateCheck from '@/components/UpdateCheck';
 import { useAIStatus, useCapabilities, type AIController, type CapabilitiesState } from '@/hooks/useAIStatus';
+import LegalLinks from '@/components/LegalLinks';
+import { exportAccountData, ExportCancelled, EXPORT_ERROR_MESSAGE, type ExportProgress } from '@/lib/exportAccountData';
+import { readLegalInfo } from '@/lib/legal';
 import { activationPlan } from '@/lib/ai-ui/activation';
 import { providerPolicyUrl, serverAIView, type ServerMode } from '@/lib/ai-ui/server';
 import { aiPhase, engineHostIfRemote, engineOutdatedText, phaseInfo, phaseLine } from '@/lib/ai-ui/status';
@@ -206,6 +212,8 @@ export default function SettingsPage() {
 
       <Section id="settings-account" icon={UserCog} title="Compte et données">
         {mode === 'web' ? <WebAccountSettings /> : mode === 'personal' ? <PersonalAccountSettings /> : mode === 'local' ? (
+          <>
+          <ExportDataBlock />
           <DeleteDataBlock
             description="Efface l'historique, les favoris, votre profil enseignant et les documents conservés sur cet ordinateur. Le moteur IA et les modèles installés sont conservés."
             buttonLabel="Effacer toutes les données locales"
@@ -213,7 +221,10 @@ export default function SettingsPage() {
             confirmMessage="L'historique, les favoris, votre profil enseignant et les documents conservés seront définitivement effacés de cet ordinateur. Cette action est irréversible."
             confirmLabel="Tout effacer"
           />
+          </>
         ) : (
+          <>
+          <ExportDataBlock />
           <DeleteDataBlock
             description="Efface l'historique, les favoris et le profil enregistrés dans ce navigateur pour la démonstration."
             buttonLabel="Effacer les données de démonstration"
@@ -221,6 +232,7 @@ export default function SettingsPage() {
             confirmMessage="L'historique, les favoris et le profil de démonstration seront effacés de ce navigateur."
             confirmLabel="Effacer"
           />
+          </>
         )}
       </Section>
 
@@ -379,6 +391,9 @@ function DemoAISettings() {
 // ─── Recherche ─────────────────────────────────────────────────────────────
 
 const RESEARCH_PRIVACY = 'Quand une recherche en ligne est utilisée, Magistra envoie seulement le sujet et les mots-clés de votre demande : jamais vos documents ni votre profil.';
+/** Serveur en ligne : l'adresse de contact de son administrateur (CROSSREF_MAILTO) accompagne les requêtes de publications. */
+const RESEARCH_CONTACT_NOTE =
+  'Si l’administrateur du serveur a indiqué une adresse de contact, elle est transmise à Crossref et à OpenAlex avec la requête (jamais la vôtre).';
 
 function Checkbox({ checked, onChange, label, hint, disabled }: {
   checked: boolean; onChange(value: boolean): void; label: string; hint?: string; disabled?: boolean;
@@ -453,14 +468,14 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
         <Checkbox
           checked={prefs.academicEnabled}
           onChange={v => void update({ academicEnabled: v }, 'academic')}
-          label="Recherche académique (HAL, Crossref)"
+          label="Recherche académique (HAL, Crossref, OpenAlex)"
           hint="Publications scientifiques en accès ouvert, citées avec leurs références."
         />
         <Checkbox
           checked={prefs.wikipediaEnabled}
           onChange={v => void update({ wikipediaEnabled: v }, 'wikipedia')}
           label="Wikipédia"
-          hint="Articles de l'encyclopédie en français, pour compléter les sources."
+          hint="Articles de l'encyclopédie en français, signalés « à recouper ». Sans moteur de recherche web (plus bas), les sites officiels vérifiés que leurs références citent pour votre sujet sont aussi consultés."
         />
         {(saved === 'academic' || saved === 'wikipedia') && <SuccessNote>Enregistré.</SuccessNote>}
       </div>
@@ -489,10 +504,11 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
       </div>
 
       <form onSubmit={e => void submitSearx(e)} className="space-y-2 border-t border-white/5 pt-4">
-        <label htmlFor={searxId} className="block text-sm font-semibold text-white">Recherche web (facultatif)</label>
+        <label htmlFor={searxId} className="block text-sm font-semibold text-white">Moteur de recherche web (facultatif)</label>
         <p className="text-xs text-mg-200">
-          Adresse d'un moteur de recherche SearXNG. Nécessaire pour la recherche web et les sources institutionnelles
-          (Éduscol, Bulletin officiel). Laissez vide si vous n'en avez pas.
+          Adresse d'un moteur de recherche SearXNG. Il permet d'interroger directement {SEARCH_SCOPE_TEXT} Sans lui,
+          et si Wikipédia est coché, Magistra consulte seulement les sites officiels vérifiés que ses articles citent pour le
+          sujet. Aucun autre site n'est interrogé. Laissez vide si vous n'en avez pas.
         </p>
         <input
           id={searxId}
@@ -514,19 +530,34 @@ function LocalResearchSettings({ state }: { state: PrefsState }) {
   );
 }
 
+/**
+ * Ce que « Sites officiels vérifiés » consulte réellement, d'après les capacités : jamais « tous » les sites, jamais un site
+ * nommé comme garanti sans moteur de recherche web (seuls les sites que Wikipédia cite pour le sujet sont alors consultés).
+ */
+function officialSitesNote(r: Capabilities['research']): string {
+  if (!r.institutional) return '';
+  // Sans moteur de recherche web, « institutional » ne vient que du chemin par Wikipédia, propre aux versions actuelles.
+  if (!r.web) return 'Seulement ceux que Wikipédia cite pour votre sujet : aucun moteur de recherche web n’est configuré.';
+  return r.trustedCatalogue === true
+    ? 'Les principaux sites officiels vérifiés (UNESCO, Éduscol, ministères, ONU…), par le moteur de recherche web.'
+    : 'Version plus ancienne : seulement quelques sites officiels (Éduscol, education.gouv.fr…), par le moteur de recherche web.';
+}
+
 function WebResearchSettings({ caps }: { caps: CapabilitiesState }) {
   const c = caps.capabilities;
   // Magistra locale pas encore prête : ses sources ne sont pas connues (jamais « non disponible » à tort).
   const r = c && !(c.route === 'local-connector' && !c.ready) ? c.research : undefined;
-  const rows: { label: string; ok: boolean | undefined }[] = [
-    { label: 'Sources académiques (HAL, Crossref)', ok: r?.academic },
-    { label: 'Recherche web', ok: r?.web },
-    { label: 'Sources institutionnelles (Éduscol, Bulletin officiel)', ok: r?.institutional },
+  const rows: { label: string; ok: boolean | undefined; note?: string }[] = [
+    { label: 'Sources académiques (HAL, Crossref, OpenAlex)', ok: r?.academic },
+    { label: 'Sites officiels vérifiés', ok: r?.institutional, note: r ? officialSitesNote(r) : undefined },
+    { label: 'Moteur de recherche web', ok: r?.web },
     { label: 'Wikipédia', ok: r?.wikipedia },
   ];
   return (
     <>
       <p className="text-sm text-mg-100">{RESEARCH_PRIVACY}</p>
+      {/* Magistra locale : les recherches sont faites par l'application Windows, qui n'a pas d'adresse de contact à transmettre. */}
+      {c?.route !== 'local-connector' && <p className="text-xs text-mg-200">{RESEARCH_CONTACT_NOTE}</p>}
       <dl className="space-y-1.5 text-sm">
         {rows.map(row => (
           <div key={row.label} className="flex flex-wrap justify-between gap-2">
@@ -534,6 +565,7 @@ function WebResearchSettings({ caps }: { caps: CapabilitiesState }) {
             <dd className={row.ok ? 'text-success' : 'text-mg-100'}>
               {r === undefined ? (caps.loading ? 'Vérification…' : 'Inconnu') : row.ok ? 'Disponible' : 'Non disponible'}
             </dd>
+            {row.note && <dd className="basis-full text-xs text-mg-200">{row.note}</dd>}
           </div>
         ))}
       </dl>
@@ -679,6 +711,76 @@ function DeleteDataBlock({ description, buttonLabel, confirmTitle, confirmMessag
   );
 }
 
+/**
+ * Droit d'accès et portabilité : télécharge en un fichier JSON le profil, tout l'historique et les favoris. Aucune
+ * confirmation (action sans risque) ; progression et bouton « Annuler » pendant la lecture des fiches.
+ */
+function ExportDataBlock() {
+  const runtime = useRuntime();
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<ExportProgress | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ count: number; unreadable: number } | null>(null);
+  const controller = useRef<AbortController | null>(null);
+
+  useEffect(() => () => controller.current?.abort(), []);
+
+  async function run() {
+    const abort = new AbortController();
+    controller.current = abort;
+    setRunning(true);
+    setError(null);
+    setResult(null);
+    setProgress(null);
+    try {
+      const data = await exportAccountData(runtime.store, { signal: abort.signal, onProgress: setProgress });
+      setResult({ count: data.generations.length, unreadable: data.unreadable.length });
+    } catch (err) {
+      // Annulation volontaire : aucun message d'erreur. Sinon, message générique (jamais de détail technique).
+      if (!(err instanceof ExportCancelled)) setError(EXPORT_ERROR_MESSAGE);
+    } finally {
+      setRunning(false);
+      controller.current = null;
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-mg-100">
+        Téléchargez une copie de vos données Magistra : profil enseignant, historique complet et favoris, dans un seul
+        fichier JSON.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn-secondary text-sm py-2 px-4" onClick={() => void run()} disabled={running}>
+          {running ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
+          {running ? 'Préparation…' : 'Télécharger toutes mes données (JSON)'}
+        </button>
+        {running && (
+          <button type="button" className="btn-secondary text-sm py-2 px-4" onClick={() => controller.current?.abort()}>
+            Annuler
+          </button>
+        )}
+      </div>
+      {running && (
+        <p className="text-xs text-mg-200" role="status">
+          {progress && progress.total > 0 ? `Lecture des fiches : ${progress.done} sur ${progress.total}…` : "Lecture de l'historique…"}
+        </p>
+      )}
+      {error && <ErrorBox title="L'export n'a pas abouti." message={error} />}
+      {result && (
+        <SuccessNote>
+          {result.count === 0 ? 'Fichier téléchargé (profil, aucune fiche).' : `Fichier téléchargé : ${result.count} fiche${result.count > 1 ? 's' : ''}.`}
+        </SuccessNote>
+      )}
+      {result && result.unreadable > 0 && (
+        <WarningNote>
+          {result.unreadable} fiche{result.unreadable > 1 ? 's' : ''} n'ont pas pu être lues (elles sont listées à la fin du fichier) : relancez l'export pour les retenter.
+        </WarningNote>
+      )}
+    </div>
+  );
+}
+
 /** Rendu uniquement en mode web (à l'intérieur de ClerkProvider). */
 function WebAccountSettings() {
   const clerk = useClerk();
@@ -694,6 +796,9 @@ function WebAccountSettings() {
           <UserCog size={15} aria-hidden="true" /> Gérer mon compte
         </button>
         <p className="text-xs text-mg-200 mt-1.5">Adresse e-mail, mot de passe et méthodes de connexion.</p>
+      </div>
+      <div className="border-t border-white/5 pt-4">
+        <ExportDataBlock />
       </div>
       <div className="border-t border-white/5 pt-4">
         <DeleteDataBlock
@@ -717,6 +822,7 @@ function PersonalAccountSettings() {
         Mode personnel : aucun compte. Magistra utilise le serveur démarré sur cet ordinateur ; l'accès est protégé par le
         code affiché dans le terminal au démarrage.
       </p>
+      <ExportDataBlock />
       <DeleteDataBlock
         description="Supprime définitivement votre historique, vos favoris et votre profil enseignant du serveur Magistra de cet ordinateur."
         buttonLabel="Supprimer toutes mes données Magistra"
@@ -740,12 +846,26 @@ function PersonalAccountSettings() {
 
 // ─── Confidentialité ───────────────────────────────────────────────────────
 
+/** Liens vers les pages légales (mentions légales, confidentialité, conditions d'utilisation). */
+function LegalNav() {
+  return (
+    <p className="text-sm text-mg-100">
+      Détail du traitement de vos données et exercice de vos droits : <LegalLinks />
+    </p>
+  );
+}
+
 function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: CapabilitiesState }) {
   const privacy = caps.capabilities?.privacy;
   if (!privacy) {
     return caps.loading
       ? <p className="text-sm text-mg-100" role="status">Chargement…</p>
-      : <p className="text-sm text-mg-100">Informations de confidentialité indisponibles pour le moment.</p>;
+      : (
+        <>
+          <p className="text-sm text-mg-100">Informations de confidentialité indisponibles pour le moment.</p>
+          <LegalNav />
+        </>
+      );
   }
   if (mode === 'local' && privacy.level === 'local') {
     return (
@@ -755,6 +875,7 @@ function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: Capabilities
           Aucun compte n'est nécessaire. Seule la recherche en ligne, si vous la choisissez, envoie le sujet et les
           mots-clés de votre demande.
         </p>
+        <LegalNav />
       </>
     );
   }
@@ -771,6 +892,7 @@ function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: Capabilities
         </p>
       )}
       {mode !== 'demo' && <p className="text-sm text-mg-100">{RESEARCH_PRIVACY}</p>}
+      <LegalNav />
     </>
   );
 }
@@ -779,6 +901,8 @@ function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: Capabilities
 
 function About({ mode }: { mode: RuntimeMode }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
+  /** Même contact que les pages légales : variable de build, sinon celui de l'administrateur du serveur, sinon celui de l'éditeur. */
+  const { contact } = readLegalInfo(undefined, adminContact());
   /** Application Windows uniquement : le site web et la démonstration n'ont pas de mise à jour à rechercher. */
   const updateBridge = mode === 'local' ? getBridge() : null;
   useEffect(() => {
@@ -804,8 +928,10 @@ function About({ mode }: { mode: RuntimeMode }) {
       {updateBridge && <UpdateCheck bridge={updateBridge} />}
       <p>Assistant pédagogique pour les enseignants, de la maternelle au doctorat.</p>
       <p>
-        Un projet <ExternalAnchor href="https://futurai.space">FutureAI</ExternalAnchor> · Bordeaux
+        Contact : <ContactLink contact={contact} className="text-accent hover:underline underline-offset-2 [overflow-wrap:anywhere]" />
       </p>
+      <p><LegalLinks /></p>
+      <p><AuthorCredit variant="footer" showProfile /></p>
     </div>
   );
 }

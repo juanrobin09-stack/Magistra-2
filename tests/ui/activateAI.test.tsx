@@ -12,6 +12,8 @@ import { MemoryRouter } from 'react-router-dom';
 import type { RuntimeMode } from '@/lib/runtime/types';
 import { button, cleanup, click, fakeRuntime, flush, MemoryStore, PROFILE_COLLEGE, render } from './helpers';
 import { PROXY_RESTART_MESSAGE } from '../../electron/ollamaSetup';
+import { ENGINE_STARTING_MESSAGE } from '@shared/ipc';
+import { ENGINE_WINDOW_DONE_NOTE, ENGINE_WINDOW_MANUAL_NOTE, ENGINE_WINDOW_NOTE } from '@/components/localEngine/texts';
 import { hold, installFakeLocalAI, ipcError, removeFakeLocalAI, type FakeLocalAI } from './localAIHelpers';
 
 beforeEach(() => {
@@ -71,8 +73,9 @@ describe('Carte « Activer l’IA » : annonce avant le clic', () => {
     // Le bouton est décrit par la taille (lecteurs d'écran).
     const describedBy = activate!.getAttribute('aria-describedby')!;
     expect(text(document.getElementById(describedBy))).toContain('10,1 Go');
-    // Aucun nom technique imposé, aucune adresse.
-    expect(text(card)).not.toMatch(/Ollama|localhost|127\.0\.0\.1|ministral/i);
+    // Aucun nom technique imposé, aucune adresse ; le seul texte qui nomme le moteur est la note sur sa fenêtre.
+    expect(text(card)).toContain(ENGINE_WINDOW_NOTE);
+    expect(text(card).replace(ENGINE_WINDOW_NOTE, '')).not.toMatch(/Ollama|localhost|127\.0\.0\.1|ministral/i);
     expect(fake.spies.installEngine).not.toHaveBeenCalled();
     expect(fake.spies.pullModel).not.toHaveBeenCalled();
     expect(fake.spies.prefsSet).not.toHaveBeenCalled();
@@ -471,6 +474,205 @@ describe('Clavier et lecteurs d’écran', () => {
   });
 });
 
+describe('Fenêtre d’Ollama pendant l’installation de l’IA (Windows)', () => {
+  /** Notes « une fenêtre Ollama peut s'ouvrir » de la page. */
+  const notes = (root: ParentNode) => Array.from(root.querySelectorAll('[data-testid="engine-window-note"]'));
+
+  it('AVANT le clic : la note est à côté de la taille annoncée, décrit le bouton, et rien n’est téléchargé', async () => {
+    const fake = installFakeLocalAI({ engine: 'not_installed' });
+    const { container } = await mountCard();
+    const [note, ...others] = notes(container);
+    expect(others).toEqual([]);
+    // Texte unique et région accessible : une note de la page (lue par les lecteurs d'écran), pas un message qui disparaît.
+    expect(text(note)).toBe(ENGINE_WINDOW_NOTE);
+    expect(note.getAttribute('role')).toBe('note');
+    expect(note.hasAttribute('aria-live')).toBe(false);
+    expect(note.closest('[role="status"], [role="alert"], [aria-live]')).toBeNull();
+    expect(note.hasAttribute('tabindex')).toBe(false);
+    // Même bloc que la taille et la durée ; le bouton « Activer l'IA » en est décrit (annoncé avant le clic).
+    const size = container.querySelector('[data-testid="activate-ai-size"]')!;
+    expect(size.parentElement?.contains(note)).toBe(true);
+    const activate = button(container, /Activer l’IA/)!;
+    expect(text(document.getElementById(activate.getAttribute('aria-describedby')!))).toContain(ENGINE_WINDOW_NOTE);
+    expect(fake.spies.installEngine).not.toHaveBeenCalled();
+  });
+
+  it('PENDANT : téléchargement, installation et démarrage du moteur — la même note, une seule fois, sans bouton ni focus pris', async () => {
+    const fake = installFakeLocalAI({ engine: 'not_installed' });
+    fake.holdEngine = hold();
+    const { container } = await mountCard();
+    const activate = button(container, /Activer l’IA/)!;
+    activate.focus();
+    await click(activate);
+    await settle();
+    // Téléchargement du moteur.
+    expect(text(container)).toContain('Téléchargement du moteur IA…');
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+    // Le focus est rendu au titre de la carte (comportement existant), pas à la note.
+    expect(document.activeElement?.tagName).toBe('H2');
+    expect(notes(container)[0].contains(document.activeElement)).toBe(false);
+    // Installateur officiel lancé.
+    await act(async () => {
+      fake.emit({ kind: 'engine-install', message: 'Installation du moteur IA en cours… (cela peut prendre quelques minutes)' });
+    });
+    expect(text(container)).toContain('Installation du moteur IA en cours…');
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+    // Démarrage du moteur par l'installateur.
+    await act(async () => {
+      fake.emit({ kind: 'engine-waiting', message: ENGINE_STARTING_MESSAGE });
+    });
+    expect(text(container)).toContain(ENGINE_STARTING_MESSAGE);
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+    // Une note n'est ni cliquable ni dans la région vivante de progression (jamais annoncée en boucle).
+    expect(notes(container)[0].closest('[role="status"], [aria-live]')).toBeNull();
+    expect(notes(container)[0].querySelector('button, a, input')).toBeNull();
+  });
+
+  it('APRÈS : moteur installé, le modèle se télécharge — la fenêtre a pu rester ouverte (texte « si elle est encore ouverte »), puis sur le message de fin', async () => {
+    const fake = installFakeLocalAI({ engine: 'not_installed' });
+    fake.holdEngine = hold();
+    fake.holdPull = hold();
+    const { container } = await mountCard();
+    await click(button(container, /Activer l’IA/));
+    await settle();
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+
+    // Moteur prêt : l'étape du modèle commence ; l'explication d'avant (« peut s'ouvrir ») n'est plus vraie telle quelle.
+    fake.holdEngine.resolve();
+    await settle();
+    expect(text(container)).toContain('Étape 2 sur 2');
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_DONE_NOTE]);
+    expect(text(container)).not.toContain(ENGINE_WINDOW_NOTE);
+
+    // IA prête : le message de fin garde la mention (une fenêtre peut être restée ouverte).
+    fake.holdPull.resolve();
+    await settle();
+    const ready = container.querySelector('[data-testid="activate-ai-ready"]')!;
+    expect(text(ready)).toContain('L’IA de Magistra est prête.');
+    expect(notes(ready).map(n => text(n))).toEqual([ENGINE_WINDOW_DONE_NOTE]);
+    expect(notes(container)).toHaveLength(1);
+    // Fermé : plus rien.
+    await click(container.querySelector('button[aria-label="Fermer le message"]'));
+    expect(notes(container)).toHaveLength(0);
+  });
+
+  it('mise à jour du moteur (Windows) : avant le clic et pendant l’installation', async () => {
+    const fake = installFakeLocalAI({ engine: 'running', installed: [], outdated: true, engineVersion: '0.12.0' });
+    fake.holdEngine = hold();
+    const { container } = await mountCard();
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+    await click(button(container, /Activer l’IA/));
+    await settle();
+    expect(fake.spies.installEngine).toHaveBeenCalledOnce();
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+  });
+
+  it('page officielle (Windows, après l’échec de l’installation automatique) : l’enseignant lance LUI-MÊME l’installateur, la note dit de le terminer d’abord', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fake = installFakeLocalAI({ engine: 'not_installed' });
+    fake.engineFailure = ipcError('ENGINE_NOT_INSTALLED', 'L’installation automatique n’a pas abouti.');
+    const { container } = await mountCard();
+    await click(button(container, /Activer l’IA/));
+    await settle();
+    await click(button(container.querySelector('[role="alert"]')!, /Ouvrir la page officielle d’installation/));
+    await settle();
+    expect(text(container)).toContain('En attente de l’installation du moteur IA depuis sa page officielle…');
+    // Texte dédié (installateur à terminer, puis fenêtre de l'application à fermer), jamais « Fermez-la simplement » d'emblée.
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_MANUAL_NOTE]);
+    expect(notes(container)[0].getAttribute('data-moment')).toBe('manual');
+    expect(text(container)).not.toContain(ENGINE_WINDOW_NOTE);
+    expect(text(container)).toContain('Terminez d’abord l’installation avec l’installateur d’Ollama (bouton « Terminer »)');
+    // Le texte reste une note de page, comme les autres : ni région vivante, ni focus pris.
+    expect(notes(container)[0].getAttribute('role')).toBe('note');
+    expect(notes(container)[0].closest('[role="status"], [aria-live]')).toBeNull();
+  });
+
+  it('jamais : moteur déjà prêt, simple démarrage du moteur, modèle seul, serveur IA distant, moteur sur un autre ordinateur', async () => {
+    const scenarios: [string, Parameters<typeof installFakeLocalAI>[0]][] = [
+      ['IA prête', { engine: 'running', installed: ['standard'] }],
+      ['moteur arrêté (Magistra le lance sans fenêtre)', { engine: 'installed_stopped', installed: ['standard'], ready: false }],
+      ['moteur en marche, modèle à télécharger', { engine: 'running', installed: [] }],
+      ['serveur IA distant', { mode: 'remote', ready: false }],
+      ['moteur sur un autre ordinateur', { engine: 'unknown', installed: [], ollamaUrl: 'http://10.0.0.5:11434' }],
+    ];
+    for (const [name, options] of scenarios) {
+      installFakeLocalAI(options);
+      const { container } = await mountCard();
+      expect(notes(container), name).toHaveLength(0);
+      expect(text(container), name).not.toContain('Ollama');
+      cleanup();
+      removeFakeLocalAI();
+      vi.resetModules();
+    }
+  });
+
+  it('modèle seul pendant son téléchargement : aucune note (aucun installateur lancé), même à la fin', async () => {
+    const fake = installFakeLocalAI({ engine: 'running', installed: [] });
+    fake.holdPull = hold();
+    const { container } = await mountCard();
+    await click(button(container, /Activer l’IA/));
+    await settle();
+    expect(text(container)).toContain('Activation de l’IA de Magistra');
+    expect(notes(container)).toHaveLength(0);
+    fake.holdPull.resolve();
+    await settle();
+    expect(text(container.querySelector('[data-testid="activate-ai-ready"]'))).toContain('L’IA de Magistra est prête.');
+    expect(notes(container)).toHaveLength(0);
+  });
+
+  it('hors Windows : jamais de note (l’installation se fait à la main depuis la page officielle), avant, pendant ni après', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fake = installFakeLocalAI({ engine: 'not_installed', platformSupported: false, hardware: { platform: 'linux' } });
+    const { container } = await mountCard();
+    expect(text(container)).toContain('le moteur IA s’installe depuis sa page officielle');
+    expect(notes(container)).toHaveLength(0);
+    await click(button(container, /Activer l’IA/));
+    await settle();
+    expect(text(container)).toContain('En attente de l’installation du moteur IA depuis sa page officielle…');
+    expect(notes(container)).toHaveLength(0);
+    fake.options.engine = 'running';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_100);
+    });
+    await settle();
+    expect(text(container.querySelector('[data-testid="activate-ai-ready"]'))).toContain('L’IA de Magistra est prête.');
+    expect(notes(container)).toHaveLength(0);
+    expect(text(container)).not.toContain('Ollama');
+  });
+
+  it('focus ailleurs dans la page : l’apparition de la note ne le déplace pas', async () => {
+    const fake = installFakeLocalAI({ engine: 'not_installed' });
+    fake.holdEngine = hold();
+    const { container, controller } = await mountWithController();
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    expect(notes(container)).toHaveLength(1);
+    expect(document.activeElement).toBe(input);
+    await act(async () => {
+      void controller().activate();
+    });
+    await settle();
+    expect(text(container)).toContain('Activation de l’IA de Magistra');
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+    expect(document.activeElement).toBe(input);
+    fake.holdEngine.resolve();
+    await settle();
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('fenêtre rechargée pendant l’installateur : la note est de nouveau là', async () => {
+    installFakeLocalAI({ engine: 'installed_stopped', installing: 'install', installed: [] }, { aiSetupRequested: true });
+    const { container, controller } = await mountWithController();
+    await act(async () => {
+      void controller().resumeActivation();
+    });
+    await settle();
+    expect(text(container)).toContain('Reprise de l’activation de l’IA');
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+  });
+});
+
 /** Carte montée avec l'accès direct au magasin de l'IA (actions sans clic : lancement au démarrage, test du focus). */
 async function mountWithController() {
   const { useAIStatus } = await import('@/hooks/useAIStatus');
@@ -615,6 +817,32 @@ describe('Reprise au lancement suivant', () => {
     expect(fake.prefs.aiSetupRequested).toBe(false);
   });
 
+  it('reprise automatique en échec (modèle) : la demande est retirée, aucun nouveau téléchargement au lancement suivant ; « Reprendre » reste proposé', async () => {
+    const fake = installFakeLocalAI({ engine: 'running', installed: [] }, { aiSetupRequested: true });
+    fake.pullFailure = ipcError('NETWORK_ERROR', 'Le téléchargement a été interrompu (connexion perdue).');
+    const { container, controller } = await mountWithResume();
+    await act(async () => {
+      await controller().resumeActivation();
+    });
+    await settle();
+    expect(fake.spies.pullModel).toHaveBeenCalledOnce();
+    expect(text(container.querySelector('[role="alert"]'))).toContain('Le téléchargement du modèle d’IA n’a pas abouti.');
+    expect(fake.prefs.aiSetupRequested).toBe(false);
+    expect(button(container, /Reprendre le téléchargement/)).not.toBeNull();
+  });
+
+  it('reprise automatique en échec (installation du moteur) : la demande est retirée', async () => {
+    const fake = installFakeLocalAI({ engine: 'not_installed' }, { aiSetupRequested: true });
+    fake.engineFailure = ipcError('ENGINE_NOT_INSTALLED', 'L’installateur téléchargé ne correspond pas à l’empreinte officielle.');
+    const { controller } = await mountWithResume();
+    await act(async () => {
+      await controller().resumeActivation();
+    });
+    await settle();
+    expect(fake.spies.installEngine).toHaveBeenCalledOnce();
+    expect(fake.prefs.aiSetupRequested).toBe(false);
+  });
+
   it('sans demande mémorisée : rien ne démarre au lancement (jamais sans le clic initial)', async () => {
     const fake = installFakeLocalAI({ engine: 'not_installed' });
     const { controller } = await mountWithResume();
@@ -730,5 +958,66 @@ describe('Réglages → Intelligence artificielle', () => {
     const { container } = await mountSettings();
     expect(container.querySelector('[data-testid="activate-ai"]')).toBeNull();
     expect(button(container, /Mettre à jour le moteur IA/)).not.toBeNull();
+  });
+});
+
+describe('Fenêtre d’Ollama : réglages et page de l’IA', () => {
+  const notes = (root: ParentNode) => Array.from(root.querySelectorAll('[data-testid="engine-window-note"]'));
+
+  async function mountPage(name: 'SettingsPage' | 'SetupPage') {
+    const { RuntimeContext } = await import('@/lib/runtime/context');
+    const mod = name === 'SettingsPage' ? await import('@/pages/SettingsPage') : await import('@/pages/SetupPage');
+    const Page = mod.default;
+    const view = await render(
+      <RuntimeContext.Provider value={fakeRuntime(new MemoryStore([], PROFILE_COLLEGE), { mode: 'local', profile: PROFILE_COLLEGE })}>
+        <MemoryRouter><Page /></MemoryRouter>
+      </RuntimeContext.Provider>,
+    );
+    await flush(8);
+    return view;
+  }
+
+  it('Réglages, moteur absent : la note est dans la carte « Activer l’IA » (une seule fois)', async () => {
+    installFakeLocalAI({ engine: 'not_installed' });
+    const { container } = await mountPage('SettingsPage');
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+    expect(container.querySelector('[data-testid="activate-ai"]')?.contains(notes(container)[0])).toBe(true);
+  });
+
+  it('Réglages, moteur trop ancien alors que l’IA fonctionne : la note accompagne « Mettre à jour le moteur IA »', async () => {
+    installFakeLocalAI({ engine: 'running', installed: ['standard'], outdated: true });
+    const { container } = await mountPage('SettingsPage');
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+    expect(button(container, /Mettre à jour le moteur IA/)).not.toBeNull();
+  });
+
+  it('Réglages, IA prête : aucune note', async () => {
+    installFakeLocalAI({ engine: 'running', installed: ['standard'] });
+    const { container } = await mountPage('SettingsPage');
+    expect(notes(container)).toHaveLength(0);
+  });
+
+  it('page de l’IA : avant, pendant, puis sur « Intelligence artificielle prête » (la fenêtre a pu rester ouverte)', async () => {
+    const fake = installFakeLocalAI({ engine: 'not_installed' });
+    fake.holdEngine = hold();
+    const { container } = await mountPage('SetupPage');
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+    await click(button(container, /Activer l’IA/));
+    await settle();
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_NOTE]);
+    fake.holdEngine.resolve();
+    await settle();
+    expect(text(container)).toContain('✓ Intelligence artificielle prête');
+    expect(notes(container).map(n => text(n))).toEqual([ENGINE_WINDOW_DONE_NOTE]);
+  });
+
+  it('page de l’IA, modèle seul : « prête » sans note', async () => {
+    installFakeLocalAI({ engine: 'running', installed: [] });
+    const { container } = await mountPage('SetupPage');
+    expect(notes(container)).toHaveLength(0);
+    await click(button(container, /Activer l’IA/));
+    await settle();
+    expect(text(container)).toContain('✓ Intelligence artificielle prête');
+    expect(notes(container)).toHaveLength(0);
   });
 });

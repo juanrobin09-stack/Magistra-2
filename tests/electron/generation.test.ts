@@ -6,12 +6,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MockProvider } from '../../shared/ai/mock.js';
+import { isLoopbackUrl } from '../../shared/ai/loopback.js';
+import { OllamaProvider } from '../../shared/ai/ollama.js';
 import type { AIProvider, PreloadOptions } from '../../shared/ai/provider.js';
 import { MagistraError } from '../../shared/errors.js';
 import type { GenerationEvent, PrivacyInfo } from '../../shared/types.js';
 import {
-  BUSY_EXTERNAL_MESSAGE, BUSY_WINDOW_MESSAGE, GenerationManager, maxDocumentCharsFor, type GenerationDeps, type GenerationPayload,
+  BUSY_EXTERNAL_MESSAGE, BUSY_WINDOW_MESSAGE, GenerationManager, maxDocumentCharsFor, researchConfigFrom, type GenerationDeps, type GenerationPayload,
 } from '../../electron/generation.js';
+import { DEFAULT_PREFERENCES } from '../../shared/ipc.js';
 import { LocalStore } from '../../electron/localStore.js';
 
 let dir: string;
@@ -37,11 +40,12 @@ type Active = Awaited<ReturnType<GenerationDeps['describeActive']>>;
 
 function manager(
   provider: AIProvider | (() => Promise<AIProvider>),
-  opts: { privacy?: PrivacyInfo; windowOpen?: () => boolean; active?: Partial<Active>; isLocalEngine?: () => boolean } = {},
+  opts: { privacy?: PrivacyInfo; windowOpen?: () => boolean; active?: Partial<Active>; isLocalEngine?: () => boolean; fetchPage?: GenerationDeps['fetchPage'] } = {},
 ) {
   const payloads: GenerationPayload[] = [];
   const gm = new GenerationManager({
     ...(opts.isLocalEngine ? { isLocalEngine: opts.isLocalEngine } : {}),
+    ...(opts.fetchPage ? { fetchPage: opts.fetchPage } : {}),
     store,
     resolveProvider: async (_signal, onStatus) => {
       onStatus('Démarrage du moteur IA…');
@@ -90,6 +94,33 @@ describe('GenerationManager', () => {
     // Le texte des documents n'est pas conservé dans l'historique, seulement leur nom.
     expect(JSON.stringify(saved)).not.toContain('muni de deux lois');
     expect(gm.busy).toBe(false);
+  });
+
+  it('séquence « plan d’abord » : l’option arrive au moteur et dans l’historique local ; valeur non booléenne ou autre outil : ignorée', async () => {
+    const provider = new MockProvider({ reply: '| N° | Titre |\n|---|---|\n| 1 | A |\n| 2 | B |' });
+    const { gm, finished } = manager(provider);
+    const sequence = { type: 'sequence', niveau: '4eme', matiere: 'histoire_geo', sujet: 'La Révolution', researchMode: 'documents', nombreSeances: 2 };
+    const run = async (body: Record<string, unknown>) => {
+      const { jobId } = gm.start(body);
+      const events = await finished(jobId);
+      await new Promise(r => setTimeout(r, 0));
+      return events.at(-1) as Extract<GenerationEvent, { type: 'done' }>;
+    };
+    const prompt = (n: number) => provider.calls[n].messages.map(m => m.content).join('\n');
+
+    const plan = await run({ ...sequence, planSeulement: true });
+    expect(prompt(0)).toContain('concevoir le PLAN d\'une séquence pédagogique de EXACTEMENT 2 séances');
+    expect(plan).toMatchObject({ type: 'done', saved: true });
+    expect((await store.get(plan.id!))?.params).toMatchObject({ nombreSeances: 2, planSeulement: true });
+
+    const full = await run(sequence);
+    expect(prompt(1)).not.toContain('PLAN d\'');
+    expect((await store.get(full.id!))?.params).not.toHaveProperty('planSeulement');
+
+    await run({ ...sequence, planSeulement: 'true' });
+    await run({ ...REQUEST, planSeulement: true });
+    expect(prompt(2)).not.toContain('PLAN d\'');
+    expect(prompt(3)).not.toContain('PLAN d\'');
   });
 
   it('une seule génération à la fois (GENERATION_BUSY), aucune limite ensuite', async () => {
@@ -193,11 +224,32 @@ describe('capacités', () => {
     const { gm } = manager(new MockProvider(), { privacy: { level: 'local', message: 'IA locale — Vos documents et générations restent sur cet ordinateur.' } });
     expect(await gm.capabilities()).toEqual({
       maxDocumentChars: maxDocumentCharsFor(12_288),
-      research: { academic: false, web: true, institutional: true, wikipedia: true },
+      research: { academic: false, web: true, institutional: true, wikipedia: true, trustedCatalogue: true },
       privacy: { level: 'local', message: 'IA locale — Vos documents et générations restent sur cet ordinateur.' },
       engineLabel: 'Magistra Standard',
       ready: true,
     });
+  });
+
+  it('sites officiels vérifiés : par SearXNG, ou par Wikipédia (activé) avec la récupération de pages de l’application', async () => {
+    const fetchPage = async () => null;
+    const research = async (deps: { fetchPage?: GenerationDeps['fetchPage'] } = {}) => (await manager(new MockProvider(), deps).gm.capabilities()).research;
+    // Cas normal d'un enseignant : Wikipédia actif (défaut), pas de SearXNG.
+    expect(await research({ fetchPage })).toEqual({ academic: true, web: false, institutional: true, wikipedia: true, trustedCatalogue: true });
+    // Wikipédia désactivé : plus aucun chemin.
+    await store.setPreferences({ wikipediaEnabled: false });
+    expect(await research({ fetchPage })).toEqual({ academic: true, web: false, institutional: false, wikipedia: false, trustedCatalogue: true });
+    // SearXNG indiqué : chemin direct, même sans Wikipédia.
+    await store.setPreferences({ searxngUrl: 'https://searx.univ.fr' });
+    expect(await research({ fetchPage })).toEqual({ academic: true, web: true, institutional: true, wikipedia: false, trustedCatalogue: true });
+    // Sans récupération de pages, Wikipédia seul ne mène pas aux sites officiels.
+    await store.setPreferences({ wikipediaEnabled: true, searxngUrl: '' });
+    expect(await research()).toEqual({ academic: true, web: false, institutional: false, wikipedia: true, trustedCatalogue: true });
+  });
+
+  it('application Windows : toujours les sites vérifiés seulement (aucune option pour le web général)', () => {
+    expect(researchConfigFrom(DEFAULT_PREFERENCES)).toMatchObject({ trustedOnly: true, academic: true, wikipedia: true });
+    expect(researchConfigFrom({ ...DEFAULT_PREFERENCES, searxngUrl: 'https://searx.univ.fr' })).toMatchObject({ trustedOnly: true, searxngUrl: 'https://searx.univ.fr' });
   });
 
   it('IA non prête : cause précise (notReady) ; serveur distant : prestataire annoncé (providerInfo)', async () => {
@@ -267,6 +319,26 @@ describe('générations du site (connecteur local)', () => {
     await byProvider.gm.startExternal(REQUEST, { owner: 'A', send: out.send, requireLocal: true }).finished;
     expect(out.events.at(-1)).toMatchObject({ type: 'error', code: 'LOCAL_ENGINE_REMOTE' });
     expect(remote.calls).toHaveLength(0);
+  });
+
+  it('moteur réglé sur http://127.evil.com (faux « 127. ») : LOCAL_ENGINE_REMOTE, aucun envoi au serveur', async () => {
+    let calls = 0;
+    const provider = new OllamaProvider({
+      baseUrl: 'http://127.evil.com:11434', model: 'm', label: 'Moteur',
+      fetch: async () => {
+        calls += 1;
+        throw new Error('réseau interdit');
+      },
+    });
+    expect(provider.local).toBe(false);
+    const { gm } = manager(provider, { isLocalEngine: () => isLoopbackUrl('http://127.evil.com:11434') });
+    expect(() => gm.startExternal(REQUEST, { owner: 'A', send: sink().send, requireLocal: true }))
+      .toThrow(expect.objectContaining({ code: 'LOCAL_ENGINE_REMOTE', status: 409 }));
+    const byProvider = manager(provider);
+    const out = sink();
+    await byProvider.gm.startExternal(REQUEST, { owner: 'A', send: out.send, requireLocal: true }).finished;
+    expect(out.events.at(-1)).toMatchObject({ type: 'error', code: 'LOCAL_ENGINE_REMOTE' });
+    expect(calls).toBe(0);
   });
 
   it('demande invalide : refus immédiat, créneau libre', () => {

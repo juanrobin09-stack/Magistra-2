@@ -15,6 +15,13 @@ import type {
  */
 export type RuntimeMode = 'web' | 'personal' | 'local' | 'demo';
 
+/**
+ * Mode d'affichage d'une page publique : un mode d'exécution, ou « showcase » (site vitrine : présentation, téléchargement
+ * de l'application Windows, pages légales ; ni compte, ni application dans le navigateur, aucun fournisseur d'exécution).
+ * Ce n'est jamais un RuntimeMode : les `switch` exhaustifs sur les modes d'exécution ne le voient pas.
+ */
+export type PageMode = RuntimeMode | 'showcase';
+
 /** Modes où les données et l'IA passent par l'API du serveur Magistra. */
 export function usesServerApi(mode: RuntimeMode): mode is 'web' | 'personal' {
   return mode === 'web' || mode === 'personal';

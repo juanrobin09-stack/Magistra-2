@@ -166,6 +166,10 @@ function modaliteLine(req: GenerationRequest, studentOnly: boolean): string {
       const flipped = req.modalite === 'classe_inversee'
         ? ' En classe inversée, les séances s’appuient chacune sur une capsule préparée à la maison avant la séance, puis sur des activités en classe.'
         : '';
+      // Plan seul : la démarche se lit dans le plan (problématique, activités du tableau) ; rien n'est développé.
+      if (req.planSeulement) {
+        return `${text}\nApplique cette démarche à toute la séquence : elle se lit dans le plan (problématique, activités du tableau des séances), sans rien développer (ni script, ni questions, ni déroulé), en conservant la structure du plan demandée ci-dessus et le nombre de séances indiqué.${flipped}`;
+      }
       return `${text}\nApplique cette démarche à toute la séquence et à chacune de ses séances, en conservant la structure demandée ci-dessus (tableau des séances, détail de chaque séance) et le nombre de séances indiqué.${flipped}`;
     }
     case 'fiche_prep':
@@ -398,6 +402,31 @@ Structure :
 4. Compétences évaluées pour chaque partie.${withKey ? `\n5. Corrigé détaillé, ${graded ? 'barème point par point' : 'réponses attendues'} et grille critériée pour les questions ouvertes.` : ''}`;
 }
 
+/**
+ * Séquence en deux temps (« plan d'abord ») : TÂCHE de la première étape, le plan seul. Même structure que la séquence
+ * complète (colonnes du tableau comprises), sans le détail de chaque séance : l'enseignant choisit ensuite les séances à
+ * développer (outil « fiche de préparation »). Le numéro de séance est la PREMIÈRE colonne du tableau, une ligne par
+ * séance (c'est ce tableau que Magistra relit pour proposer « Développer une séance », src/lib/generation/plan.ts) ;
+ * nombre exact de lignes quand l'enseignant en a demandé un (contrôlé par shared/outputChecks.ts).
+ */
+function sequencePlanTask({ n, seances, group, sup, primary }: { n: number | undefined; seances: string; group: LevelGroup; sup: boolean; primary: boolean }): string {
+  const rows = n ? `EXACTEMENT ${n} lignes, numérotées de 1 à ${n}` : 'une ligne par séance, numérotées à partir de 1';
+  const table = `Tableau des séances : ${rows}, le numéro de la séance (1, 2, 3…) seul dans la PREMIÈRE colonne. NE DÉTAILLE PAS le déroulé de chaque séance : une seule ligne par séance, pas de partie séparée par séance (l'enseignant choisira ensuite les séances à développer).`;
+  if (sup) {
+    return `TÂCHE : organiser le PLAN d'un module (unité d'enseignement) en ${n ? seances : 'séances'}, uniquement ce plan.
+Structure : acquis d'apprentissage visés, prérequis, tableau des séances (numéro | format CM/TD/TP | thème | contenus | travail étudiant), modalités d'évaluation (contrôle continu, examen), lectures recommandées (uniquement parmi les sources fournies, citées avec leur numéro ; sinon, les types de lectures à constituer).
+${table}`;
+  }
+  if (group === 'maternelle') {
+    return `TÂCHE : concevoir le PLAN d'une séquence de maternelle de ${seances}, uniquement ce plan.
+Structure : titre, section, domaine d'apprentissage, objectifs, tableau synoptique (numéro de séance | titre | objectif | activités | durée | organisation), évaluation positive prévue (réussites observées, carnet de suivi des apprentissages), prolongements.
+${table}`;
+  }
+  return `TÂCHE : concevoir le PLAN d'une séquence pédagogique de ${seances}, uniquement ce plan.
+Structure : titre, niveau, problématique, objectifs de la séquence, évaluation diagnostique, tableau synoptique (numéro de séance | titre | objectif | activités | durée | évaluation), évaluation ${primary ? 'finale (positionnement sur les objectifs, sans note sur 20)' : 'sommative'} prévue, prolongements.
+${table}`;
+}
+
 const BY_TOOL: Record<TypeContenu, (ctx: Ctx) => string> = {
   cours: ({ req, group, sup, fmt }) => {
     if (getModalite(req.modalite)) {
@@ -491,6 +520,7 @@ Chaque énoncé est complet (données, hypothèses, questions numérotées).${ke
   sequence: ({ req, group, sup, primary }) => {
     const n = req.nombreSeances;
     const seances = n ? `EXACTEMENT ${plural(n, 'séance')}, numérotées de 1 à ${n}` : '4 à 6 séances';
+    if (req.planSeulement) return sequencePlanTask({ n, seances, group, sup, primary });
     if (sup) {
       return `TÂCHE : organiser un module (unité d'enseignement) en ${n ? seances : 'séances'}.
 Structure : acquis d'apprentissage visés, prérequis, tableau des séances (numéro | format CM/TD/TP | thème | contenus | travail étudiant), détail de chaque séance, modalités d'évaluation (contrôle continu, examen), lectures recommandées (uniquement parmi les sources fournies, citées avec leur numéro ; sinon, les types de lectures à constituer).`;

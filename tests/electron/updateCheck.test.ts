@@ -108,6 +108,21 @@ describe('recherche d’une mise à jour', () => {
     expect(new Headers(calls[0].init?.headers).get('user-agent')).toMatch(/^Magistra\/2\.0\.0 /);
   });
 
+  it('2.0.3 installée : la 2.0.4 publiée est proposée (page de sa version) ; la 2.0.4 installée est à jour ; seule la dernière version publiée est interrogée', async () => {
+    const page = 'https://github.com/juanrobin09-stack/magistra-downloads/releases/tag/v2.0.4';
+    const { fetch, calls } = fakeFetch(() => release('v2.0.4', page));
+    await expect(checkForUpdate({ fetch, currentVersion: '2.0.3' })).resolves.toEqual({
+      currentVersion: '2.0.3', latestVersion: '2.0.4', upToDate: false, url: page,
+    });
+    const installed = await checkForUpdate({ fetch, currentVersion: '2.0.4' });
+    expect(installed).toEqual({ currentVersion: '2.0.4', latestVersion: '2.0.4', upToDate: true });
+    expect(installed.url).toBeUndefined();
+    // GitHub exclut d'office les brouillons et les préversions de « /releases/latest » : c'est la seule adresse interrogée
+    // (jamais la liste des versions, qui les contient).
+    expect(calls.map(c => c.url)).toEqual([RELEASES_API_URL, RELEASES_API_URL]);
+    expect(RELEASES_API_URL).toMatch(/^https:\/\/api\.github\.com\/repos\/juanrobin09-stack\/magistra-downloads\/releases\/latest$/);
+  });
+
   it('à jour (même version, ou version publiée plus ancienne) : pas de lien', async () => {
     for (const tag of ['v2.0.0', '2.0.0', 'v1.9.0', 'v2.0.0-rc.1']) {
       const { fetch } = fakeFetch(() => release(tag));

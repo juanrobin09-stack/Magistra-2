@@ -7,7 +7,8 @@
 // Les évènements produits (GenerationEvent) sont transmis tels quels au navigateur
 // (flux NDJSON) ou à la fenêtre Electron (IPC).
 
-import type { AIProvider } from './ai/provider.js';
+import type { AIProvider, Usage } from './ai/provider.js';
+import { cleanEnginePlacement, cleanEngineTimings } from './ai/timings.js';
 import { getMatiereLabel, getToolLabel, type TypeContenu } from './catalog.js';
 import { documentSourceRef, extractUrls, finalizeCitations } from './citations.js';
 import { buildClozeDocument, ClozeStream, isClozeRequest } from './cloze.js';
@@ -16,11 +17,15 @@ import { MagistraError, toMagistraError, type ErrorCode } from './errors.js';
 import { normalizeExerciseLayout } from './exerciseLayout.js';
 import { getLevelGroup, getNiveauLabel } from './levels.js';
 import { unwrapDocumentFence } from './markdownFence.js';
-import { checkOutputStructure } from './outputChecks.js';
-import { buildMessages, estimateTokens, generationTemperature, type PromptSource } from './prompts/index.js';
+import { checkCopyQuotes, checkOutputStructure } from './outputChecks.js';
+import { buildMessages, estimateTokens, generationTemperature, targetLanguageOf, type PromptSource } from './prompts/index.js';
 import { planResearch, runResearch, type ResearchConfig, type ResearchDeps, type ResearchOutcome } from './research/index.js';
 import type { ResearchSource } from './research/types.js';
-import { modeUsesDocuments, type DocumentPassage, type GenerationEvent, type GenerationRecordDraft, type GenerationRequest, type SourceRef } from './types.js';
+import { normalizeFrenchTypography } from './typography.js';
+import {
+  modeUsesDocuments, type DocumentPassage, type GenerationEvent, type GenerationMetrics, type GenerationRecordDraft, type GenerationRequest,
+  type SourceRef,
+} from './types.js';
 import { displaySujet, RECORD_LIMITS } from './validation.js';
 
 export type NewGenerationRecord = GenerationRecordDraft;
@@ -52,6 +57,8 @@ export interface PipelineDeps {
    * ne compte plus le chargement. Désactivé par défaut.
    */
   preloadModel?: boolean;
+  /** Horloge en millisecondes (tests) : défaut performance.now(). Sert aux seules mesures de vitesse (GenerationMetrics). */
+  now?: () => number;
 }
 
 /**
@@ -99,6 +106,12 @@ function messagesTokens(messages: { content: string }[]): number {
 }
 
 /**
+ * Surcoût estimé du prompt quand des sources sont fournies : règles d'utilisation des sources et hiérarchie de leur
+ * fiabilité, en-tête du bloc, consigne de citation finale.
+ */
+export const SOURCES_PROMPT_MARGIN_TOKENS = 330;
+
+/**
  * Calcule la place disponible pour les sources, selon la taille de contexte du modèle.
  * Garantit : prompt (hors sources) + sources + sortie ≤ contextTokens.
  * `fits` est faux si la demande seule (texte collé, consignes…) ne laisse pas assez de place à la réponse.
@@ -106,8 +119,8 @@ function messagesTokens(messages: { content: string }[]): number {
 export function computeBudgets(provider: AIProvider, req: GenerationRequest, maxOutputTokens?: number) {
   const ctx = provider.contextTokens;
   const base = buildMessages({ ...req, documents: undefined }, []);
-  // Le prompt avec sources est un peu plus long (règles d'utilisation des sources, en-tête du bloc).
-  const baseTokens = messagesTokens(base) + 250;
+  // Le prompt avec sources est plus long (règles d'utilisation des sources, hiérarchie, en-tête du bloc).
+  const baseTokens = messagesTokens(base) + SOURCES_PROMPT_MARGIN_TOKENS;
   const wanted = Math.max(1, Math.min(maxOutputTokens ?? 6_000, Math.floor(ctx * 0.4)));
   const minOutputTokens = Math.min(MIN_OUTPUT_TOKENS, wanted);
   const output = Math.max(0, Math.min(wanted, ctx - baseTokens - SAFETY_TOKENS));
@@ -121,13 +134,38 @@ export function computeBudgets(provider: AIProvider, req: GenerationRequest, max
   };
 }
 
-/** Requête de recherche : sujet, discipline et objectifs uniquement — jamais le texte des documents ni des consignes. */
+/**
+ * Requête envoyée aux services de recherche : sujet et discipline uniquement — jamais le texte des documents, des
+ * consignes ni les objectifs (texte libre : il peut nommer des élèves ; l'interface annonce « votre sujet et vos
+ * mots-clés »).
+ */
 function researchQueryText(req: GenerationRequest): string {
-  return [req.sujet, req.discipline, req.objectifs?.slice(0, 120)]
+  return [req.sujet, req.discipline]
     .filter(Boolean)
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/** Requête de classement des passages de documents (local, jamais envoyée) : la recherche + les objectifs. */
+function rankingQueryText(req: GenerationRequest): string {
+  return [researchQueryText(req), req.objectifs?.slice(0, 120)]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Requête de classement des passages des documents (local, jamais envoyée) : celle ci-dessus et les consignes ; pour la
+ * différenciation et la correction, dont le sujet est facultatif, le début du texte à adapter ou de la copie la complète
+ * quand le sujet et les objectifs tiennent en moins de 40 caractères (sinon la requête se réduirait à « SVT »).
+ */
+function passageQueryText(req: GenerationRequest): string {
+  const base = `${rankingQueryText(req)} ${req.consignes ?? ''}`.replace(/\s+/g, ' ').trim();
+  if (`${req.sujet ?? ''} ${req.objectifs ?? ''}`.trim().length >= 40) return base;
+  const excerpt = (req.contenuSource ?? req.texteEleve ?? '').slice(0, 1_200).replace(/\s+/g, ' ').trim().slice(0, 300);
+  return excerpt ? `${base} ${excerpt}`.trim() : base;
 }
 
 /** Coût (en caractères) d'un passage dans le prompt : texte + ligne de description + délimiteurs. */
@@ -152,7 +190,16 @@ function fitPassages(passages: DocumentPassage[], query: string, budget: number)
   let used = 0;
   for (const p of ranked) {
     const cost = passageCost(p);
-    if (used + cost > budget) continue;
+    if (used + cost > budget) {
+      // Un passage pertinent trop long pour la place restante n'est pas écarté au profit de passages moins pertinents :
+      // on en garde le début (localisation marquée « (extrait) »), et le budget est alors épuisé.
+      const room = budget - used - (cost - p.text.length);
+      if (p.score > 0 && room >= MIN_PASSAGE_CHARS) {
+        keep.set(p.order, { ...passages[p.order], text: truncateText(p.text, room), locator: { ...passages[p.order].locator, partial: true } });
+        break;
+      }
+      continue;
+    }
     keep.set(p.order, passages[p.order]);
     used += cost;
   }
@@ -171,7 +218,9 @@ function fitPassages(passages: DocumentPassage[], query: string, budget: number)
 /** Texte borné à `max` caractères (UTF-16, comme la validation), terminé par « … » s'il a été coupé ; vide → undefined. */
 function clipMeta(value: unknown, max: number): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const text = value.trim();
+  // Une seule ligne : les titres viennent de tiers (pages web, notices) ; un saut de ligne y ajouterait des titres,
+  // des listes ou des instructions au document et au prompt.
+  const text = value.replace(/\s+/g, ' ').trim();
   if (!text) return undefined;
   if (text.length <= max) return text;
   let cut = text.slice(0, max - 1);
@@ -191,8 +240,8 @@ function researchSourceRef(n: number, s: ResearchSource): SourceRef {
     .map(a => clipMeta(a, RECORD_LIMITS.author))
     .filter((a): a is string => a !== undefined);
   const year = typeof s.year === 'number' && Number.isInteger(s.year) && s.year >= 0 && s.year <= 9_999 ? s.year : undefined;
-  const doi = typeof s.doi === 'string' && s.doi.trim() && s.doi.trim().length <= RECORD_LIMITS.doi ? s.doi.trim() : undefined;
-  const url = typeof s.url === 'string' && s.url.length <= RECORD_LIMITS.url && /^https?:\/\//i.test(s.url) ? s.url : undefined;
+  const doi = typeof s.doi === 'string' && s.doi.trim() && s.doi.trim().length <= RECORD_LIMITS.doi && !/\s/.test(s.doi.trim()) ? s.doi.trim() : undefined;
+  const url = typeof s.url === 'string' && s.url.length <= RECORD_LIMITS.url && /^https?:\/\/\S+$/i.test(s.url) ? s.url : undefined;
   return {
     n,
     kind: s.kind,
@@ -225,6 +274,7 @@ function recordParams(req: GenerationRequest): Record<string, unknown> {
     sansCorrige: req.sansCorrige,
     nombreExercices: req.nombreExercices,
     nombreSeances: req.nombreSeances,
+    planSeulement: req.planSeulement,
     ton: req.ton,
     besoins: req.besoins,
     // Le travail d'élève n'est pas conservé (donnée personnelle) : seule sa longueur est notée.
@@ -244,19 +294,60 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]).finally(() => clearTimeout(timer));
 }
 
+interface MetricsInput {
+  totalMs: number;
+  prepMs?: number;
+  waitModelMs?: number;
+  preloadLoadMs?: number;
+  firstWordMs?: number;
+  usage?: Usage;
+  promptTokens: number;
+  outputBudgetTokens: number;
+}
+
+/**
+ * Mesures jointes à « done » : uniquement des nombres et des énumérations (jamais de texte). Les durées du moteur et
+ * le placement ne sont donnés que pour le moteur de cet ordinateur ; ce qu'un fournisseur renvoie est filtré champ par champ.
+ */
+function buildMetrics(provider: AIProvider, m: MetricsInput): GenerationMetrics {
+  const engine = provider.local ? cleanEngineTimings(m.usage?.timings) : undefined;
+  const placement = provider.local ? cleanEnginePlacement(m.usage?.placement) : undefined;
+  const contextTokens = Number.isFinite(provider.contextTokens) ? Math.max(0, Math.round(provider.contextTokens)) : 0;
+  return {
+    totalMs: m.totalMs,
+    ...(m.prepMs !== undefined ? { prepMs: m.prepMs } : {}),
+    ...(m.waitModelMs !== undefined ? { waitModelMs: m.waitModelMs } : {}),
+    ...(provider.local && m.preloadLoadMs !== undefined ? { preloadLoadMs: m.preloadLoadMs } : {}),
+    ...(m.firstWordMs !== undefined ? { firstWordMs: m.firstWordMs } : {}),
+    ...(engine ? { engine } : {}),
+    ...(placement ? { placement } : {}),
+    contextTokens,
+    promptTokens: m.promptTokens,
+    outputBudgetTokens: m.outputBudgetTokens,
+  };
+}
+
 const DOCS_REDUCED_WARNING = 'Vos documents dépassent la capacité du modèle : seuls les passages les plus pertinents ont été utilisés.';
 
 export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps): AsyncGenerator<GenerationEvent> {
   const { provider, signal } = deps;
+  const now = deps.now ?? (() => performance.now());
+  const startedAt = now();
+  const elapsedSince = (from: number) => Math.max(0, Math.round(now() - from));
   let text = '';
   let providedForPartial: SourceRef[] = [];
   let allowedUrls: string[] = [];
+  let allowedExactUrls: string[] = [];
   // Texte à trous : le modèle marque les mots à trouver ([[mot]]) ; Magistra pose les blancs numérotés, la banque de
   // mots et le corrigé (shared/cloze.ts), à l'affichage en direct comme dans le document final.
   const cloze = isClozeRequest(req) ? { max: req.nombreExercices, withKey: !req.sansCorrige } : null;
   // Choix de QCM et questions numérotées écrits ligne à ligne : mis en liste et séparés (shared/exerciseLayout.ts),
   // sinon ils s'afficheraient en un seul paragraphe. Document final comme texte partiel (enregistrés, exportés ainsi).
   const shape = (body: string) => normalizeExerciseLayout(cloze ? buildClozeDocument(body, cloze) : body);
+  // Espaces insécables de la typographie française : sur le document final seulement (jamais sur les morceaux affichés
+  // en direct), sauf quand le contenu est écrit dans une langue étudiée (ponctuation de la langue cible) : les
+  // appréciations et les lettres aux parents d'une matière de langue restent en français, donc typographiées.
+  const typeset = (body: string) => (targetLanguageOf(req) ? body : normalizeFrenchTypography(body));
   try {
     if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
     const budgets = computeBudgets(provider, req, deps.maxOutputTokens);
@@ -269,6 +360,19 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     const networkMode = plan.academic || plan.web || plan.institutional || plan.wikipedia;
     const query = researchQueryText(req);
     const hasTopic = Boolean(req.sujet?.trim());
+    // Chargement du modèle (Ollama) lancé tout de suite, pendant la sélection des passages et la recherche : l'attente
+    // du premier mot ne le compte plus. Un échec est repris plus bas ; jamais de rejet non géré si la recherche, ou
+    // « Arrêter », met fin à la génération avant.
+    let preload: Promise<void> | undefined;
+    let preloadLoadMs: number | undefined;
+    if (deps.preloadModel && typeof provider.preload === 'function') {
+      preload = Promise.resolve()
+        .then(() => provider.preload!({ signal }))
+        .then(result => {
+          if (result && typeof result.loadMs === 'number') preloadLoadMs = result.loadMs;
+        });
+      preload.catch(() => {});
+    }
     const toolUsesResearch = RESEARCH_TOOLS.has(req.type);
     const wantsResearch = networkMode && toolUsesResearch && hasTopic;
 
@@ -276,7 +380,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     const docs = modeUsesDocuments(req.researchMode) ? req.documents ?? [] : [];
     if (docs.length > 0) yield { type: 'status', stage: 'context', message: 'Sélection des passages utiles de vos documents…' };
     const docBudget = wantsResearch && deps.research ? Math.floor(budgets.sourcesChars * 0.6) : budgets.sourcesChars;
-    const fitted = fitPassages(docs, `${query} ${req.consignes ?? ''}`, docBudget);
+    const fitted = fitPassages(docs, passageQueryText(req), docBudget);
     let docsWarned = false;
     if (docs.length > 0 && fitted.reduced) {
       docsWarned = true;
@@ -294,7 +398,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     } else if (wantsResearch && !deps.research) {
       yield { type: 'warning', code: 'RESEARCH_UNAVAILABLE', message: 'La recherche en ligne n’est pas disponible ici : génération à partir des autres sources.' };
     } else if (wantsResearch && deps.research) {
-      yield { type: 'status', stage: 'research', message: plan.academic && !plan.web ? 'Recherche de publications académiques…' : 'Recherche de sources en ligne…' };
+      yield { type: 'status', stage: 'research', message: plan.academic && !plan.web ? 'Recherche de publications et de sites officiels…' : 'Recherche de sources en ligne…' };
       const usedChars = fitted.passages.reduce((n, p) => n + passageCost(p), 0);
       let outcome: ResearchOutcome;
       try {
@@ -339,23 +443,30 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
 
     const provided = sources.map(s => s.ref);
     // Liens légitimes en plus de ceux des sources : ceux des extraits transmis et de la demande de l'enseignant.
+    // Texte de documents : même règle que les sources (le site, ou une page plus précise). Texte de pages web ou
+    // d'encyclopédie : adresse exacte seulement (une page qui cite « https://exemple.fr » n'autorise pas tout son site).
     allowedUrls = [
-      ...sources.flatMap(s => extractUrls(s.text)),
+      ...sources.filter(s => s.ref.kind === 'document').flatMap(s => extractUrls(s.text)),
       ...[req.sujet, req.objectifs, req.consignes, req.contenuSource, req.texteEleve].flatMap(t => (t ? extractUrls(t) : [])),
     ];
+    allowedExactUrls = sources.filter(s => s.ref.kind !== 'document').flatMap(s => extractUrls(s.text));
+    const prepMs = elapsedSince(startedAt);
     yield { type: 'sources', sources: provided, internetUsed };
 
     // ─── Chargement du modèle (facultatif) ───────────────────────────────
     let preloaded = false;
-    if (deps.preloadModel && typeof provider.preload === 'function') {
+    let waitModelMs: number | undefined;
+    if (preload) {
       yield { type: 'status', stage: 'loading_model', message: 'Chargement du modèle…' };
+      const waitStartedAt = now();
       try {
-        await provider.preload({ signal });
+        await preload;
         preloaded = true;
       } catch (err) {
         // Une panne passagère est laissée aux nouveaux essais de la rédaction ; le reste est affiché tout de suite.
         if (!(err instanceof MagistraError && TRANSIENT_AI_ERRORS.includes(err.code))) throw err;
       }
+      waitModelMs = elapsedSince(waitStartedAt);
       if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
     }
 
@@ -366,11 +477,13 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
       message: !provider.local
         ? 'Rédaction en cours…'
         : preloaded
-          ? 'Le modèle rédige…'
+          ? 'Le modèle lit votre demande puis rédige… (sur un ordinateur sans carte graphique, cela peut prendre jusqu’à une minute avant l’apparition des premiers mots)'
           : 'Le modèle rédige… (le premier lancement peut prendre une minute, le temps de charger le modèle)',
     };
     providedForPartial = provided;
     let finishReason: 'stop' | 'length' | 'unknown' = 'unknown';
+    let usage: Usage | undefined;
+    let firstWordMs: number | undefined;
     const retryDelays = deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
     const live = cloze ? new ClozeStream(cloze.max) : null;
     for (let attempt = 0; ; attempt++) {
@@ -379,11 +492,13 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
           if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
           if (event.type === 'delta') {
             if (!event.text) continue;
+            if (firstWordMs === undefined) firstWordMs = elapsedSince(startedAt);
             text += event.text;
             const shown = live ? live.push(event.text) : event.text;
             if (shown) yield { type: 'delta', text: shown };
           } else {
             finishReason = event.finishReason;
+            usage = event.usage;
           }
         }
         break;
@@ -410,8 +525,8 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     // ─── Finalisation : citations vérifiées ──────────────────────────────
     yield { type: 'status', stage: 'finalizing', message: 'Vérification des citations…' };
     // Un document entier entouré de « ```markdown » serait vu comme du code : aucune citation vérifiée.
-    const shaped = shape(unwrapDocumentFence(text, { complete: finishReason === 'stop' }));
-    const final = finalizeCitations(shaped, provided, { allowedUrls, flagUncited: true });
+    const shaped = typeset(shape(unwrapDocumentFence(text, { complete: finishReason === 'stop' })));
+    const final = finalizeCitations(shaped, provided, { allowedUrls, allowedExactUrls, flagUncited: true });
     const truncated = finishReason !== 'stop';
     if (finishReason === 'length') {
       yield { type: 'warning', code: 'GENERATION_TRUNCATED', message: 'Le contenu a atteint la longueur maximale et peut être incomplet.' };
@@ -420,6 +535,12 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     } else {
       // Réponse complète : nombre d'exercices, de questions, de séances… comparé à la demande (jamais bloquant).
       for (const message of checkOutputStructure(req, shaped)) yield { type: 'warning', code: 'CONTENT_CHECK', message };
+      // Correction annotée : les passages cités entre guillemets doivent figurer tels quels dans le travail fourni.
+      if (req.type === 'corrige' && req.texteEleve) {
+        for (const message of checkCopyQuotes(shaped, req.texteEleve, [req.sujet, req.consignes, req.objectifs, ...sources.map(s => s.text)])) {
+          yield { type: 'warning', code: 'CONTENT_CHECK', message };
+        }
+      }
     }
 
     // ─── Sauvegarde ──────────────────────────────────────────────────────
@@ -451,14 +572,17 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
       }
     }
 
+    const metrics = buildMetrics(provider, {
+      totalMs: elapsedSince(startedAt), prepMs, waitModelMs, preloadLoadMs, firstWordMs, usage, promptTokens, outputBudgetTokens: outputTokens,
+    });
     yield {
-      type: 'done', content: final.content, sources: final.used, truncated, internetUsed, saved, id, model: provider.model,
+      type: 'done', content: final.content, sources: final.used, truncated, internetUsed, saved, id, model: provider.model, metrics,
       ...(!deps.save && deps.includeRecord ? { record } : {}),
     };
   } catch (err) {
     const e = signal?.aborted ? new MagistraError('GENERATION_ABORTED') : toMagistraError(err);
     // Le texte déjà produit n'est jamais rendu brut : ses citations sont vérifiées comme en fin normale.
-    const partial = text.trim() ? finalizeCitations(shape(unwrapDocumentFence(text)), providedForPartial, { allowedUrls }).content : undefined;
+    const partial = text.trim() ? finalizeCitations(typeset(shape(unwrapDocumentFence(text))), providedForPartial, { allowedUrls, allowedExactUrls }).content : undefined;
     yield { type: 'error', code: e.code, message: e.message, retryable: e.retryable, ...(partial ? { partial } : {}) };
   }
 }

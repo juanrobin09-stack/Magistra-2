@@ -399,8 +399,14 @@ async function endOfOperationElsewhere(scope: 'engine' | 'model', end: 'ready' |
   return true;
 }
 
+/** La série en cours est-elle une reprise automatique au lancement (sans nouveau clic de l'enseignant) ? */
+let runIsResume = false;
+
 function stopActivation(error: MagistraError): void {
-  // La demande reste mémorisée : l'activation reprendra au prochain lancement (souvent une coupure réseau).
+  // Premier essai (clic de l'enseignant) : la demande reste mémorisée, l'activation reprendra UNE fois au prochain
+  // lancement (souvent une coupure réseau). Échec d'une reprise automatique : la demande est retirée, sinon le même
+  // téléchargement (plusieurs Go) serait relancé à chaque ouverture sans nouveau clic ; la carte propose « Reprendre ».
+  if (runIsResume) void rememberActivation(false);
   setActivation({ state: 'error', error });
 }
 
@@ -423,6 +429,7 @@ async function markActivationCancelled(): Promise<void> {
 async function runActivation(resumed: boolean, options: ActivationOptions = {}): Promise<void> {
   activationCancelled = false;
   let worked = false;
+  runIsResume = resumed;
   update(s => ({ activation: { ...s.activation, state: 'running', step: null, resumed, error: undefined } }));
   try {
     let status = await refreshAfterAction();

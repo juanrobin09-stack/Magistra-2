@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import DashboardPage from '@/pages/DashboardPage';
 import { RuntimeContext } from '@/lib/runtime/context';
+import { getSujetSuggestions } from '@shared/suggestions';
 import type { TeacherProfile } from '@shared/types';
 import { button, cleanup, click, fakeRuntime, flush, makeRecord, MemoryStore, PROFILE_COLLEGE, render } from './helpers';
 
@@ -55,9 +56,28 @@ describe('Tableau de bord', () => {
     expect(text).toContain('TD / Exercices');
     expect(text).toContain('Examen');
     expect(text).toContain('Syllabus');
-    expect(text).toContain('Le multiplicateur keynésien');
+    // Quatre idées de la classe (tirées au hasard parmi toutes celles de L2 en économie), pas davantage.
+    const all = getSujetSuggestions('economie', 'licence_2');
+    expect(all.length).toBeGreaterThanOrEqual(4);
+    const ideas = Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href^="/app/generate?sujet="]'));
+    expect(ideas).toHaveLength(4);
+    expect(new Set(ideas.map(a => a.querySelector('p')?.textContent)).size).toBe(4);
+    for (const a of ideas) expect(all).toContain(a.querySelector('p')?.textContent);
     expect(text).not.toMatch(/180\+|Barèmes officiels/);
     expect(container.querySelector('a[href="/onboarding?edit=1"]')).not.toBeNull();
+  });
+
+  it('« Autres idées » propose 4 autres idées de la classe, sans répéter les précédentes', async () => {
+    const profile: TeacherProfile = { displayName: '', etablissement: '', cycle: 'college', niveaux: ['4eme'], matierePrincipale: 'mathematiques' };
+    const { container } = await mount(new MemoryStore(), profile);
+    const shown = () => Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href^="/app/generate?sujet="]')).map(a => a.querySelector('p')?.textContent ?? '');
+    const first = shown();
+    expect(first).toHaveLength(4);
+    await click(button(container, /Autres idées/));
+    const second = shown();
+    expect(second).toHaveLength(4);
+    expect(second.filter(s => first.includes(s))).toEqual([]);
+    expect(button(container, /Autres idées/)).not.toBeNull();
   });
 
   it('erreur de chargement : message visible et « Réessayer » fonctionnel', async () => {

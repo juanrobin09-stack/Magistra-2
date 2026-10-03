@@ -31,6 +31,16 @@ jobs:
         run: npm test
       - name: Build web
         run: npx vite build
+      # Le site public (Vercel) est une vitrine : sa construction (vercel.json : npm run build:site) et sa vérification
+      # (aucune application, aucun secret, en-têtes) sont contrôlées à chaque envoi.
+      - name: Build du site vitrine
+        run: npm run build:site
+      - name: Vérification du site vitrine
+        run: npm run verify:site
+      # « npm test » passe avant la construction du site : ses contrôles sur dist-site/ (page réelle dans la politique de
+      # sécurité du contenu de vercel.json) sont donc rejoués ici, une fois le site construit.
+      - name: Politique de sécurité du site construit
+        run: npx vitest run tests/server/deploy.test.ts tests/site/siteBuild.test.ts
       - name: Build serveur autonome
         run: npm run build:server
       - name: Audit des dépendances de production
@@ -59,7 +69,10 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npx vite build
+      - run: npm run build:site
+      # « web » : l'interface en démonstration (dist/) ; « site » : le site vitrine construit (dist-site/).
       - run: npm run test:e2e -- --project=web
+      - run: npm run test:e2e -- --project=site
 
   electron:
     name: Electron (démarrage réel + E2E local avec Ollama simulé + connecteur local)
@@ -121,7 +134,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Mêmes informations légales et même profil d'auteur que release.yml (variables de dépôt, publiques par nature) :
+      # l'installateur essayé ici affiche les pages légales de l'éditeur et le lien « Magistra, créé par Juan Robin »,
+      # comme la version publiée.
       - run: npx vite build
+        env:
+          VITE_LEGAL_PUBLISHER: ${{ vars.VITE_LEGAL_PUBLISHER }}
+          VITE_LEGAL_DIRECTOR: ${{ vars.VITE_LEGAL_DIRECTOR }}
+          VITE_LEGAL_ADDRESS: ${{ vars.VITE_LEGAL_ADDRESS }}
+          VITE_LEGAL_CONTACT: ${{ vars.VITE_LEGAL_CONTACT }}
+          VITE_AUTHOR_PROFILE_URL: ${{ vars.VITE_AUTHOR_PROFILE_URL }}
       - run: node scripts/build-electron.mjs
       # Depuis les sources (`electron .`) : l'application empaquetée ignore --smoke-test et les variables
       # MAGISTRA_* (electron/devOptions.ts), aucune exception n'est prévue pour elle.
@@ -133,6 +155,11 @@ jobs:
         run: npx electron-builder --win nsis zip --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      # Le paquet n'est jamais lancé (voir plus haut) : on lit donc son résultat final. Fusibles d'Electron,
+      # intégrité d'app.asar, fichiers indispensables (main, preload, index.html), ni node_modules ni secret serveur.
+      # Lecture seule des fichiers de release/win-unpacked (@electron/fuses et @electron/asar, déjà installés).
+      - name: Inspection du paquet (fusibles, intégrité et contenu de l'asar)
+        run: node scripts/verify-package.mjs
       - name: Installateur à essayer
         uses: actions/upload-artifact@v4
         with:

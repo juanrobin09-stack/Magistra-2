@@ -20,11 +20,12 @@ import {
 } from '../shared/ai/presets.js';
 import { DEFAULT_RETRY_DELAYS_MS } from '../shared/pipeline.js';
 import type { ResearchConfig } from '../shared/research/types.js';
+import { SITE_ORIGIN } from '../shared/site.js';
 import type { AINotice, ProviderInfo } from '../shared/types.js';
 import { parseWebhookSecret } from './clerkWebhook.js';
 import { REQUEST_LIMITS } from '../shared/validation.js';
 import { normalizeTimeZone } from './time.js';
-import { DEFAULT_RELEASES_REPO, parseReleasesRepo } from './windowsRelease.js';
+import { loadWindowsReleaseSettings } from './windowsRelease.js';
 
 export type Env = Record<string, string | undefined>;
 
@@ -403,17 +404,18 @@ function loadResearch(env: Env, problems: string[]): ResearchConfig {
   if (rawSearx && !searxngUrl) problems.push('SEARXNG_URL doit être une adresse http(s) valide : recherche web désactivée.');
   const mailto = clean(env.CROSSREF_MAILTO);
   const validMailto = mailto && /^[^\s@<>()]{1,64}@[^\s@<>()]{1,190}\.[a-z]{2,}$/i.test(mailto) ? mailto : undefined;
-  if (mailto && !validMailto) problems.push('CROSSREF_MAILTO doit être une adresse électronique valide : ignorée.');
+  if (mailto && !validMailto) problems.push('CROSSREF_MAILTO (adresse de contact transmise à Crossref et OpenAlex) doit être une adresse électronique valide : ignorée.');
   return {
     academic: boolVar(env, 'RESEARCH_ACADEMIC', true, problems),
     wikipedia: boolVar(env, 'RESEARCH_WIKIPEDIA', true, problems),
+    trustedOnly: boolVar(env, 'RESEARCH_TRUSTED_ONLY', true, problems),
     searxngUrl,
     crossrefMailto: validMailto,
     timeoutMs: intVar(env, 'RESEARCH_TIMEOUT_MS', DEFAULTS.researchTimeoutMs, 1_000, 60_000, problems),
   };
 }
 
-function loadClerk(env: Env, problems: string[]): ClerkConfig | null {
+function loadClerk(env: Env, problems: string[], production: boolean): ClerkConfig | null {
   const secretKey = clean(env.CLERK_SECRET_KEY);
   // Clé PEM : les hébergeurs stockent souvent les retours à la ligne sous la forme « \n ».
   const jwtKey = clean(env.CLERK_JWT_KEY)?.replace(/\\n/g, '\n');
@@ -425,6 +427,11 @@ function loadClerk(env: Env, problems: string[]): ClerkConfig | null {
     ?.split(/[\s,]+/)
     .map(p => p.trim().replace(/\/+$/, ''))
     .filter(Boolean);
+  // Sans origines autorisées, Clerk ne contrôle pas l'origine (azp) des jetons : simple avertissement, aucune valeur
+  // par défaut déduite (elle pourrait bloquer des enseignants : domaine personnalisé, préproduction) et le serveur démarre.
+  if (production && !(parties && parties.length)) {
+    problems.push(`CLERK_AUTHORIZED_PARTIES est vide : l'origine (azp) des jetons de session n'est pas vérifiée. Renseignez les origines du site (ex. ${SITE_ORIGIN}).`);
+  }
   return { secretKey, jwtKey, authorizedParties: parties && parties.length ? parties : undefined };
 }
 
@@ -492,23 +499,10 @@ function loadStore(env: Env, problems: string[]): { store: ServerConfig['store']
   return { store: 'supabase', storeExplicit: false };
 }
 
-// Jetons GitHub (ghp_…, github_pat_…, ghs_…) : lettres, chiffres et « _ » uniquement. Toute autre valeur (retour à la
-// ligne, espace…) est refusée sans jamais être recopiée dans un journal.
-const GITHUB_TOKEN_RE = /^[A-Za-z0-9_]{20,255}$/;
-
 function loadReleases(env: Env, problems: string[]): ReleasesConfig {
-  const rawRepo = clean(env.MAGISTRA_RELEASES_REPO);
-  let repo = DEFAULT_RELEASES_REPO;
-  if (rawRepo) {
-    const parsed = parseReleasesRepo(rawRepo);
-    if (parsed) repo = parsed;
-    else problems.push(`MAGISTRA_RELEASES_REPO doit être de la forme « propriétaire/dépôt » (dépôt GitHub) : dépôt officiel (${DEFAULT_RELEASES_REPO}) utilisé.`);
-  }
-  const rawToken = clean(env.GITHUB_TOKEN);
-  if (rawToken && !GITHUB_TOKEN_RE.test(rawToken)) {
-    problems.push('GITHUB_TOKEN invalide (lettres, chiffres et « _ » attendus) : ignoré, l’API GitHub est interrogée sans jeton.');
-  }
-  return { repo, ...(rawToken && GITHUB_TOKEN_RE.test(rawToken) ? { token: rawToken } : {}) };
+  const { settings, problems: found } = loadWindowsReleaseSettings(env);
+  problems.push(...found);
+  return settings;
 }
 
 /** Texte court et sans caractère de contrôle (contact affiché aux enseignants). */
@@ -535,7 +529,7 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): ServerCon
   if (tzRaw && !normalizeTimeZone(tzRaw)) problems.push('DEFAULT_TIMEZONE inconnu : Europe/Paris utilisé.');
   const ai = loadAI(env, problems, defaultTimeZone);
   const research = loadResearch(env, problems);
-  const clerk = loadClerk(env, problems);
+  const clerk = loadClerk(env, problems, env.NODE_ENV === 'production' || env.VERCEL === '1');
   const clerkWebhookKey = loadClerkWebhook(env, clerk, problems);
   const { store, storeExplicit } = loadStore(env, problems);
   const supabase = store === 'supabase' ? loadSupabase(env, problems) : null;

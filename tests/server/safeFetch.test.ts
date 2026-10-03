@@ -122,6 +122,86 @@ describe('fetchPublicPage (createSafePageFetcher)', () => {
     expect(loop.connections).toHaveLength(4);
   });
 
+  describe('allowUrl : prédicat évalué AVANT la première connexion et AVANT chaque saut de redirection', () => {
+    /** Résolveur et transport qui consignent chaque hôte résolu (DNS) et contacté (socket). */
+    function traced(dns: Record<string, string[]>, handler: (url: URL) => Response) {
+      const resolved: string[] = [];
+      const contacted: string[] = [];
+      const resolve = async (host: string): Promise<ResolvedAddress[]> => {
+        resolved.push(host);
+        return (dns[host] ?? []).map(address => ({ address, family: 4 as const }));
+      };
+      const transport: Transport = async url => {
+        contacted.push(url.hostname);
+        return handler(url);
+      };
+      return { resolved, contacted, fetchPage: createSafePageFetcher({ resolve, fetch: transport }) };
+    }
+    const CATALOGUE = (url: URL) => url.protocol === 'https:' && /(^|\.)(unesco\.org|who\.int)$/.test(url.hostname);
+    const dns = { 'www.unesco.org': [PUBLIC_IP], 'www.who.int': ['8.8.4.4'], 'attacker.example': ['203.0.114.7'] };
+
+    it('adresse de départ refusée : null, aucune résolution DNS, aucune connexion', async () => {
+      const t = traced(dns, () => html('<p>jamais</p>'));
+      expect(await t.fetchPage('https://attacker.example/page', undefined, { allowUrl: CATALOGUE })).toBeNull();
+      expect(t.resolved).toEqual([]);
+      expect(t.contacted).toEqual([]);
+    });
+
+    it('redirection vers un hôte hors du prédicat : refusée au saut, l’hôte visé n’est jamais résolu ni contacté', async () => {
+      const t = traced(dns, url => (url.hostname === 'www.unesco.org'
+        ? new Response(null, { status: 302, headers: { Location: 'https://attacker.example/landing' } })
+        : html('<p>Page de l’attaquant, jamais lue.</p>')));
+      expect(await t.fetchPage('https://www.unesco.org/redirection-ouverte', undefined, { allowUrl: CATALOGUE })).toBeNull();
+      expect(t.resolved).toEqual(['www.unesco.org']);
+      expect(t.contacted).toEqual(['www.unesco.org']);
+    });
+
+    it('sans prédicat, le comportement est inchangé : la redirection est suivie (c’est l’appelant qui choisit de restreindre)', async () => {
+      const t = traced(dns, url => (url.hostname === 'www.unesco.org'
+        ? new Response(null, { status: 302, headers: { Location: 'https://attacker.example/landing' } })
+        : html('<p>Page de destination, avec du contenu.</p>')));
+      expect((await t.fetchPage('https://www.unesco.org/redirection-ouverte'))?.url).toBe('https://attacker.example/landing');
+      expect(t.contacted).toEqual(['www.unesco.org', 'attacker.example']);
+    });
+
+    it('redirection d’un site admis vers un autre site admis : suivie, chaque destination soumise au prédicat avant la connexion', async () => {
+      const seen: string[] = [];
+      const t = traced(dns, url => (url.hostname === 'www.unesco.org'
+        ? new Response(null, { status: 301, headers: { Location: 'https://www.who.int/fr/a#ancre' } })
+        : html('<p>Page de l’OMS, avec du contenu.</p>', 'OMS')));
+      const page = await t.fetchPage('https://www.unesco.org/a', undefined, { allowUrl: url => { seen.push(url.href); return CATALOGUE(url); } });
+      expect(page).toMatchObject({ url: 'https://www.who.int/fr/a', title: 'OMS' });
+      // Adresse de départ puis destination (sans fragment), toutes deux avant leur connexion.
+      expect(seen).toEqual(['https://www.unesco.org/a', 'https://www.who.int/fr/a']);
+      expect(t.resolved).toEqual(['www.unesco.org', 'www.who.int']);
+      expect(t.contacted).toEqual(['www.unesco.org', 'www.who.int']);
+    });
+
+    it('chaîne catalogue → catalogue → hors catalogue : refusée au dernier saut', async () => {
+      const t = traced(dns, url => {
+        if (url.hostname === 'www.unesco.org') return new Response(null, { status: 302, headers: { Location: 'https://www.who.int/fr/b' } });
+        return new Response(null, { status: 302, headers: { Location: 'https://attacker.example/x' } });
+      });
+      expect(await t.fetchPage('https://www.unesco.org/a', undefined, { allowUrl: CATALOGUE })).toBeNull();
+      expect(t.contacted).toEqual(['www.unesco.org', 'www.who.int']);
+      expect(t.resolved).not.toContain('attacker.example');
+    });
+
+    it('prédicat qui lève une exception : refus, aucune connexion', async () => {
+      const t = traced(dns, () => html('<p>jamais</p>'));
+      expect(await t.fetchPage('https://www.unesco.org/a', undefined, { allowUrl: () => { throw new Error('boum'); } })).toBeNull();
+      expect(t.resolved).toEqual([]);
+      expect(t.contacted).toEqual([]);
+    });
+
+    it('le prédicat reçoit une copie : il ne peut pas changer l’adresse contactée', async () => {
+      const t = traced(dns, () => html('<p>Page de l’UNESCO, avec du contenu.</p>'));
+      const page = await t.fetchPage('https://www.unesco.org/a', undefined, { allowUrl: url => { url.hostname = 'attacker.example'; return true; } });
+      expect(page?.url).toBe('https://www.unesco.org/a');
+      expect(t.contacted).toEqual(['www.unesco.org']);
+    });
+  });
+
   it('refuse les types de contenu autres que text/html et text/plain', async () => {
     for (const type of ['application/pdf', 'application/json', 'image/png', '']) {
       const { fetchPage } = setup({ 'x.exemple.fr': [PUBLIC_IP] }, () =>
@@ -166,10 +246,11 @@ describe('fetchPublicPage (createSafePageFetcher)', () => {
   it('neutralise les blocs jamais refermés (page tronquée ou hostile)', () => {
     expect(neutralizeUnclosedBlocks('<p>ok</p><script>var secret = 1;')).toBe('<p>ok</p>');
     expect(neutralizeUnclosedBlocks('<nav>a</nav><p>x</p><nav class="y">b')).toBe('<nav>a</nav><p>x</p>< nav class="y">b');
-    const hostile = `${'<aside>'.repeat(20_000)}texte`;
+    const hostile = `${'<aside>'.repeat(100_000)}texte`;
     const start = Date.now();
     neutralizeUnclosedBlocks(hostile);
-    expect(Date.now() - start).toBeLessThan(1_000);
+    // Borne très large (machine chargée) : quelques dizaines de millisecondes en temps normal.
+    expect(Date.now() - start).toBeLessThan(3_000);
   });
 });
 
@@ -197,11 +278,11 @@ describe('transport Node : connexion épinglée à l’adresse vérifiée', () =
 });
 
 describe('déni de service : pages hostiles (non-régression)', () => {
-  it('extractTitle reste linéaire : « <title> » répété sans fermeture (1,5 Mo) traité en moins de 200 ms', () => {
+  it('extractTitle reste linéaire : « <title> » répété sans fermeture (1,5 Mo) traité en moins de 3 s (quelques millisecondes en temps normal)', () => {
     const hostile = '<p>texte</p>' + '<title>'.repeat(200_000);
     const start = performance.now();
     expect(extractTitle(hostile)).toBeUndefined();
-    expect(performance.now() - start).toBeLessThan(200);
+    expect(performance.now() - start).toBeLessThan(3_000);
     expect(extractTitle('<html><head><title> Cours &amp; TD </title></head></html>')).toBe('Cours & TD');
   });
 

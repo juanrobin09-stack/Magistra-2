@@ -1,17 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, FileText, GraduationCap, Heart, Sparkles, Star, TrendingUp, Zap } from 'lucide-react';
-import { ALL_TYPES, getMatiereEmoji, getMatiereLabel, getSujetSuggestions, getToolInfo, type TypeContenu } from '@shared/catalog';
+import { ArrowRight, FileText, GraduationCap, Heart, Shuffle, Sparkles, Star, TrendingUp, Zap } from 'lucide-react';
+import { ALL_TYPES, getMatiereEmoji, getMatiereLabel, getToolInfo, type TypeContenu } from '@shared/catalog';
 import { getNiveauLabel, isNiveau, isSuperieur } from '@shared/levels';
+import { getSujetSuggestions } from '@shared/suggestions';
 import type { GenerationSummary, UsageStats } from '@shared/types';
 import { useLocalEngine } from '@/lib/localConnector/controller';
 import { useRuntime } from '@/lib/runtime/context';
+import { useSuggestionDeck } from '@/lib/useSuggestionDeck';
 import ErrorBanner from '@/components/ui/ErrorBanner';
 import ActivateAICard from '@/components/ai/ActivateAICard';
 import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import LocalEngineCard from '@/components/localEngine/LocalEngineCard';
 import { errorMessage, niveauLabelFor, timeAgo, toolLabelFor } from '@/components/history/logic';
 import { TOOL_ICONS, TOOL_STYLE } from '@/lib/toolIcons';
+import IconBadge from '@/components/IconBadge';
 import { useAppShell } from '@/components/layout/shell';
 
 type Loadable<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'error'; error: string };
@@ -104,7 +107,16 @@ export default function DashboardPage() {
   const superieur = niveau ? isSuperieur(niveau) : false;
   const quickTools = superieur ? QUICK_TOOLS_SUPERIEUR : QUICK_TOOLS_SCOLAIRE;
   const matiere = profile?.matierePrincipale;
-  const suggestions = matiere && niveau ? getSujetSuggestions(matiere, niveau).slice(0, 3) : [];
+  // Idées de sujets : 4 tirées une fois par classe et matière, renouvelables par « Autres idées ».
+  const allIdeas = useMemo(() => (matiere && niveau ? getSujetSuggestions(matiere, niveau) : []), [matiere, niveau]);
+  const ideas = useSuggestionDeck(allIdeas, 4, `${niveau ?? ''}|${matiere ?? ''}`);
+  const suggestions = ideas.shown;
+  // Nombre de renouvellements : annonce aux lecteurs d'écran, qui ne voient pas les idées changer (le focus reste sur le bouton).
+  const [shuffles, setShuffles] = useState(0);
+  const shuffleIdeas = () => {
+    ideas.shuffle();
+    setShuffles(n => n + 1);
+  };
 
   const displayName = profile?.displayName || user?.firstName || '';
   const dateStr = now.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -117,7 +129,8 @@ export default function DashboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl sm:text-4xl text-white mb-1.5 leading-tight" style={{ fontFamily: 'var(--font-display)' }}>
-            {greetingFor(now)}{displayName ? `, ${displayName}` : ''} <span aria-hidden="true">✨</span>
+            {greetingFor(now)}{displayName ? `, ${displayName}` : ''}{' '}
+            <Sparkles size={24} strokeWidth={1.7} className="inline-block align-middle text-accent" aria-hidden="true" />
           </h1>
           <p className="text-sm text-mg-300 first-letter:uppercase">{dateStr}</p>
         </div>
@@ -227,17 +240,14 @@ export default function DashboardPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {quickTools.map(type => {
                 const info = getToolInfo(type, niveau);
-                const Icon = TOOL_ICONS[type];
                 const style = TOOL_STYLE[type];
                 return (
                   <Link
                     key={type}
                     to={`/app/generate?type=${type}`}
-                    className="card p-4 hover:border-white/12 hover:-translate-y-0.5 group flex flex-col gap-3 transition-all duration-200"
+                    className="card p-4 hover:border-white/12 motion-safe:hover:-translate-y-0.5 group flex flex-col gap-3 transition-all duration-200"
                   >
-                    <div className={`w-9 h-9 rounded-xl ${style.iconBg} flex items-center justify-center group-hover:scale-110 transition-transform duration-200`}>
-                      <Icon size={17} className={style.iconColor} aria-hidden="true" />
-                    </div>
+                    <IconBadge icon={TOOL_ICONS[type]} size="sm" className={style.iconColor} />
                     <div>
                       <p className="text-sm font-semibold text-mg-100 group-hover:text-white transition-colors">{info.label}</p>
                       <p className="text-xs text-mg-300 mt-0.5">{info.description}</p>
@@ -251,11 +261,28 @@ export default function DashboardPage() {
           {/* Idées de sujets */}
           {matiere && suggestions.length > 0 && (
             <section aria-labelledby="ideas-title">
-              <h2 id="ideas-title" className="text-xs font-medium text-mg-200 uppercase tracking-wider mb-3">
-                Idées en {getMatiereLabel(matiere)}
-                {niveau ? ` · ${getNiveauLabel(niveau)}` : ''}
-              </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <h2 id="ideas-title" className="text-xs font-medium text-mg-200 uppercase tracking-wider">
+                  Idées en {getMatiereLabel(matiere)}
+                  {niveau ? ` · ${getNiveauLabel(niveau)}` : ''}
+                </h2>
+                {ideas.canShuffle && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={shuffleIdeas}
+                      title="Proposer d'autres idées de sujets"
+                      className="shrink-0 inline-flex items-center gap-1.5 text-xs text-accent hover:text-white transition-colors rounded focus-visible:outline-2 focus-visible:outline-accent"
+                    >
+                      <Shuffle size={12} aria-hidden="true" /> Autres idées
+                    </button>
+                    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                      {shuffles > 0 && <span key={shuffles}>{suggestions.length} nouvelles idées affichées</span>}
+                    </span>
+                  </>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
                 {suggestions.map(s => (
                   <Link
                     key={s}

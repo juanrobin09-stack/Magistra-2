@@ -7,9 +7,12 @@ import { tierForModel } from '@shared/ai/models';
 import { getMatiereEmoji, getMatiereLabel, isTypeContenu } from '@shared/catalog';
 import type { GenerationRecord } from '@shared/types';
 import MarkdownView from '@/components/MarkdownView';
+import SourceReliability from '@/components/generate/SourceReliability';
 import ErrorBanner from '@/components/ui/ErrorBanner';
 import { copyText, exportMarkdown, exportPdf, printDocument } from '@/lib/export';
-import { describeRecordParams, type ReusableRecord } from '@/lib/generation/reuse';
+import DevelopSessions from '@/components/generate/DevelopSessions';
+import { planOriginFromRecord } from '@/lib/generation/plan';
+import { describeRecordParams, isPlanFirst, type ReusableRecord } from '@/lib/generation/reuse';
 import { errorMessage, exportDocFor, formatDate, niveauLabelFor, toolLabelFor } from './logic';
 import type { RecordState } from './useGenerationRecord';
 
@@ -168,6 +171,7 @@ export default function GenerationDetail({
               )}
             </div>
           )}
+          <SourceReliability sources={record.sources ?? []} />
         </div>
 
         <div className="flex items-center gap-0.5 shrink-0 -ml-2 sm:ml-0" role="group" aria-label="Actions sur ce contenu">
@@ -257,6 +261,19 @@ export default function GenerationDetail({
           </button>
         </div>
         <MarkdownView content={content} className="max-w-3xl" />
+        {/* Plan seul (« Commencer par le plan ») : les séances à développer ; tableau illisible : rien. Jamais pour un exemple
+            pré-rédigé de la démonstration (son plan est fixe, sans rapport avec le sujet enregistré). */}
+        {isPlanFirst(record) && !isDemo && (
+          <div className="max-w-3xl">
+            <DevelopSessions
+              key={record.id}
+              content={content}
+              origin={planOriginFromRecord(record)}
+              requested={typeof record.params?.nombreSeances === 'number' ? record.params.nombreSeances : undefined}
+              planId={record.id}
+            />
+          </div>
+        )}
         <p className="text-xs text-mg-300 mt-8 pt-4 border-t border-white/5 max-w-3xl">
           {isDemo
             ? 'Exemple pré-rédigé de la démonstration : aucune IA n’a été utilisée.'

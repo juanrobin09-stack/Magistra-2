@@ -1,9 +1,9 @@
 // Configuration de l'IA : la clé API n'est JAMAIS renvoyée à la fenêtre ni écrite en clair.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, promises as fsp, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AIConfigStore, safeStorageCipher, type SecretCipher } from '../../electron/aiConfig.js';
 
 const SECRET = 'sk-univ-TRES-SECRET-0123456789';
@@ -24,7 +24,10 @@ beforeEach(() => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'magistra-aicfg-'));
   file = path.join(dir, 'ai-config.json');
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  rmSync(dir, { recursive: true, force: true });
+});
 
 describe('clé API d’un serveur distant', () => {
   it('est chiffrée sur le disque et jamais renvoyée (seulement hasApiKey)', async () => {
@@ -120,5 +123,126 @@ describe('niveau et fichier de configuration', () => {
     expect(safeStorageCipher({ ...base, getSelectedStorageBackend: () => 'gnome_libsecret' }, 'linux').isAvailable()).toBe(true);
     expect(safeStorageCipher(base, 'win32').isAvailable()).toBe(true);
     expect(safeStorageCipher({ ...base, isEncryptionAvailable: () => false }, 'win32').isAvailable()).toBe(false);
+  });
+});
+
+describe('lecture de la configuration', () => {
+  it('fichier illisible (EISDIR, comme EBUSY ou EPERM sous Windows) : réglages par défaut, jamais d’échec au démarrage, fichier intact', async () => {
+    // Un dossier à la place du fichier : la lecture échoue avec un code autre que ENOENT.
+    mkdirSync(file);
+    writeFileSync(path.join(file, 'x'), 'garde');
+    const store = new AIConfigStore(file, fakeCipher());
+    await expect(store.load()).resolves.toBeUndefined();
+    expect(store.get().mode).toBe('local');
+    expect(readFileSync(path.join(file, 'x'), 'utf8')).toBe('garde');
+  });
+});
+
+/** Lecture refusée (antivirus, droits) pour le fichier de configuration, tant que `state.denied` est vrai. */
+function denyConfigReads(state: { denied: boolean }, code = 'EBUSY') {
+  const real = fsp.readFile.bind(fsp);
+  return vi.spyOn(fsp, 'readFile').mockImplementation((async (target: unknown, ...rest: unknown[]) => {
+    if (state.denied && target === file) throw Object.assign(new Error(`${code}: fichier verrouillé`), { code });
+    return (real as (...a: unknown[]) => unknown)(target, ...rest);
+  }) as never);
+}
+
+describe('fichier existant illisible au démarrage : jamais écrasé en silence', () => {
+  const existing = {
+    version: 1,
+    mode: 'remote',
+    tier: 'qualite',
+    tierChosen: false,
+    customModel: 'qwen3:8b',
+    ollamaUrl: 'http://127.0.0.1:12345',
+    remote: { kind: 'openai-compatible', baseUrl: 'https://ia.univ.fr/v1', model: 'mistral-small', apiKeyEnc: fakeCipher().encrypt(SECRET) },
+  };
+
+  async function loadWhileLocked(state: { denied: boolean }): Promise<AIConfigStore> {
+    writeFileSync(file, JSON.stringify(existing));
+    const store = new AIConfigStore(file, fakeCipher());
+    await expect(store.load()).resolves.toBeUndefined();
+    // Les réglages par défaut servent en mémoire : l'application continue de fonctionner.
+    expect(store.get()).toMatchObject({ mode: 'local', tier: 'standard', tierChosen: false });
+    expect(state.denied).toBe(true);
+    return store;
+  }
+
+  it('redevenu lisible : update() adopte son contenu (serveur, clé chiffrée, modèle) au lieu des réglages par défaut', async () => {
+    const state = { denied: true };
+    denyConfigReads(state);
+    const store = await loadWhileLocked(state);
+    state.denied = false;
+    const pub = await store.update({ ollamaUrl: 'http://127.0.0.1:23456' });
+    expect(pub).toMatchObject({ mode: 'remote', customModel: 'qwen3:8b', ollamaUrl: 'http://127.0.0.1:23456', remote: { baseUrl: 'https://ia.univ.fr/v1', hasApiKey: true } });
+    const onDisk = JSON.parse(readFileSync(file, 'utf8'));
+    expect(onDisk).toMatchObject({ mode: 'remote', customModel: 'qwen3:8b', remote: existing.remote });
+    expect(store.getApiKey()).toBe(SECRET);
+  });
+
+  it('redevenu lisible : adoptInstalledTier() part de son contenu, sans perdre le serveur ni la clé', async () => {
+    const state = { denied: true };
+    denyConfigReads(state);
+    writeFileSync(file, JSON.stringify({ ...existing, mode: 'local', customModel: undefined }));
+    const store = new AIConfigStore(file, fakeCipher());
+    await store.load();
+    state.denied = false;
+    await expect(store.adoptInstalledTier('leger')).resolves.toBe(true);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ mode: 'local', tier: 'leger', tierChosen: false, ollamaUrl: 'http://127.0.0.1:12345', remote: existing.remote });
+  });
+
+  it('redevenu lisible avec un niveau choisi par l’enseignant : adoptInstalledTier() ne le remplace pas', async () => {
+    const state = { denied: true };
+    denyConfigReads(state);
+    writeFileSync(file, JSON.stringify({ ...existing, mode: 'local', customModel: undefined, tierChosen: true }));
+    const store = new AIConfigStore(file, fakeCipher());
+    await store.load();
+    state.denied = false;
+    await expect(store.adoptInstalledTier('leger')).resolves.toBe(false);
+    expect(JSON.parse(readFileSync(file, 'utf8')).tier).toBe('qualite');
+  });
+
+  it('toujours illisible à l’écriture : copie « .unreadable-<date> » de l’original, puis l’application continue avec les réglages par défaut', async () => {
+    const state = { denied: true };
+    denyConfigReads(state, 'EPERM');
+    const store = await loadWhileLocked(state);
+    await expect(store.adoptInstalledTier('leger')).resolves.toBe(true);
+    await expect(store.update({ ollamaUrl: 'http://127.0.0.1:23456' })).resolves.toMatchObject({ tier: 'leger', ollamaUrl: 'http://127.0.0.1:23456' });
+    const copies = readdirSync(dir).filter(n => n.startsWith('ai-config.json.unreadable-'));
+    expect(copies).toHaveLength(1);
+    expect(JSON.parse(readFileSync(path.join(dir, copies[0]), 'utf8'))).toEqual(existing);
+  });
+
+  it('illisible ET copie impossible : rien n’est écrit, le fichier reste intact ; une fois le verrou levé, son contenu est adopté', async () => {
+    const state = { denied: true };
+    denyConfigReads(state, 'EPERM');
+    const copyFile = vi.spyOn(fsp, 'copyFile').mockRejectedValue(Object.assign(new Error('EPERM: fichier verrouillé'), { code: 'EPERM' }));
+    const store = await loadWhileLocked(state);
+    await expect(store.adoptInstalledTier('leger')).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    await expect(store.update({ ollamaUrl: 'http://127.0.0.1:23456' })).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    await expect(store.update({ tier: 'leger' })).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(existing);
+    expect(readdirSync(dir)).toEqual(['ai-config.json']);
+    state.denied = false;
+    copyFile.mockRestore();
+    await expect(store.update({ ollamaUrl: 'http://127.0.0.1:23456' })).resolves.toMatchObject({ mode: 'remote', customModel: 'qwen3:8b', remote: { hasApiKey: true } });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ mode: 'remote', remote: existing.remote });
+    expect(readdirSync(dir)).toEqual(['ai-config.json']);
+  });
+
+  it('des écritures simultanées ne font qu’une copie', async () => {
+    const state = { denied: true };
+    denyConfigReads(state);
+    const store = await loadWhileLocked(state);
+    await Promise.all([store.update({ ollamaUrl: 'http://127.0.0.1:23456' }), store.update({ tier: 'leger' }), store.adoptInstalledTier('leger')]);
+    expect(readdirSync(dir).filter(n => n.startsWith('ai-config.json.unreadable-'))).toHaveLength(1);
+  });
+
+  it('une lecture réussie au démarrage ne laisse aucune copie', async () => {
+    writeFileSync(file, JSON.stringify(existing));
+    const store = new AIConfigStore(file, fakeCipher());
+    await store.load();
+    await store.update({ ollamaUrl: 'http://127.0.0.1:23456' });
+    expect(readdirSync(dir)).toEqual(['ai-config.json']);
   });
 });

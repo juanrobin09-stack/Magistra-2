@@ -7,7 +7,10 @@ import { RuntimeContext } from '@/lib/runtime/context';
 import type { RuntimeValue } from '@/lib/runtime/types';
 import { button, cleanup, click, fakeRuntime, flush, MemoryStore, render, typeInto } from './helpers';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+});
 
 async function mount(runtime: RuntimeValue, url = '/onboarding') {
   return render(

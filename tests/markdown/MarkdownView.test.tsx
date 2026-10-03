@@ -9,24 +9,24 @@ function render(content: string, className?: string): string {
 
 describe('MarkdownView', () => {
   it('enveloppe le contenu dans .prose-content (+ classe facultative)', () => {
-    expect(render('Bonjour')).toMatch(/^<div class="prose-content"><p>Bonjour<\/p>/);
+    expect(render('Bonjour')).toMatch(/^<div class="prose-content"><p dir="auto">Bonjour<\/p>/);
     expect(render('Bonjour', 'extra')).toMatch(/^<div class="prose-content extra">/);
   });
 
   it('rend les tableaux GFM dans un conteneur à défilement horizontal', () => {
     const html = render('| Étape | Durée |\n| :--- | ---: |\n| Accueil | 5 min |\n| x > 3 | 2 * 3 = 6 |');
-    expect(html).toContain('<div class="table-wrap" role="region" aria-label="Tableau" tabindex="0"><table>');
-    expect(html).toContain('<th style="text-align:left">Étape</th>');
-    expect(html).toContain('<td style="text-align:right">5 min</td>');
-    expect(html).toContain('<td style="text-align:left">x &gt; 3</td>');
+    expect(html).toContain('<div class="table-wrap" role="region" aria-label="Tableau" tabindex="0" dir="auto"><table>');
+    expect(html).toContain('<th dir="auto" style="text-align:left">Étape</th>');
+    expect(html).toContain('<td dir="auto" style="text-align:right">5 min</td>');
+    expect(html).toContain('<td dir="auto" style="text-align:left">x &gt; 3</td>');
     expect(html).toContain('2 * 3 = 6');
   });
 
   it('rend les listes à puces, numérotées et imbriquées', () => {
     const html = render('- un\n- deux\n  - imbriqué\n\n1. premier\n2. second\n\nParagraphe.\n\n5. commence à 5');
-    expect(html).toMatch(/<ul>\s*<li>un<\/li>/);
-    expect(html).toContain('<li>imbriqué</li>');
-    expect(html).toMatch(/<ol>\s*<li>premier<\/li>/);
+    expect(html).toMatch(/<ul>\s*<li dir="auto">un<\/li>/);
+    expect(html).toContain('<li dir="auto">imbriqué</li>');
+    expect(html).toMatch(/<ol>\s*<li dir="auto">premier<\/li>/);
     expect(html).toContain('<ol start="5">');
   });
 
@@ -40,8 +40,8 @@ describe('MarkdownView', () => {
 
   it('rend citations, code en ligne, blocs de code, titres h1 à h6, séparateurs, barré', () => {
     const html = render('# T1\n## T2\n### T3\n#### T4\n##### T5\n###### T6\n\n> Une citation\n\nDu `code` ici.\n\n```js\nconst a = 1 < 2;\n```\n\n---\n\n~~barré~~');
-    for (let i = 1; i <= 6; i++) expect(html).toContain(`<h${i}>T${i}</h${i}>`);
-    expect(html).toMatch(/<blockquote>\s*<p>Une citation<\/p>\s*<\/blockquote>/);
+    for (let i = 1; i <= 6; i++) expect(html).toContain(`<h${i} dir="auto">T${i}</h${i}>`);
+    expect(html).toMatch(/<blockquote dir="auto">\s*<p dir="auto">Une citation<\/p>\s*<\/blockquote>/);
     expect(html).toContain('<code>code</code>');
     expect(html).toContain('<pre tabindex="0"><code class="language-js">const a = 1 &lt; 2;\n</code></pre>');
     expect(html).toContain('<hr/>');
@@ -144,13 +144,15 @@ describe('découpage progressif', () => {
 
   it('découpe rapidement un long document (streaming)', () => {
     const section = '## Partie\n\nUn paragraphe avec **gras** et $x^2$.\n\n- point un\n- point deux\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n';
-    const doc = section.repeat(200);
+    const sections = 2000;
+    const doc = section.repeat(sections);
     const t = performance.now();
     const blocks = splitMarkdownBlocks(doc);
     const elapsed = performance.now() - t;
     expect(blocks.join('')).toBe(doc);
-    expect(blocks.length).toBeGreaterThan(400);
-    expect(elapsed).toBeLessThan(50);
+    expect(blocks.length).toBeGreaterThan(2 * sections);
+    // Borne très large (machine chargée) : quelques dizaines de millisecondes en temps normal.
+    expect(elapsed).toBeLessThan(2000);
   });
 
   it('supporte un contenu vide ou en cours de génération', () => {

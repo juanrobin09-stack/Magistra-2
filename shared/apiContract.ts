@@ -23,7 +23,7 @@
 // Erreurs : statut HTTP + { error: { code: ErrorCode, message: string, retryable: boolean } }
 
 import type { ErrorCode } from './errors.js';
-import type { AINotice, GenerationRecordDraft, ProviderInfo } from './types.js';
+import type { AINotice, GenerationRecordDraft, ProviderInfo, ResearchCapabilities } from './types.js';
 
 export interface ServerStatus {
   ai: {
@@ -41,7 +41,7 @@ export interface ServerStatus {
     /** Prestataire qui reçoit les textes : nom, tiers ou non, pays, conservation, entraînement. Jamais d'URL ni de clé. */
     providerInfo?: ProviderInfo;
   };
-  research: { academic: boolean; web: boolean; institutional: boolean; wikipedia: boolean };
+  research: ResearchCapabilities;
   maxDocumentChars: number;
 }
 

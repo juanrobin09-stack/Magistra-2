@@ -6,14 +6,15 @@ import type {
 import type { Bareme, BesoinParticulier, TonRedaction, TypeEvaluation } from './formats.js';
 import type { NiveauScolaire } from './levels.js';
 import type { ErrorCode } from './errors.js';
+import type { EnginePlacement, EngineTimings } from './ai/timings.js';
 
 export type ResearchMode = 'documents' | 'academic' | 'internet' | 'documents_internet';
 
 export const RESEARCH_MODES: { value: ResearchMode; label: string; description: string; network: boolean }[] = [
   { value: 'documents', label: 'Mes documents uniquement', description: 'Aucune recherche externe. Fonctionne hors ligne.', network: false },
-  { value: 'academic', label: 'Sources académiques', description: 'Vos documents + publications scientifiques (HAL, Crossref).', network: true },
-  { value: 'internet', label: 'Internet', description: 'Sources en ligne vérifiables, sans vos documents.', network: true },
-  { value: 'documents_internet', label: 'Documents + Internet', description: 'Vos documents en priorité, complétés par des sources en ligne.', network: true },
+  { value: 'academic', label: 'Sources académiques', description: 'Vos documents + publications scientifiques (HAL, Crossref, OpenAlex) et sites officiels vérifiés.', network: true },
+  { value: 'internet', label: 'Internet', description: 'Sites officiels vérifiés et Wikipédia, sans vos documents.', network: true },
+  { value: 'documents_internet', label: 'Documents + Internet', description: 'Vos documents en priorité, complétés par les sites officiels vérifiés et Wikipédia.', network: true },
 ];
 
 export function isResearchMode(value: unknown): value is ResearchMode {
@@ -69,7 +70,7 @@ export interface DocumentPassage {
 
 // ─── Sources et citations ───────────────────────────────────────────────────
 
-export type SourceKind = 'document' | 'hal' | 'crossref' | 'web' | 'institutional' | 'wikipedia';
+export type SourceKind = 'document' | 'hal' | 'crossref' | 'openalex' | 'web' | 'institutional' | 'wikipedia';
 
 export interface SourceRef {
   /** Numéro de citation [n], attribué par le code — jamais par le modèle. */
@@ -114,6 +115,11 @@ export interface GenerationRequest {
   sansCorrige?: boolean;
   nombreExercices?: number;
   nombreSeances?: number;
+  /**
+   * Vrai : séquence en deux temps. Cette demande ne produit que le PLAN (tableau des séances, sans leur déroulé) ; l'enseignant
+   * choisit ensuite les séances à développer, une par une (outil « fiche de préparation »). Absent : séquence complète.
+   */
+  planSeulement?: boolean;
   ton?: TonRedaction;
   besoins?: BesoinParticulier[];
   researchMode: ResearchMode;
@@ -177,6 +183,34 @@ export interface UsageStats {
 
 export type GenerationStage = 'research' | 'context' | 'loading_model' | 'generating' | 'finalizing';
 
+/**
+ * Mesures d'une génération, jointes à l'évènement « done » (champ facultatif) pour la fenêtre « Détails de vitesse ».
+ * Uniquement des nombres et des énumérations : jamais le prompt, le contenu, un nom de fichier ni une requête. Affichées
+ * pour la session seulement : jamais enregistrées dans l'historique.
+ */
+export interface GenerationMetrics {
+  /** Durée de la génération, de la demande validée à la fin (sauvegarde comprise). */
+  totalMs: number;
+  /** Préparation : sélection des passages de documents et recherche de sources. */
+  prepMs?: number;
+  /** Attente de la fin du chargement du modèle (préchargement), après la préparation. */
+  waitModelMs?: number;
+  /** Durée de chargement du modèle annoncée par le moteur pour le préchargement (souvent recouverte par la préparation). */
+  preloadLoadMs?: number;
+  /** Délai avant l'apparition du premier mot, depuis le début de la génération. */
+  firstWordMs?: number;
+  /** Durées mesurées par le moteur (moteur de l'ordinateur seulement). */
+  engine?: EngineTimings;
+  /** Carte graphique ou processeur (moteur de l'ordinateur seulement). */
+  placement?: EnginePlacement;
+  /** Taille de contexte demandée au moteur (num_ctx). */
+  contextTokens: number;
+  /** Jetons du prompt final (estimation). */
+  promptTokens?: number;
+  /** Plafond de jetons demandé pour la réponse. */
+  outputBudgetTokens?: number;
+}
+
 export type GenerationEvent =
   | { type: 'status'; stage: GenerationStage; message: string }
   | { type: 'sources'; sources: SourceRef[]; internetUsed: boolean }
@@ -191,6 +225,8 @@ export type GenerationEvent =
       saved: boolean;
       id?: string;
       model: string;
+      /** Mesures de vitesse (facultatif : une application plus ancienne ne l'envoie pas, un client plus ancien l'ignore). */
+      metrics?: GenerationMetrics;
       /**
        * Génération à enregistrer par le site (connecteur local uniquement : PipelineDeps.includeRecord). Retiré par le
        * client du site avant l'affichage ; jamais présent quand `saved` est vrai.
@@ -238,11 +274,25 @@ export interface ProviderInfo {
   privacyUrl?: string;
 }
 
+/**
+ * Sources de recherche interrogeables. `trustedCatalogue` (facultatif) : vrai pour une version qui s'appuie sur le catalogue
+ * des sites officiels vérifiés (shared/research/trusted.ts). Absent d'une version plus ancienne, dont `institutional`
+ * et `web` ne disent rien du catalogue : elle interroge seulement Éduscol, education.gouv.fr et gouv.fr, et le web général
+ * sans filtre ; l'interface n'annonce alors que cela.
+ */
+export interface ResearchCapabilities {
+  academic: boolean;
+  web: boolean;
+  institutional: boolean;
+  wikipedia: boolean;
+  trustedCatalogue?: boolean;
+}
+
 export interface Capabilities {
   /** Taille maximale (caractères) des extraits de documents envoyés au modèle. */
   maxDocumentChars: number;
   /** Sources réellement interrogeables (Wikipédia peut être désactivé dans les réglages ou sur le serveur). */
-  research: { academic: boolean; web: boolean; institutional: boolean; wikipedia: boolean };
+  research: ResearchCapabilities;
   privacy: PrivacyInfo;
   engineLabel: string;
   ready: boolean;

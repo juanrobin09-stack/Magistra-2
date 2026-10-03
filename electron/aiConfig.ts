@@ -6,11 +6,12 @@
 // - Une clé est liée à l'origine du serveur : changer d'adresse de serveur sans ressaisir la clé l'efface
 //   (elle ne peut jamais être envoyée à un autre serveur que celui pour lequel elle a été saisie).
 
+import { promises as fsp } from 'node:fs';
 import { CUSTOM_OLLAMA_MODEL_CONTEXT, DEFAULT_TIER, getTier, type TierId } from '../shared/ai/models.js';
 import { DEFAULT_OLLAMA_URL } from '../shared/ai/ollama.js';
 import { MagistraError } from '../shared/errors.js';
 import type { AIConfigPublic, AIConfigUpdate } from '../shared/ipc.js';
-import { readJsonFile, writeJsonAtomic } from './jsonFile.js';
+import { corruptStamp, readJsonFile, writeJsonAtomic } from './jsonFile.js';
 import { isLoopbackHost, originOf } from './security.js';
 import { isHttpUrl, isTierId, isValidModelName } from './validate.js';
 
@@ -102,6 +103,9 @@ export class AIConfigStore {
   private readonly defaults: StoredAIConfig;
   private config: StoredAIConfig;
   private existed = false;
+  /** Vrai tant qu'un fichier existant n'a pas pu être lu : il ne doit pas être écrasé par les réglages par défaut. */
+  private unreadable = false;
+  private recovery: Promise<void> | null = null;
 
   constructor(file: string, cipher: SecretCipher, options: { ollamaUrl?: string } = {}) {
     this.file = file;
@@ -117,10 +121,56 @@ export class AIConfigStore {
   }
 
   async load(): Promise<void> {
-    const result = await readJsonFile(this.file, raw => parseStored(raw, this.defaults));
+    let result: Awaited<ReturnType<typeof readJsonFile<StoredAIConfig>>>;
+    try {
+      result = await readJsonFile(this.file, raw => parseStored(raw, this.defaults));
+    } catch (err) {
+      // Fichier verrouillé ou refusé (antivirus, droits : EBUSY, EPERM…) : jamais d'échec au démarrage ; réglages par
+      // défaut en mémoire. Le fichier n'est pas touché ici ; avant la première écriture, il est relu ou sauvegardé.
+      console.warn(`[magistra] Configuration IA impossible à lire (${(err as NodeJS.ErrnoException).code ?? 'erreur'}) : réglages par défaut pour cette session.`);
+      this.existed = true;
+      this.unreadable = true;
+      this.config = { ...this.defaults };
+      return;
+    }
     if (result.status === 'corrupt') console.warn(`[magistra] Configuration IA illisible mise de côté : ${result.movedTo ?? this.file}`);
     this.existed = result.status === 'ok';
     this.config = result.status === 'ok' ? result.value : { ...this.defaults };
+  }
+
+  /**
+   * Avant d'écrire par-dessus un fichier que le démarrage n'a pas pu lire : on le relit (redevenu lisible, son contenu
+   * est adopté au lieu des réglages par défaut) ; sinon on en garde une copie « .unreadable-<date> », au mieux.
+   */
+  private settleUnreadable(): Promise<void> {
+    if (!this.unreadable) return Promise.resolve();
+    this.recovery ??= this.recoverUnreadable().finally(() => {
+      this.recovery = null;
+    });
+    return this.recovery;
+  }
+
+  private async recoverUnreadable(): Promise<void> {
+    let result: Awaited<ReturnType<typeof readJsonFile<StoredAIConfig>>> | undefined;
+    try {
+      result = await readJsonFile(this.file, raw => parseStored(raw, this.defaults));
+    } catch {
+      result = undefined;
+    }
+    if (result?.status === 'ok') {
+      this.config = result.value;
+      this.existed = true;
+    } else if (result?.status !== 'missing' && !(result?.status === 'corrupt' && result.movedTo)) {
+      // Ni relu, ni mis de côté : sans copie de l'original, rien n'est écrit (le fichier reste, l'enseignant peut réessayer).
+      const copy = `${this.file}.unreadable-${corruptStamp()}`;
+      try {
+        await fsp.copyFile(this.file, copy);
+        console.warn(`[magistra] Configuration IA illisible conservée avant d'être remplacée : ${copy}`);
+      } catch (err) {
+        throw new MagistraError('STORAGE_ERROR', "Impossible d'enregistrer la configuration de l'IA.", { cause: err });
+      }
+    }
+    this.unreadable = false;
   }
 
   /** Vrai tant qu'aucune configuration n'a été enregistrée (premier démarrage). */
@@ -194,6 +244,7 @@ export class AIConfigStore {
    * un autre niveau ensuite, et un niveau qu'il a lui-même choisi n'est jamais remplacé.
    */
   async adoptInstalledTier(tier: TierId): Promise<boolean> {
+    await this.settleUnreadable();
     const c = this.config;
     if (c.tierChosen || c.customModel || c.mode !== 'local' || c.tier === tier) return false;
     await this.persist({ ...c, tier });
@@ -201,6 +252,7 @@ export class AIConfigStore {
   }
 
   async update(update: AIConfigUpdate): Promise<AIConfigPublic> {
+    await this.settleUnreadable();
     const next = this.get();
     if (update.tier) {
       next.tier = update.tier;

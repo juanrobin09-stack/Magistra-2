@@ -32,7 +32,7 @@ const RETRY_MS = 60_000;
 /** Demande d'accord montrée à l'enseignant (boîte native de l'application). */
 export interface ConsentRequest {
   origin: string;
-  /** Site affiché (« magistra-2.vercel.app »). */
+  /** Site affiché (« www.mag-istra.fr », « magistra-2.vercel.app »). */
   site: string;
   message: string;
   detail: string;

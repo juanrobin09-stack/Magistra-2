@@ -14,8 +14,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './mainModule.mjs';
 
 const BLOCKING = new Set(['high', 'critical']);
 /** Outils de construction de l'application Windows : signalés, jamais bloquants. */
@@ -63,8 +62,7 @@ export function evaluate(report) {
   return { failures, warnings };
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
-if (isDirectRun) {
+if (isMainModule(import.meta.url)) {
   let result;
   try {
     result = evaluate(loadReport(process.argv.slice(2)));

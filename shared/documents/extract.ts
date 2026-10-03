@@ -6,8 +6,11 @@ import JSZip from 'jszip';
 import { MagistraError } from '../errors.js';
 import { validateLocatorLabels } from '../validation.js';
 import type { DocKind, Locator } from '../types.js';
+import { createNumbering, type DocxNumbering } from './numbering.js';
+import { readingOrder } from './pdfColumns.js';
 import { cleanExtractedText, cleanPlainText, decodeText, decodeXmlEntities } from './text.js';
 import { DOCUMENT_LIMITS, type DocumentUnit, type ExtractedDocument } from './types.js';
+import { xmlBlocks, xmlOpenTags } from './xmlScan.js';
 
 // ─── Interface minimale de pdf.js (injectée : build navigateur ou Node selon l'environnement) ──
 
@@ -117,19 +120,31 @@ function countChars(units: DocumentUnit[]): number {
 
 // ─── PDF ──────────────────────────────────────────────────────────────────
 
-function pdfItemsToText(items: unknown[]): string {
+function pdfFontSize(item: PdfTextItem): number {
+  return Math.abs(item.transform?.[0] ?? item.height ?? 10) || 10;
+}
+
+export function pdfItemsToText(items: unknown[]): string {
   let out = '';
   let prev: PdfTextItem | null = null;
   for (const raw of items) {
     const item = raw as PdfTextItem;
     if (typeof item.str !== 'string') continue;
-    if (prev && !prev.hasEOL && item.str && !/\s$/.test(out) && !/^\s/.test(item.str)) {
+    if (prev && !prev.hasEOL && item.str && !/\s/.test(out.charAt(out.length - 1)) && !/^\s/.test(item.str)) {
       const prevEnd = (prev.transform?.[4] ?? 0) + (prev.width ?? 0);
       const x = item.transform?.[4] ?? prevEnd;
-      const sameLine = Math.abs((item.transform?.[5] ?? 0) - (prev.transform?.[5] ?? 0)) < 1;
-      const fontSize = Math.abs(item.transform?.[0] ?? item.height ?? 10) || 10;
-      if (!sameLine) out += '\n';
-      else if (x - prevEnd > fontSize * 0.15) out += ' ';
+      const dy = Math.abs((item.transform?.[5] ?? 0) - (prev.transform?.[5] ?? 0));
+      const fontSize = pdfFontSize(item);
+      const prevSize = pdfFontSize(prev);
+      const big = Math.max(fontSize, prevSize);
+      const gap = x - prevEnd;
+      // Exposant ou indice (CO₂, mc², 10⁸) : corps nettement plus petit, légèrement décalé, et qui prolonge
+      // la ligne horizontalement. Une vraie ligne suivante revient à gauche ou est décalée d'au moins une demi-ligne.
+      const script = Math.min(fontSize, prevSize) < big * 0.85 && dy < big * 0.5 && gap >= -big * 0.25;
+      if (dy >= 1 && !script) out += '\n';
+      else if (script && gap < big * 0.3) {
+        // collé : « CO2 », « mc2 »
+      } else if (gap > fontSize * 0.15) out += ' ';
     }
     out += item.str;
     if (item.hasEOL) out += '\n';
@@ -138,11 +153,71 @@ function pdfItemsToText(items: unknown[]): string {
   return out;
 }
 
+/** Numéro de page imprimé : « Page 3 », « p. 3 » (avec ou sans total : « Page 3/12 », « Page 3 sur 12 »). */
+const PAGE_LABEL = /\b(pages?\s*|p\.\s*)\d+/g;
+/** « 3/12 » seul au bout d'une ligne, après un séparateur : « Lycée Jean Moulin - SVT - 3/12 ». Une fraction dans une phrase n'en est pas un. */
+const TRAILING_PAGE_FRACTION = /(\s[-–—|·•]\s)\d+(?=\s*\/\s*\d+$)/;
+
+/**
+ * Clé d'une ligne qui ressemble à un en-tête ou un pied de page courant (« Lycée Jean Moulin - SVT - Chapitre 3 »,
+ * « Année 2025-2026 - Page 3/6 »), ou null. Volontairement étroit : il faut un numéro de page, un séparateur
+ * (« - », « | ») ou une année ; sinon la ligne (« Exercice 3 », en-tête de tableau…) n'est jamais considérée.
+ * Seul le numéro de page est neutralisé, jamais les autres chiffres : « Exercice 2 - Calculer 2/5 + 3/10 » reste
+ * propre à sa page (énoncé), « Page 3/6 » et « Page 4/6 » donnent la même clé.
+ */
+function runningLineKey(line: string): string | null {
+  const t = line.trim();
+  if (t.length < 12 || t.length > 120) return null;
+  const spaced = t.replace(/\s+/g, ' ').toLowerCase();
+  const key = spaced.replace(PAGE_LABEL, '$1#').replace(TRAILING_PAGE_FRACTION, '$1#');
+  const separator = /\s[-–—|·•]\s|©|\b(?:19|20)\d\d\b/.test(t);
+  return separator || key !== spaced ? key : null;
+}
+
+const MIN_PAGES_FOR_RUNNING_LINES = 4;
+
+/**
+ * Retire des pages l'en-tête / le pied de page répétés (première ou dernière ligne identique sur au moins 60 % des
+ * pages, 4 pages minimum). La première occurrence est conservée : le modèle voit l'établissement et le titre une
+ * fois, sans qu'ils diluent la recherche dans chaque page. Une page n'est jamais vidée.
+ */
+export function stripRunningLines(pages: string[]): string[] {
+  if (pages.length < MIN_PAGES_FOR_RUNNING_LINES) return pages;
+  const lines = pages.map(p => p.split('\n'));
+  const counts = new Map<string, number>();
+  for (const l of lines) {
+    if (l.length < 2) continue;
+    for (const key of new Set([runningLineKey(l[0]), runningLineKey(l[l.length - 1])])) {
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  const threshold = Math.max(3, Math.ceil(pages.length * 0.6));
+  const repeated = new Set([...counts].filter(([, n]) => n >= threshold).map(([key]) => key));
+  if (repeated.size === 0) return pages;
+  const seen = new Set<string>();
+  const drop = (key: string | null): boolean => {
+    if (!key || !repeated.has(key)) return false;
+    if (!seen.has(key)) {
+      seen.add(key);
+      return false;
+    }
+    return true;
+  };
+  return pages.map((page, i) => {
+    const l = lines[i];
+    if (l.length < 2) return page;
+    const dropFirst = drop(runningLineKey(l[0]));
+    const dropLast = drop(runningLineKey(l[l.length - 1]));
+    const kept = l.slice(dropFirst ? 1 : 0, dropLast ? l.length - 1 : l.length).join('\n').trim();
+    return kept || page;
+  });
+}
+
 export async function extractPdf(input: ExtractInput, pdfjs: PdfJsLike): Promise<ExtractedDocument> {
   // pdf.js peut transférer (détacher) le tampon : on lui passe une copie.
   const data = new Uint8Array(input.bytes);
   const pdf = await pdfjs.getDocument({ data, isEvalSupported: false, useSystemFonts: false, disableFontFace: true }).promise;
-  const units: DocumentUnit[] = [];
+  const pageTexts: { page: number; text: string }[] = [];
   const warnings: string[] = [];
   const pages = Math.min(pdf.numPages, DOCUMENT_LIMITS.maxPdfPages);
   if (pdf.numPages > pages) warnings.push(`Seules les ${pages} premières pages ont été analysées.`);
@@ -153,21 +228,36 @@ export async function extractPdf(input: ExtractInput, pdfjs: PdfJsLike): Promise
     for (let p = 1; p <= pages; p++) {
       const page = await pdf.getPage(p);
       const content = await page.getTextContent();
-      const text = cleanExtractedText(pdfItemsToText(content.items));
+      const text = cleanExtractedText(pdfItemsToText(readingOrder(content.items)));
       page.cleanup?.();
       if (!text) {
         emptyPages++;
         continue;
       }
-      const label = validateLocatorLabels({ start: labels?.[p - 1] ?? '', end: labels?.[p - 1] ?? '' });
-      const printed = label && label.start !== String(p) ? { labels: label } : {};
-      units.push({ locator: { type: 'pages', start: p, end: p, ...printed }, text });
+      pageTexts.push({ page: p, text });
     }
   } finally {
     await pdf.destroy?.();
   }
+  const rawChars = pageTexts.reduce((n, t) => n + t.text.length, 0);
+  // Une couche de texte réduite à des numéros de page ou à un filigrane n'est pas un document lisible.
+  if (pageTexts.length >= 3 && rawChars / pageTexts.length < 5) {
+    throw new MagistraError('DOCUMENT_SCANNED', `« ${input.name} » ne contient pas de texte sélectionnable (document scanné).`);
+  }
+  const cleaned = stripRunningLines(pageTexts.map(t => t.text));
+  const units: DocumentUnit[] = pageTexts.map(({ page: p }, i) => {
+    const label = validateLocatorLabels({ start: labels?.[p - 1] ?? '', end: labels?.[p - 1] ?? '' });
+    const printed = label && label.start !== String(p) ? { labels: label } : {};
+    return { locator: { type: 'pages' as const, start: p, end: p, ...printed }, text: cleaned[i] };
+  });
   if (emptyPages > 0 && units.length > 0) {
     warnings.push(`${emptyPages} page(s) sans texte sélectionnable (images ou scans) ont été ignorées.`);
+  }
+  if (pageTexts.length >= 3) {
+    const sparse = pageTexts.filter(t => t.text.length < 30).length;
+    if (rawChars / pageTexts.length < 40 || sparse / pageTexts.length > 0.5) {
+      warnings.push('Ce PDF contient très peu de texte sélectionnable : s’il s’agit d’un scan, utilisez un PDF avec texte ou une reconnaissance de caractères (OCR).');
+    }
   }
   return {
     id: input.id,
@@ -188,31 +278,68 @@ interface DocxParagraph {
 
 const HEADING_STYLE = /^(heading|titre|title|berschrift|kop)\s*(\d)?$/i;
 
+const XML_SPACE = /\s/;
+const DOCX_EMPTY_RUN = /<w:(?:tab|br|cr|noBreakHyphen)\s*\/>/y;
+
+/** Texte d'un bloc DOCX (balayage linéaire : un `<w:t>` jamais refermé ne fait pas reparcourir tout le reste). */
 function docxRunText(xml: string): string {
   let out = '';
-  const re = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:tab\s*\/>|<w:br\s*\/>|<w:cr\s*\/>|<w:noBreakHyphen\s*\/>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml))) {
-    if (m[1] !== undefined) out += decodeXmlEntities(m[1]);
-    else if (m[0].startsWith('<w:tab')) out += '\t';
-    else if (m[0].startsWith('<w:noBreakHyphen')) out += '-';
-    else out += '\n';
+  let unclosed = false;
+  let i = xml.indexOf('<w:');
+  while (i !== -1) {
+    const next = xml.charAt(i + 4);
+    if (xml.startsWith('<w:t', i) && (next === '>' || XML_SPACE.test(next))) {
+      // <w:t> ou <w:t xml:space="preserve"> : sans </w:t> plus loin, aucun <w:t> suivant ne peut se refermer.
+      if (!unclosed) {
+        const gt = xml.indexOf('>', i);
+        if (gt === -1) break;
+        const close = xml.indexOf('</w:t>', gt + 1);
+        if (close === -1) unclosed = true;
+        else {
+          out += decodeXmlEntities(xml.slice(gt + 1, close));
+          i = xml.indexOf('<w:', close + 6);
+          continue;
+        }
+      }
+    } else {
+      DOCX_EMPTY_RUN.lastIndex = i;
+      const m = DOCX_EMPTY_RUN.exec(xml);
+      if (m) {
+        if (m[0].startsWith('<w:tab')) out += '\t';
+        else if (m[0].startsWith('<w:noBreakHyphen')) out += '-';
+        else out += '\n';
+      }
+    }
+    i = xml.indexOf('<w:', i + 3);
   }
   return out;
 }
 
-export function parseDocxParagraphs(documentXml: string): DocxParagraph[] {
+const escapeXmlText = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** `numbering` : numérotation des listes du document (word/numbering.xml) ; sans elle, le texte des paragraphes est lu tel quel. */
+export function parseDocxParagraphs(documentXml: string, numbering?: DocxNumbering | null): DocxParagraph[] {
   // Les lignes de tableau deviennent un paragraphe « cellule | cellule | cellule ».
-  const flattened = documentXml.replace(/<w:tr[\s>][\s\S]*?<\/w:tr>/g, row => {
-    const cells = [...row.matchAll(/<w:tc[\s>][\s\S]*?<\/w:tc>/g)].map(c => docxRunText(c[0]).replace(/\s+/g, ' ').trim());
-    const escaped = cells.join(' | ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return `<w:p><w:r><w:t>${escaped}</w:t></w:r></w:p>`;
-  });
+  let flattened = '';
+  let pos = 0;
+  for (const row of xmlBlocks(documentXml, 'w:tr')) {
+    if (row.selfClosing) continue;
+    const cells: string[] = [];
+    for (const cell of xmlBlocks(documentXml, 'w:tc', row.innerStart, row.innerEnd)) {
+      cells.push(docxRunText(documentXml.slice(cell.start, cell.end)).replace(/\s+/g, ' ').trim());
+    }
+    flattened += `${documentXml.slice(pos, row.start)}<w:p><w:r><w:t>${escapeXmlText(cells.join(' | '))}</w:t></w:r></w:p>`;
+    pos = row.end;
+  }
+  flattened += documentXml.slice(pos);
   const paragraphs: DocxParagraph[] = [];
-  // Paragraphe vide auto-fermant (<w:p w:rsidR="…"/>) d'abord : sinon il avalerait le paragraphe suivant.
-  for (const m of flattened.matchAll(/<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)) {
-    const block = m[0];
+  // Les paragraphes vides auto-fermants (<w:p w:rsidR="…"/>) sont reconnus à part : ils n'avalent pas le suivant.
+  for (const m of xmlBlocks(flattened, 'w:p')) {
+    if (m.selfClosing) continue;
+    const block = flattened.slice(m.start, m.end);
     const text = docxRunText(block).replace(/[ \t]+/g, ' ').trim();
+    // Lu avant le test du texte vide : un élément de liste vide occupe quand même son numéro.
+    const marker = numbering?.prefix(block) ?? '';
     if (!text) continue;
     const style = /<w:pStyle\s+w:val="([^"]+)"/.exec(block)?.[1] ?? '';
     const outline = /<w:outlineLvl\s+w:val="(\d)"/.exec(block)?.[1];
@@ -220,7 +347,7 @@ export function parseDocxParagraphs(documentXml: string): DocxParagraph[] {
     const hm = HEADING_STYLE.exec(style.replace(/[-_]/g, ''));
     if (hm) headingLevel = hm[2] ? parseInt(hm[2], 10) : 1;
     else if (outline !== undefined) headingLevel = parseInt(outline, 10) + 1;
-    paragraphs.push({ text, headingLevel });
+    paragraphs.push({ text: marker + text, headingLevel });
   }
   return paragraphs;
 }
@@ -228,7 +355,9 @@ export function parseDocxParagraphs(documentXml: string): DocxParagraph[] {
 /** Regroupe des paragraphes en unités : sections sous titres, sinon blocs de paragraphes numérotés. */
 function paragraphsToUnits(paragraphs: DocxParagraph[]): { units: DocumentUnit[]; sections: number } {
   const units: DocumentUnit[] = [];
-  const hasHeadings = paragraphs.some(p => p.headingLevel !== undefined);
+  // Un seul style de titre (le « Titre » de Word, intertitres en gras manuel) ne structure rien : tout le document
+  // serait UNE section citée par le titre du fichier. Il en faut au moins deux ; sinon blocs de paragraphes.
+  const hasHeadings = paragraphs.filter(p => p.headingLevel !== undefined).length >= 2;
   if (!hasHeadings) {
     const BLOCK = 8;
     for (let i = 0; i < paragraphs.length; i += BLOCK) {
@@ -273,12 +402,130 @@ function paragraphsToUnits(paragraphs: DocxParagraph[]): { units: DocumentUnit[]
   return { units, sections: sectionIndex };
 }
 
-export async function extractDocx(input: ExtractInput): Promise<ExtractedDocument> {
+// ─── Zip (DOCX / PPTX) : lecture bornée ───────────────────────────────────
+
+/** Octets décompressés encore autorisés pour un fichier ; partagé par toutes les lectures de ce fichier. */
+interface ZipBudget {
+  name: string;
+  remaining: number;
+}
+
+const tooLargeUnzipped = (name: string) => new MagistraError('DOCUMENT_TOO_LARGE', `« ${name} » est trop volumineux une fois décompressé.`);
+const tooManyEntries = (name: string) => new MagistraError('DOCUMENT_TOO_LARGE', `« ${name} » contient trop d'éléments : fichier refusé.`);
+
+/**
+ * Nombre d'entrées de l'annuaire central du zip, compté sans rien décompresser (22 octets de lecture par
+ * en-tête) ; null si l'annuaire n'est pas lisible (JSZip décidera alors seul).
+ */
+function countZipEntries(bytes: Uint8Array, limit: number): number | null {
+  if (bytes.length < 22) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 0xffff); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd === -1) return null;
+  let offset = view.getUint32(eocd + 16, true);
+  if (offset === 0xffffffff) return null;
+  let count = 0;
+  while (offset + 46 <= bytes.length && view.getUint32(offset, true) === 0x02014b50) {
+    if (++count > limit) return count;
+    offset += 46 + view.getUint16(offset + 28, true) + view.getUint16(offset + 30, true) + view.getUint16(offset + 32, true);
+  }
+  return count;
+}
+
+async function openZip(input: ExtractInput): Promise<JSZip> {
+  // JSZip charge tout l'annuaire en mémoire (≈ 10 Ko par entrée) : on refuse avant, sur le compte de l'annuaire.
+  const declared = countZipEntries(input.bytes, DOCUMENT_LIMITS.maxZipEntries);
+  if (declared !== null && declared > DOCUMENT_LIMITS.maxZipEntries) throw tooManyEntries(input.name);
   const zip = await JSZip.loadAsync(input.bytes);
-  const file = zip.file('word/document.xml');
-  if (!file) throw new MagistraError('DOCUMENT_UNREADABLE', `« ${input.name} » n'est pas un document Word valide.`);
-  const xml = await file.async('string');
-  const paragraphs = parseDocxParagraphs(xml);
+  if (Object.keys(zip.files).length > DOCUMENT_LIMITS.maxZipEntries) throw tooManyEntries(input.name);
+  return zip;
+}
+
+interface ZipStream {
+  on(event: 'data', cb: (chunk: Uint8Array) => void): ZipStream;
+  on(event: 'error', cb: (err: unknown) => void): ZipStream;
+  on(event: 'end', cb: () => void): ZipStream;
+  pause(): ZipStream;
+  resume(): ZipStream;
+}
+
+/**
+ * Lit une entrée XML du zip en comptant les octets décompressés au fil de l'eau : la taille annoncée par le zip
+ * est modifiable par un fichier piégé, seul le compte réel fait foi. Au-delà de la limite par entrée ou du budget
+ * du fichier, la lecture s'arrête immédiatement (rien de plus n'est décompressé).
+ */
+async function readZipText(zip: JSZip, path: string, budget: ZipBudget): Promise<string | undefined> {
+  const entry = zip.file(path);
+  if (!entry) return undefined;
+  const cap = Math.min(DOCUMENT_LIMITS.maxXmlEntryBytes, budget.remaining);
+  const declared = (entry as unknown as { _data?: { uncompressedSize?: unknown } })._data?.uncompressedSize;
+  if (typeof declared === 'number' && declared > cap) throw tooLargeUnzipped(budget.name);
+  const bytes = await new Promise<Uint8Array>((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    let settled = false;
+    const stream = (entry as unknown as { internalStream(type: 'uint8array'): ZipStream }).internalStream('uint8array');
+    stream
+      .on('data', chunk => {
+        if (settled) return;
+        size += chunk.length;
+        if (size > cap) {
+          settled = true;
+          stream.pause();
+          reject(tooLargeUnzipped(budget.name));
+          return;
+        }
+        chunks.push(chunk);
+      })
+      .on('error', err => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      })
+      .on('end', () => {
+        if (settled) return;
+        settled = true;
+        const all = new Uint8Array(size);
+        let at = 0;
+        for (const c of chunks) {
+          all.set(c, at);
+          at += c.length;
+        }
+        resolve(all);
+      })
+      .resume();
+  });
+  budget.remaining -= bytes.length;
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+/**
+ * Partie annexe d'un DOCX (numérotation, styles) : indisponible si elle est absente ou illisible, le document se lit
+ * alors sans elle. Les bornes de décompression, elles, restent impératives.
+ */
+async function readOptionalZipText(zip: JSZip, path: string, budget: ZipBudget): Promise<string | undefined> {
+  try {
+    return await readZipText(zip, path, budget);
+  } catch (err) {
+    if (err instanceof MagistraError) throw err;
+    return undefined;
+  }
+}
+
+export async function extractDocx(input: ExtractInput): Promise<ExtractedDocument> {
+  const zip = await openZip(input);
+  const budget: ZipBudget = { name: input.name, remaining: DOCUMENT_LIMITS.maxUncompressedBytes };
+  const xml = await readZipText(zip, 'word/document.xml', budget);
+  if (xml === undefined) throw new MagistraError('DOCUMENT_UNREADABLE', `« ${input.name} » n'est pas un document Word valide.`);
+  const numberingXml = await readOptionalZipText(zip, 'word/numbering.xml', budget);
+  const stylesXml = numberingXml ? await readOptionalZipText(zip, 'word/styles.xml', budget) : undefined;
+  const paragraphs = parseDocxParagraphs(xml, numberingXml ? createNumbering(numberingXml, stylesXml) : null);
   const { units, sections } = paragraphsToUnits(paragraphs);
   return {
     id: input.id,
@@ -292,13 +539,41 @@ export async function extractDocx(input: ExtractInput): Promise<ExtractedDocumen
 
 // ─── PPTX ─────────────────────────────────────────────────────────────────
 
-function slideText(xml: string): string {
-  const paragraphs: string[] = [];
-  for (const m of xml.matchAll(/<a:p[\s>][\s\S]*?<\/a:p>/g)) {
-    const text = [...m[0].matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g)].map(t => decodeXmlEntities(t[1])).join('');
-    if (text.trim()) paragraphs.push(text.trim());
+/** Paragraphes `<a:p>` de `xml[from..to]` : un texte par ligne. */
+function paragraphLines(xml: string, from: number, to: number): string[] {
+  const lines: string[] = [];
+  for (const p of xmlBlocks(xml, 'a:p', from, to)) {
+    if (p.selfClosing) continue;
+    let text = '';
+    for (const t of xmlBlocks(xml, 'a:t', p.innerStart, p.innerEnd)) text += decodeXmlEntities(xml.slice(t.innerStart, t.innerEnd));
+    if (text.trim()) lines.push(text.trim());
   }
-  return paragraphs.join('\n');
+  return lines;
+}
+
+/**
+ * Texte d'une diapositive. Une ligne de tableau (`<a:tr>`) devient une ligne « cellule | cellule | cellule », comme
+ * dans les DOCX : sans cela chaque cellule serait une ligne et « 1/2 = 0,5 = 50 % » perdrait son lien.
+ */
+function slideText(xml: string): string {
+  const lines: string[] = [];
+  let pos = 0;
+  for (const table of xmlBlocks(xml, 'a:tbl')) {
+    if (table.selfClosing) continue;
+    lines.push(...paragraphLines(xml, pos, table.start));
+    for (const row of xmlBlocks(xml, 'a:tr', table.innerStart, table.innerEnd)) {
+      if (row.selfClosing) continue;
+      const cells: string[] = [];
+      // Une cellule fusionnée ou vide reste une cellule vide : les colonnes restent alignées.
+      for (const cell of xmlBlocks(xml, 'a:tc', row.innerStart, row.innerEnd)) {
+        cells.push(paragraphLines(xml, cell.innerStart, cell.innerEnd).join(' ').replace(/\s+/g, ' ').trim());
+      }
+      if (cells.some(Boolean)) lines.push(cells.join(' | '));
+    }
+    pos = table.end;
+  }
+  lines.push(...paragraphLines(xml, pos, xml.length));
+  return lines.join('\n');
 }
 
 function resolveRel(baseDir: string, target: string): string {
@@ -314,50 +589,57 @@ function resolveRel(baseDir: string, target: string): string {
 
 function parseRels(xml: string): Map<string, { target: string; type: string }> {
   const map = new Map<string, { target: string; type: string }>();
-  for (const m of xml.matchAll(/<Relationship\s[^>]*>/g)) {
-    const id = /\sId="([^"]+)"/.exec(m[0])?.[1];
-    const target = /\sTarget="([^"]+)"/.exec(m[0])?.[1];
-    const type = /\sType="([^"]+)"/.exec(m[0])?.[1] ?? '';
+  for (const tag of xmlOpenTags(xml, 'Relationship')) {
+    const id = /\sId="([^"]+)"/.exec(tag)?.[1];
+    const target = /\sTarget="([^"]+)"/.exec(tag)?.[1];
+    const type = /\sType="([^"]+)"/.exec(tag)?.[1] ?? '';
     if (id && target) map.set(id, { target: decodeXmlEntities(target), type });
   }
   return map;
 }
 
 export async function extractPptx(input: ExtractInput): Promise<ExtractedDocument> {
-  const zip = await JSZip.loadAsync(input.bytes);
-  const presentation = await zip.file('ppt/presentation.xml')?.async('string');
-  const presRels = await zip.file('ppt/_rels/presentation.xml.rels')?.async('string');
+  const zip = await openZip(input);
+  const budget: ZipBudget = { name: input.name, remaining: DOCUMENT_LIMITS.maxUncompressedBytes };
+  const presentation = await readZipText(zip, 'ppt/presentation.xml', budget);
+  const presRels = await readZipText(zip, 'ppt/_rels/presentation.xml.rels', budget);
   if (!presentation || !presRels) throw new MagistraError('DOCUMENT_UNREADABLE', `« ${input.name} » n'est pas une présentation PowerPoint valide.`);
 
   const rels = parseRels(presRels);
-  const slidePaths: string[] = [];
-  for (const m of presentation.matchAll(/<p:sldId\s[^>]*>/g)) {
-    const rid = /r:id="([^"]+)"/.exec(m[0])?.[1];
+  // Une diapositive citée plusieurs fois par la présentation n'est lue (et comptée) qu'une fois.
+  const slideSet = new Set<string>();
+  for (const tag of xmlOpenTags(presentation, 'p:sldId')) {
+    const rid = /r:id="([^"]+)"/.exec(tag)?.[1];
     const rel = rid ? rels.get(rid) : undefined;
-    if (rel) slidePaths.push(resolveRel('ppt', rel.target));
+    if (rel) slideSet.add(resolveRel('ppt', rel.target));
   }
+  let slidePaths = [...slideSet];
   if (slidePaths.length === 0) {
     // Repli : ordre numérique des fichiers de diapositives.
-    slidePaths.push(
-      ...Object.keys(zip.files)
-        .filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
-        .sort((a, b) => parseInt(a.replace(/\D/g, ''), 10) - parseInt(b.replace(/\D/g, ''), 10)),
-    );
+    slidePaths = Object.keys(zip.files)
+      .filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
+      .sort((a, b) => parseInt(a.replace(/\D/g, ''), 10) - parseInt(b.replace(/\D/g, ''), 10));
+  }
+  const totalSlides = slidePaths.length;
+  const warnings: string[] = [];
+  if (totalSlides > DOCUMENT_LIMITS.maxSlides) {
+    slidePaths = slidePaths.slice(0, DOCUMENT_LIMITS.maxSlides);
+    warnings.push(`Seules les ${DOCUMENT_LIMITS.maxSlides} premières diapositives ont été analysées.`);
   }
 
   const units: DocumentUnit[] = [];
   for (let i = 0; i < slidePaths.length; i++) {
     const path = slidePaths[i];
-    const xml = await zip.file(path)?.async('string');
+    const xml = await readZipText(zip, path, budget);
     if (!xml) continue;
     let text = slideText(xml);
     const dir = path.slice(0, path.lastIndexOf('/'));
     const relsPath = `${dir}/_rels/${path.slice(path.lastIndexOf('/') + 1)}.rels`;
-    const slideRelsXml = await zip.file(relsPath)?.async('string');
+    const slideRelsXml = await readZipText(zip, relsPath, budget);
     if (slideRelsXml) {
       const notesRel = [...parseRels(slideRelsXml).values()].find(r => r.type.endsWith('/notesSlide'));
       if (notesRel) {
-        const notesXml = await zip.file(resolveRel(dir, notesRel.target))?.async('string');
+        const notesXml = await readZipText(zip, resolveRel(dir, notesRel.target), budget);
         const notes = notesXml ? slideText(notesXml).replace(/^\d+$/gm, '').trim() : '';
         if (notes) text += `\nNotes de l'orateur : ${notes}`;
       }
@@ -370,8 +652,8 @@ export async function extractPptx(input: ExtractInput): Promise<ExtractedDocumen
     name: input.name,
     kind: 'pptx',
     units,
-    stats: { slides: slidePaths.length, chars: countChars(units) },
-    warnings: [],
+    stats: { slides: totalSlides, chars: countChars(units) },
+    warnings,
   };
 }
 
@@ -418,6 +700,25 @@ export function extractPlainText(input: ExtractInput): ExtractedDocument {
   };
 }
 
+/**
+ * Titre d'une ligne Markdown « ## Titre » (dièses de fermeture retirés : « # Titre ## » → « Titre »), ou null.
+ * Lecture linéaire, sans expression rationnelle à retour arrière : une ligne de 200 000 espaces ne fige rien.
+ */
+export function parseMarkdownHeading(line: string): string | null {
+  let level = 0;
+  while (level < 7 && line.charCodeAt(level) === 35) level++;
+  if (level === 0 || level > 6 || !XML_SPACE.test(line.charAt(level))) return null;
+  const text = line.trimEnd();
+  let start = level;
+  while (start < text.length && XML_SPACE.test(text.charAt(start))) start++;
+  if (start >= text.length) return null;
+  let title = text.slice(start);
+  let end = title.length;
+  while (end > 0 && title.charCodeAt(end - 1) === 35) end--;
+  if (end > 0 && end < title.length && XML_SPACE.test(title.charAt(end - 1))) title = title.slice(0, end).trimEnd();
+  return title;
+}
+
 export function extractMarkdown(input: ExtractInput): ExtractedDocument {
   const text = decodeText(input.bytes).replace(/\r\n?/g, '\n');
   const lines = splitLines(text);
@@ -434,15 +735,15 @@ export function extractMarkdown(input: ExtractInput): ExtractedDocument {
   };
   lines.forEach(line => {
     if (/^\s*(```|~~~)/.test(line)) inCode = !inCode;
-    const heading = !inCode ? /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line) : null;
-    if (heading) {
+    const heading = !inCode ? parseMarkdownHeading(line) : null;
+    if (heading !== null) {
       if (!current && preamble.length) {
         units.push(...linesToBlocks(preamble).map(u => ({ ...u, text: cleanPlainText(u.text) })).filter(u => u.text));
         preamble = [];
       }
       pushCurrent();
       section++;
-      current = { title: heading[2].slice(0, 160), startLine: 0, lines: [line], index: section };
+      current = { title: heading.slice(0, 160), startLine: 0, lines: [line], index: section };
     } else if (current) {
       current.lines.push(line);
     } else {

@@ -14,7 +14,9 @@
 //    est remplacée par la première du niveau) → demande refusée avant l'envoi quand sa version, relue à l'instant, est
 //    plus ancienne, avec les choix en cause et la version nécessaire ; version inconnue → envoyée, et le résultat est
 //    signalé si l'application ne les a pas appliqués (paramètres de done.record) ; une génération rédigée pour une
-//    autre matière (ou un autre outil, un autre niveau) n'est jamais enregistrée dans l'historique.
+//    autre matière (ou un autre outil, un autre niveau) n'est jamais enregistrée dans l'historique. « Plan d'abord »
+//    (planSeulement) a sa propre version minimale (PLAN_FIRST_MIN_APP_VERSION) : une application 2.0.3 applique les autres
+//    options mais l'ignorerait, l'enseignante attendrait la séquence complète avant d'en être avertie.
 
 import { compareVersions, parseVersion } from '@shared/ai/models';
 import { getMatiereLabel, resolveMatiere, type Matiere } from '@shared/catalog';
@@ -58,6 +60,13 @@ export const LOCAL_SAVE_FAILED_MESSAGE =
 export const TOOL_OPTIONS_MIN_APP_VERSION = '2.0.3';
 
 /**
+ * Première version de l'application Windows qui applique « plan d'abord » (planSeulement), livrée après les options des
+ * outils : une application 2.0.3 applique celles-ci mais ignore celle-là sans erreur. Version propre à cette option,
+ * vérifiée avant l'envoi comme TOOL_OPTIONS_MIN_APP_VERSION l'est pour les autres.
+ */
+export const PLAN_FIRST_MIN_APP_VERSION = '2.0.4';
+
+/**
  * Matières apparues avec TOOL_OPTIONS_MIN_APP_VERSION. Une application plus ancienne ne les connaît pas et les
  * remplace SANS ERREUR par la première matière du niveau (« Se repérer dans le temps et l'espace » → « Mobiliser le
  * langage — Oral ») : même vérification de version que les options des outils. Toute matière ajoutée au catalogue
@@ -71,6 +80,7 @@ const TOOL_OPTIONS = [
   ['sansCorrige', 'version élève seule'],
   ['nombreExercices', 'nombre demandé'],
   ['nombreSeances', 'nombre de séances'],
+  ['planSeulement', "plan d'abord"],
   ['typeEvaluation', "objectif de l'évaluation"],
   ['bareme', 'notation'],
   ['ton', 'ton'],
@@ -78,6 +88,25 @@ const TOOL_OPTIONS = [
 ] as const satisfies readonly (readonly [keyof GenerationRequest, string])[];
 
 export type ToolOption = (typeof TOOL_OPTIONS)[number][0];
+
+/** Version minimale propre à une option, quand elle est plus récente que TOOL_OPTIONS_MIN_APP_VERSION. */
+const OPTION_MIN_APP_VERSION: Readonly<Partial<Record<ToolOption, string>>> = { planSeulement: PLAN_FIRST_MIN_APP_VERSION };
+
+/** Première version de l'application Windows qui applique cette option. */
+export function toolOptionMinVersion(option: ToolOption): string {
+  return OPTION_MIN_APP_VERSION[option] ?? TOOL_OPTIONS_MIN_APP_VERSION;
+}
+
+/** Version à installer pour ces options (et cette matière récente) : la plus récente de leurs versions minimales. */
+function requiredVersion(options: readonly ToolOption[], matiere: Matiere | null = null): string {
+  const versions = [...options.map(toolOptionMinVersion), ...(matiere ? [TOOL_OPTIONS_MIN_APP_VERSION] : [])];
+  return versions.reduce((latest, version) => (compareVersions(version, latest) > 0 ? version : latest), TOOL_OPTIONS_MIN_APP_VERSION);
+}
+
+/** « Magistra pour Windows 2.0.4 ou plus récente » : la version à installer pour ces choix. */
+function installPhrase(options: readonly ToolOption[], matiere: Matiere | null = null): string {
+  return `Magistra pour Windows ${requiredVersion(options, matiere)} ou plus récente`;
+}
 
 /** Valeur renseignée (comme les paramètres enregistrés : ni vide, ni faux, ni liste vide). */
 function isSet(value: unknown): boolean {
@@ -114,7 +143,7 @@ export function localAppTooOldMessage(options: readonly ToolOption[], matiere: M
   const subject = parts.join(' et ');
   const verb = parts.length > 1 || (!single && !matiere) ? 'demandent' : 'demande';
   const alternative = matiere ? 'ou choisissez le serveur en ligne' : `ou générez sans ${single ? 'ce choix' : 'ces choix'}`;
-  return `${subject.charAt(0).toUpperCase()}${subject.slice(1)} ${verb} Magistra pour Windows ${TOOL_OPTIONS_MIN_APP_VERSION} ou plus récente, et l'application de cet ordinateur est plus ancienne : installez la dernière version ${UPDATE_WHERE}, puis réessayez, ${alternative}.`;
+  return `${subject.charAt(0).toUpperCase()}${subject.slice(1)} ${verb} ${installPhrase(options, matiere)}, et l'application de cet ordinateur est plus ancienne : installez la dernière version ${UPDATE_WHERE}, puis réessayez, ${alternative}.`;
 }
 
 /**
@@ -126,6 +155,29 @@ export function appSupportsToolOptions(version: string | undefined): boolean | n
   const parsed = parseVersion(version);
   if (!parsed) return null;
   return compareVersions(parsed.core.join('.'), TOOL_OPTIONS_MIN_APP_VERSION) >= 0;
+}
+
+/**
+ * L'application de cette version applique-t-elle cette option ? null : version absente ou illisible. Chaque option a sa
+ * version minimale (toolOptionMinVersion) : « plan d'abord » n'est pas appliqué par une application 2.0.3.
+ */
+export function appSupportsToolOption(version: string | undefined, option: ToolOption): boolean | null {
+  const parsed = parseVersion(version);
+  if (!parsed) return null;
+  return compareVersions(parsed.core.join('.'), toolOptionMinVersion(option)) >= 0;
+}
+
+/** Choix de la demande qu'une application de cette version ignorerait (jamais ceux qu'elle applique). */
+function unsupportedChoices(version: string | undefined, options: readonly ToolOption[], matiere: Matiere | null): AppTooOld | null {
+  const unsupported = options.filter(option => appSupportsToolOption(version, option) === false);
+  const unknownMatiere = matiere && appSupportsToolOptions(version) === false ? matiere : null;
+  return unsupported.length > 0 || unknownMatiere ? { options: unsupported, matiere: unknownMatiere } : null;
+}
+
+/** Ce qu'une application trop ancienne ne sait pas faire de la demande. */
+interface AppTooOld {
+  options: ToolOption[];
+  matiere: Matiere | null;
 }
 
 /**
@@ -144,7 +196,7 @@ export function ignoredToolOptionsMessage(ignored: readonly ToolOption[]): strin
   const names = optionNames(ignored);
   const choices = ignored.length > 1 ? `Vos choix (${names}) n'ont pas été appliqués` : `Votre choix (${names}) n'a pas été appliqué`;
   const answerKey = ignored.includes('sansCorrige') ? ' Le document peut contenir un corrigé : relisez-le avant de le distribuer.' : '';
-  return `${choices} : l'application Magistra de cet ordinateur est trop ancienne.${answerKey} Installez Magistra pour Windows ${TOOL_OPTIONS_MIN_APP_VERSION} ou plus récente ${UPDATE_WHERE}, puis relancez la génération.`;
+  return `${choices} : l'application Magistra de cet ordinateur est trop ancienne.${answerKey} Installez ${installPhrase(ignored)} ${UPDATE_WHERE}, puis relancez la génération.`;
 }
 
 /**
@@ -288,8 +340,9 @@ export class HybridGenerationClient implements GenerationClient {
     // que les autres mises à jour de l'application ; le message nomme les choix en cause et la version nécessaire.
     const options = requestedToolOptions(request);
     const matiere = recentMatiere(request);
-    if ((options.length > 0 || matiere) && (await this.localAppTooOld()) && !signal.aborted) {
-      const e = new MagistraError('CONNECTOR_UNREACHABLE', localAppTooOldMessage(options, matiere));
+    const tooOld = options.length > 0 || matiere ? await this.localAppTooOld(options, matiere) : null;
+    if (tooOld && !signal.aborted) {
+      const e = new MagistraError('CONNECTOR_UNREACHABLE', localAppTooOldMessage(tooOld.options, tooOld.matiere));
       onEvent({ type: 'error', code: e.code, message: e.message, retryable: e.retryable });
       return;
     }
@@ -323,16 +376,18 @@ export class HybridGenerationClient implements GenerationClient {
   }
 
   /**
-   * Application appairée d'une version qui ignorerait les options ou la matière demandées (appelé seulement quand la
-   * demande en contient) ? Une version ancienne ou inconnue est d'abord relue (application mise à jour ou ouverte
-   * depuis la dernière lecture ; la preuve obtenue sert aussi à l'envoi) : seule une version lue à l'instant, et plus
-   * ancienne, fait refuser. Inconnue après relecture : envoyée.
+   * Choix de la demande (options des outils, matière récente ; appelé seulement quand elle en contient) que l'application
+   * appairée ignorerait d'après sa version, ou null. Une version qui n'en applique pas tout est d'abord relue (application
+   * mise à jour ou ouverte depuis la dernière lecture ; la preuve obtenue sert aussi à l'envoi) : seule une version lue à
+   * l'instant, et plus ancienne, fait refuser — et le message ne nomme que les choix qu'elle ignore. Inconnue après
+   * relecture : envoyée.
    */
-  private async localAppTooOld(): Promise<boolean> {
-    if (appSupportsToolOptions(this.local.getSnapshot().appVersion) === true) return false;
+  private async localAppTooOld(options: readonly ToolOption[], matiere: Matiere | null): Promise<AppTooOld | null> {
+    const known = this.local.getSnapshot().appVersion;
+    if (parseVersion(known) && !unsupportedChoices(known, options, matiere)) return null;
     await this.local.refresh().catch(() => undefined);
     const state = this.local.getSnapshot();
-    return state.kind === 'connected' && appSupportsToolOptions(state.appVersion) === false;
+    return state.kind === 'connected' ? unsupportedChoices(state.appVersion, options, matiere) : null;
   }
 
   /**

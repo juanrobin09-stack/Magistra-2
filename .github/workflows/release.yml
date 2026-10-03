@@ -18,6 +18,12 @@
 # dépendances (npm ci depuis package-lock.json), aucun autre secret que GITHUB_TOKEN. La construction s'exécute avec
 # un jeton en lecture seule et sans identifiants git conservés ; seul le job « release », qui n'exécute aucun code
 # du dépôt ni aucune dépendance npm, reçoit « contents: write ».
+#
+# Surcharges facultatives des informations légales de l'éditeur (pages légales de l'installateur : éditeur, directeur de
+# la publication, adresse, contact ; valeurs par défaut dans src/lib/legal.ts) et du profil de l'auteur (lien de
+# « Magistra, créé par Juan Robin ») : variables de BUILD publiques par nature (VITE_LEGAL_*, VITE_AUTHOR_PROFILE_URL),
+# lues dans les VARIABLES du dépôt (GitHub → Settings → Secrets and variables → Actions → onglet Variables), jamais dans
+# les secrets. Une variable absente laisse la valeur par défaut. Voir le README, section « Mainteneurs ».
 
 name: Publication Windows
 
@@ -105,8 +111,25 @@ jobs:
 
       - run: npm ci
 
+      - name: Profil de l'auteur
+        # Variable absente : le lien « Magistra, créé par Juan Robin » mène au profil GitHub par défaut. Avertissement
+        # seulement, la publication reste possible.
+        shell: bash
+        env:
+          VITE_AUTHOR_PROFILE_URL: ${{ vars.VITE_AUTHOR_PROFILE_URL }}
+        run: |
+          if [ -z "$(printf '%s' "$VITE_AUTHOR_PROFILE_URL" | tr -d '[:space:]')" ]; then
+            echo "::warning title=Profil de l'auteur manquant::La variable de dépôt VITE_AUTHOR_PROFILE_URL n'est pas renseignée : le lien « Magistra, créé par Juan Robin » mènera au profil GitHub par défaut (GitHub → Settings → Secrets and variables → Actions → Variables)."
+          fi
+
       - name: Build web (vérification des types + Vite)
         run: npm run build
+        env:
+          VITE_LEGAL_PUBLISHER: ${{ vars.VITE_LEGAL_PUBLISHER }}
+          VITE_LEGAL_DIRECTOR: ${{ vars.VITE_LEGAL_DIRECTOR }}
+          VITE_LEGAL_ADDRESS: ${{ vars.VITE_LEGAL_ADDRESS }}
+          VITE_LEGAL_CONTACT: ${{ vars.VITE_LEGAL_CONTACT }}
+          VITE_AUTHOR_PROFILE_URL: ${{ vars.VITE_AUTHOR_PROFILE_URL }}
 
       - name: Build Electron (processus principal + preload)
         run: node scripts/build-electron.mjs
@@ -116,6 +139,11 @@ jobs:
         run: npx electron-builder --win nsis zip --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      # Même contrôle que la CI (fusibles Electron, intégrité et contenu de l'asar) sur le paquet qui va être publié :
+      # une version dont les protections ont régressé n'est jamais publiée. Lecture seule de release/win-unpacked.
+      - name: Inspection du paquet (fusibles, intégrité et contenu de l'asar)
+        run: node scripts/verify-package.mjs
 
       - name: Empreintes SHA-256
         shell: bash
@@ -178,9 +206,9 @@ jobs:
           L'archive \`Magistra-$VERSION-win-x64.zip\` contient la même application sans installateur.
 
           ### Première utilisation
-          1. Ouvrez l'installateur. **Windows SmartScreen** peut afficher « Windows a protégé votre ordinateur » :
-             l'installateur n'est pas encore signé numériquement (certificat payant). Cliquez sur
-             **Informations complémentaires**, puis **Exécuter quand même**, uniquement si le fichier vient de cette page.
+          1. Ouvrez l'installateur. **Windows SmartScreen** peut afficher un avertissement (« Windows a protégé votre
+             ordinateur ») : le fichier n'est pas encore signé numériquement. Vérifiez qu'il vient de cette page
+             (contrôle d'empreinte SHA-256 possible : voir plus bas), puis cliquez sur **Informations complémentaires** → **Exécuter quand même**.
           2. Magistra s'installe en quelques secondes, sans droits d'administrateur, et s'ouvre toute seule.
           3. Dans Magistra, **Activer l'IA** installe le moteur d'IA locale (Ollama, version 0.13.1 ou plus récente) et
              un modèle open weights adapté à l'ordinateur : un seul clic, taille du téléchargement annoncée avant, sans
