@@ -11,8 +11,14 @@
 //  - aucune version stable publiée : rien à télécharger, le bouton est inactif et le dit.
 
 import { useEffect, useState } from 'react';
-import { API_ROUTES, type WindowsReleaseInfo, type WindowsReleaseResponse } from '@shared/apiContract';
+import type { API_ROUTES, WindowsReleaseInfo, WindowsReleaseResponse } from '@shared/apiContract';
 import { safeExternalUrl, WINDOWS_DOWNLOAD_URL, WINDOWS_RELEASES_URL } from '@/lib/links';
+
+/**
+ * Route de la dernière version (celle de API_ROUTES, vérifiée par le type). Importer API_ROUTES lui-même embarquerait
+ * toutes les routes du serveur dans le site vitrine, qui n'en appelle qu'une.
+ */
+const WINDOWS_RELEASE_ROUTE: typeof API_ROUTES.windowsRelease = '/api/windows-release';
 
 /** Configuration requise affichée (celle du serveur si elle est lisible). */
 export const WINDOWS_REQUIREMENTS_TEXT = 'Windows 10 ou 11 (64 bits)';
@@ -114,7 +120,7 @@ export async function fetchWindowsRelease(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(API_ROUTES.windowsRelease, {
+    const res = await fetchImpl(WINDOWS_RELEASE_ROUTE, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       credentials: 'omit',

@@ -65,9 +65,6 @@ export const ENGINE_BUSY_TEXT = 'Une génération est en cours dans l’applicat
 
 // ─── Boutons ────────────────────────────────────────────────────────────────
 
-export const DOWNLOAD_WINDOWS_LABEL = 'Télécharger Magistra pour Windows';
-/** Aucune version stable publiée : le bouton de téléchargement est inactif (jamais un renvoi vers une page vide). */
-export const NOT_PUBLISHED_TEXT = 'Pas encore disponible : la première version de Magistra pour Windows n’est pas encore publiée. Le téléchargement s’activera ici dès sa publication.';
 export const DOWNLOAD_SHORT_LABEL = 'Télécharger Magistra';
 export const SEARCH_EXISTING_LABEL = "J'ai déjà Magistra : la rechercher";
 export const CONNECT_LABEL = 'Connecter Magistra locale';
@@ -80,7 +77,6 @@ export const DISCONNECT_BLOCKED_TEXT =
   'Ce navigateur ne pourra plus utiliser l’intelligence artificielle de cet ordinateur. Votre navigateur bloque l’accès à l’application Magistra : l’autorisation ne pourra pas y être retirée d’ici. Retirez-la aussi dans Magistra → Réglages → « Site web Magistra ». Vous pourrez reconnecter Magistra locale à tout moment.';
 export const RETRY_LABEL = 'Réessayer';
 export const CANCEL_LABEL = 'Annuler';
-export const OPEN_APP_LABEL = 'Ouvrir Magistra';
 export const SEARCH_WITH_PERMISSION_LABEL = 'Rechercher Magistra…';
 export const CONTINUE_LABEL = 'Continuer';
 export const USE_SERVER_LABEL = 'Utiliser le serveur en ligne…';
@@ -95,24 +91,12 @@ export const SIGNED_OUT_DETECT_TEXT =
 export const DETECT_NOW_LABEL = 'Détecter maintenant';
 
 // ─── Installation de Magistra pour Windows ──────────────────────────────────
-// Mêmes trois étapes partout où l'on télécharge (carte du mode démonstration, section « Magistra pour Windows » de
-// l'accueil et des réglages) : l'installateur est un NSIS « oneClick », par utilisateur (perMachine: false,
-// allowElevation: false), qui lance Magistra à la fin (runAfterFinish: true) — electron-builder.json. Il n'est pas
-// encore signé : SmartScreen l'annonce, avec les libellés exacts de Windows en français.
+// Textes dans windowsTexts.ts (sans dépendance : le site vitrine les utilise sans le connecteur local).
 
-export const INSTALL_STEPS: readonly string[] = [
-  'Téléchargez Magistra.',
-  'Ouvrez le fichier téléchargé. Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur « Informations complémentaires » puis « Exécuter quand même ».',
-  'Magistra s’installe en quelques secondes, sans droits d’administrateur, et s’ouvre toute seule.',
-];
-export const INSTALL_STEPS_LABEL = 'Installation en trois étapes';
-/**
- * Ce qui suit l'installation, dit honnêtement : l'IA n'est pas dans l'installateur. L'application propose de
- * l'activer (moteur et modèle) et annonce la taille AVANT tout téléchargement ; jamais sans ce clic.
- */
-export const ACTIVATE_AI_NOTE =
-  'Ensuite, Magistra vous propose d’activer l’IA : un seul téléchargement de plusieurs Go, dont la taille est annoncée avant. L’IA fonctionne ensuite même sans Internet.';
-export const ALREADY_INSTALLED_TEXT = 'Déjà installée ?';
+export {
+  ACTIVATE_AI_NOTE, ALREADY_INSTALLED_TEXT, DOWNLOAD_WINDOWS_LABEL, INSTALL_STEPS, INSTALL_STEPS_LABEL, NOT_PUBLISHED_TEXT,
+  OPEN_APP_LABEL,
+} from './windowsTexts';
 
 // ─── Moteur de génération (site web) ────────────────────────────────────────
 

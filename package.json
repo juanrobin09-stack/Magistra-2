@@ -15,6 +15,9 @@
     "test:e2e": "playwright test",
     "test:real-ai": "node scripts/real-ai-check.mjs",
     "preview": "vite preview",
+    "build:site": "tsc -b && vite build --config vite.site.config.ts",
+    "preview:site": "vite preview --config vite.site.config.ts --port 4174 --strictPort --host 127.0.0.1",
+    "verify:site": "node scripts/verify-site.mjs",
     "electron:build": "node scripts/build-electron.mjs",
     "dev:electron": "node scripts/dev-electron.mjs",
     "electron:smoke": "npm run build && node scripts/build-electron.mjs && node scripts/electron-smoke.mjs",
@@ -72,7 +75,10 @@
   },
   "description": "Magistra — assistant pédagogique IA open source pour les enseignants, de la maternelle au doctorat",
   "license": "MIT",
-  "author": "FutureAI",
+  "author": {
+    "name": "Juan Robin",
+    "url": "https://github.com/juanrobin09-stack"
+  },
   "engines": {
     "node": ">=20.19"
   }

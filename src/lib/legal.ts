@@ -6,6 +6,8 @@
 // pour complet sans l'être. Les textes sont un projet à faire valider : l'éditeur qui les a relus (et fait relire)
 // le déclare avec VITE_LEGAL_VALIDATED, ce qui retire l'avis « projet de texte » (jamais les marques « à compléter »).
 
+import type { PageMode } from '@/lib/runtime/types';
+
 export type LegalField = 'publisher' | 'director' | 'address' | 'contact' | 'host' | 'dataRegion';
 
 /** Variable de build attendue pour chaque information (affichée à l'administrateur dans l'avis « à compléter »). */
@@ -25,7 +27,7 @@ export const LEGAL_LABELS: Record<LegalField, string> = {
   address: "Adresse de l'éditeur",
   contact: 'Contact (e-mail) pour les questions et les droits RGPD',
   host: "Hébergeur du site (nom et adresse)",
-  dataRegion: 'Région de la base de données (Supabase)',
+  dataRegion: 'Région de la base de données',
 };
 
 export const LEGAL_FIELDS = Object.keys(LEGAL_ENV_NAMES) as LegalField[];
@@ -95,3 +97,21 @@ export const LEGAL_TITLES: Record<LegalPageKind, string> = {
   confidentialite: 'Politique de confidentialité',
   cgu: "Conditions d'utilisation",
 };
+
+/**
+ * Hébergeur et base de données : seuls le site web (avec comptes) et le site vitrine ont un hébergeur ; seul le site web a
+ * une base de données. En mode personnel les données sont dans le stockage fichier du serveur local, en démonstration
+ * dans le navigateur, dans l'application Windows sur l'ordinateur. Une seule règle pour les textes et pour la liste
+ * « à compléter » : ils ne peuvent pas diverger.
+ */
+export const hasHosting = (mode: PageMode): boolean => mode === 'web' || mode === 'showcase';
+export const hasDatabase = (mode: PageMode): boolean => mode === 'web';
+
+/** Informations que chaque page affiche vraiment : seules celles-là sont listées « à compléter ». */
+export function relevantFields(page: LegalPageKind, mode: PageMode): LegalField[] {
+  if (page === 'cgu') return ['contact'];
+  const host: LegalField[] = hasHosting(mode) ? ['host'] : [];
+  const database: LegalField[] = hasDatabase(mode) ? ['dataRegion'] : [];
+  if (page === 'mentions') return ['publisher', 'director', 'address', 'contact', ...host, ...database];
+  return hasHosting(mode) ? ['publisher', 'address', 'contact', ...host, ...database] : ['publisher', 'contact'];
+}

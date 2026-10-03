@@ -15,5 +15,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["node"]
   },
-  "include": ["shared", "server", "api", "electron", "scripts", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
+  "include": ["shared", "server", "api", "electron", "scripts", "vite.config.ts", "vite.site.config.ts", "vitest.config.ts", "playwright.config.ts"]
 }

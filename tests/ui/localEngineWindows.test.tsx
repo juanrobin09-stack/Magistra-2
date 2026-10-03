@@ -169,13 +169,15 @@ describe('Section « Magistra pour Windows »', () => {
     expect(details.textContent).toContain('Empreinte copiée.');
   });
 
-  it('points clés et trois étapes courtes : IA locale, aucune clé API, hors connexion (le site, lui, nécessite Internet), confidentialité locale', async () => {
+  it('points clés et trois étapes courtes : IA locale, aucune clé API, hors connexion une fois l’IA activée, confidentialité locale', async () => {
     stubReleaseFetch(RELEASE);
     const view = await mountSection('web', null);
     const text = view.section().textContent ?? '';
-    for (const point of ['IA locale', 'Aucune clé API', 'Fonctionne hors connexion', 'Le site Magistra, lui, nécessite une connexion', 'Confidentialité locale']) {
+    for (const point of ['IA locale', 'Aucune clé API', 'Fonctionne hors connexion', 'Une fois l’IA activée, l’application fonctionne sans Internet.', 'Confidentialité locale']) {
       expect(text).toContain(point);
     }
+    // Rien sur le site : l'application, seule, est présentée.
+    expect(text).not.toContain('nécessite une connexion');
     const steps = Array.from(view.section().querySelectorAll('ol[aria-label="Installation en trois étapes"] li')).map(li => li.textContent?.trim());
     expect(steps).toEqual([
       '1Téléchargez Magistra.',

@@ -30,6 +30,7 @@ import { engineStateKey, useEngineRoute, useRouteCapsHeal } from '@/components/l
 import EngineSettings from '@/components/localEngine/EngineSettings';
 import { WEBSITE_SECTION_TITLE } from '@/components/localEngine/texts';
 import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSection';
+import AuthorCredit from '@/components/AuthorCredit';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import UpdateCheck from '@/components/UpdateCheck';
 import { useAIStatus, useCapabilities, type AIController, type CapabilitiesState } from '@/hooks/useAIStatus';
@@ -903,9 +904,7 @@ function About({ mode }: { mode: RuntimeMode }) {
       <p>Assistant pédagogique pour les enseignants, de la maternelle au doctorat.</p>
       <p>Code source publié sous licence MIT.</p>
       <p><LegalLinks /></p>
-      <p>
-        Un projet <ExternalAnchor href="https://futurai.space">FutureAI</ExternalAnchor> · Bordeaux
-      </p>
+      <p><AuthorCredit variant="footer" showProfile /></p>
     </div>
   );
 }

@@ -8,12 +8,11 @@
 // windowsRelease.ts).
 
 import { Download, Monitor } from 'lucide-react';
-import { OPEN_APP_URL } from '@shared/localConnector';
 import { FOCUS_RING } from '@/components/generate/fieldUtils';
 import {
   ACTIVATE_AI_NOTE, ALREADY_INSTALLED_TEXT, DOWNLOAD_WINDOWS_LABEL, INSTALL_STEPS, INSTALL_STEPS_LABEL, NOT_PUBLISHED_TEXT,
-  OPEN_APP_LABEL,
-} from './texts';
+  OPEN_APP_HREF, OPEN_APP_LABEL,
+} from './windowsTexts';
 import { formatSize, installerUrl, WINDOWS_REQUIREMENTS_TEXT, type WindowsReleaseState } from './windowsRelease';
 
 interface WindowsDownloadLinkProps {
@@ -103,7 +102,7 @@ export function OpenInstalledApp() {
   return (
     <p className="text-sm text-mg-200" data-testid="open-installed-app">
       {ALREADY_INSTALLED_TEXT}{' '}
-      <a href={OPEN_APP_URL} className={`inline-flex items-center gap-1 text-accent hover:underline underline-offset-2 rounded ${FOCUS_RING}`}>
+      <a href={OPEN_APP_HREF} className={`inline-flex items-center gap-1 text-accent hover:underline underline-offset-2 rounded ${FOCUS_RING}`}>
         <Monitor size={13} aria-hidden="true" /> {OPEN_APP_LABEL}
       </a>
     </p>

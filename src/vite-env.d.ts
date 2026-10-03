@@ -11,6 +11,8 @@ interface ImportMetaEnv {
   readonly VITE_LEGAL_HOST?: string;
   readonly VITE_LEGAL_DATA_REGION?: string;
   readonly VITE_LEGAL_VALIDATED?: string;
+  /** Profil professionnel de l'auteur (https, 300 caractères au plus) ; repli : profil GitHub par défaut (shared/author.ts). */
+  readonly VITE_AUTHOR_PROFILE_URL?: string;
 }
 
 interface ImportMeta {

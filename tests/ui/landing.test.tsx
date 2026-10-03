@@ -75,9 +75,9 @@ describe('Landing — affirmations', () => {
     expect(text).toMatch(/licence MIT/i);
     expect(text).toMatch(/IA locale gratuite sur Windows/);
     expect(text).toMatch(/vos documents restent sur votre ordinateur/);
-    // Sur le site : l'IA de l'ordinateur d'abord (application Windows connectée), sinon le serveur configuré.
-    expect(text).toMatch(/en priorité l’IA de votre ordinateur quand l’application Windows y est connectée/);
-    expect(text).toMatch(/sinon le serveur d’IA compatible OpenAI configuré par votre établissement/);
+    // Engagement vrai pour le site comme pour l'application : gratuit, sans compte, hors connexion.
+    expect(text).toContain('Gratuit, sans compte, hors connexion');
+    expect(text).toMatch(/ni abonnement, ni compte à créer\. Une fois l’IA activée, elle fonctionne sur votre ordinateur, même sans Internet/);
     // Aucun nom de moteur à connaître sur l'accueil public.
     expect(text).not.toMatch(/ollama/i);
     expect(text).toMatch(/HAL, Crossref/);
@@ -113,9 +113,17 @@ describe('Landing — application Windows et IA du site', () => {
     for (const a of Array.from(container.querySelectorAll('a.btn-primary'))) expect(a.getAttribute('href')).toBe('/onboarding');
   });
 
-  it('le site n’affirme plus que l’IA est forcément celle de l’établissement : le prestataire est annoncé', async () => {
+  it('plus de carte « Sur le web, une IA annoncée clairement » : aucune phrase qui suppose Magistra dans le navigateur', async () => {
     const { container } = await mount(fakeRuntime(new MemoryStore()));
-    expect(container.textContent).toMatch(/Le site indique toujours qui traite vos textes/);
+    const text = container.textContent ?? '';
+    expect(text).not.toMatch(/Sur le web|IA annoncée clairement|Le site indique toujours|serveur d’IA compatible OpenAI/);
+  });
+
+  it('l’étape « Créez votre profil » dit que le profil est propre à l’ordinateur, pas à un compte', async () => {
+    const { container } = await mount(fakeRuntime(new MemoryStore()));
+    const text = container.textContent ?? '';
+    expect(text).toContain('Votre profil reste propre à votre ordinateur.');
+    expect(text).not.toMatch(/propre à votre compte/);
   });
 
   it('mode personnel : « Commencer » mène à l’application, sans connexion', async () => {
