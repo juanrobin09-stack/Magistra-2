@@ -1,6 +1,6 @@
 # Architecture IA de Magistra
 
-Magistra est un projet **open source (licence MIT) et non lucratif**. Il ne dépend d'**aucune API payante** :
+Magistra est une application **gratuite pour les enseignants**. Il ne dépend d'**aucune API payante** :
 
 - **Application Windows** : une IA **locale**, open weights, qui tourne sur l'ordinateur de l'enseignant via [Ollama](https://ollama.com). Aucune clé, aucun compte, aucune limite d'utilisation.
 - **Site web** : un **préréglage** (`AI_PRESET`, voir § 11 ; `ovhcloud` est gratuit, sans clé, hébergé en France) ou un serveur d'IA **compatible OpenAI** ou **Ollama** configuré par l'administrateur (serveur GPU d'une université sous vLLM, Ollama distant…). Un prestataire en ligne est **toujours annoncé** à l'enseignant.

@@ -32,7 +32,7 @@ import type { FetchLike } from '../shared/ai/provider.js';
 import type { WindowsReleaseInfo, WindowsReleaseResponse } from '../shared/apiContract.js';
 
 /** Dépôt officiel de Magistra (celui que l'application Windows interroge pour « Rechercher une mise à jour »). */
-export const DEFAULT_RELEASES_REPO = 'juanrobin09-stack/magistra-2';
+export const DEFAULT_RELEASES_REPO = 'juanrobin09-stack/magistra-downloads';
 
 /** Systèmes pris en charge par l'installateur (NSIS x64, voir electron-builder.json), tels qu'affichés. */
 export const WINDOWS_REQUIREMENTS = 'Windows 10 ou 11 (64 bits)';
@@ -77,7 +77,7 @@ export const WINDOWS_RELEASE_CACHE_CONTROL = 'public, max-age=300, s-maxage=600,
 export const WINDOWS_RELEASE_SHORT_CACHE_CONTROL = 'public, max-age=60, s-maxage=60';
 
 const API_ORIGIN = 'https://api.github.com';
-const USER_AGENT = 'Magistra-web (outil pedagogique open source)';
+const USER_AGENT = 'Magistra-web (outil pedagogique)';
 const TAG_RE = /^v((?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5}))$/;
 const INSTALLER_RE = /^Magistra-Setup-(\d+\.\d+\.\d+)\.exe$/;
 const DIGEST_RE = /^sha256:([0-9a-fA-F]{64})$/;

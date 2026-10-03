@@ -108,7 +108,7 @@ const FEATURES_PLUS: { icon: string; title: string; desc: string; link?: { href:
   },
   { icon: '🏛️', title: 'Sur le web, une IA annoncée clairement', desc: 'Sur le site, Magistra utilise en priorité l’IA de votre ordinateur quand l’application Windows y est connectée ; sinon le serveur d’IA compatible OpenAI configuré par votre établissement ou un service en ligne choisi par l’administrateur. Le site indique toujours qui traite vos textes.' },
   { icon: '📚', title: 'Sources vérifiables', desc: 'Vos documents (PDF, Word, PowerPoint…), HAL, Crossref et le web : les citations renvoient aux sources réellement utilisées.' },
-  { icon: '◉', title: 'Open source, licence MIT', desc: 'Code public et auditable, projet non lucratif : pas d’abonnement, pas de quota commercial.' },
+  { icon: '◉', title: 'Votre espace pédagogique', desc: 'Retrouvez vos préparations dans votre historique et adaptez votre profil à vos niveaux et à vos matières.' },
   { icon: '✧', title: 'À relire et adapter', desc: 'Magistra propose des brouillons structurés ; vous restez l’auteur. Relisez et vérifiez, puis copiez ou exportez (Markdown, PDF) pour adapter le texte dans votre traitement de texte. Besoin d’un autre angle ? Précisez vos consignes et relancez.' },
 ];
 
@@ -121,7 +121,7 @@ const STEPS = [
 const STATS = [
   { value: String(NB_OUTILS), label: 'Outils pédagogiques : cours, exercices et TD, évaluations, séquences, fiches de séance, progressions, appréciations, différenciation, courriers, cahier journal, corrigés.' },
   { value: String(NB_NIVEAUX), label: `Niveaux, de la Toute Petite Section au doctorat, et ${NB_MATIERES} matières. Dans le supérieur, les outils parlent CM, TD, examens et syllabus.` },
-  { value: 'MIT', label: 'Open source sous licence MIT : code public et auditable, projet non lucratif. Les contenus produits sont à relire et adapter par l’enseignant.' },
+  { value: '0 €', label: 'Application gratuite, sans abonnement. Les contenus produits sont à relire et adapter par l’enseignant.' },
 ];
 
 /**
@@ -176,7 +176,7 @@ export default function LandingPage() {
 
           <div className="max-w-3xl mx-auto text-center relative z-10">
             <div className="badge badge-accent mb-6 mx-auto">
-              <Sparkles size={12} aria-hidden="true" /> Un projet FutureAI · open source
+              <Sparkles size={12} aria-hidden="true" /> Un projet FutureAI · gratuit
             </div>
 
             <h1 className="text-4xl sm:text-5xl lg:text-6xl text-white leading-[1.15] mb-6" style={{ fontFamily: 'var(--font-display)' }}>
@@ -186,7 +186,7 @@ export default function LandingPage() {
             </h1>
 
             <p className="text-mg-200 text-base sm:text-lg max-w-xl mx-auto mb-8 leading-relaxed">
-              Magistra est un assistant pédagogique open source pour les enseignants, de la maternelle au doctorat,
+              Magistra est un assistant pédagogique gratuit pour les enseignants, de la maternelle au doctorat,
               avec un accent sur le supérieur. Préparez cours, TD, examens et syllabus à partir de vos propres documents,
               avec des sources vérifiables — des brouillons solides, à relire et adapter.
             </p>
@@ -371,7 +371,7 @@ export default function LandingPage() {
               Magistra fait partie d'un <em className="text-accent not-italic">mouvement</em>
             </h2>
             <p className="text-sm text-mg-200 leading-relaxed max-w-xl mx-auto mb-6">
-              FutureAI co-construit des outils d’IA open source avec des communautés du monde entier. Notre mission :
+              FutureAI co-construit des outils d’IA avec des communautés du monde entier. Notre mission :
               rendre l’intelligence artificielle utile, accessible et éthique — éducation, santé, agriculture —
               en France comme dans les pays en développement.
             </p>
@@ -391,7 +391,7 @@ export default function LandingPage() {
                   Prêt à gagner du <em className="text-accent not-italic">temps</em> ?
                 </h2>
                 <p className="text-sm text-mg-200 mb-6 max-w-md mx-auto">
-                  Un outil open source et non lucratif, conçu pour simplifier le quotidien des enseignants.
+                  Un outil gratuit, conçu pour simplifier le quotidien des enseignants.
                 </p>
                 <AccessButton size="hero" signedOutLabel="Accéder à Magistra" />
               </div>
@@ -411,7 +411,7 @@ export default function LandingPage() {
           <p className="text-xs text-mg-300 text-center">
             Un projet{' '}
             <a href="https://futurai.space" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">FutureAI</a>
-            {' '}· Bordeaux, France · Logiciel libre sous licence MIT
+            {' '}· Bordeaux, France · Application gratuite
           </p>
         </div>
       </footer>

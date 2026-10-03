@@ -102,7 +102,7 @@ describe('Carte Magistra locale — jamais appairée', () => {
   });
 
   it('aucune version publiée : bouton inactif qui dit pourquoi, jamais un renvoi vers GitHub', async () => {
-    stubReleaseFetch({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases' });
+    stubReleaseFetch({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-downloads/releases' });
     const engine = new FakeEngine(engineState('not-found'));
     const { card } = await mountCard(engine);
     expect(Array.from(card().querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra'))).toBeUndefined();

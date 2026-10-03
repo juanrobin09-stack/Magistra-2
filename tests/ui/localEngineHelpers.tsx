@@ -160,11 +160,11 @@ export const RELEASE = {
   available: true,
   version: '2.3.1',
   fileName: 'Magistra-Setup-2.3.1.exe',
-  downloadUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases/download/v2.3.1/Magistra-Setup-2.3.1.exe',
+  downloadUrl: 'https://github.com/juanrobin09-stack/magistra-downloads/releases/download/v2.3.1/Magistra-Setup-2.3.1.exe',
   sizeBytes: 89_443_942,
   sha256: 'a3f5c0e1b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6',
   publishedAt: '2026-09-15T12:00:00Z',
-  releaseUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases/tag/v2.3.1',
+  releaseUrl: 'https://github.com/juanrobin09-stack/magistra-downloads/releases/tag/v2.3.1',
   requirements: 'Windows 10 ou 11 (64 bits)',
 } as const;
 

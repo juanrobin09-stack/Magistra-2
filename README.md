@@ -1,8 +1,8 @@
 # Magistra
 
-**Assistant pédagogique IA open source pour les enseignants, de la maternelle au doctorat, avec un accent sur l'enseignement supérieur.**
+**Assistant pédagogique IA gratuit pour les enseignants, de la maternelle au doctorat, avec un accent sur l'enseignement supérieur.**
 
-Un projet non lucratif [FutureAI](https://futurai.space), publié sous licence [MIT](LICENSE).
+Un projet [FutureAI](https://futurai.space), proposé gratuitement aux enseignants.
 
 Magistra aide à préparer :
 - des cours et des TD ;
@@ -28,7 +28,7 @@ Installez Magistra sur votre ordinateur Windows (10 ou 11, 64 bits) : l'IA y fon
 
 Ensuite, dans Magistra, **Activer l'IA** prépare l'intelligence artificielle en un clic : la taille du téléchargement (moteur d'IA et modèle adapté à votre ordinateur, plusieurs Go) est annoncée avant, et vous pouvez utiliser l'application pendant ce temps. Ce téléchargement n'a lieu qu'une fois.
 
-> **Pourquoi cet avertissement de Windows ?** L'installateur n'est pas encore signé numériquement : un certificat de signature de code est payant et se renouvelle chaque année, et ce projet non lucratif ne l'a pas encore acquis. L'avertissement ne signale aucun problème détecté dans le fichier. N'exécutez l'installateur que s'il vient du site Magistra ou de la [page officielle des versions](https://github.com/juanrobin09-stack/magistra-2/releases).
+> **Pourquoi cet avertissement de Windows ?** L'installateur n'est pas encore signé numériquement : un certificat de signature de code est payant et se renouvelle chaque année, et ce projet non lucratif ne l'a pas encore acquis. L'avertissement ne signale aucun problème détecté dans le fichier. N'exécutez l'installateur que s'il vient du site Magistra ou de la [page officielle des versions](https://github.com/juanrobin09-stack/magistra-downloads/releases).
 
 Vous administrez le site de l'établissement ou vous développez Magistra ? Voir « [Brancher une vraie IA](#brancher-une-vraie-ia) ».
 
@@ -267,7 +267,7 @@ Le bouton télécharge **toujours un fichier**, jamais une page GitHub :
 
 | Variable | Rôle |
 |---|---|
-| `MAGISTRA_RELEASES_REPO` | dépôt GitHub `propriétaire/dépôt` dont les versions sont proposées. Vide : dépôt officiel `juanrobin09-stack/magistra-2`. Valeur invalide : dépôt officiel, avec un avertissement dans le journal. À changer seulement pour une copie qui publie ses propres versions : l'application, elle, cherche ses mises à jour sur le dépôt officiel (`electron/updateCheck.ts`). |
+| `MAGISTRA_RELEASES_REPO` | dépôt GitHub `propriétaire/dépôt` dont les versions sont proposées. Vide : dépôt officiel `juanrobin09-stack/magistra-downloads`. Valeur invalide : dépôt officiel, avec un avertissement dans le journal. À changer seulement pour une copie qui publie ses propres versions : l'application, elle, cherche ses mises à jour sur le dépôt officiel (`electron/updateCheck.ts`). |
 | `GITHUB_TOKEN` | **recommandé sur Vercel** et sur tout hébergement dont l'adresse de sortie est partagée : jeton « fine-grained » en lecture seule, sans aucune permission (dépôts publics). Sans jeton, l'API GitHub accepte 60 requêtes par heure et par adresse IP, **partagées avec les autres clients de l'hébergeur** ; le cache (10 minutes) est propre à chaque instance du serveur, et une instance qui démarre commence sans lui. Limite atteinte : `/api/windows-release` renvoie `unavailable` ; le bouton télécharge toujours la dernière version (nom fixe), sans afficher sa version, sa taille ni son empreinte. Le jeton est envoyé seulement à `api.github.com`, jamais au navigateur ni dans les journaux. |
 
 `POST /api/generation` enregistre le résultat d'une génération locale. Cette route compte pour `RATE_LIMIT_PER_MINUTE`, pas pour `RATE_LIMIT_GLOBAL_PER_MINUTE`. Après la mise à jour, réexécutez `supabase-schema.sql` : il ajoute la colonne `kind` de `api_requests`.
@@ -446,9 +446,9 @@ Les polices sont auto-hébergées : aucune requête vers Google.
 
 ---
 
-## Licence
+## Notices de licence
 
-[MIT](LICENSE). Toutes les dépendances d'exécution sont sous licence libre compatible :
+Les conditions applicables au logiciel sont conservées dans [LICENSE](LICENSE) et fournies avec l’application. Les licences des dépendances restent applicables :
 
 | Dépendances | Licence |
 |---|---|
@@ -459,3 +459,11 @@ Les polices sont auto-hébergées : aucune requête vers Google.
 | polices Fontsource | OFL |
 
 Les modèles proposés (Ministral 3, Mistral Small 3.2) sont publiés sous licence Apache 2.0.
+
+## Téléchargements publics et dépôt privé
+
+Le code de Magistra est conservé dans ce dépôt privé. Les installateurs, archives, empreintes et notices nécessaires sont publiés séparément dans [Magistra-Downloads](https://github.com/juanrobin09-stack/Magistra-Downloads). Aucun code source ni historique de développement n’y est transféré.
+
+Le workflow Windows continue de construire les versions dans le dépôt privé. Pour rendre une version accessible aux enseignants, un mainteneur autorisé récupère ses fichiers avec `gh release download`, vérifie `SHA256SUMS.txt`, puis les publie avec `gh release create` ou `gh release upload` dans `juanrobin09-stack/Magistra-Downloads`, avec le même numéro de version et les notices de licence. Le jeton standard du workflow reste limité au dépôt privé ; aucun jeton personnel n’est ajouté à la CI.
+
+Les versions Windows déjà installées qui interrogent l’ancien dépôt doivent être mises à jour depuis [le site Magistra](https://www.mag-istra.fr). Les nouveaux builds utilisent le dépôt public de téléchargements. Les fichiers déjà distribués conservent leurs conditions de licence ; le passage en privé ne les modifie pas.

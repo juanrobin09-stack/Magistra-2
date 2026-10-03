@@ -22,7 +22,7 @@ import LandingPage from '@/pages/LandingPage';
 import { button, cleanup, click, fakeRuntime, flush, MemoryStore, render } from './helpers';
 import { engineState, FakeEngine, jsonResponse, RELEASE, stubReleaseFetch } from './localEngineHelpers';
 
-const RELEASES_PAGE = 'https://github.com/juanrobin09-stack/magistra-2/releases';
+const RELEASES_PAGE = 'https://github.com/juanrobin09-stack/magistra-downloads/releases';
 
 /** jsdom ne sait pas naviguer : les clics sur les liens sont interceptés (le gestionnaire de la page s'exécute). */
 function blockNavigation(event: MouseEvent): void {
@@ -66,9 +66,9 @@ describe('Réponse de /api/windows-release revérifiée', () => {
   it('refuse un lien hors de github.com, en http, avec identifiants, ou un fichier qui ne correspond pas à la version', () => {
     for (const downloadUrl of [
       'https://evil.example/releases/download/v2.3.1/Magistra-Setup-2.3.1.exe',
-      'http://github.com/juanrobin09-stack/magistra-2/releases/download/v2.3.1/Magistra-Setup-2.3.1.exe',
-      'https://user:pass@github.com/juanrobin09-stack/magistra-2/releases/download/v2.3.1/Magistra-Setup-2.3.1.exe',
-      'https://github.com/juanrobin09-stack/magistra-2/releases/download/v2.3.1/Autre.exe',
+      'http://github.com/juanrobin09-stack/magistra-downloads/releases/download/v2.3.1/Magistra-Setup-2.3.1.exe',
+      'https://user:pass@github.com/juanrobin09-stack/magistra-downloads/releases/download/v2.3.1/Magistra-Setup-2.3.1.exe',
+      'https://github.com/juanrobin09-stack/magistra-downloads/releases/download/v2.3.1/Autre.exe',
       'javascript:alert(1)',
     ]) {
       expect(parseWindowsRelease({ ...RELEASE, downloadUrl }), downloadUrl).toBeNull();
@@ -95,7 +95,7 @@ describe('Réponse de /api/windows-release revérifiée', () => {
   });
 
   it('lien direct de repli : un FICHIER (installateur de la dernière version stable, nom fixe), jamais une page', () => {
-    expect(WINDOWS_DOWNLOAD_URL).toBe('https://github.com/juanrobin09-stack/magistra-2/releases/latest/download/Magistra-Setup.exe');
+    expect(WINDOWS_DOWNLOAD_URL).toBe('https://github.com/juanrobin09-stack/magistra-downloads/releases/latest/download/Magistra-Setup.exe');
   });
 
   it('aucune version stable publiée (réponse sûre du serveur) : rien à télécharger', async () => {
