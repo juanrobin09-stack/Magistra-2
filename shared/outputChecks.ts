@@ -24,6 +24,7 @@
 import { CLOZE_BLANK, isClozeRequest } from './cloze.js';
 import { countText, countUnit } from './formats.js';
 import { getLevelGroup, SUPERIEUR_GROUPS } from './levels.js';
+import { readPlanTable } from './planTable.js';
 import type { GenerationRequest } from './types.js';
 
 const ADVICE = 'vérifiez-le avant de l’utiliser, ou relancez la génération.';
@@ -354,9 +355,28 @@ function checkExercices(req: GenerationRequest, document: string): string | null
   return `Le document contient ${countText(found, unit)} au lieu des ${wanted} demandé${unit.feminine ? 'e' : ''}s : ${ADVICE}`;
 }
 
+/**
+ * Plan d'une séquence (option « plan d'abord ») : les séances se comptent dans les lignes numérotées du tableau (une ligne
+ * par séance, « Séances 3 et 4 » comptent pour deux), jamais d'après des titres « Séance n » : un plan ne détaille pas ses
+ * séances, et une mention dans le texte (« évaluation en séance 6 ») ne doit pas fausser le compte. Aucun tableau lisible :
+ * aucun avertissement (compte incertain).
+ */
+function countPlanRows(document: string): number | null {
+  const covered = new Set<number>();
+  for (const session of readPlanTable(document)) {
+    for (let n = session.numero; n <= (session.fin ?? session.numero); n++) covered.add(n);
+  }
+  return covered.size || null;
+}
+
 function checkSeances(req: GenerationRequest, document: string): string | null {
   const wanted = req.nombreSeances;
   if (req.type !== 'sequence' || !wanted) return null;
+  if (req.planSeulement) {
+    const rows = countPlanRows(document);
+    if (rows === null || rows === wanted) return null;
+    return `Le plan compte ${rows} séance${rows > 1 ? 's' : ''} au lieu des ${wanted} demandées : ${ADVICE}`;
+  }
   const found = countNumbered(document, numberedLine('s[ée]ance'), { answerKey: false });
   if (found === null || found === wanted) return null;
   return `La séquence compte ${found} séance${found > 1 ? 's' : ''} au lieu des ${wanted} demandées : ${ADVICE}`;

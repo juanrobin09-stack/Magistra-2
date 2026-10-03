@@ -326,7 +326,7 @@ export const TOOL_FIELDS: Record<TypeContenu, readonly string[]> = {
   cours: ['sujet', 'duree', 'objectifs', 'consignes', 'format', 'modalite'],
   exercices: ['sujet', 'objectifs', 'consignes', 'difficulte', 'format', 'modalite', 'nombreExercices', 'bareme', 'sansCorrige'],
   evaluation: ['sujet', 'duree', 'objectifs', 'consignes', 'difficulte', 'modalite', 'typeEvaluation', 'bareme', 'sansCorrige'],
-  sequence: ['sujet', 'duree', 'objectifs', 'consignes', 'modalite', 'nombreSeances'],
+  sequence: ['sujet', 'duree', 'objectifs', 'consignes', 'modalite', 'nombreSeances', 'planSeulement'],
   fiche_prep: ['sujet', 'duree', 'objectifs', 'consignes', 'format', 'modalite'],
   progression: ['sujet', 'consignes', 'modalite'],
   appreciations: ['sujet', 'trimestre', 'profilEleve', 'nombreAppreciations', 'consignes', 'modalite', 'ton'],

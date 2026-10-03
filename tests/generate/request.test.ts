@@ -6,8 +6,8 @@ import type { DocumentPassage, GenerationRequest, ResearchMode, TeacherProfile }
 import { REQUEST_LIMITS, validateGenerationRequest } from '@shared/validation';
 import {
   appreciationCount, appreciationSummary, buildGenerationRequest, buildPassageQuery, buildWeightedPassageQuery, chosenCount, createInitialForm, defaultTrimestre,
-  fitPassagesToLimits, normalizeAppreciationInput, resolveInitialSujet, resolveInitialType, validateForm, visibleFields,
-  withNiveau, type GenerateForm,
+  fitPassagesToLimits, isLargeSequence, normalizeAppreciationInput, PLAN_ADVICE_MIN_SEANCES, resolveInitialSujet, resolveInitialType, validateForm,
+  visibleFields, withNiveau, type GenerateForm,
 } from '@/lib/generation/request';
 import { HISTOIRE_COURSE_PAGES, SVT_COURSE_PAGES } from '../documents/fixtures';
 
@@ -50,6 +50,7 @@ function fullForm(type: TypeContenu, niveau: NiveauScolaire): GenerateForm {
     sansCorrige: true,
     nombreExercices: 5,
     nombreSeances: 6,
+    planSeulement: true,
     ton: 'exigeant',
     besoins: ['dys', 'allophone'],
   };
@@ -139,6 +140,60 @@ describe('buildGenerationRequest — aucun paramètre fantôme', () => {
     const form: GenerateForm = { ...fullForm('cours', 'cp'), matiere: 'philosophie' };
     const req = buildGenerationRequest(form, 'cours', PROFILE, [], 'documents');
     expect(getMatieresForNiveau('cp').map(m => m.value)).toContain(req.matiere);
+  });
+});
+
+describe('séquence en deux temps : « Commencer par le plan »', () => {
+  const sequence = (patch: Partial<GenerateForm> = {}) => ({ ...fullForm('sequence', '4eme'), ...patch });
+
+  it('transmis pour une séquence seulement quand la case est cochée', () => {
+    const on = buildGenerationRequest(sequence(), 'sequence', PROFILE, [], 'documents');
+    expect(on.planSeulement).toBe(true);
+    expect(on.nombreSeances).toBe(6);
+    const off = buildGenerationRequest(sequence({ planSeulement: false }), 'sequence', PROFILE, [], 'documents');
+    expect(off).not.toHaveProperty('planSeulement');
+    // Formulaire d'une version antérieure (sans ce champ) : séquence complète.
+    const legacy = { ...sequence() } as Partial<GenerateForm>;
+    delete legacy.planSeulement;
+    expect(buildGenerationRequest(legacy as GenerateForm, 'sequence', PROFILE, [], 'documents')).not.toHaveProperty('planSeulement');
+  });
+
+  it('jamais transmis pour un autre outil, même cochée dans le formulaire (champ gardé en changeant d’outil)', () => {
+    for (const tool of ALL_TYPES.filter(t => t !== 'sequence')) {
+      expect(buildGenerationRequest(fullForm(tool, '4eme'), tool, PROFILE, [], 'documents'), tool).not.toHaveProperty('planSeulement');
+    }
+  });
+
+  it('champ visible à tous les niveaux (maternelle, élémentaire, collège, lycée, supérieur) pour la séquence seulement', () => {
+    for (const niveau of ['maternelle_ps', 'cp', 'cm2', '6eme', 'terminale_pro', 'bts', 'licence_1', 'doctorat'] as NiveauScolaire[]) {
+      expect(visibleFields('sequence', niveau, getMatieresForNiveau(niveau)[0].value).has('planSeulement'), niveau).toBe(true);
+    }
+    expect(visibleFields('fiche_prep', '4eme').has('planSeulement')).toBe(false);
+    expect(createInitialForm(PROFILE, { type: 'sequence' }).planSeulement).toBe(false);
+  });
+
+  it('la demande passe la validation partagée sans perte', () => {
+    const req = buildGenerationRequest(sequence(), 'sequence', PROFILE, [], 'documents');
+    expect(validateGenerationRequest(JSON.parse(JSON.stringify(req)))).toMatchObject({ planSeulement: true, nombreSeances: 6 });
+  });
+
+  it('grosse séquence : à partir de 5 séances, ou d’une durée très longue (texte libre, jamais d’effet sur la demande)', () => {
+    expect(PLAN_ADVICE_MIN_SEANCES).toBe(5);
+    expect(isLargeSequence('', '')).toBe(false);
+    expect(isLargeSequence(4, '')).toBe(false);
+    expect(isLargeSequence(5, '')).toBe(true);
+    expect(isLargeSequence(12, '45 min')).toBe(true);
+    for (const duree of ['3 semaines', '4 sem.', '10 heures', '12h', 'un mois', '1 mois', 'un trimestre', 'le semestre', 'toute l’année', 'Année scolaire', '3 Semaines']) {
+      expect(isLargeSequence('', duree), duree).toBe(true);
+    }
+    for (const duree of ['55 minutes', '2 semaines', '1 semaine', '2 heures', '9h', '1h30', '45 min', 'moisson', 'trimestriel', 'une séance', 'x'.repeat(500)]) {
+      expect(isLargeSequence('', duree), duree).toBe(false);
+    }
+    // Texte démesuré : bornée, jamais de lenteur.
+    const start = performance.now();
+    isLargeSequence('', `${' '.repeat(200_000)}3 semaines`);
+    isLargeSequence('', `${'1'.repeat(200_000)} h`);
+    expect(performance.now() - start).toBeLessThan(500);
   });
 });
 

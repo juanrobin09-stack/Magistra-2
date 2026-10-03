@@ -264,6 +264,7 @@ function optionLines(req: GenerationRequest, allowed: (field: string) => boolean
   const unit = countUnit(modalite?.value, getLevelGroup(req.niveau));
   if (req.nombreExercices && allowed('nombreExercices') && unit) lines.push(`- ${countLabel(unit)} : ${req.nombreExercices}`);
   if (req.nombreSeances && allowed('nombreSeances')) lines.push(`- Nombre de séances : ${req.nombreSeances}`);
+  if (req.planSeulement && allowed('planSeulement')) lines.push('- Plan seul : le tableau des séances, sans le détail de chaque séance');
   const bareme = allowed('bareme') ? BAREMES.find(b => b.value === req.bareme) : undefined;
   if (bareme) lines.push(`- Notation : ${bareme.label.toLowerCase()}`);
   if (req.sansCorrige && allowed('sansCorrige')) lines.push('- Corrigé : non (version élève seule)');
@@ -363,15 +364,17 @@ export function buildUserPrompt(req: GenerationRequest, sources: PromptSource[])
   if (ctx) lines.push(`- ${ctx}`);
   if (req.contenuSource && allowed('contenuSource')) lines.push(`\nContenu à adapter :\n${fenced(req.contenuSource)}`);
   if (req.texteEleve && allowed('texteEleve')) lines.push(`\nTravail à corriger (reproduit tel quel) :\n${fenced(req.texteEleve)}`);
+  // Séquence en deux temps : le plan seulement (jamais « le contenu complet », que le petit modèle lirait comme la séquence entière).
+  const product = req.planSeulement && allowed('planSeulement') ? 'le plan (sans le détail des séances)' : 'le contenu complet';
   // Avec des sources, la consigne de citation est rappelée en dernier : un petit modèle local suit mieux la
   // dernière consigne lue (constaté avec un vrai Ministral 3 3B, qui rédigeait sans aucune citation).
   lines.push(sources.length
-    ? '\nProduis maintenant le contenu complet en Markdown, en citant les sources fournies ([S1], [S2]…) à chaque idée qui en provient.'
-    : '\nProduis maintenant le contenu complet en Markdown.');
+    ? `\nProduis maintenant ${product} en Markdown, en citant les sources fournies ([S1], [S2]…) à chaque idée qui en provient.`
+    : `\nProduis maintenant ${product} en Markdown.`);
   const language = languageReminder(req);
   if (language) lines.push(language);
   // Format ou nombres imposés : rappelés en dernier (un petit modèle suit mieux la dernière consigne lue).
-  if (optionLines(req, allowed).some(l => /Format demandé|Nombre d|Corrigé : non/.test(l))) {
+  if (optionLines(req, allowed).some(l => /Format demandé|Nombre d|Corrigé : non|Plan seul/.test(l))) {
     lines.push('Respecte exactement le format et les nombres demandés ci-dessus.');
   }
   return lines.join('\n');

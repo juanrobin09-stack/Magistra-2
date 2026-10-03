@@ -1066,6 +1066,31 @@ describe('génération (flux NDJSON)', () => {
     expect(gm.busy).toBe(false);
   });
 
+  it('séquence « plan d’abord » : le champ traverse le connecteur (protocole inchangé) jusqu’au moteur et à la génération à enregistrer', async () => {
+    const browser = await paired();
+    const sequence = { type: 'sequence', niveau: '4eme', matiere: 'histoire_geo', sujet: 'La Révolution', researchMode: 'documents', nombreSeances: 2 };
+    const run = async (body: Record<string, unknown>) => {
+      const text = JSON.stringify(body);
+      const { headers } = await browser.sign('POST', '/v1/generate', text);
+      const s = await stream({ method: 'POST', path: '/v1/generate', headers, body: text });
+      expect(s.status).toBe(200);
+      return (await s.done).at(-1) as Extract<GenerationEvent, { type: 'done' }>;
+    };
+    const mock = provider as MockProvider;
+    const prompt = (n: number) => mock.calls[n].messages.map(m => m.content).join('\n');
+
+    const plan = await run({ ...sequence, planSeulement: true });
+    expect(prompt(0)).toContain('concevoir le PLAN d\'une séquence pédagogique de EXACTEMENT 2 séances');
+    expect(plan.record).toMatchObject({ type: 'sequence', params: { nombreSeances: 2, planSeulement: true } });
+
+    // Ancien site (sans le champ) ou valeur non booléenne : séquence complète, rien ne change.
+    const full = await run(sequence);
+    expect(prompt(1)).not.toContain('PLAN d\'');
+    expect(full.record?.params).not.toHaveProperty('planSeulement');
+    await run({ ...sequence, planSeulement: 'true' });
+    expect(prompt(2)).not.toContain('PLAN d\'');
+  });
+
   it('une seule génération à la fois (fenêtre ou site) : 409 GENERATION_BUSY avec preuve', async () => {
     provider = new MockProvider({ reply: 'x'.repeat(4_000), chunkSize: 10, delayMs: 5 });
     const browser = await paired();

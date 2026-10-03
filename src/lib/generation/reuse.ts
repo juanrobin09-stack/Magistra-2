@@ -22,6 +22,38 @@ export interface ReusedRequest {
   researchMode: ResearchMode | null;
   /** Ce qui n'a pas pu être repris (travail d'élève, documents) : dit à l'enseignant. */
   notes: string[];
+  /** Rappel affiché à la place de « Demande reprise depuis l'historique » (séance préparée à partir d'un plan). */
+  notice?: string;
+}
+
+/**
+ * État du routeur d'une navigation vers « Générer » avec un formulaire à préremplir : « Reprendre cette demande »
+ * (Historique) ou « Développer une séance » (plan d'une séquence, src/lib/generation/plan.ts). Jamais dans l'adresse :
+ * ni limite de taille, ni texte de l'enseignant dans l'historique du navigateur.
+ */
+export interface ReuseState {
+  reuse?: ReusableRecord;
+  /** Phrase de rappel propre à l'origine de la demande (facultative). */
+  reuseNotice?: string;
+}
+
+function isReusableRecord(value: unknown): value is ReusableRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Partial<Record<keyof ReusableRecord, unknown>>;
+  return typeof record.type === 'string' && typeof record.sujet === 'string';
+}
+
+/** Formulaire à reprendre selon l'état du routeur (null : rien à reprendre, ou état illisible : jamais d'exception). */
+export function reusedFromState(state: unknown, profile: TeacherProfile | null | undefined): ReusedRequest | null {
+  const reuse = typeof state === 'object' && state !== null ? (state as ReuseState).reuse : undefined;
+  if (!isReusableRecord(reuse)) return null;
+  const notice = (state as ReuseState).reuseNotice;
+  try {
+    const reused = formFromRecord(reuse, profile);
+    return typeof notice === 'string' && notice.trim() ? { ...reused, notice: notice.slice(0, 500) } : reused;
+  } catch {
+    return null;
+  }
 }
 
 const text = (value: unknown, max: number): string => (typeof value === 'string' ? value.slice(0, max) : '');
@@ -43,6 +75,11 @@ function isTrimestre(value: unknown): value is Trimestre {
 /** Entier enregistré dans les bornes, sinon '' (« automatique »). */
 function countOf(value: unknown, bounds: { min: number; max: number }): number | '' {
   return typeof value === 'number' && Number.isInteger(value) && value >= bounds.min && value <= bounds.max ? value : '';
+}
+
+/** Séquence demandée en deux temps (plan d'abord) : seul l'outil Séquence a cette option, tout autre enregistrement l'ignore. */
+export function isPlanFirst(record: Pick<ReusableRecord, 'type' | 'params'>): boolean {
+  return record.type === 'sequence' && record.params?.planSeulement === true;
 }
 
 /** Paramètres enregistrés, lisibles (seulement ceux qui existent). */
@@ -76,6 +113,7 @@ export function describeRecordParams(record: ReusableRecord): { label: string; v
   const unit = countUnit(typeof p.modalite === 'string' ? p.modalite : undefined, isNiveau(record.niveau) ? getLevelGroup(record.niveau) : undefined);
   if (unit) add(countLabel(unit), countOf(p.nombreExercices, LIMITES_NOMBRES.exercices) ? String(p.nombreExercices) : undefined);
   add('Nombre de séances', countOf(p.nombreSeances, LIMITES_NOMBRES.seances) ? String(p.nombreSeances) : undefined);
+  add("Plan d'abord", isPlanFirst(record) ? 'oui' : undefined);
   add('Ton', labelOf(p.ton, TONS));
   if (Array.isArray(p.besoins)) {
     add('Besoins particuliers', p.besoins.map(v => labelOf(v, BESOINS_PARTICULIERS)).filter(Boolean).join(', '));
@@ -120,6 +158,7 @@ export function formFromRecord(record: ReusableRecord, profile: TeacherProfile |
     sansCorrige: p.sansCorrige === true,
     nombreExercices: countOf(p.nombreExercices, LIMITES_NOMBRES.exercices),
     nombreSeances: countOf(p.nombreSeances, LIMITES_NOMBRES.seances),
+    planSeulement: isPlanFirst(record),
     ton: oneOf<TonRedaction>(p.ton, TONS) ?? '',
     besoins: Array.isArray(p.besoins)
       ? BESOINS_PARTICULIERS.map(b => b.value).filter((v: BesoinParticulier) => (p.besoins as unknown[]).includes(v))

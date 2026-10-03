@@ -19,7 +19,8 @@ import { getLevelGroup, isNiveau, isSuperieur, NIVEAUX, type NiveauScolaire } fr
 import { getSujetSuggestions } from '@shared/suggestions';
 import SelectField from '@/components/ui/SelectField';
 import {
-  appreciationSummary, chosenCount, fieldLimit, formDefaultNotation, MAX_APPRECIATIONS, MIN_APPRECIATIONS, normalizeAppreciationInput, visibleFields,
+  appreciationSummary, chosenCount, fieldLimit, formDefaultNotation, isLargeSequence, MAX_APPRECIATIONS, MIN_APPRECIATIONS,
+  normalizeAppreciationInput, visibleFields,
   type FormField, type FormProblem, type GenerateForm, type Trimestre,
 } from '@/lib/generation/request';
 import { ChipGroup, ChoiceButton, Field, type ChipOption } from './fields';
@@ -214,6 +215,49 @@ export default function GenerateFormFields({ form, onChange, onNiveauChange, pro
         onChange={v => onChange({ nombreSeances: v })}
         options={[{ value: '', label: 'Auto', title: '4 à 6 séances' }, ...NOMBRES_SEANCES.map(n => ({ value: n, label: String(n) }))]}
       />,
+    );
+  }
+  if (has('planSeulement')) {
+    // Séquence en deux temps : le plan d'abord, puis les séances à développer (« Développer une séance » sous le plan).
+    // Une grosse séquence (5 séances ou plus, durée très longue) : conseil discret, jamais de case cochée à la place de
+    // l'enseignant.
+    const advise = !form.planSeulement && isLargeSequence(form.nombreSeances, form.duree);
+    settings.push(
+      <div key="planSeulement" className="md:col-span-2">
+        <div
+          className={`flex items-start gap-2.5 p-3 rounded-lg border transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/70 ${
+            form.planSeulement ? 'bg-accent/10 border-accent/40' : 'bg-mg-700 border-white/5 hover:border-white/15'
+          }`}
+        >
+          <input
+            id="gen-plan-seulement"
+            type="checkbox"
+            checked={form.planSeulement === true}
+            onChange={e => onChange({ planSeulement: e.target.checked })}
+            aria-describedby={`gen-plan-seulement-hint${advise ? ' gen-plan-seulement-advice' : ''}`}
+            className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[#c8b6ff]"
+          />
+          <div className="min-w-0">
+            <label
+              htmlFor="gen-plan-seulement"
+              className={`block cursor-pointer text-sm font-medium ${form.planSeulement ? 'text-white' : 'text-mg-100'}`}
+            >
+              Commencer par le plan
+            </label>
+            <p id="gen-plan-seulement-hint" className="text-[11px] text-mg-300 leading-snug">
+              Plus rapide : vous obtenez d’abord le plan {sup ? 'du module' : 'de la séquence'}, puis vous choisissez les séances à développer.
+            </p>
+          </div>
+        </div>
+        {/* Annoncé poliment quand il apparaît (nombre de séances ou durée choisis) : l'enseignant décide. */}
+        <div aria-live="polite">
+          {advise && (
+            <p id="gen-plan-seulement-advice" className="mt-1.5 text-xs text-mg-200 leading-relaxed">
+              Conseil : pour {sup ? 'un gros module' : 'une grosse séquence'}, commencer par le plan donne plus vite un premier résultat utile. Cochez la case ci-dessus si vous le souhaitez.
+            </p>
+          )}
+        </div>
+      </div>,
     );
   }
   if (has('typeEvaluation')) {

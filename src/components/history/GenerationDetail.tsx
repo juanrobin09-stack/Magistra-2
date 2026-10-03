@@ -10,7 +10,9 @@ import MarkdownView from '@/components/MarkdownView';
 import SourceReliability from '@/components/generate/SourceReliability';
 import ErrorBanner from '@/components/ui/ErrorBanner';
 import { copyText, exportMarkdown, exportPdf, printDocument } from '@/lib/export';
-import { describeRecordParams, type ReusableRecord } from '@/lib/generation/reuse';
+import DevelopSessions from '@/components/generate/DevelopSessions';
+import { planOriginFromRecord } from '@/lib/generation/plan';
+import { describeRecordParams, isPlanFirst, type ReusableRecord } from '@/lib/generation/reuse';
 import { errorMessage, exportDocFor, formatDate, niveauLabelFor, toolLabelFor } from './logic';
 import type { RecordState } from './useGenerationRecord';
 
@@ -259,6 +261,17 @@ export default function GenerationDetail({
           </button>
         </div>
         <MarkdownView content={content} className="max-w-3xl" />
+        {/* Plan seul (« Commencer par le plan ») : les séances à développer ; tableau illisible : rien. */}
+        {isPlanFirst(record) && (
+          <div className="max-w-3xl">
+            <DevelopSessions
+              key={record.id}
+              content={content}
+              origin={planOriginFromRecord(record)}
+              requested={typeof record.params?.nombreSeances === 'number' ? record.params.nombreSeances : undefined}
+            />
+          </div>
+        )}
         <p className="text-xs text-mg-300 mt-8 pt-4 border-t border-white/5 max-w-3xl">
           {isDemo
             ? 'Exemple pré-rédigé de la démonstration : aucune IA n’a été utilisée.'

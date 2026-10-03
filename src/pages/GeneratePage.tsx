@@ -15,7 +15,7 @@
 // (erreur précise si l'IA n'est pas prête) : jamais d'exemple silencieux.
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigationType, useSearchParams } from 'react-router-dom';
 import { Info, LayoutGrid, Loader2, Settings2, Sparkles } from 'lucide-react';
 import { getToolInfo, isTypeContenu, TOOL_GROUPS } from '@shared/catalog';
 import { toMagistraError } from '@shared/errors';
@@ -50,7 +50,7 @@ import {
   describeResearchOptions, effectiveResearchMode, modeUsesNetwork, NETWORK_PRIVACY_NOTE, privacyNotes, providerAnnounced,
   researchHints,
 } from '@/lib/generation/research';
-import { formFromRecord, type ReusableRecord } from '@/lib/generation/reuse';
+import { reusedFromState, type ReusedRequest } from '@/lib/generation/reuse';
 import { useLocalEngine } from '@/lib/localConnector/controller';
 import { adminContact, configuredProvider, useRuntime } from '@/lib/runtime/context';
 import { ExampleGenerationClient } from '@/lib/runtime/demo';
@@ -85,18 +85,37 @@ export default function GeneratePage() {
   const { mode, client, store, profile } = useRuntime();
   const [searchParams, setSearchParams] = useSearchParams();
   const shell = useAppShell();
-  // « Reprendre cette demande » (historique) : formulaire prérempli avec les paramètres enregistrés.
+  // « Reprendre cette demande » (historique) ou « Développer une séance » (plan d'une séquence) : formulaire prérempli
+  // (état du routeur, jamais l'adresse). Rien n'est généré : l'enseignant relit et modifie avant de lancer.
   const location = useLocation();
-  const [reused] = useState(() => {
-    const reuse = (location.state as { reuse?: ReusableRecord } | null)?.reuse;
-    return reuse ? formFromRecord(reuse, profile) : null;
-  });
+  const navigationType = useNavigationType();
+  const [reused, setReused] = useState<ReusedRequest | null>(() => reusedFromState(location.state, profile));
   const [form, setForm] = useState<GenerateForm>(() =>
     reused?.form ?? createInitialForm(profile, { type: searchParams.get('type'), sujet: searchParams.get('sujet') }),
   );
   const [showErrors, setShowErrors] = useState(false);
   const [submitNotice, setSubmitNotice] = useState<string | null>(null);
   const [chosenMode, setChosenMode] = useState<ResearchMode | null>(reused?.researchMode ?? null);
+
+  // Nouvelle demande à reprendre alors que la page est déjà affichée (« Développer une séance » sous le plan, qui reste
+  // sur « Générer ») : le formulaire est rempli à nouveau et la page revient en haut. Pas au retour arrière du navigateur
+  // (la saisie en cours est conservée, comme avant) ; au premier affichage, l'état a déjà servi (useState ci-dessus).
+  // (État ajusté pendant le rendu quand l'état du routeur change, comme le recommande React.)
+  const reuseKey = (location.state as { reuse?: unknown } | null)?.reuse ?? null;
+  const [seenReuse, setSeenReuse] = useState(reuseKey);
+  const [prefills, setPrefills] = useState(0);
+  if (reuseKey !== seenReuse) {
+    setSeenReuse(reuseKey);
+    const next = navigationType === 'POP' ? null : reusedFromState(location.state, profile);
+    if (next) {
+      setReused(next);
+      setForm(next.form);
+      setChosenMode(next.researchMode);
+      setShowErrors(false);
+      setSubmitNotice(null);
+      setPrefills(n => n + 1);
+    }
+  }
 
   const capabilities = useCapabilities(client);
   const reloadCaps = capabilities.refresh;
@@ -153,6 +172,12 @@ export default function GeneratePage() {
     pageRef.current?.scrollIntoView?.({ block: 'start' });
     headingRef.current?.focus({ preventScroll: true });
   }, [form.type]);
+  // Formulaire rempli alors que la page était déjà affichée (« Développer une séance »), même outil ou non : retour en haut.
+  useEffect(() => {
+    if (prefills === 0) return;
+    pageRef.current?.scrollIntoView?.({ block: 'start' });
+    headingRef.current?.focus({ preventScroll: true });
+  }, [prefills]);
 
   // Libellés des outils de la barre latérale au niveau du formulaire (« TD / Exercices » en Licence…), comme cette
   // page ; rendus au niveau du profil quand la page est quittée.
@@ -429,7 +454,7 @@ export default function GeneratePage() {
             nouveau le travail corrigé », ne valent pas pour un autre outil). */}
         {reused && form.type === reused.form.type && (
           <div role="note" className="mb-5 p-4 rounded-xl bg-white/[0.03] border border-white/10 text-sm text-mg-100">
-            <p className="text-white font-medium">Demande reprise depuis l’historique : vérifiez les paramètres avant de générer.</p>
+            <p className="text-white font-medium">{reused.notice ?? 'Demande reprise depuis l’historique : vérifiez les paramètres avant de générer.'}</p>
             {reused.notes.length > 0 && (
               <ul className="mt-1.5 list-disc pl-5 space-y-0.5 text-mg-200 [overflow-wrap:anywhere]">
                 {reused.notes.map(note => <li key={note}>{note}</li>)}

@@ -115,6 +115,11 @@ export interface GenerationRequest {
   sansCorrige?: boolean;
   nombreExercices?: number;
   nombreSeances?: number;
+  /**
+   * Vrai : séquence en deux temps. Cette demande ne produit que le PLAN (tableau des séances, sans leur déroulé) ; l'enseignant
+   * choisit ensuite les séances à développer, une par une (outil « fiche de préparation »). Absent : séquence complète.
+   */
+  planSeulement?: boolean;
   ton?: TonRedaction;
   besoins?: BesoinParticulier[];
   researchMode: ResearchMode;

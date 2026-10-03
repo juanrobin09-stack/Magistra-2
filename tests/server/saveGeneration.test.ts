@@ -63,6 +63,32 @@ describe('POST /api/generation — enregistrement d’une génération de Magist
     expect((await call(server.url, `/api/generation?id=${id}`, 'token-B')).status).toBe(404);
   });
 
+  it('séquence « plan d’abord » : « planSeulement » conservé dans les paramètres ; non booléen ou autre outil : 400, rien d’enregistré', async () => {
+    const store = new MemoryStore();
+    server = await startApi(testDeps({ store }));
+    const plan: GenerationRecordDraft = {
+      ...draft, type: 'sequence', niveau: '4eme', matiere: 'histoire_geo', discipline: undefined, sujet: 'La Révolution',
+      contenu: '| N° | Titre |\n|---|---|\n| 1 | A |', params: { nombreSeances: 2, planSeulement: true },
+    };
+    const res = await save(server.url, 'token-A', { record: plan });
+    expect(res.status).toBe(201);
+    const { id } = await res.json() as { id: string };
+    const stored = await (await call(server.url, `/api/generation?id=${id}`, 'token-A')).json() as GenerationRecord;
+    expect(stored.params).toEqual({ nombreSeances: 2, planSeulement: true });
+    // Client plus ancien : sans le champ, comme avant.
+    expect((await save(server.url, 'token-A', { record: { ...plan, params: { nombreSeances: 2 } } })).status).toBe(201);
+    for (const record of [
+      { ...plan, params: { planSeulement: 'oui' } },
+      { ...plan, params: { planSeulement: 1 } },
+      { ...plan, type: 'cours', params: { planSeulement: true } },
+    ]) {
+      const refused = await save(server.url, 'token-A', { record });
+      expect(refused.status).toBe(400);
+      expect((await refused.json() as { error: { code: string } }).error.code).toBe('INVALID_REQUEST');
+    }
+    expect((await (await call(server.url, '/api/history', 'token-A')).json() as HistoryPage).items).toHaveLength(2);
+  });
+
   it('identifiant, date, favori et utilisateur du corps ignorés : attribués par le serveur', async () => {
     const store = new MemoryStore();
     server = await startApi(testDeps({ store }));

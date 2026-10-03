@@ -96,6 +96,33 @@ describe('GenerationManager', () => {
     expect(gm.busy).toBe(false);
   });
 
+  it('séquence « plan d’abord » : l’option arrive au moteur et dans l’historique local ; valeur non booléenne ou autre outil : ignorée', async () => {
+    const provider = new MockProvider({ reply: '| N° | Titre |\n|---|---|\n| 1 | A |\n| 2 | B |' });
+    const { gm, finished } = manager(provider);
+    const sequence = { type: 'sequence', niveau: '4eme', matiere: 'histoire_geo', sujet: 'La Révolution', researchMode: 'documents', nombreSeances: 2 };
+    const run = async (body: Record<string, unknown>) => {
+      const { jobId } = gm.start(body);
+      const events = await finished(jobId);
+      await new Promise(r => setTimeout(r, 0));
+      return events.at(-1) as Extract<GenerationEvent, { type: 'done' }>;
+    };
+    const prompt = (n: number) => provider.calls[n].messages.map(m => m.content).join('\n');
+
+    const plan = await run({ ...sequence, planSeulement: true });
+    expect(prompt(0)).toContain('concevoir le PLAN d\'une séquence pédagogique de EXACTEMENT 2 séances');
+    expect(plan).toMatchObject({ type: 'done', saved: true });
+    expect((await store.get(plan.id!))?.params).toMatchObject({ nombreSeances: 2, planSeulement: true });
+
+    const full = await run(sequence);
+    expect(prompt(1)).not.toContain('PLAN d\'');
+    expect((await store.get(full.id!))?.params).not.toHaveProperty('planSeulement');
+
+    await run({ ...sequence, planSeulement: 'true' });
+    await run({ ...REQUEST, planSeulement: true });
+    expect(prompt(2)).not.toContain('PLAN d\'');
+    expect(prompt(3)).not.toContain('PLAN d\'');
+  });
+
   it('une seule génération à la fois (GENERATION_BUSY), aucune limite ensuite', async () => {
     const provider = new MockProvider({ reply: 'x'.repeat(400), chunkSize: 10, delayMs: 5 });
     const { gm, finished } = manager(provider);

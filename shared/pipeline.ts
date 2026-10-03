@@ -274,6 +274,7 @@ function recordParams(req: GenerationRequest): Record<string, unknown> {
     sansCorrige: req.sansCorrige,
     nombreExercices: req.nombreExercices,
     nombreSeances: req.nombreSeances,
+    planSeulement: req.planSeulement,
     ton: req.ton,
     besoins: req.besoins,
     // Le travail d'élève n'est pas conservé (donnée personnelle) : seule sa longueur est notée.

@@ -72,6 +72,35 @@ describe('POST /api/generate', () => {
     ]);
   });
 
+  it('séquence « plan d’abord » : l’option arrive au modèle et dans l’historique ; ancien client (sans le champ), valeur non booléenne ou autre outil : comme avant', async () => {
+    const store = new MemoryStore();
+    const provider = new MockProvider({ reply: '| N° | Titre |\n|---|---|\n| 1 | A |\n| 2 | B |' });
+    server = await startApi(testDeps({ store, provider: () => provider }));
+    const sequence = { ...validRequest, type: 'sequence', niveau: '4eme', matiere: 'histoire_geo', sujet: 'La Révolution', nombreSeances: 2 };
+    const send = async (body: Record<string, unknown>) => {
+      const res = await call(server!.url, '/api/generate', 'token-A', { method: 'POST', body: JSON.stringify(body) });
+      expect(res.status).toBe(200);
+      return (await readNdjson(res)).at(-1) as Extract<GenerationEvent, { type: 'done' }>;
+    };
+    const promptOf = (n: number) => provider.calls[n].messages.map(m => m.content).join('\n');
+
+    const plan = await send({ ...sequence, planSeulement: true });
+    expect(promptOf(0)).toContain('concevoir le PLAN d\'une séquence pédagogique de EXACTEMENT 2 séances');
+    expect((await store.getGeneration('user_A', plan.id!))?.params).toMatchObject({ nombreSeances: 2, planSeulement: true });
+
+    // Ancien client : le champ n'existe pas, séquence complète (rien ne change pour lui).
+    const full = await send(sequence);
+    expect(promptOf(1)).toContain('détail de chaque séance');
+    expect(promptOf(1)).not.toContain('PLAN d\'');
+    expect((await store.getGeneration('user_A', full.id!))?.params).not.toHaveProperty('planSeulement');
+
+    // Valeur non booléenne ou outil sans cette option : ignorée, jamais d'erreur.
+    await send({ ...sequence, planSeulement: 'true' });
+    await send({ ...validRequest, planSeulement: true });
+    expect(promptOf(2)).not.toContain('PLAN d\'');
+    expect(promptOf(3)).not.toContain('PLAN d\'');
+  });
+
   it('interrompt le fournisseur d’IA quand le client ferme la connexion', async () => {
     const store = new MemoryStore();
     const provider = new MockProvider({ reply: 'x'.repeat(4_000), chunkSize: 10, delayMs: 20 });

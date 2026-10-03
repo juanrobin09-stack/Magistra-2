@@ -17,6 +17,8 @@ import { getDemoExample } from '@shared/demo';
 import type { GenerationRequest } from '@shared/types';
 import { toMagistraError, type ErrorCode } from '@shared/errors';
 import LoadingSkeleton from './LoadingSkeleton';
+import { planOriginFromRequest } from '@/lib/generation/plan';
+import DevelopSessions from './DevelopSessions';
 import { FOCUS_RING } from './fieldUtils';
 import SourceReliability from './SourceReliability';
 import SpeedDetails from './SpeedDetails';
@@ -206,6 +208,12 @@ export default function ResultPanel({ state, mode, store, onStop, onRestart, con
 
       {!running && text && (
         <ResultActions key={state.runId} request={req} heading={heading} content={text} resultId={result?.id} store={store} />
+      )}
+
+      {/* Plan d'une séquence (« Commencer par le plan ») : les séances à développer ensuite. Jamais pour une autre demande,
+          ni pour un exemple pré-rédigé, ni avant la fin de la génération. */}
+      {state.phase === 'done' && !example && text && req.type === 'sequence' && req.planSeulement === true && (
+        <DevelopSessions key={`plan-${state.runId}`} content={text} origin={planOriginFromRequest(req)} requested={req.nombreSeances} />
       )}
 
       {save && (

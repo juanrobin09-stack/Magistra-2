@@ -23,7 +23,7 @@ export type FormField =
   | 'sujet' | 'discipline' | 'duree' | 'objectifs' | 'consignes' | 'difficulte' | 'format'
   | 'trimestre' | 'profilEleve' | 'nombreAppreciations' | 'profilsDifferenciation'
   | 'contenuSource' | 'typeLettre' | 'texteEleve'
-  | 'modalite' | 'typeEvaluation' | 'bareme' | 'sansCorrige' | 'nombreExercices' | 'nombreSeances' | 'ton' | 'besoins';
+  | 'modalite' | 'typeEvaluation' | 'bareme' | 'sansCorrige' | 'nombreExercices' | 'nombreSeances' | 'planSeulement' | 'ton' | 'besoins';
 
 export type Trimestre = '1' | '2' | '3';
 
@@ -58,6 +58,8 @@ export interface GenerateForm {
   sansCorrige: boolean;
   nombreExercices: number | '';
   nombreSeances: number | '';
+  /** Vrai : séquence en deux temps, le plan d'abord (puis « Développer une séance »). Faux : séquence complète. */
+  planSeulement: boolean;
   ton: TonRedaction | '';
   besoins: BesoinParticulier[];
 }
@@ -130,6 +132,7 @@ export function createInitialForm(
     sansCorrige: false,
     nombreExercices: '',
     nombreSeances: '',
+    planSeulement: false,
     ton: '',
     besoins: [],
   };
@@ -193,6 +196,34 @@ export function visibleFields(tool: TypeContenu, niveau: NiveauScolaire, matiere
  */
 export function chosenCount(value: number | '', unit: CountUnit): number | '' {
   return typeof value === 'number' && unit.options.includes(value) ? value : '';
+}
+
+// ─── Plan d'abord (grosse séquence) ─────────────────────────────────────────
+
+/** À partir de ce nombre de séances, le formulaire suggère de commencer par le plan (jamais de bascule automatique). */
+export const PLAN_ADVICE_MIN_SEANCES = 5;
+
+/** Durée « très longue » : plusieurs semaines, une dizaine d'heures ou plus, un mois, un trimestre, un semestre, l'année. */
+const LONG_PERIOD_RE = /(?<![\p{L}\d])(?:mois|trimestres?|semestres?|ann[ée]e)(?![\p{L}\d])/iu;
+const WEEKS_RE = /(\d{1,3}) ?(?:semaines?|sem\.?)(?![\p{L}])/iu;
+const HOURS_RE = /(\d{1,3}) ?(?:heures?|h)(?![\p{L}])/iu;
+/** Seuils de la durée saisie en texte libre (REQUEST_LIMITS.duree : 80 caractères au plus). */
+const LONG_WEEKS = 3;
+const LONG_HOURS = 10;
+
+/**
+ * La séquence demandée est-elle assez grosse pour que le formulaire propose de commencer par le plan ? Oui à partir de
+ * PLAN_ADVICE_MIN_SEANCES séances, ou si la durée saisie est très longue (3 semaines, 10 heures, un mois, un trimestre…).
+ * Texte libre : tout ce qui n'est pas reconnu compte pour « pas long » (aucun conseil, aucun effet sur la demande).
+ */
+export function isLargeSequence(nombreSeances: number | '', duree: string): boolean {
+  if (typeof nombreSeances === 'number' && nombreSeances >= PLAN_ADVICE_MIN_SEANCES) return true;
+  const text = duree.slice(0, REQUEST_LIMITS.duree);
+  if (LONG_PERIOD_RE.test(text)) return true;
+  const weeks = WEEKS_RE.exec(text);
+  if (weeks && Number(weeks[1]) >= LONG_WEEKS) return true;
+  const hours = HOURS_RE.exec(text);
+  return Boolean(hours && Number(hours[1]) >= LONG_HOURS);
 }
 
 // ─── Nombre d'appréciations ─────────────────────────────────────────────────
@@ -340,6 +371,8 @@ export function buildGenerationRequest(
     if (count) set('nombreExercices', count);
   }
   if (has('nombreSeances') && form.nombreSeances) set('nombreSeances', form.nombreSeances);
+  // Formulaire d'une version antérieure (sans ce champ) : séquence complète.
+  if (has('planSeulement') && form.planSeulement === true) set('planSeulement', true);
   if (has('ton') && form.ton) set('ton', form.ton);
   // Formulaire d'une version antérieure (sans ce champ) : aucun besoin.
   const besoins = form.besoins ?? [];

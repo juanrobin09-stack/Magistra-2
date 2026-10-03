@@ -71,6 +71,7 @@ const TOOL_OPTIONS = [
   ['sansCorrige', 'version élève seule'],
   ['nombreExercices', 'nombre demandé'],
   ['nombreSeances', 'nombre de séances'],
+  ['planSeulement', "plan d'abord"],
   ['typeEvaluation', "objectif de l'évaluation"],
   ['bareme', 'notation'],
   ['ton', 'ton'],
@@ -78,6 +79,17 @@ const TOOL_OPTIONS = [
 ] as const satisfies readonly (readonly [keyof GenerationRequest, string])[];
 
 export type ToolOption = (typeof TOOL_OPTIONS)[number][0];
+
+/**
+ * Options apparues APRÈS TOOL_OPTIONS_MIN_APP_VERSION (une application de cette version les ignore sans erreur) : le
+ * message ne cite pas ce numéro, il demande la dernière version.
+ */
+const NEWER_OPTIONS: ReadonlySet<ToolOption> = new Set<ToolOption>(['planSeulement']);
+
+/** Version à installer pour ces options : celle des options des outils, ou la dernière pour une option plus récente. */
+function installPhrase(options: readonly ToolOption[]): string {
+  return options.some(o => NEWER_OPTIONS.has(o)) ? 'la dernière version de Magistra pour Windows' : `Magistra pour Windows ${TOOL_OPTIONS_MIN_APP_VERSION} ou plus récente`;
+}
 
 /** Valeur renseignée (comme les paramètres enregistrés : ni vide, ni faux, ni liste vide). */
 function isSet(value: unknown): boolean {
@@ -114,7 +126,7 @@ export function localAppTooOldMessage(options: readonly ToolOption[], matiere: M
   const subject = parts.join(' et ');
   const verb = parts.length > 1 || (!single && !matiere) ? 'demandent' : 'demande';
   const alternative = matiere ? 'ou choisissez le serveur en ligne' : `ou générez sans ${single ? 'ce choix' : 'ces choix'}`;
-  return `${subject.charAt(0).toUpperCase()}${subject.slice(1)} ${verb} Magistra pour Windows ${TOOL_OPTIONS_MIN_APP_VERSION} ou plus récente, et l'application de cet ordinateur est plus ancienne : installez la dernière version ${UPDATE_WHERE}, puis réessayez, ${alternative}.`;
+  return `${subject.charAt(0).toUpperCase()}${subject.slice(1)} ${verb} ${installPhrase(options)}, et l'application de cet ordinateur est plus ancienne : installez la dernière version ${UPDATE_WHERE}, puis réessayez, ${alternative}.`;
 }
 
 /**
@@ -144,7 +156,7 @@ export function ignoredToolOptionsMessage(ignored: readonly ToolOption[]): strin
   const names = optionNames(ignored);
   const choices = ignored.length > 1 ? `Vos choix (${names}) n'ont pas été appliqués` : `Votre choix (${names}) n'a pas été appliqué`;
   const answerKey = ignored.includes('sansCorrige') ? ' Le document peut contenir un corrigé : relisez-le avant de le distribuer.' : '';
-  return `${choices} : l'application Magistra de cet ordinateur est trop ancienne.${answerKey} Installez Magistra pour Windows ${TOOL_OPTIONS_MIN_APP_VERSION} ou plus récente ${UPDATE_WHERE}, puis relancez la génération.`;
+  return `${choices} : l'application Magistra de cet ordinateur est trop ancienne.${answerKey} Installez ${installPhrase(ignored)} ${UPDATE_WHERE}, puis relancez la génération.`;
 }
 
 /**
