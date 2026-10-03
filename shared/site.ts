@@ -19,8 +19,13 @@ export const SITE_ORIGIN = 'https://www.mag-istra.fr';
  */
 export const SITE_LEGACY_ORIGIN = 'https://magistra-2.vercel.app';
 
-/** Pages publiques du site, dans l'ordre du plan du site (les routes de src/site/SiteApp.tsx). */
-export const SITE_PATHS: readonly string[] = ['/', '/mentions-legales', '/confidentialite', '/cgu'];
+/**
+ * Pages du plan du site (sitemap.xml) : l'accueil seul. Toutes les routes du site (accueil et pages légales,
+ * src/site/SiteApp.tsx) sont servies par la même page statique, donc avec le même lien canonique et la même adresse
+ * og:url : celles de l'accueil. Lister les pages légales comme pages distinctes contredirait ce lien canonique, et elles
+ * n'ont pas à être indexées.
+ */
+export const SITE_PATHS: readonly string[] = ['/'];
 
 /** Adresse complète d'une page du site (« / » → « https://www.mag-istra.fr/ »). */
 export function siteUrl(sitePath: string): string {
@@ -32,7 +37,7 @@ export function buildRobotsTxt(): string {
   return `User-agent: *\nAllow: /\n\nSitemap: ${siteUrl('/sitemap.xml')}\n`;
 }
 
-/** sitemap.xml : une entrée par page du site, sans date (une date figée serait fausse au déploiement suivant). */
+/** sitemap.xml : une entrée par page de SITE_PATHS (l'accueil), sans date (une date figée serait fausse au déploiement suivant). */
 export function buildSitemapXml(): string {
   const entries = SITE_PATHS.map(sitePath => `  <url>\n    <loc>${siteUrl(sitePath)}</loc>\n  </url>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries}\n</urlset>\n`;

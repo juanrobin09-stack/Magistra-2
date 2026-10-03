@@ -121,10 +121,16 @@ describe('Pages d’entrée', () => {
     expect(SITE_PATHS[0]).toBe('/');
   });
 
-  it('site/index.html : le lien canonique et og:url sont les seules adresses externes que scripts/verify-site.mjs admet (contrôle réel de la page)', async () => {
-    const verify = (await import(pathToFileURL(path.join(root, 'scripts', 'verify-site.mjs')).href)) as { checkIndexHtml(html: string): string[]; checkSearchTags(html: string): string[] };
-    expect(verify.checkIndexHtml(site)).toEqual([]);
+  it('site/index.html : conforme à la liste blanche de scripts/verify-site.mjs (le lien canonique et og:url sont les seules adresses externes ; aucun commentaire)', async () => {
+    const verify = (await import(pathToFileURL(path.join(root, 'scripts', 'verify-site.mjs')).href)) as {
+      checkIndexHtml(html: string, options?: { source?: boolean }): string[];
+      checkSearchTags(html: string): string[];
+    };
+    // Gabarit : son point d'entrée est encore le fichier TypeScript, que Vite remplace par /assets/index-….js.
+    expect(verify.checkIndexHtml(site, { source: true })).toEqual([]);
     expect(verify.checkSearchTags(site)).toEqual([]);
+    // Vite recopie les commentaires du gabarit dans le build, et le contrôle les refuse : le gabarit n'en a aucun.
+    expect(site).not.toMatch(/<!--|--!?>|<!\[CDATA\[|<\?/i);
   });
 
   it('site/index.html : un seul script, externe, qui démarre le site vitrine (aucun script en ligne)', () => {

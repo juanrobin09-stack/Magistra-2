@@ -153,7 +153,10 @@ test('référencement : lien canonique et Open Graph à l’adresse officielle, 
   const xml = await sitemap.text();
   expect(xml).toBe(buildSitemapXml());
   expect(xml).not.toContain('<html');
-  for (const location of xml.matchAll(/<loc>([^<]+)<\/loc>/g)) expect(location[1].startsWith(`${SITE_ORIGIN}/`)).toBe(true);
+  // L'accueil seul : les pages légales sont servies avec le lien canonique de l'accueil, elles ne sont pas à indexer.
+  expect([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(location => location[1])).toEqual([`${SITE_ORIGIN}/`]);
+  await page.goto('/mentions-legales');
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `${SITE_ORIGIN}/`);
 });
 
 // ─── 2. Attribution ─────────────────────────────────────────────────────────
