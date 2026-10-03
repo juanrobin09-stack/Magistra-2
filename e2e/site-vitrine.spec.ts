@@ -97,12 +97,14 @@ test('accueil : se charge, un seul h1, aucun accès à une application, « Tél�
   expect(hrefs.filter(href => /^\/(?:app|onboarding|setup|presentation)(?:[/?#]|$)/.test(href))).toEqual([]);
   expect(await pageText(page)).not.toMatch(NO_APP_WORDING);
 
-  // Téléchargement : barre de navigation, héros et appel final mènent à la section « Magistra pour Windows ».
+  // Téléchargement : la barre de navigation et le héros mènent à la section « Magistra pour Windows », qui porte le
+  // bouton de téléchargement lui-même : trois entrées, sans doublon (ni carte, ni appel final).
   await expect(page.getByRole('navigation', { name: 'Navigation du site' }).getByRole('link', { name: 'Télécharger' })).toHaveAttribute('href', '#magistra-windows');
   const download = page.getByRole('link', { name: 'Télécharger pour Windows' });
-  expect(await download.count()).toBeGreaterThanOrEqual(3);
-  await expect(download.first()).toBeVisible();
-  await expect(download.first()).toHaveAttribute('href', '#magistra-windows');
+  await expect(download).toHaveCount(1);
+  await expect(download).toBeVisible();
+  await expect(download).toHaveAttribute('href', '#magistra-windows');
+  await expect(page.getByRole('link', { name: /^Télécharger/ })).toHaveCount(3);
   await expect(page.locator('section#magistra-windows')).toHaveCount(1);
   await expect(page.getByRole('link', { name: 'Découvrir FutureAI' }).first()).toHaveAttribute('href', 'https://futurai.space');
 });

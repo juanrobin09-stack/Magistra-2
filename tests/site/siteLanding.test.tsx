@@ -97,7 +97,7 @@ describe('Site vitrine : aucun accès à l’application', () => {
     expect(container.querySelectorAll('button.btn-primary')).toHaveLength(0);
   });
 
-  it('un seul h1 ; barre de navigation « Télécharger », héros et appel final « Télécharger pour Windows » vers #magistra-windows', async () => {
+  it('un seul h1 ; barre de navigation « Télécharger » et héros « Télécharger pour Windows » vers #magistra-windows', async () => {
     stubReleaseFetch(RELEASE);
     const { container } = await mountSite();
     expect(container.querySelectorAll('h1')).toHaveLength(1);
@@ -106,12 +106,23 @@ describe('Site vitrine : aucun accès à l’application', () => {
     const hero = container.querySelector('main section')!;
     const heroLinks = Array.from(hero.querySelectorAll('a')).map(a => a.textContent?.trim());
     expect(heroLinks).toEqual(expect.arrayContaining(['Télécharger pour Windows', 'Découvrir FutureAI']));
-    const cta = container.querySelector('section[aria-labelledby="cta-title"]')!;
-    expect(cta.querySelector('a')?.textContent?.trim()).toBe('Télécharger pour Windows');
     const toWindows = Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href="#magistra-windows"]'));
-    expect(toWindows.length).toBeGreaterThanOrEqual(4);
+    expect(toWindows.map(a => a.textContent?.trim())).toEqual(['Télécharger', 'Télécharger pour Windows']);
     for (const a of toWindows) expect(a.target).toBe('');
     expect(container.querySelector('section#magistra-windows')).not.toBeNull();
+  });
+
+  it('pas de doublons : trois entrées de téléchargement (barre de navigation, héros, section), ni carte « Télécharger » ni appel final', async () => {
+    stubReleaseFetch(RELEASE);
+    const { container } = await mountSite();
+    // Ni la carte « IA locale gratuite » ni l'appel « Prêt à gagner du temps ? » ne répètent le bouton.
+    expect(container.querySelector('section[aria-labelledby="cta-title"]')).toBeNull();
+    expect(container.textContent).not.toContain('Prêt à gagner du temps');
+    const plus = container.querySelector('section[aria-labelledby="plus-title"]')!;
+    expect(plus.querySelectorAll('a')).toHaveLength(0);
+    // Tous les liens et boutons dont le texte commence par « Télécharger » : barre, héros, bouton de la section.
+    const downloads = Array.from(container.querySelectorAll<HTMLElement>('a, button')).filter(el => /^Télécharger/.test(el.textContent?.trim() ?? ''));
+    expect(downloads.map(el => el.textContent?.trim())).toEqual(['Télécharger', 'Télécharger pour Windows', 'Télécharger Magistra pour Windows']);
   });
 
   it('l’engagement « Gratuit, sans compte, hors connexion » remplace « Sur le web, une IA annoncée clairement »', async () => {

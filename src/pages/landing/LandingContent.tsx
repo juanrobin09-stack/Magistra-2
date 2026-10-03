@@ -21,8 +21,8 @@ interface LandingContentProps {
   heroNote?: ReactNode;
   /** Section « Magistra pour Windows » (téléchargement), absente de l'application Windows, déjà installée. */
   windowsSection?: ReactNode;
-  /** Bouton de l'appel à l'action final. */
-  finalAction: ReactNode;
+  /** Bouton de l'appel à l'action final ; absent : la section « Prêt à gagner du temps ? » n'est pas affichée. */
+  finalAction?: ReactNode;
   /** Les cartes qui mènent au téléchargement affichent leur lien « Télécharger pour Windows ». */
   windowsLinks?: boolean;
 }
@@ -246,22 +246,24 @@ export default function LandingContent({
         </section>
 
         {/* Appel à l'action */}
-        <section className="py-16 sm:py-20 px-6" aria-labelledby="cta-title">
-          <div className="max-w-2xl mx-auto text-center">
-            <div className="card p-8 sm:p-12 border-accent/10 bg-gradient-to-b from-mg-800 to-mg-900 relative overflow-hidden">
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[300px] h-[200px] bg-accent/5 rounded-full blur-[80px] pointer-events-none" aria-hidden="true" />
-              <div className="relative z-10">
-                <h2 id="cta-title" className="text-2xl sm:text-3xl text-white mb-3" style={{ fontFamily: 'var(--font-display)' }}>
-                  Prêt à gagner du <em className="text-accent not-italic">temps</em> ?
-                </h2>
-                <p className="text-sm text-mg-200 mb-6 max-w-md mx-auto">
-                  Un outil open source et non lucratif, conçu pour simplifier le quotidien des enseignants.
-                </p>
-                {finalAction}
+        {finalAction && (
+          <section className="py-16 sm:py-20 px-6" aria-labelledby="cta-title">
+            <div className="max-w-2xl mx-auto text-center">
+              <div className="card p-8 sm:p-12 border-accent/10 bg-gradient-to-b from-mg-800 to-mg-900 relative overflow-hidden">
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[300px] h-[200px] bg-accent/5 rounded-full blur-[80px] pointer-events-none" aria-hidden="true" />
+                <div className="relative z-10">
+                  <h2 id="cta-title" className="text-2xl sm:text-3xl text-white mb-3" style={{ fontFamily: 'var(--font-display)' }}>
+                    Prêt à gagner du <em className="text-accent not-italic">temps</em> ?
+                  </h2>
+                  <p className="text-sm text-mg-200 mb-6 max-w-md mx-auto">
+                    Un outil open source et non lucratif, conçu pour simplifier le quotidien des enseignants.
+                  </p>
+                  {finalAction}
+                </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
       </main>
 
       {/* Pied de page */}

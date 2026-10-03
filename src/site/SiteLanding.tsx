@@ -1,6 +1,8 @@
 // Page d'accueil du site vitrine : la présentation de Magistra (landing/LandingContent.tsx) et le téléchargement de
 // l'application Windows. Aucun accès à une application dans le navigateur : les boutons mènent à la section « Magistra
 // pour Windows » de la page (ancre #magistra-windows), où se trouve le téléchargement lui-même.
+// Trois entrées de téléchargement seulement : le bouton de la barre de navigation, celui du héros et la section elle-même
+// (ni lien dans une carte, ni appel à l'action final : le même bouton cinq fois de suite n'aide pas).
 // Aucun fournisseur d'exécution, aucun service de connexion, aucun connecteur local : la seule requête de la page est
 // la recherche de la dernière version (GET /api/windows-release, WindowsDownloadPanel).
 
@@ -41,11 +43,7 @@ export default function SiteLanding() {
         </p>
       }
       windowsSection={<WindowsDownloadPanel variant="landing" mode="showcase" />}
-      finalAction={
-        <a href={WINDOWS_SECTION_HREF} className={CTA_CLASS.hero}>
-          <Download size={16} aria-hidden="true" /> Télécharger pour Windows
-        </a>
-      }
+      windowsLinks={false}
     />
   );
 }
