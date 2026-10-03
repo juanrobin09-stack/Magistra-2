@@ -20,6 +20,16 @@ describe('Hébergeur par défaut', () => {
     expect(readLegalInfo({ VITE_LEGAL_HOST: '' }).host).toBe(LEGAL_DEFAULT_HOST);
     expect(readLegalInfo({ VITE_LEGAL_HOST: '  ' }).host).toBe(LEGAL_DEFAULT_HOST);
   });
+
+  it('un point final de VITE_LEGAL_HOST est retiré : les pages ajoutent le leur (jamais « .. »)', () => {
+    expect(readLegalInfo({ VITE_LEGAL_HOST: 'OVH SAS, 2 rue Kellermann, 59100 Roubaix, France.' }).host)
+      .toBe('OVH SAS, 2 rue Kellermann, 59100 Roubaix, France');
+    expect(readLegalInfo({ VITE_LEGAL_HOST: '.' }).host).toBe(LEGAL_DEFAULT_HOST);
+  });
+
+  it('adresse https de l’hébergeur : une virgule collée à l’adresse n’en fait pas partie', () => {
+    expect(findHostUrl('OVH SAS, https://www.ovhcloud.com,2 rue Kellermann')?.url).toBe('https://www.ovhcloud.com');
+  });
 });
 
 describe('findHostUrl : l’adresse https de l’hébergeur, sans la ponctuation de la phrase', () => {

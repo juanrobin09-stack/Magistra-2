@@ -352,9 +352,9 @@ describe('documentation des informations légales : hébergeur, éditeur et cont
   it('.env.example : le contact de l’administrateur ne passe avant le défaut que dans l’application, jamais sur le site vitrine', () => {
     const block = envBlock();
     expect(block).toContain('modes web et');
-    expect(block).toContain('personnel seulement : MAGISTRA_ADMIN_CONTACT');
+    expect(block).toContain('personnel seulement : MAGISTRA_ADMIN_CONTACT remplace le défaut, mais jamais VITE_LEGAL_CONTACT');
     expect(block).toMatch(/le site vitrine\s+#\s+ne le lit jamais/);
-    expect(block).not.toContain("MAGISTRA_ADMIN_CONTACT, s'il est renseigné, passe avant)");
+    expect(block).not.toContain("MAGISTRA_ADMIN_CONTACT, s'il est renseigné, passe avant");
     // README : aucune affirmation contraire pour le site (la variable n'y est citée que comme contact affiché aux enseignants).
     expect(vercelSection()).not.toMatch(/VITE_LEGAL_CONTACT[^.]*MAGISTRA_ADMIN_CONTACT[^.]*passe avant/);
   });

@@ -208,7 +208,7 @@ jobs:
           ### Première utilisation
           1. Ouvrez l'installateur. **Windows SmartScreen** peut afficher un avertissement (« Windows a protégé votre
              ordinateur ») : le fichier n'est pas encore signé numériquement. Vérifiez qu'il vient de cette page
-             (empreinte SHA-256 ci-dessous), puis cliquez sur **Informations complémentaires** → **Exécuter quand même**.
+             (contrôle d'empreinte SHA-256 possible : voir plus bas), puis cliquez sur **Informations complémentaires** → **Exécuter quand même**.
           2. Magistra s'installe en quelques secondes, sans droits d'administrateur, et s'ouvre toute seule.
           3. Dans Magistra, **Activer l'IA** installe le moteur d'IA locale (Ollama, version 0.13.1 ou plus récente) et
              un modèle open weights adapté à l'ordinateur : un seul clic, taille du téléchargement annoncée avant, sans

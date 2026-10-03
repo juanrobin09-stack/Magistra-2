@@ -395,7 +395,7 @@ function ActivationOffer({ ai, status, plan, engineUpdate, variant, example, foc
               </p>
             )}
             {engineWindowMayOpen(status, plan.engine) && (
-              <EngineWindowNote moment={plan.engine === 'manual' ? 'manual' : 'install'} className="mt-2" />
+              <EngineWindowNote moment="install" className="mt-2" />
             )}
             <p className="text-xs text-mg-200">
               {/* Demande mémorisée (arrêt sur erreur) : « rien avant votre clic » serait faux — voir plus bas. */}

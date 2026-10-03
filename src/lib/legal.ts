@@ -77,7 +77,8 @@ export function readLegalInfo(
     publisher: read('publisher') ?? AUTHOR_NAME,
     director: read('director') ?? AUTHOR_NAME,
     contact: read('contact') ?? clean(fallbackContact) ?? AUTHOR_CONTACT_EMAIL,
-    host: read('host') ?? LEGAL_DEFAULT_HOST,
+    // Les pages ajoutent leur point final : un point déjà présent dans la variable ne doit pas le doubler.
+    host: read('host')?.replace(/[.\s]+$/, '') || LEGAL_DEFAULT_HOST,
     address: read('address'),
     dataRegion: read('dataRegion'),
   };
@@ -99,7 +100,7 @@ export function showsNonProfessionalNotice(info: Pick<LegalInfo, 'publisher' | '
  * fermante). null : aucune adresse https.
  */
 export function findHostUrl(host: string): { index: number; url: string } | null {
-  const found = /https:\/\/[^\s)]+/.exec(host);
+  const found = /https:\/\/[^\s),;]+/.exec(host);
   if (!found) return null;
   return { index: found.index, url: found[0].replace(/[.,;:!?]+$/, '') };
 }
