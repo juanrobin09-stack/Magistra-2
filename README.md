@@ -126,7 +126,7 @@ Vérification : `npm run ai:check` (serveur autonome : lit `.env`) ou `npm run a
 - **Niveaux** : maternelle, élémentaire, collège, lycée, lycée professionnel, BTS/BUT, CPGE, licence, master, doctorat. Au supérieur, vos documents, objectifs et consignes sont la référence principale.
 - **Sources** :
   - ajoutez des PDF, DOCX, PPTX, TXT ou MD : le texte est extrait **localement**, et le fichier original n'est jamais envoyé ;
-  - recherche facultative dans HAL, Crossref, Wikipédia et le web (SearXNG), avec priorité à Éduscol et au Bulletin officiel pour le scolaire.
+  - recherche facultative dans HAL, Crossref, OpenAlex et sur des **sites officiels et académiques vérifiés** (UNESCO, Éduscol, ministères, organisations internationales, recherche publique) : sans moteur de recherche, ceux que Wikipédia cite pour le sujet ; avec SearXNG, les principaux sites par requêtes ciblées. Chaque source affiche son niveau de fiabilité (« Source officielle · UNESCO », « Plateforme ouverte, à recouper »…).
 - **Citations vérifiables** : la liste « Sources utilisées » (document, pages, diapositives, section, ou publication réelle avec son DOI) est construite par le code, jamais inventée par le modèle.
 - **Génération en direct** : le texte apparaît au fur et à mesure, avec les boutons Arrêter, Recommencer et Réessayer.
 - **Historique, favoris, recherche sans accents, statistiques**, sous Windows (et dans l'interface d'un hébergement personnel avancé).
@@ -201,7 +201,7 @@ Sans écran (tests), Edge enregistre sa réponse automatique à la demande comme
 | Fichiers originaux (PDF, DOCX…) | nulle part : le texte est extrait dans le navigateur, comme toujours |
 | Demande complète et **extraits** sélectionnés de vos documents | uniquement à l'application Magistra de cet ordinateur, jamais au serveur Magistra en ligne ni à un prestataire d'IA |
 | Rédaction par le modèle | sur cet ordinateur |
-| Recherche Internet ou académique (si vous la choisissez) | faite par l'application, depuis cet ordinateur, avec ses propres réglages : seuls le sujet et les mots-clés partent vers HAL, Crossref, Wikipédia ou SearXNG |
+| Recherche Internet ou académique (si vous la choisissez) | faite par l'application, depuis cet ordinateur, avec ses propres réglages : seuls le sujet et les mots-clés partent vers HAL, Crossref, OpenAlex, Wikipédia ou SearXNG (si vous en indiquez un) ; les sites officiels cités par Wikipédia sont seulement lus, par adresse |
 | **Résultat**, sources citées (nom du document, pages…), paramètres de la demande (sujet, objectifs, consignes, contenu à adapter, profils, noms des documents), nom du modèle | enregistrés dans l'**historique de votre compte** en ligne (serveur Magistra, Supabase) ; l'application ne les garde pas dans son propre historique |
 | Travail d'élève collé pour un corrigé | jamais enregistré (seule sa longueur est notée) |
 | Appairage de ce navigateur | navigateur : clé **non extractible** (IndexedDB « magistra-local-connector ») ; application : fichier `local-connector.json` de son dossier de données (site, navigateur, dates, clé chiffrée par Windows avec DPAPI) |
@@ -374,7 +374,7 @@ Toutes les variables sont documentées dans [`.env.example`](.env.example) (la s
 | `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY`, `AI_SERVER_LABEL`, `AI_PROVIDER_PRIVACY_URL` | serveur d'IA au choix, ou réglages qui l'emportent sur le préréglage (la clé n'est jamais exposée au navigateur ni aux journaux) |
 | `VITE_LEGAL_*`, `VITE_LEGAL_VALIDATED`, `VITE_AUTHOR_PROFILE_URL` | variables de build de l'interface, communes avec le site vitrine (voir « [Déploiement du site (Vercel)](#déploiement-du-site-vercel) ») ; `VITE_LEGAL_DATA_REGION` est celle du lieu d'hébergement d'une base distante |
 | `MAGISTRA_AUTH`, `MAGISTRA_ADMIN_CONTACT` | mode d'accès (`auto`, `clerk`, `personal`) et contact affiché aux enseignants quand l'IA ne répond pas |
-| `SEARXNG_URL`, `CROSSREF_MAILTO` | recherche (facultatif) |
+| `SEARXNG_URL`, `CROSSREF_MAILTO`, `RESEARCH_TRUSTED_ONLY` | recherche : moteur SearXNG (facultatif) ; adresse de contact de l'administrateur transmise à Crossref et OpenAlex ; seuls les sites vérifiés sont retenus (`true` par défaut) |
 | `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_GLOBAL_PER_MINUTE`, `MAX_CONCURRENT_GENERATIONS_PER_USER`, `MAX_CONCURRENT_GENERATIONS` | protection technique : demandes par minute par utilisateur (10) et pour tout le déploiement (120), générations simultanées par utilisateur (2) et par instance du serveur (8) ; 0 = sans limite |
 | `MAGISTRA_RELEASES_REPO`, `GITHUB_TOKEN` | versions Windows proposées (communes avec le site vitrine, voir « [Mainteneurs](#mainteneurs--versions-variables-domaine-ports) ») |
 
@@ -420,6 +420,8 @@ npm run dev:electron     # application Windows en développement (Vite + Electro
 | `npm test` | tests unitaires et d'intégration (Vitest) |
 | `npm run test:e2e` | tests de bout en bout Playwright : `--project=web` (interface en démonstration), `--project=site` (site vitrine construit, servi par `vite preview` sur le port 4174), `--project=electron` (application réelle avec Ollama simulé), `--project=connector` (site ⇄ connecteur local ⇄ application réelle, protection « Local Network Access » de Chromium active) ou `--project=connector-edge` (les mêmes tests dans Microsoft Edge installé ; ignorés s'il est absent, jamais lancés par la CI) |
 | `npm run ai:check` | hébergement personnel : vérifie la configuration et l'IA branchée (`--dev`, `--start`, `--env-file`, `--no-generate` ; `--vercel` ne concerne qu'un serveur de type Vercel hors site public) |
+| `npm run research:check` | à lancer sur **votre** ordinateur : interroge les vrais services de recherche (HAL, Crossref, OpenAlex, Wikipédia et ses références, SearXNG avec `--searxng`, domaines du catalogue avec `--catalogue`) et signale toute dérive ; ne tourne pas en CI |
+| `node scripts/ai-bench.mjs` | mesure précise de la lenteur d'un Ollama (chargement, lecture, rédaction, calcul sur processeur ou carte graphique) par taille de contexte ; voir `ARCHITECTURE_IA.md` § 21 |
 | `npm run test:real-ai` | validation avec une **vraie** IA (Ollama) : voir ci-dessous |
 | `npm run build` | build de l'interface (`dist/`), embarquée dans l'application Windows |
 | `npm run build:site` | build du site vitrine (`dist-site/`), celui que déploie Vercel |
@@ -491,7 +493,7 @@ L'architecture IA est détaillée dans [ARCHITECTURE_IA.md](ARCHITECTURE_IA.md).
 |---|---|
 | **Windows + IA locale** | Vos documents et générations restent sur l'ordinateur. |
 | **En local** (`npm run dev`, IA détectée sur l'ordinateur) | Rien ne sort de l'ordinateur. |
-| **Recherche en ligne** (si vous la choisissez) | Seuls le sujet et les mots-clés partent vers HAL, Crossref, Wikipédia ou SearXNG ; jamais vos documents. |
+| **Recherche en ligne** (si vous la choisissez) | Seuls le sujet et les mots-clés partent vers HAL, Crossref, OpenAlex, Wikipédia ou SearXNG (si indiqué) ; les sites officiels que Wikipédia cite pour le sujet sont ensuite lus par leur adresse ; jamais vos documents. |
 | **Hébergement personnel avancé + Magistra locale** | La demande et les **extraits** de vos documents vont uniquement à l'application Magistra de cet ordinateur. Seuls le résultat, les sources citées et les paramètres de la demande (sujet, objectifs, consignes, contenu à adapter, profils, noms des documents) sont enregistrés dans l'historique de votre compte en ligne. |
 | **Site vitrine** | Aucune donnée d'enseignant : ni compte, ni demande, ni document. L'hébergeur du site (Vercel) conserve les journaux techniques habituels des visites, et le serveur du site interroge l'API publique de GitHub pour connaître la dernière version de l'installateur. |
 | **Hébergement personnel avancé** (comptes) | La demande et les **extraits** sélectionnés de vos documents sont transmis au serveur Magistra puis au service d'IA configuré par l'administrateur. Quand c'est un prestataire en ligne (OVHcloud, Mistral AI, Albert, Scaleway…), l'interface le **nomme**, avec son pays, sa conservation des données, son usage pour l'entraînement et un lien vers ses conditions. Les fichiers originaux restent dans votre navigateur. |

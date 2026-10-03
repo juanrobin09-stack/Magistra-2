@@ -178,31 +178,56 @@ Fichier : `shared/citations.ts`.
 
 ## 6. Recherche sur Internet
 
-Fichier : `shared/research/`.
+Fichiers : `shared/research/` (`index.ts`, `providers.ts`, `trusted.ts`), `shared/citations.ts`.
 
 ```
 question (sujet et discipline — JAMAIS les objectifs, les consignes ni le texte des documents)
-  → recherche : HAL · Crossref · SearXNG (facultatif) · Wikipédia
+  → recherche : HAL · Crossref · OpenAlex · sites officiels vérifiés · Wikipédia
   → récupération de vraies sources (métadonnées d'origine : auteurs, année, DOI, URL)
   → extraction (résumés, pages web nettoyées et recentrées sur la question)
-  → modèle
+  → modèle (avec le niveau de fiabilité de chaque source)
   → réponse sourcée, avec citations vérifiées
 ```
 
 Le modèle n'est **pas réentraîné**. Les informations récentes arrivent par récupération dynamique, et l'interface affiche clairement quand Internet a été utilisé.
 
-| Mode choisi dans « Générer » | Scolaire (maternelle → lycée) | Supérieur |
-|---|---|---|
-| Mes documents uniquement | aucune recherche (hors ligne) | aucune recherche (hors ligne) |
-| Sources académiques | documents + HAL + Crossref | documents + HAL + Crossref |
-| Internet | Éduscol, education.gouv.fr (Bulletin officiel) *via SearXNG* → web → Wikipédia | HAL → Crossref → web → Wikipédia |
-| Documents + Internet | documents en priorité + le mode Internet | documents en priorité + le mode Internet |
+| Mode choisi dans « Générer » | Sources |
+|---|---|
+| Mes documents uniquement | aucune recherche (hors ligne) |
+| Sources académiques | documents + HAL, Crossref, OpenAlex, puis sites officiels vérifiés (sans l'article de Wikipédia) |
+| Internet | HAL → Crossref → OpenAlex → sites officiels vérifiés → Wikipédia (« à recouper ») |
+| Documents + Internet | documents en priorité + le mode Internet |
 
-- HAL, Crossref et Wikipédia sont des API publiques : **aucune configuration n'est nécessaire**.
-- SearXNG, qui donne la recherche web générale et les sites institutionnels, est **facultatif**. Il se configure avec `SEARXNG_URL` sur le serveur, ou dans les Réglages sous Windows.
-- Wikipédia peut être désactivé (`RESEARCH_WIKIPEDIA=false` sur le serveur, Réglages sous Windows). L'interface annonce ce qui sera réellement consulté : « Wikipédia seulement », « sources académiques seulement », ou mode Internet indisponible si rien n'est interrogeable.
+### Sites officiels et académiques vérifiés
+
+L'IA ne s'appuie sur le web **que** sur un catalogue de sites vérifiés (`shared/research/trusted.ts`, plus de quatre-vingts entrées) : ministères et Éduscol, UNESCO et ses sous-sites, ONU et agences, OCDE, Banque mondiale, Union européenne, Conseil de l'Europe, administrations (`*.gouv.fr` nommés), recherche publique (CNRS, Inserm, Inria, CEA…), bibliothèques et archives ouvertes, agences scientifiques. Un site est reconnu **par son nom d'hôte exact** (domaine ou vrai sous-domaine) : sous-chaînes, suffixes collés (`unesco.org.pirate.example`), identifiants dans l'adresse (`unesco.org@evil.com`), port inattendu, homographes (punycode, cyrillique) et schémas autres que http(s) sont refusés.
+
+Deux chemins mènent aux pages de ces sites :
+
+1. **Avec SearXNG** (`SEARXNG_URL`, facultatif) : requêtes `site:` par lots de 6 domaines, 6 lots au plus, soit `SEARCHED_DOMAIN_COUNT` = 36 domaines, pris dans l'ordre du catalogue (éducation, ONU et agences, OCDE, Banque mondiale, UE, Conseil de l'Europe, recherche publique, Service-Public.fr, portails de publications). Une requête **générale** n'est jamais envoyée tant que la restriction est active. **Non interrogés directement** (mais reconnus s'ils apparaissent) : les 30 sites d'académies, Canal-U, HAL, OpenAlex, Crossref, l'Agence spatiale européenne, le CERN, la NOAA, le NIH ; `doi.org` est reconnu pour étiqueter un DOI mais jamais consulté (il ne fait que rediriger vers un éditeur quelconque).
+2. **Sans SearXNG** (cas normal) : les **références** (liens externes, API MediaWiki `prop=extlinks`) des pages Wikipédia trouvées pour le sujet, filtrées par le catalogue ; 3 pages au plus, une par hôte, classées éducation > organisations internationales > recherche > reste (dont les académies) > plateformes ouvertes ; accueils, pages de recherche et de connexion écartés. Ce chemin dépend de ce que Wikipédia cite pour le sujet : il ne garantit pas qu'Éduscol ou l'UNESCO apparaissent.
+
+**Contrôles** :
+- **Avant la connexion** : `fetchPage` reçoit un prédicat `allowUrl` évalué avant la première connexion et avant **chaque saut de redirection** (`server/safeFetch.ts`) : un lien du catalogue qui redirige vers un hôte hors catalogue (redirection ouverte, DOI) n'est ni résolu ni contacté. Défense en profondeur : l'adresse finale d'une page récupérée est revérifiée (`isCitablePage` : catalogue, https, ni accueil ni recherche ni connexion, chemin canonisé : `//`, `%69ndex.html`, `;jsessionid`).
+- `RESEARCH_TRUSTED_ONLY` (`true` par défaut, **aucune option dans l'interface**) : à `false`, l'administrateur d'un serveur auto-hébergé admet aussi le web général (SearXNG non filtré) ; ces sources sont alors signalées « non vérifiées ». Cette capacité n'est pas exposée aux clients : le sélecteur de mode n'annonce donc pas ce cas.
+- Les adresses, DOI et noms d'auteur de tiers sont neutralisés avant d'entrer dans « Sources utilisées » (aucun second lien, aucune adresse e-mail cliquable : § 5).
+- Limite : le niveau de fiabilité est celui de l'**hôte**, jamais de l'auteur de la page ; des hôtes qui hébergent du contenu libre (pages personnelles de `cern.ch`, `*.education.gouv.fr`…) peuvent porter des textes de contributeurs.
+
+**Niveaux de fiabilité** (`sourceReliability` dans `shared/citations.ts`, affichés dans « Sources utilisées », dans les exports et dans le prompt) : documents de l'enseignant ; **source officielle** (administrations, organisations intergouvernementales, agences publiques, avec le nom du site : « Source officielle · UNESCO ») ; publication ou source scientifique (HAL, Crossref, OpenAlex, organismes de recherche) ; **plateforme ouverte, à recouper** (data.gouv.fr, HAL et archives ouvertes, Canal-U : contenu déposé par des tiers, jamais « officielle ») ; encyclopédie collaborative (Wikipédia, à recouper) ; web non vérifié. Règle du prompt, seulement quand des sources sont fournies (≈ 69 jetons) : documents de l'enseignant > sources officielles > publications > Wikipédia ; en cas de désaccord, la plus fiable l'emporte et le désaccord est signalé ; faits chiffrés, dates et lois : seulement ceux des sources (les nombres d'un exercice sont inchangés).
+
+**Avertissements honnêtes** : « Sites officiels (Éduscol, UNESCO, ministères…) non consultés » quand aucun chemin n'existe (ni SearXNG ni Wikipédia + `fetchPage`) ou que les références n'ont pas pu être lues ; « Aucune source officielle trouvée pour ce sujet : à vérifier » quand le chemin a répondu sans rien de vérifié (y compris quand seules des plateformes ouvertes ont été trouvées) ; « Wikipédia injoignable : les sites officiels qu'elle indique ne sont pas consultés non plus » sans SearXNG. Jamais une source hors catalogue en silence.
+
+**OpenAlex** (`searchOpenAlex`) : publications ouvertes, résumé reconstruit de façon bornée (3 000 mots, 20 000 positions), DOI normalisé ; dédoublonnage HAL > Crossref > OpenAlex ; `CROSSREF_MAILTO` est transmis aux deux (paramètre `mailto`, adresse de l'administrateur, jamais celle de l'enseignant).
+
+**Compatibilité** : la capacité facultative `research.trustedCatalogue` (serveur et application) indique que le catalogue vérifié est utilisé ; son absence (ancienne application) vaut « ancien comportement » et le sélecteur n'annonce alors ni l'UNESCO ni le filtrage. Aucune clé de protocole existante n'a changé.
+
+**Vérification réelle** : toutes les réponses des services sont simulées dans les tests (le bac à sable de développement refuse tout accès externe). Sur son ordinateur, le mainteneur lance **`npm run research:check`** (`scripts/research-check.mjs` ; `--searxng <https://…>` et `--catalogue`, qui vérifie l'existence DNS de chaque domaine du catalogue) : état, nombre de résultats, exemple, durée de HAL, Crossref, OpenAlex, Wikipédia (et ses liens externes), SearXNG et du chemin complet, et signale toute dérive d'API. Il ne tourne pas en CI.
+
+- HAL, Crossref, OpenAlex et Wikipédia sont des API publiques : **aucune configuration n'est nécessaire**.
+- SearXNG est **facultatif**. Il se configure avec `SEARXNG_URL` sur le serveur, ou dans les Réglages sous Windows.
+- Wikipédia peut être désactivé (`RESEARCH_WIKIPEDIA=false` sur le serveur, Réglages sous Windows) ; sans SearXNG, c'est aussi lui qui indique les sites officiels. L'interface annonce ce qui sera réellement consulté.
 - **Sans Internet**, Magistra continue de fonctionner avec le modèle local et les documents. Un avertissement est affiché.
-- Côté serveur et côté Windows, les pages web sont récupérées avec une protection SSRF (`server/safeFetch.ts`) : adresses privées refusées, redirections vérifiées, taille bornée.
+- Côté serveur et côté Windows, les pages web sont récupérées avec une protection SSRF (`server/safeFetch.ts`) : adresses privées refusées, redirections vérifiées (hôte contrôlé **avant** chaque connexion), taille bornée.
 
 ---
 
@@ -287,7 +312,7 @@ Dans l'interface, le texte apparaît progressivement, avec trois commandes : **A
 | `AI_CONTEXT_TOKENS`, `AI_MAX_OUTPUT_TOKENS` | budget de contexte et de sortie (défaut : ceux du préréglage) |
 | `MAGISTRA_AUTH` | `auto` (défaut), `clerk` ou `personal` (§ 12) |
 | `MAGISTRA_ADMIN_CONTACT` | contact affiché aux enseignants quand l'IA ne répond pas |
-| `SEARXNG_URL`, `CROSSREF_MAILTO` | recherche (facultatif) |
+| `SEARXNG_URL`, `CROSSREF_MAILTO`, `RESEARCH_TRUSTED_ONLY` | recherche : moteur SearXNG (facultatif) ; adresse de contact transmise à Crossref et OpenAlex ; seuls les sites vérifiés sont retenus (`true` par défaut, § 6) |
 | `AI_TIMEOUT_SECONDS` | durée maximale d'une génération (280 s par défaut) |
 | `RATE_LIMIT_PER_MINUTE` | demandes de génération par minute et par utilisateur (10 ; 0 = désactivé) → `RATE_LIMITED` (429) |
 | `RATE_LIMIT_GLOBAL_PER_MINUTE` | demandes de génération par minute pour tout le déploiement (120 ; 0 = désactivé) → `AI_BUSY` (503, réessayable) |
