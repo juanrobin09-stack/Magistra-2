@@ -19,9 +19,10 @@
 # un jeton en lecture seule et sans identifiants git conservés ; seul le job « release », qui n'exécute aucun code
 # du dépôt ni aucune dépendance npm, reçoit « contents: write ».
 #
-# Informations légales de l'éditeur (pages « Mentions légales » et « Confidentialité » de l'installateur) : variables de
-# BUILD publiques par nature (src/lib/legal.ts), lues dans les VARIABLES du dépôt (GitHub → Settings → Secrets and
-# variables → Actions → onglet Variables), jamais dans les secrets. Voir le README, section « Mainteneurs ».
+# Informations légales de l'éditeur (pages « Mentions légales » et « Confidentialité » de l'installateur) et profil de
+# l'auteur (lien de « Magistra, créé par Juan Robin ») : variables de BUILD publiques par nature (VITE_LEGAL_*,
+# VITE_AUTHOR_PROFILE_URL), lues dans les VARIABLES du dépôt (GitHub → Settings → Secrets and variables → Actions →
+# onglet Variables), jamais dans les secrets. Voir le README, section « Mainteneurs ».
 
 name: Publication Windows
 
@@ -126,6 +127,17 @@ jobs:
             fi
           done
 
+      - name: Profil de l'auteur
+        # Variable absente : le lien « Magistra, créé par Juan Robin » mène au profil GitHub par défaut. Avertissement
+        # seulement, la publication reste possible (même principe que les informations légales).
+        shell: bash
+        env:
+          VITE_AUTHOR_PROFILE_URL: ${{ vars.VITE_AUTHOR_PROFILE_URL }}
+        run: |
+          if [ -z "$(printf '%s' "$VITE_AUTHOR_PROFILE_URL" | tr -d '[:space:]')" ]; then
+            echo "::warning title=Profil de l'auteur manquant::La variable de dépôt VITE_AUTHOR_PROFILE_URL n'est pas renseignée : le lien « Magistra, créé par Juan Robin » mènera au profil GitHub par défaut (GitHub → Settings → Secrets and variables → Actions → Variables)."
+          fi
+
       - name: Build web (vérification des types + Vite)
         run: npm run build
         env:
@@ -134,6 +146,7 @@ jobs:
           VITE_LEGAL_ADDRESS: ${{ vars.VITE_LEGAL_ADDRESS }}
           VITE_LEGAL_CONTACT: ${{ vars.VITE_LEGAL_CONTACT }}
           VITE_LEGAL_VALIDATED: ${{ vars.VITE_LEGAL_VALIDATED }}
+          VITE_AUTHOR_PROFILE_URL: ${{ vars.VITE_AUTHOR_PROFILE_URL }}
 
       - name: Build Electron (processus principal + preload)
         run: node scripts/build-electron.mjs

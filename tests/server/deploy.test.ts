@@ -14,9 +14,16 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const read = (p: string) => readFileSync(path.join(root, p), 'utf8');
 
 interface VercelConfig {
+  buildCommand: string;
+  outputDirectory: string;
   rewrites: { source: string; destination: string }[];
   functions: Record<string, { maxDuration?: number }>;
   headers: { source: string; headers: { key: string; value: string }[] }[];
+}
+
+/** Directives d'une politique de sécurité du contenu : { 'script-src': ["'self'"], … }. */
+function parseCsp(csp: string): Record<string, string[]> {
+  return Object.fromEntries(csp.split(';').map(d => d.trim()).filter(Boolean).map(d => d.split(/\s+/)).map(([name, ...values]) => [name, values]));
 }
 
 describe('déploiement', () => {
@@ -24,34 +31,53 @@ describe('déploiement', () => {
 
   /** Réécriture vers l'interface (application monopage). */
   const spaRule = () => vercel.rewrites.find(r => r.destination === '/index.html')!;
+  const globalHeaders = () => Object.fromEntries(vercel.headers.find(h => h.source === '/(.*)')!.headers.map(h => [h.key, h.value]));
 
-  it('vercel.json : réécriture SPA hors /api et durée longue pour la génération', () => {
+  it('vercel.json : build du site vitrine, réécriture SPA hors /api et /assets', () => {
+    expect(vercel.buildCommand).toBe('npm run build:site');
+    expect(vercel.outputDirectory).toBe('dist-site');
     expect(vercel.rewrites).toEqual([
       { source: '/telecharger', destination: '/api/download' },
       { source: '/((?!api/|assets/).*)', destination: '/index.html' },
     ]);
     const spa = new RegExp(`^${spaRule().source}$`);
-    expect(spa.test('/app/generate')).toBe(true);
-    expect(spa.test('/api/generate')).toBe(false);
+    expect(spa.test('/mentions-legales')).toBe(true);
+    expect(spa.test('/api/windows-release')).toBe(false);
     // Un fichier de /assets/ qui n'existe plus (ancien hash après un déploiement) donne un vrai 404, pas index.html
     // en 200 « immutable » (comme le serveur autonome).
     expect(spa.test('/assets/index-ancienhash.js')).toBe(false);
     expect(spa.test('/assets-publics')).toBe(true);
-    expect(vercel.functions['api/generate.ts'].maxDuration).toBe(300);
     for (const file of Object.keys(vercel.functions)) expect(existsSync(path.join(root, file)), file).toBe(true);
   });
 
-  it('vercel.json et le serveur autonome envoient les mêmes en-têtes de sécurité', () => {
-    const global = vercel.headers.find(h => h.source === '/(.*)')!;
-    const fromVercel = Object.fromEntries(global.headers.map(h => [h.key, h.value]));
-    expect(fromVercel).toEqual(securityHeaders());
+  it('vercel.json : en-têtes de sécurité du site vitrine, valeur par valeur', () => {
+    expect(globalHeaders()).toEqual({
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'X-Frame-Options': 'DENY',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=(), serial=(), bluetooth=()',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      // Sans « preload » : l'inscription à la liste des navigateurs est irréversible, elle reste une décision du propriétaire.
+      'Strict-Transport-Security': 'max-age=63072000; includeSubDomains',
+      'Content-Security-Policy': "default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        + "font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'",
+    });
+    expect(globalHeaders()['Strict-Transport-Security']).not.toMatch(/preload/i);
     expect(JSON.stringify(vercel)).not.toContain('Access-Control-Allow-Origin');
+    // Les ressources hachées de /assets/ sont immuables ; rien d'autre ne l'est.
+    const assets = vercel.headers.filter(h => h.source !== '/(.*)');
+    expect(assets).toEqual([{ source: '/assets/(.*)', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] }]);
   });
 
-  it('CSP : connect-src autorise EXACTEMENT les trois ports du connecteur local, et nulle autre directive', () => {
-    const global = vercel.headers.find(h => h.source === '/(.*)')!;
-    const csp = global.headers.find(h => h.key === 'Content-Security-Policy')!.value;
-    const directives = Object.fromEntries(csp.split(';').map(d => d.trim().split(/\s+/)).map(([name, ...values]) => [name, values]));
+  it('en-têtes communs : le site vitrine et le serveur autonome envoient les mêmes (la CSP du site est plus stricte que celle de l’interface avec comptes)', () => {
+    const standalone = securityHeaders();
+    for (const name of ['X-Content-Type-Options', 'Referrer-Policy', 'X-Frame-Options']) expect(globalHeaders()[name], name).toBe(standalone[name]);
+    expect(globalHeaders()['Content-Security-Policy']).not.toBe(standalone['Content-Security-Policy']);
+  });
+
+  it('serveur autonome (interface avec comptes) : connect-src autorise EXACTEMENT les trois ports du connecteur local, et nulle autre directive', () => {
+    const csp = securityHeaders()['Content-Security-Policy'];
+    const directives = parseCsp(csp);
     const loopback = (values: string[]) => values.filter(v => /127\.0\.0\.1|localhost|\[::1\]/i.test(v));
     const expected = CONNECTOR_PORTS.map(port => `http://${CONNECTOR_HOST}:${port}`);
     expect(expected).toEqual(['http://127.0.0.1:47831', 'http://127.0.0.1:47832', 'http://127.0.0.1:47833']);
@@ -79,16 +105,16 @@ describe('déploiement', () => {
     expect(vercel.functions['api/download.ts'].maxDuration).toBeLessThanOrEqual(30);
   });
 
-  it('une fonction Vercel par route du contrat, et plus aucune ancienne route', () => {
+  it('deux fonctions Vercel seulement (versions Windows et téléchargement), aucune route de comptes ni d’IA', () => {
     const files = readdirSync(path.join(root, 'api')).sort();
-    expect(files).toEqual([
-      'account.ts', 'clerk-webhook.ts', 'download.ts', 'generate.ts', 'generation.ts', 'history.ts', 'mode.ts', 'profile.ts', 'stats.ts',
-      'status.ts', 'windows-release.ts',
-    ]);
-    // Chaque route du serveur a sa fonction Vercel, servie hors de la réécriture vers l'interface.
+    expect(files).toEqual(['download.ts', 'windows-release.ts']);
+    expect(Object.keys(vercel.functions).sort()).toEqual(['api/download.ts', 'api/windows-release.ts']);
+    // Les autres routes du contrat restent celles du serveur autonome : le site déployé n'en sert aucune, et la
+    // réécriture vers l'interface ne les avale pas (404 franc, jamais index.html en 200).
     for (const route of Object.keys(ROUTE_METHODS)) {
-      expect(files, route).toContain(`${route}.ts`);
-      expect(vercel.functions[`api/${route}.ts`], route).toBeDefined();
+      const served = route === 'windows-release' || route === 'download';
+      expect(files.includes(`${route}.ts`), route).toBe(served);
+      expect(`api/${route}.ts` in vercel.functions, route).toBe(served);
       expect(new RegExp(`^${spaRule().source}$`).test(`/api/${route}`), route).toBe(false);
     }
     expect(existsSync(path.join(root, 'netlify.toml'))).toBe(false);
@@ -122,25 +148,44 @@ describe('déploiement', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('.env.example : seules la clé publiable Clerk et les informations légales (publiques par nature, vides) sont des variables VITE_, aucune valeur secrète', () => {
+  it('.env.example : deux parties, le site vitrine (variables de build, jeton GitHub facultatif) puis l’hébergement personnel, aucune valeur secrète', () => {
     const env = read('.env.example');
-    const vars = [...env.matchAll(/^([A-Z0-9_]+)=(.*)$/gm)].map(m => ({ name: m[1], value: m[2] }));
-    expect(vars.filter(v => v.name.startsWith('VITE_')).map(v => v.name)).toEqual([
-      'VITE_CLERK_PUBLISHABLE_KEY', 'VITE_LEGAL_PUBLISHER', 'VITE_LEGAL_DIRECTOR', 'VITE_LEGAL_ADDRESS', 'VITE_LEGAL_CONTACT',
-      'VITE_LEGAL_HOST', 'VITE_LEGAL_DATA_REGION', 'VITE_LEGAL_VALIDATED',
+    const siteAt = env.indexOf('# 1. SITE VITRINE (Vercel)');
+    const personalAt = env.indexOf('# 2. HÉBERGEMENT PERSONNEL (npm start, npm run dev)');
+    expect(siteAt).toBeGreaterThan(0);
+    expect(personalAt).toBeGreaterThan(siteAt);
+    const variables = (text: string) => [...text.matchAll(/^([A-Z0-9_]+)=(.*)$/gm)].map(m => ({ name: m[1], value: m[2] }));
+    const site = variables(env.slice(siteAt, personalAt));
+    const personal = variables(env.slice(personalAt));
+
+    // Site vitrine : informations légales, profil de l'auteur (publics par nature, vides), puis les deux variables lues
+    // par les fonctions du site. Ni Clerk, ni Supabase, ni IA.
+    expect(site.map(v => v.name)).toEqual([
+      'VITE_LEGAL_PUBLISHER', 'VITE_LEGAL_DIRECTOR', 'VITE_LEGAL_ADDRESS', 'VITE_LEGAL_CONTACT', 'VITE_LEGAL_HOST', 'VITE_LEGAL_DATA_REGION',
+      'VITE_LEGAL_VALIDATED', 'VITE_AUTHOR_PROFILE_URL', 'MAGISTRA_RELEASES_REPO', 'GITHUB_TOKEN',
     ]);
-    // Aucune identité n'est livrée dans le dépôt : chaque éditeur renseigne les siennes (et valide lui-même ses textes :
-    // VITE_LEGAL_VALIDATED reste vide).
-    for (const v of vars.filter(v => v.name.startsWith('VITE_LEGAL_'))) expect(v.value, v.name).toBe('');
+    // Aucune identité ni adresse n'est livrée dans le dépôt : chaque éditeur renseigne les siennes (et valide lui-même ses
+    // textes : VITE_LEGAL_VALIDATED reste vide).
+    for (const v of site) expect(v.value, v.name).toBe('');
+
+    // Hébergement personnel : la seule variable VITE_ est la clé publiable Clerk ; toutes les valeurs secrètes sont vides.
+    expect(personal.filter(v => v.name.startsWith('VITE_')).map(v => v.name)).toEqual(['VITE_CLERK_PUBLISHABLE_KEY']);
+    expect(variables(env).filter(v => v.name.startsWith('VITE_')).map(v => v.name)).toEqual([
+      ...site.filter(v => v.name.startsWith('VITE_')).map(v => v.name), 'VITE_CLERK_PUBLISHABLE_KEY',
+    ]);
     for (const secret of ['CLERK_SECRET_KEY', 'CLERK_JWT_KEY', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_SERVICE_ROLE_KEY', 'AI_API_KEY', 'GITHUB_TOKEN']) {
-      expect(vars.find(v => v.name === secret)?.value, secret).toBe('');
+      expect(variables(env).find(v => v.name === secret)?.value, secret).toBe('');
     }
     for (const name of ['AI_PROVIDER', 'AI_BASE_URL', 'AI_MODEL', 'AI_SERVER_LABEL', 'AI_CONTEXT_TOKENS', 'AI_MAX_OUTPUT_TOKENS',
       'AI_TIMEOUT_SECONDS', 'SEARXNG_URL', 'CROSSREF_MAILTO', 'RESEARCH_ACADEMIC', 'RESEARCH_WIKIPEDIA', 'RATE_LIMIT_PER_MINUTE',
       'RATE_LIMIT_GLOBAL_PER_MINUTE', 'MAX_CONCURRENT_GENERATIONS_PER_USER', 'MAX_CONCURRENT_GENERATIONS',
-      'CLERK_AUTHORIZED_PARTIES', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_URL', 'PORT', 'CSP_EXTRA_ORIGINS', 'MAGISTRA_RELEASES_REPO', 'GITHUB_TOKEN']) {
-      expect(vars.some(v => v.name === name), name).toBe(true);
+      'CLERK_AUTHORIZED_PARTIES', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_URL', 'PORT', 'CSP_EXTRA_ORIGINS']) {
+      expect(personal.some(v => v.name === name), name).toBe(true);
     }
+    // Le site vitrine n'utilise ni compte ni IA : rien de tout cela dans sa partie du fichier.
+    expect(site.filter(v => /^(CLERK_|SUPABASE_|AI_|MAGISTRA_AUTH|MAGISTRA_STORE|MAGISTRA_DATA_DIR)/.test(v.name))).toEqual([]);
+    // Plus aucune consigne de configurer Clerk, Supabase ou l'IA dans Vercel ni de modifier la CSP de vercel.json.
+    expect(env).not.toMatch(/api\/generate\.ts|NODEJS_HELPERS|vercel env pull|ajoutez ce domaine aux directives/i);
   });
 
   it('.env.example : préréglages (solution gratuite la plus simple), mode personnel, détection locale, transparence', () => {
@@ -193,5 +238,81 @@ describe('déploiement', () => {
     // Réexécutable : aucune création qui échouerait la seconde fois.
     expect(active).toMatch(/CREATE TABLE IF NOT EXISTS public\.active_generations/);
     expect(active).not.toMatch(/CREATE FUNCTION/i);
+  });
+});
+
+describe('CSP du site vitrine (vercel.json)', () => {
+  const vercel = JSON.parse(read('vercel.json')) as VercelConfig;
+  const header = (name: string) => vercel.headers.find(h => h.source === '/(.*)')!.headers.find(h => h.key === name)!.value;
+  const csp = header('Content-Security-Policy');
+  const directives = parseCsp(csp);
+
+  it('script-src : « \'self\' » seul, jamais de script en ligne ni d’eval', () => {
+    expect(directives['script-src']).toEqual(["'self'"]);
+    expect(csp).not.toMatch(/unsafe-eval|wasm-unsafe-eval|strict-dynamic|unsafe-hashes/);
+    // « unsafe-inline » n'est toléré que pour les styles (attribut « style » du squelette de chargement).
+    for (const [name, values] of Object.entries(directives)) {
+      expect(values.includes("'unsafe-inline'"), name).toBe(name === 'style-src');
+    }
+  });
+
+  it('aucun domaine tiers, aucun joker, aucun schéma ouvert : seulement le site lui-même, « none » et data:', () => {
+    const allowed = new Set(["'self'", "'none'", 'data:']);
+    for (const [name, values] of Object.entries(directives)) {
+      for (const value of values) {
+        if (value === "'unsafe-inline'" && name === 'style-src') continue;
+        expect(allowed.has(value), `${name} ${value}`).toBe(true);
+      }
+    }
+    expect(csp).not.toMatch(/https?:|wss?:|blob:|filesystem:|\*/);
+    expect(JSON.stringify(vercel)).not.toMatch(/clerk|cloudflare|supabase|127\.0\.0\.1|localhost|challenges\./i);
+  });
+
+  it('directives exactes : défaut, connexions et images du site, objets et formulaires fermés, jamais intégré dans un cadre', () => {
+    expect(directives).toEqual({
+      'default-src': ["'self'"],
+      'script-src': ["'self'"],
+      'connect-src': ["'self'"],
+      'img-src': ["'self'", 'data:'],
+      'style-src': ["'self'", "'unsafe-inline'"],
+      'font-src': ["'self'", 'data:'],
+      'object-src': ["'none'"],
+      'base-uri': ["'self'"],
+      'form-action': ["'none'"],
+      'frame-ancestors': ["'none'"],
+    });
+    // Ni cadre, ni travailleur : plus aucune entrée pour un service de connexion ou le connecteur local.
+    for (const name of ['frame-src', 'child-src', 'worker-src', 'manifest-src', 'media-src']) expect(directives[name], name).toBeUndefined();
+  });
+
+  it('Permissions-Policy : toutes les fonctions sensibles fermées', () => {
+    const features = header('Permissions-Policy').split(',').map(f => f.trim());
+    expect(features.sort()).toEqual(['bluetooth=()', 'camera=()', 'geolocation=()', 'interest-cohort=()', 'microphone=()', 'payment=()', 'serial=()', 'usb=()']);
+  });
+
+  /** La page doit tenir dans cette politique : aucun script en ligne, aucun gestionnaire d'évènement, aucune ressource externe. */
+  function expectFitsPolicy(html: string): void {
+    const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
+    for (const [, attributes, body] of scripts) {
+      expect(attributes).toMatch(/\bsrc="(?!(?:https?:)?\/\/)[^"]+"/);
+      expect(body.trim()).toBe('');
+    }
+    expect(html).not.toMatch(/\son[a-z]+\s*=/i);
+    expect(html).not.toMatch(/javascript:/i);
+    for (const [, url] of html.matchAll(/\b(?:src|href|action|poster)\s*=\s*"([^"]*)"/gi)) expect(url, url).not.toMatch(/^(?:https?:)?\/\//);
+    // Le seul style en ligne est l'attribut « style » du squelette de chargement (style-src 'unsafe-inline').
+    expect(html).not.toMatch(/<style\b[^>]*>(?![\s]*<\/style>)/i);
+  }
+
+  it('index.html (squelette de chargement) tient dans la politique', () => {
+    const html = read('index.html');
+    expectFitsPolicy(html);
+    expect(html).toMatch(/<div id="root"><div role="status"[^>]* style="[^"]*">/);
+    // Icône « data: » : couverte par img-src.
+    expect(html).toMatch(/<link rel="icon"[^>]* href="data:image\/svg\+xml,/);
+  });
+
+  it.skipIf(!existsSync(path.join(root, 'dist-site', 'index.html')))('dist-site/index.html (site construit) tient dans la politique', () => {
+    expectFitsPolicy(read('dist-site/index.html'));
   });
 });

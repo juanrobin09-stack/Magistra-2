@@ -30,17 +30,21 @@ Seule la **dernière version publiée** de l'application Windows et du site reç
 
 ## Périmètre
 
+Magistra est une **application Windows locale** : le produit, c'est elle. Le **site public** n'en est que la vitrine (page statique : présentation, téléchargement, pages légales ; aucun compte, aucune application dans le navigateur, aucune donnée d'enseignant).
+
 Dans le périmètre :
-- le **connecteur local** de l'application Windows (échanges site web ⇄ application, appairage, contrôle de l'origine) ;
 - l'**installateur et l'application Windows** (Electron, protocole `app://`, données locales, fusibles, mise à jour manuelle) ;
-- l'**API web** (`/api/*`, authentification Clerk, stockage Supabase, limites d'usage) et l'interface du site ;
+- le **site vitrine** : le site statique, ses en-têtes de sécurité (CSP stricte, sans script en ligne ni domaine tiers), et ses deux seules fonctions publiques, `GET /api/windows-release` et `GET /telecharger` (redirection vers l'installateur) ;
+- le **connecteur local** de l'application Windows (échanges interface web ⇄ application, appairage, contrôle de l'origine) : c'est la **surface résiduelle** de l'application : elle écoute sur `127.0.0.1` tant que l'option « Permettre au site Magistra d'utiliser l'IA de cet ordinateur » (Réglages) est cochée, même si le site vitrine public ne l'utilise pas ;
+- l'**hébergement personnel avancé**, pour qui l'utilise (hors site public) : serveur autonome, API `/api/*`, authentification Clerk, stockage Supabase, limites d'usage ;
 - la **chaîne de publication** (workflows GitHub Actions, dépendances).
 
-Hors périmètre : failles des services tiers eux-mêmes (Clerk, Supabase, Vercel, Ollama, fournisseurs d'IA) — à signaler à leurs éditeurs ; qualité ou exactitude des textes générés par l'IA ; attaques supposant un ordinateur déjà compromis ou un accès physique ; déni de service par simple volume de requêtes ; absence de signature de code de l'installateur (connue et documentée).
+Hors périmètre : failles des services tiers eux-mêmes (Clerk, Supabase, Vercel, GitHub, Ollama, fournisseurs d'IA) — à signaler à leurs éditeurs ; qualité ou exactitude des textes générés par l'IA ; attaques supposant un ordinateur déjà compromis ou un accès physique ; déni de service par simple volume de requêtes ; absence de signature de code de l'installateur (connue et documentée).
 
 ## Ce que Magistra fait pour votre sécurité
 
-- La **clé de l'IA** (`AI_API_KEY`) et la clé « service_role » de Supabase restent sur le serveur : jamais dans le navigateur ni dans l'application Windows.
+- Le **site vitrine** n'a ni compte, ni base de données, ni clé d'IA : ses deux fonctions publiques ne lisent que le dépôt des versions et, facultativement, un jeton GitHub en lecture seule, qui n'est envoyé qu'à `api.github.com` (jamais au navigateur ni aux journaux). Sa politique de sécurité du contenu n'autorise que le site lui-même, et aucun script en ligne.
+- Dans l'**hébergement personnel avancé**, la **clé de l'IA** (`AI_API_KEY`) et la clé « service_role » de Supabase restent sur le serveur : jamais dans le navigateur ni dans l'application Windows.
 - Le **connecteur local** n'écoute que sur l'adresse de bouclage (`127.0.0.1`), refuse toute origine ou tout hôte inattendu, et n'accepte que cinq opérations Magistra, après l'accord de l'enseignant.
 - L'application Windows durcit Electron (fusibles : pas de `runAsNode`, chargement depuis l'archive intègre uniquement ; isolation du contexte et bac à sable). La CI vérifie ces réglages sur le paquet construit.
 - Aucun téléchargement de plusieurs Go sans l'accord explicite de l'utilisateur ; les messages d'erreur n'affichent ni trace d'exécution, ni secret, ni jeton.

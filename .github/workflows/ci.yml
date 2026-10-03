@@ -31,6 +31,12 @@ jobs:
         run: npm test
       - name: Build web
         run: npx vite build
+      # Le site public (Vercel) est une vitrine : sa construction (vercel.json : npm run build:site) et sa vérification
+      # (aucune application, aucun secret, en-têtes) sont contrôlées à chaque envoi.
+      - name: Build du site vitrine
+        run: npm run build:site
+      - name: Vérification du site vitrine
+        run: npm run verify:site
       - name: Build serveur autonome
         run: npm run build:server
       - name: Audit des dépendances de production
@@ -59,7 +65,10 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npx vite build
+      - run: npm run build:site
+      # « web » : l'interface en démonstration (dist/) ; « site » : le site vitrine construit (dist-site/).
       - run: npm run test:e2e -- --project=web
+      - run: npm run test:e2e -- --project=site
 
   electron:
     name: Electron (démarrage réel + E2E local avec Ollama simulé + connecteur local)
@@ -121,8 +130,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # Mêmes informations légales que release.yml (variables de dépôt, publiques par nature) : l'installateur essayé
-      # ici affiche les pages légales de l'éditeur, comme la version publiée.
+      # Mêmes informations légales et même profil d'auteur que release.yml (variables de dépôt, publiques par nature) :
+      # l'installateur essayé ici affiche les pages légales de l'éditeur et le lien « Magistra, créé par Juan Robin »,
+      # comme la version publiée.
       - run: npx vite build
         env:
           VITE_LEGAL_PUBLISHER: ${{ vars.VITE_LEGAL_PUBLISHER }}
@@ -130,6 +140,7 @@ jobs:
           VITE_LEGAL_ADDRESS: ${{ vars.VITE_LEGAL_ADDRESS }}
           VITE_LEGAL_CONTACT: ${{ vars.VITE_LEGAL_CONTACT }}
           VITE_LEGAL_VALIDATED: ${{ vars.VITE_LEGAL_VALIDATED }}
+          VITE_AUTHOR_PROFILE_URL: ${{ vars.VITE_AUTHOR_PROFILE_URL }}
       - run: node scripts/build-electron.mjs
       # Depuis les sources (`electron .`) : l'application empaquetée ignore --smoke-test et les variables
       # MAGISTRA_* (electron/devOptions.ts), aucune exception n'est prévue pour elle.

@@ -42,6 +42,13 @@ function stepWith(jobText: string, marker: string): string {
   return found[0];
 }
 
+/** Variables du bloc « env: » d'une étape, avec leur valeur telle qu'écrite dans le workflow. */
+const envOf = (step: string) => Object.fromEntries([...step.matchAll(/^\s+(VITE_[A-Z_]+): (.+)$/gm)].map(m => [m[1], m[2].trim()]));
+const fromRepositoryVariables = (names: string[]) => Object.fromEntries(names.map(name => [name, `\${{ vars.${name} }}`]));
+/** Script shell d'une étape « run: | », sans son indentation. */
+const scriptOf = (step: string) => step.slice(step.indexOf('run: |\n') + 'run: |\n'.length).split('\n').map(l => l.slice(10)).join('\n');
+const hasBash = spawnSync('bash', ['--version']).status === 0;
+
 /** Texte d'un job : de « <nom>: » (2 espaces) au job suivant. */
 function job(text: string, name: string): string {
   const lines = text.split('\n');
@@ -198,7 +205,9 @@ describe('documentation', () => {
     const at = readme.indexOf('## Brancher une vraie IA');
     expect(at).toBeGreaterThan(0);
     expect(at).toBeLessThan(readme.indexOf('## Fonctionnalités'));
-    for (const heading of ['### 1. Site en ligne (Vercel)', '### 2. En local', '### 3. Application Windows']) expect(readme).toContain(heading);
+    for (const heading of ['### 1. Application Windows', '### 2. En local', '### 3. Hébergement personnel avancé (`npm start`), hors site public']) expect(readme).toContain(heading);
+    // Le site public n'est plus un chemin pour brancher une IA : il n'en exécute aucune.
+    expect(readme).not.toContain('### 1. Site en ligne (Vercel)');
   });
 
   it('README : les ancres citées par l’interface, la note de version et le README existent', () => {
@@ -220,7 +229,7 @@ describe('documentation', () => {
   });
 
   it('README : commandes de vérification exactes', () => {
-    expect(readme).toContain('npx vercel env pull --environment=production .env.prod.local && npm run ai:check -- --vercel --env-file .env.prod.local');
+    expect(readme).toContain('`npm run ai:check` (serveur autonome : lit `.env`) ou `npm run ai:check -- --dev` (`npm run dev`)');
     expect(readme).toContain('ollama pull ministral-3:8b');
     expect(readme).toContain('npm run test:real-ai');
     expect(pkg.scripts['ai:check']).toBeDefined();
@@ -266,24 +275,21 @@ describe('informations légales de l’éditeur dans l’installateur Windows (v
   const PUBLISHER_VARS = [LEGAL_ENV_NAMES.publisher, LEGAL_ENV_NAMES.director, LEGAL_ENV_NAMES.address, LEGAL_ENV_NAMES.contact];
   const BUILD_VARS = [...PUBLISHER_VARS, 'VITE_LEGAL_VALIDATED'];
   const LEGAL_STEP = "name: Informations légales de l'éditeur";
-  /** Variables du bloc « env: » d'une étape, avec leur valeur telle qu'écrite dans le workflow. */
-  const envOf = (step: string) => Object.fromEntries([...step.matchAll(/^\s+(VITE_[A-Z_]+): (.+)$/gm)].map(m => [m[1], m[2].trim()]));
-  const fromRepositoryVariables = (names: string[]) => Object.fromEntries(names.map(name => [name, `\${{ vars.${name} }}`]));
-  /** Script shell d'une étape « run: | », sans son indentation. */
-  const scriptOf = (step: string) => step.slice(step.indexOf('run: |\n') + 'run: |\n'.length).split('\n').map(l => l.slice(10)).join('\n');
-  const hasBash = spawnSync('bash', ['--version']).status === 0;
+  // Le profil de l'auteur (lien de « Magistra, créé par Juan Robin ») est transmis avec les mêmes variables de dépôt.
+  const BUILD_ENV_VARS = [...BUILD_VARS, 'VITE_AUTHOR_PROFILE_URL'];
 
-  it('release.yml : l’étape « Build web » transmet les cinq variables depuis les VARIABLES du dépôt, jamais depuis les secrets', () => {
+  it('release.yml : l’étape « Build web » transmet les cinq variables légales et le profil de l’auteur depuis les VARIABLES du dépôt, jamais depuis les secrets', () => {
     const web = stepWith(job(release, 'build'), 'run: npm run build');
-    expect(envOf(web)).toEqual(fromRepositoryVariables(BUILD_VARS));
+    expect(envOf(web)).toEqual(fromRepositoryVariables(BUILD_ENV_VARS));
     expect(code(release)).not.toMatch(/secrets\./);
   });
 
   it('ci.yml : le build web du job d’installateur Windows transmet les mêmes variables, et lui seul', () => {
     const web = stepWith(job(ci, 'windows-package'), 'run: npx vite build');
-    expect(envOf(web)).toEqual(fromRepositoryVariables(BUILD_VARS));
+    expect(envOf(web)).toEqual(fromRepositoryVariables(BUILD_ENV_VARS));
     expect(code(ci)).not.toMatch(/secrets\./);
     expect(code(ci).match(/VITE_LEGAL_PUBLISHER:/g)).toHaveLength(1);
+    expect(code(ci).match(/VITE_AUTHOR_PROFILE_URL:/g)).toHaveLength(1);
   });
 
   it('release.yml : une variable manquante donne un avertissement (jamais un échec), avant la construction, sans interpolation dans le script', () => {
@@ -316,14 +322,159 @@ describe('informations légales de l’éditeur dans l’installateur Windows (v
   });
 
   it('README et .env.example : où renseigner ces variables pour l’installateur, et ce que change VITE_LEGAL_VALIDATED', () => {
-    const maintainers = readme.slice(readme.indexOf('### Mainteneurs'), readme.indexOf('## Site web : déploiement'));
+    const maintainers = readme.slice(readme.indexOf('### Mainteneurs'), readme.indexOf('## Déploiement du site (Vercel)'));
     const section = maintainers.slice(maintainers.indexOf('**Informations légales de l\'installateur Windows**'));
     expect(section.length).toBeGreaterThan(0);
     expect(section).toContain('Settings → Secrets and variables → Actions → onglet Variables');
     for (const name of BUILD_VARS) expect(section, name).toContain(`\`${name}\``);
     expect(section).toMatch(/`VITE_LEGAL_VALIDATED` : `true` masque l'avis « projet de texte/);
-    expect(section).toMatch(/`VITE_LEGAL_HOST` et `VITE_LEGAL_DATA_REGION` ne concernent que le site en ligne/);
+    expect(section).toMatch(/`VITE_LEGAL_HOST` \(hébergeur du site vitrine\) et `VITE_LEGAL_DATA_REGION` \([^)]*\) ne concernent pas l'application Windows/);
     for (const name of BUILD_VARS) expect(read('.env.example'), name).toMatch(new RegExp(`^${name}=$`, 'm'));
+  });
+});
+
+describe('profil de l’auteur : variable de build VITE_AUTHOR_PROFILE_URL (lien de « Magistra, créé par Juan Robin »)', () => {
+  const AUTHOR_STEP = "name: Profil de l'auteur";
+
+  it('release.yml : avertissement non bloquant avant la construction, valeur lue par env: (jamais interpolée dans le script), variable de dépôt', () => {
+    const build = job(release, 'build');
+    const step = stepWith(build, AUTHOR_STEP);
+    expect(step).toContain('shell: bash');
+    expect(envOf(step)).toEqual(fromRepositoryVariables(['VITE_AUTHOR_PROFILE_URL']));
+    const script = scriptOf(step);
+    expect(script).toContain('::warning title=');
+    expect(script).not.toMatch(/\bexit\b|::error/);
+    expect(script).not.toContain('${{');
+    expect(build.indexOf(AUTHOR_STEP)).toBeLessThan(build.indexOf('run: npm run build'));
+    expect(code(release)).not.toMatch(/secrets\./);
+  });
+
+  it.skipIf(!hasBash)('release.yml : le script n’avertit que si la variable est absente ou blanche, ne recopie jamais sa valeur, et réussit toujours', () => {
+    const script = scriptOf(stepWith(job(release, 'build'), AUTHOR_STEP));
+    const run = (env: Record<string, string>) => spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } });
+    for (const env of [{}, { VITE_AUTHOR_PROFILE_URL: '' }, { VITE_AUTHOR_PROFILE_URL: '  \t ' }] as Record<string, string>[]) {
+      const missing = run(env);
+      expect(missing.status).toBe(0);
+      expect(missing.stdout.match(/^::warning title=Profil de l'auteur manquant::La variable de dépôt VITE_AUTHOR_PROFILE_URL /gm)).toHaveLength(1);
+    }
+    const set = run({ VITE_AUTHOR_PROFILE_URL: 'https://exemple.fr/profil-secret' });
+    expect(set.status).toBe(0);
+    expect(set.stdout).toBe('');
+  });
+
+  it('ci.yml : seul l’installateur d’essai la reçoit (le site vitrine de la CI se construit sans, avec le profil par défaut)', () => {
+    expect(job(ci, 'windows-package')).toContain('VITE_AUTHOR_PROFILE_URL: ${{ vars.VITE_AUTHOR_PROFILE_URL }}');
+    for (const name of ['checks', 'e2e-web', 'electron']) expect(job(ci, name), name).not.toContain('VITE_AUTHOR_PROFILE_URL');
+  });
+
+  it('README, .env.example : variable de build facultative et publique, vide par défaut, profil GitHub par défaut', () => {
+    expect(read('.env.example')).toMatch(/^VITE_AUTHOR_PROFILE_URL=$/m);
+    expect(read('.env.example')).toContain('https://github.com/juanrobin09-stack');
+    expect(readme).toContain('`VITE_AUTHOR_PROFILE_URL`');
+    expect(readme).toContain('https://github.com/juanrobin09-stack');
+  });
+});
+
+describe('ci.yml : site vitrine construit et vérifié à chaque envoi', () => {
+  /** Chaque fragment apparaît dans le job, dans cet ordre. */
+  function expectInOrder(text: string, fragments: string[]): void {
+    let previous = -1;
+    for (const fragment of fragments) {
+      const at = text.indexOf(fragment);
+      expect(at, fragment).toBeGreaterThan(previous);
+      previous = at;
+    }
+  }
+
+  it('job « Lint, typecheck, tests, build web » : build:site puis verify:site, après le build web', () => {
+    const checks = job(ci, 'checks');
+    expect(checks).toContain('name: Lint, typecheck, tests, build web');
+    expectInOrder(checks, ['run: npx vite build', 'run: npm run build:site', 'run: npm run verify:site', 'run: npm run build:server']);
+  });
+
+  it('job « E2E web (démo) » : construit aussi le site, puis lance les projets « web » et « site »', () => {
+    const e2e = job(ci, 'e2e-web');
+    expect(e2e).toContain('name: E2E web (démo)');
+    expectInOrder(e2e, ['run: npx vite build', 'run: npm run build:site', 'run: npm run test:e2e -- --project=web', 'run: npm run test:e2e -- --project=site']);
+    expect(code(ci)).not.toMatch(/playwright test(?![^\n]*--project)/);
+  });
+
+  it('aucun secret : le site vitrine se construit sans clé (ni Clerk, ni Supabase, ni IA)', () => {
+    for (const name of ['checks', 'e2e-web']) expect(job(ci, name), name).not.toMatch(/secrets\.|CLERK|SUPABASE|AI_|VITE_CLERK/);
+  });
+});
+
+describe('README : attribution, architecture et déploiement du site vitrine', () => {
+  const section = (heading: string) => {
+    const start = readme.indexOf(heading);
+    expect(start, heading).toBeGreaterThanOrEqual(0);
+    const end = readme.indexOf('\n## ', start + heading.length);
+    return readme.slice(start, end < 0 ? undefined : end);
+  };
+  const top = readme.slice(0, readme.indexOf('\n## '));
+
+  it('en tête : « Magistra, créé par Juan Robin », courte présentation, lien du profil (remplaçable), un projet FutureAI', () => {
+    expect(readme.startsWith('# Magistra, créé par Juan Robin\n')).toBe(true);
+    expect(top).toContain('[Juan Robin](https://github.com/juanrobin09-stack)');
+    expect(top).toContain('`VITE_AUTHOR_PROFILE_URL`');
+    expect(top).toMatch(/profil professionnel/);
+    expect(top).toContain('Un projet [FutureAI](https://futurai.space)');
+    // Aucune biographie inventée : seulement ce que le dépôt établit (auteur, outil libre et gratuit, IA sur l'ordinateur).
+    expect(top).not.toMatch(/\b(ancien|diplômé|ingénieur|docteur|enseignant depuis|passionné|fondateur|CEO)\b/i);
+  });
+
+  it('architecture : le produit est l’application Windows, le site une vitrine statique (build:site, Vercel), ni connexion ni compte', () => {
+    expect(top).toContain("**Le produit, c'est l'application Windows**");
+    expect(top).toContain('**Le site est une vitrine statique**');
+    expect(top).toContain('`npm run build:site`');
+    expect(top).toContain('**Aucune application dans le navigateur, aucune connexion, aucun compte**');
+    expect(top).toContain('hors site public');
+  });
+
+  it('« Déploiement du site (Vercel) » : ni Clerk, ni Supabase, ni IA ; variables de build et variables lues par les fonctions du site', () => {
+    const deploy = section('## Déploiement du site (Vercel)');
+    const beforeCleanup = deploy.slice(0, deploy.indexOf('### Nettoyage de Vercel'));
+    expect(deploy).toContain('**aucune clé Clerk, Supabase ni IA**');
+    expect(beforeCleanup).not.toMatch(/\b(?:CLERK|SUPABASE|AI)_[A-Z_]+|NODEJS_HELPERS|VITE_CLERK/);
+    for (const name of [...Object.values(LEGAL_ENV_NAMES), 'VITE_LEGAL_VALIDATED', 'VITE_AUTHOR_PROFILE_URL', 'GITHUB_TOKEN', 'MAGISTRA_RELEASES_REPO']) {
+      expect(beforeCleanup, name).toContain(`\`${name}\``);
+    }
+    for (const fragment of ['`npm run build:site`', '`dist-site/`', '`api/windows-release.ts`', '`api/download.ts`', 'sans `preload`']) expect(deploy, fragment).toContain(fragment);
+    // Les fonctions du site fonctionnent sans autre variable : le README le dit.
+    expect(deploy).toMatch(/fonctionnent sans aucune autre variable/);
+  });
+
+  it('« Nettoyage de Vercel » : les anciennes variables peuvent être supprimées, la base Supabase et l’instance Clerk supprimées ou mises en pause', () => {
+    const cleanup = readme.slice(readme.indexOf('### Nettoyage de Vercel'), readme.indexOf('## Hébergement personnel avancé'));
+    for (const name of ['CLERK_SECRET_KEY', 'CLERK_JWT_KEY', 'CLERK_AUTHORIZED_PARTIES', 'CLERK_WEBHOOK_SECRET', 'VITE_CLERK_PUBLISHABLE_KEY',
+      'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'AI_PRESET', 'AI_API_KEY']) {
+      expect(cleanup, name).toContain(`\`${name}\``);
+    }
+    expect(cleanup).toContain('**supprimées**');
+    expect(cleanup).toMatch(/Clerk\*\* \(et son webhook\) et la base \*\*Supabase\*\* peuvent être supprimées ou mises en pause/);
+  });
+
+  it('« Hébergement personnel avancé (hors site public) » : npm start, mode personnel et comptes Clerk auto-hébergés conservés', () => {
+    const advanced = section('## Hébergement personnel avancé (hors site public)');
+    for (const kept of ['`npm start`', 'mode personnel', '/api/clerk-webhook', '`CLERK_SECRET_KEY`', '`CLERK_WEBHOOK_SECRET`', '`SUPABASE_SERVICE_ROLE_KEY`',
+      'supabase-schema.sql', '`CSP_EXTRA_ORIGINS`', '`MAGISTRA_AUTH`', '### Restreindre les inscriptions', '### Serveur Node autonome']) {
+      expect(advanced, kept).toContain(kept);
+    }
+    expect(advanced).toContain("Rien de ce chapitre n'est utilisé par le site public");
+  });
+
+  it('plus de consigne de se connecter au site ni de configurer Clerk, Supabase ou l’IA dans Vercel', () => {
+    expect(readme).not.toMatch(/connectez-vous au site/i);
+    expect(readme).not.toMatch(/Sur le site, Magistra/);
+    expect(readme).not.toMatch(/vercel env pull|NODEJS_HELPERS=0|ai:check -- --vercel --env-file/);
+    expect(readme).not.toContain('## Site web : déploiement');
+  });
+});
+
+describe('ci.yml : permissions', () => {
+  it('lecture seule par défaut, aucun droit d’écriture', () => {
+    expect(ci).toMatch(/^permissions:\n {2}contents: read$/m);
+    expect(code(ci)).not.toMatch(/contents: write/);
   });
 });
 
@@ -402,7 +553,10 @@ describe('ci.yml et Playwright : E2E du connecteur local', () => {
 
   it('chaque fichier E2E appartient à exactement un projet (le connecteur : un par navigateur) ; « connector » et « connector-edge » activent la protection Local Network Access', () => {
     const projects = playwrightConfig.projects ?? [];
-    expect(projects.map(p => p.name)).toEqual(['web', 'electron', 'connector', 'connector-edge']);
+    expect(projects.map(p => p.name).filter(name => name !== 'site')).toEqual(['web', 'electron', 'connector', 'connector-edge']);
+    // Site vitrine construit (dist-site/), servi par vite preview sur son propre port.
+    const site = projects.find(p => p.name === 'site');
+    if (site) expect(site.use?.baseURL).toBe('http://127.0.0.1:4174');
     const specs = readdirSync(path.join(root, 'e2e')).filter(f => f.endsWith('.spec.ts'));
     expect(specs).toContain('connector-local.spec.ts');
     for (const spec of specs) {

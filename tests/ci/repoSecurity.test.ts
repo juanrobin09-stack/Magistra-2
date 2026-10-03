@@ -53,6 +53,22 @@ describe('CODEOWNERS et SECURITY.md', () => {
     expect(security).not.toMatch(/[\w.-]+@[\w-]+\.[a-z]{2,}/i);
   });
 
+  it('SECURITY.md : périmètre à jour (site vitrine statique sans compte, application locale, connecteur local = surface résiduelle)', () => {
+    const security = read('SECURITY.md');
+    const scope = security.slice(security.indexOf('## Périmètre'), security.indexOf('## Ce que Magistra fait pour votre sécurité'));
+    expect(scope).toContain('application Windows locale');
+    expect(scope).toMatch(/site public.*vitrine/);
+    expect(scope).toMatch(/aucun compte.*aucune application dans le navigateur.*aucune donnée d'enseignant/);
+    // Les deux seules fonctions du site, et plus l'API de comptes comme partie du site public.
+    expect(scope).toContain('`GET /api/windows-release`');
+    expect(scope).toContain('`GET /telecharger`');
+    expect(scope).toMatch(/connecteur local\*\* de l'application Windows.*surface résiduelle/);
+    expect(scope).toMatch(/hébergement personnel avancé\*\*.*hors site public/);
+    expect(scope).not.toContain("l'**API web**");
+    // Le site vitrine ne détient aucun secret : seule la clé de l'IA du serveur d'un hébergement personnel est évoquée.
+    expect(security).toMatch(/Le \*\*site vitrine\*\* n'a ni compte, ni base de données, ni clé d'IA/);
+  });
+
   it('README : section Sécurité renvoyant à SECURITY.md', () => {
     expect(read('README.md')).toMatch(/## Sécurité\n\n[^\n]*\[SECURITY\.md\]\(SECURITY\.md\)/);
   });
