@@ -3,7 +3,8 @@
 Magistra est un projet **open source (licence MIT) et non lucratif**. Il ne dépend d'**aucune API payante** :
 
 - **Application Windows** : une IA **locale**, open weights, qui tourne sur l'ordinateur de l'enseignant via [Ollama](https://ollama.com). Aucune clé, aucun compte, aucune limite d'utilisation.
-- **Site web** : un **préréglage** (`AI_PRESET`, voir § 11 ; `ovhcloud` est gratuit, sans clé, hébergé en France) ou un serveur d'IA **compatible OpenAI** ou **Ollama** configuré par l'administrateur (serveur GPU d'une université sous vLLM, Ollama distant…). Un prestataire en ligne est **toujours annoncé** à l'enseignant.
+- **Site public (Vercel)** : une **vitrine** (§ 20). Il présente Magistra, propose le téléchargement de l'application Windows et publie les pages légales ; il n'exécute **aucune IA**, n'a ni compte ni base de données, et ne contient pas l'application.
+- **Hébergement personnel** (serveur Node ou Vercel de l'enseignant ou de son établissement, code conservé et testé, **non déployé** par le dépôt) : un **préréglage** (`AI_PRESET`, voir § 11 ; `ovhcloud` est gratuit, sans clé, hébergé en France) ou un serveur d'IA **compatible OpenAI** ou **Ollama** configuré par l'administrateur (serveur GPU d'une université sous vLLM, Ollama distant…). Un prestataire en ligne est **toujours annoncé** à l'enseignant.
 - **En local** (`npm run dev`, `npm start` sur la boucle locale) : **mode personnel** sans compte (§ 12), avec l'IA de l'ordinateur **détectée automatiquement** (§ 13).
 - **Site web + application Windows** (« Magistra locale ») : le site confie la génération à l'IA locale de l'application par son **connecteur local**, après appairage accepté par l'enseignant ; le navigateur n'accède jamais au moteur lui-même (§ 19).
 
@@ -607,3 +608,72 @@ Options ignorées dans l'application installée (`electron/devOptions.ts`) :
   - En face tourne la vraie application Electron, avec un Ollama simulé. Le test joue seulement le rôle du système : remise des URL `magistra://`, réponse à la boîte native, trousseau de clés sous Linux.
   - Parcours couverts : parcours complet (absente, trouvée, refus, accord, flux, arrêt, fermeture, relance sans nouvel appairage, retrait), moteur non prêt, autre site refusé, programme sur le premier port, explication puis refus puis accord de l'autorisation du navigateur.
 - **Vraie IA** : le test « vraie IA » du même fichier exécute appairage puis génération d'un cours en français, en flux, par site → connecteur → application → vrai Ollama. Il est ignoré sans `MAGISTRA_E2E_REAL_OLLAMA_URL` et n'est pas lancé par la CI. Exemple : `MAGISTRA_E2E_REAL_OLLAMA_URL=http://127.0.0.1:11434 xvfb-run -a npx playwright test --project=connector -g "vraie IA"`, avec `ministral-3:8b` installé.
+
+---
+
+## 20. Site vitrine (Vercel) et application Windows
+
+Le site public n'est **pas** l'application : c'est une vitrine. L'application tourne dans la fenêtre Windows (même code React, construit dans `dist/`, chargé par Electron) ; le site ne la contient pas.
+
+| | Site public | Application Windows |
+|---|---|---|
+| Construction | `npm run build:site` → `dist-site/` (`vite.site.config.ts`, point d'entrée `site/index.html` → `src/site/main.tsx`) | `npx vite build` → `dist/` (`vite.config.ts`) |
+| Contenu | présentation, téléchargement de l'application Windows, mentions légales, confidentialité, CGU | tout Magistra (profil, génération, historique, favoris, réglages) |
+| Routes servies | `/`, `/mentions-legales`, `/confidentialite`, `/cgu`, `/telecharger` ; toute autre adresse (dont `/app`, `/onboarding`) revient à l'accueil | `app://` (protocole interne) |
+| Fonctions Vercel | **deux seulement** : `api/windows-release.ts` (dernière version stable publiée) et `api/download.ts` (téléchargement direct) | aucune |
+| IA, compte, base | aucun : pas de Clerk, de Supabase, de connecteur local, de clé `AI_API_KEY` | Ollama local, ou serveur distant choisi par l'enseignant |
+
+**Contrôles** (les trois tournent dans la CI) :
+- `scripts/verify-site.mjs` lit `dist-site/` sans rien lancer et refuse : un service de connexion, une base de données, jsPDF / pdf.js, une route de l'API de l'application, le port ou le code du connecteur local, une clé secrète, un script en ligne dans `index.html`, une ressource d'un autre domaine, une sourcemap ;
+- la politique de sécurité de `vercel.json` (`script-src 'self'`, `connect-src 'self'`, ni Clerk, ni Cloudflare, ni `127.0.0.1`) est testée sur la page réellement construite (`tests/server/deploy.test.ts`, `tests/site/siteBuild.test.ts`) ;
+- `e2e/site-vitrine.spec.ts` (projet Playwright `site`, port 4174) : aucun bouton « Commencer », aucune entrée vers l'application, la page légale et le téléchargement fonctionnent.
+
+Seules les variables d'identité publiques atteignent le code du site (`VITE_LEGAL_*`, `VITE_AUTHOR_*`, `envPrefix` de `vite.site.config.ts`) : une clé de connexion présente dans l'environnement de construction n'y entre pas.
+
+**Conservé, non déployé** : le mode web (comptes Clerk, historique Supabase), le mode personnel (`npm run dev`, `npm start`) et le connecteur local (§ 19) restent dans le code et dans les tests, pour un hébergement personnel. Comme le site n'a plus aucun client du connecteur, **le connecteur n'est plus qu'une surface d'attaque locale sans usage dans le déploiement officiel** : le retirer (ou le désactiver par défaut) serait la suite logique, mais ce n'est pas fait ici faute de décision du mainteneur.
+
+### Attribution
+
+`shared/author.ts` : « Magistra, créé par Juan Robin », une courte présentation et un lien vers le profil professionnel (`VITE_AUTHOR_PROFILE_URL`, https seulement, sans identifiants ni jeton, 300 caractères au plus ; à défaut le profil GitHub). Le composant `AuthorCredit` (badge, bloc « Qui est derrière Magistra ? », pied de page) est affiché sur le site, sur l'accueil de l'application et dans Réglages → « À propos ». FutureAI reste nommé (éditeur) ; la licence MIT (`LICENSE`) et le copyright d'`electron-builder.json` n'ont pas été modifiés.
+
+---
+
+## 21. Mesure de la vitesse (moteur local)
+
+Une génération lente peut venir de quatre endroits différents ; Magistra les sépare au lieu de les additionner :
+
+| Mesure | D'où elle vient | Ce qu'elle dit |
+|---|---|---|
+| préparation (`prepMs`) | Magistra : sélection des passages de documents, recherche de sources | temps avant que le moteur reçoive la demande |
+| chargement du modèle (`engine.loadMs`, `waitModelMs`, `preloadLoadMs`) | Ollama (`load_duration`) et attente du préchargement | modèle lu depuis le disque et placé en mémoire ; nul quand il est déjà chargé |
+| lecture de la demande (`engine.promptTokens` / `promptMs`) | Ollama (`prompt_eval_count`, `prompt_eval_duration`) | vitesse de lecture du prompt et des documents |
+| rédaction (`engine.outputTokens` / `outputMs`) | Ollama (`eval_count`, `eval_duration`) | vitesse d'écriture en jetons par seconde |
+| calcul (`placement`) | `GET /api/ps` (taille, `size_vram`, `context_length`), lu une fois après le premier mot | processeur, carte graphique ou les deux |
+
+- **Code** : `shared/ai/timings.ts` (`ollamaTimingsFromChunk`, `placementFromPs`, nettoyage des valeurs reçues), `shared/ai/ollama.ts` (le préchargement renvoie sa durée), `shared/pipeline.ts` (`GenerationMetrics`, horloge injectable), `src/lib/generation/speed.ts` et `src/components/generate/SpeedDetails.tsx` (« Détails de la vitesse » sous le résultat).
+- **Compatibilité** : `metrics` est facultatif dans l'évènement `done`. Une application plus ancienne ne l'envoie pas, un site plus ancien l'ignore. Les mesures ne contiennent **jamais de texte** (ni de la demande, ni de la réponse), ne sont **pas enregistrées dans l'historique** et ne quittent pas l'ordinateur.
+- **Limites vérifiées sur un vrai Ollama 0.34.4** :
+  - `prompt_eval_count` **inclut** les jetons déjà en cache (`prompt_eval_cached_count`) : la vitesse de lecture est calculée sur les jetons réellement lus ;
+  - sur un processeur à instructions **AMX** (Xeon récents), Ollama compte une partie des poids du processeur comme de la mémoire de carte graphique : `size_vram > 0` ne prouve pas l'usage d'une carte. Le placement « partagé » est donc présenté avec prudence (`MIXED_EXPLANATION`), et le journal d'Ollama (« inference compute ») fait foi ;
+  - Ollama ne renvoie pas toujours `load_duration` pour la requête de chargement à vide : Magistra n'affiche alors aucune durée de chargement inventée (le banc de mesure, lui, utilise la durée d'horloge de cette requête).
+- **Banc de mesure du mainteneur** : `node scripts/ai-bench.mjs --model ministral-3:3b --ctx 8192,12288 --scenario court,moyen --runs 3 --json bench.json`. Il mesure chargement à froid, lecture, rédaction, premier mot, placement, rechargement et empreinte du texte (température 0, graine fixe) pour chaque taille de contexte, sur le moteur **de cet ordinateur seulement** (autre adresse : `--allow-remote`), avec des textes synthétiques, sans rien télécharger. Tests : `tests/ci/aiBench.test.ts` et un Ollama simulé qui renvoie des durées (`scripts/mock-ollama.mjs`).
+
+---
+
+## 22. Taille de contexte adaptée à la demande : étude et décision
+
+**Idée** : Magistra demande 12 288 jetons de contexte (`num_ctx`) à Léger et à Standard même pour une petite demande ; un contexte plus petit pour les tâches courtes économiserait de la mémoire. L'étude a été faite avant toute généralisation (Ollama 0.34.4, Xeon 4 cœurs sans carte graphique, 15,7 Gio de RAM, **modèle 3B** `ministral-3:3b` : l'alias `ministral-3:8b` du bac à sable pointait le même fichier, **aucune mesure sur 8B, 14B ou 24B**) ; données brutes et scripts conservés par le mainteneur.
+
+| Constat | Mesure |
+|---|---|
+| Mémoire | le cache de contexte (KV) coûte **104 Kio par jeton** sur ce 3B (couches × têtes KV × dimension × 2 × 2 octets) : −416 Mo de 12 288 à 8 192 (−10,6 % de l'empreinte), −624 Mo à 6 144 |
+| Vitesse | lecture et rédaction **identiques à ± 5 %** de 4 096 à 16 384 jetons ; seul le chargement à froid gagne ≈ 0,5 s (12 288 → 8 192) |
+| Qualité du texte | texte **identique** d'un contexte à l'autre (30/30, température 0, graine fixe) ; le contexte en soi ne change pas la qualité |
+| Rechargements | **chaque changement de `num_ctx` recharge le modèle**, même vers un contexte plus petit : ≈ 3,7-4,2 s sur le 3B (extrapolation non mesurée : 9-15 s pour 8B/14B) et cache de prompt perdu |
+| Débordement | prompt seul trop grand : erreur 400 nette. **Prompt + sortie trop grands : décalage de contexte silencieux** (Ollama jette ≈ 2 045 jetons juste après les 5 premiers, c'est-à-dire tout le message système de Magistra) sans aucun signal dans la réponse |
+| Estimation des jetons | 3,2 caractères par jeton supposés, 3,8-4,1 réels pour du français courant : surestimation de 22 à 31 % (sûre) ; **sous-estimation jusqu'à −32 %** sur du texte collé dense en symboles (maths Unicode ×1,9, grec polytonique ×1,66, URL ou base64 ×1,5, LaTeX ×1,36, émojis ×5,5) |
+| Sortie | `computeBudgets` fixe la sortie à min(6 000 ; 40 % du contexte) : un contexte de 8 192 réduirait la sortie de 4 915 à 3 276 jetons (documents coupés) |
+
+**Décision : le contexte adaptatif n'est PAS adopté.** Le gain est une économie de mémoire modeste (≈ 5-10 %, inconnue pour 8B/14B), sans aucun gain de vitesse, et le seul défaut possible est silencieux et grave (le message système supprimé). Léger et Standard gardent 12 288 jetons, Qualité 16 384.
+
+**Si un besoin réel de mémoire apparaît** (Léger sur 8 Go), la seule version défendable serait minimale, à deux paliers (8 192 / 12 288), avec ces garde-fous obligatoires : jamais de palier réduit avec un document, une recherche ou un texte collé de plus d'environ 2 000 caractères (ou contenant émojis, symboles mathématiques, grec polytonique, URL, base64) ; texte collé compté deux fois ; sortie découplée du contexte (garder 4 915) ; palier choisi **avant** le préchargement et « montée seule » via `/api/ps` (le contexte ne fait que monter tant que le modèle est chargé, sinon chaque changement recharge) ; comparaison de `prompt_eval_count` à l'estimation avec retour à 12 288 au premier écart. Autre piste, non testée : la quantification du cache KV (`q8_0`, ≈ −50 % de KV sans changer de contexte).
