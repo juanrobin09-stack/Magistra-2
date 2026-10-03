@@ -40,7 +40,10 @@ describe('OllamaProvider — /api/chat (NDJSON)', () => {
     const events = await collect(localProvider(fetchImpl).stream({ messages: MESSAGES, maxTokens: 900, temperature: 0.2 }));
     expect(textOf(events)).toBe('# Les fractions\n\nUne fraction représente un partage équitable.');
     expect(textOf(events)).not.toContain('réfléchis');
-    expect(endOf(events)).toEqual({ type: 'end', finishReason: 'stop', usage: { promptTokens: 321, completionTokens: 45 } });
+    expect(endOf(events)).toMatchObject({ type: 'end', finishReason: 'stop', usage: { promptTokens: 321, completionTokens: 45 } });
+    // Dernier objet sans aucune durée : pas de mesures du moteur inventées ; le premier mot est mesuré côté client.
+    expect(endOf(events).usage?.timings).toBeUndefined();
+    expect(endOf(events).usage?.timeToFirstDeltaMs).toBeGreaterThanOrEqual(0);
 
     const call = fetchImpl.calls[0];
     expect(call.url).toBe(`${DEFAULT_OLLAMA_URL}/api/chat`);

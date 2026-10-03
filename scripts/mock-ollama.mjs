@@ -10,12 +10,24 @@
 //   POST /api/chat      → messages [] : { done: true, done_reason: "load" } (préchargement, JSON unique) ;
 //                         sinon flux NDJSON d'un texte Markdown plausible, citant [S1]… si des sources sont fournies.
 //                         « think: false » est accepté (ignoré) ; « think: true » → 400 (ministral ne « réfléchit » pas).
+//                         Le dernier objet du flux porte les durées d'Ollama, en NANOSECONDES (total_duration, load_duration,
+//                         prompt_eval_count / prompt_eval_cached_count / prompt_eval_duration, eval_count / eval_duration) ;
+//                         comme Ollama 0.34, prompt_eval_count compte aussi les jetons déjà en mémoire (début commun avec la
+//                         requête précédente, jamais relus). Les valeurs sont déterministes : la vitesse
+//                         dépend de --vram (voir ci-dessous) ; le chargement à froid (premier appel du modèle, après un
+//                         déchargement, ou avec une autre taille de contexte num_ctx) attend --load-ms et annonce --load-ms
+//                         plus un délai fixe dans load_duration.
+//   GET  /api/ps        → modèles chargés en mémoire (name, model, size, size_vram, context_length, expires_at) ;
+//                         --vram none (processeur, size_vram 0), partial (40 % en carte graphique) ou full (tout en carte
+//                         graphique), ou un nombre d'octets ; --no-ps : 404 (moteur qui ne connaît pas /api/ps).
+//   POST /api/generate  → { keep_alive: 0 } décharge le modèle (done_reason « unload ») ; sans prompt, le charge (« load »).
 //
 // Usage : node scripts/mock-ollama.mjs [--port 11434] [--models ministral-3:14b,ministral-3:8b] [--version 0.12.0]
 //         [--missing-model] [--oom] [--oom-format legacy|llama-server|gpu] [--unknown-pull] [--pull-412]
-//         [--pull-ms 3000] [--chat-delay-ms 15] [--load-ms 0]
+//         [--pull-ms 3000] [--chat-delay-ms 15] [--load-ms 0] [--vram none|partial|full|<octets>] [--no-ps]
 // En module : const server = await startMockOllama({ port: 0 }); … await server.close();
-// server.state.chats : corps des /api/chat reçus (modèle, think, nombre de messages…), pour les vérifications.
+// server.state.chats : corps des /api/chat reçus (modèle, think, nombre de messages…), pour les vérifications ;
+// server.state.loaded : modèles actuellement chargés (nom → { numCtx, loadedAt, lastPrompt }).
 
 import http from 'node:http';
 import { isMainModule } from './mainModule.mjs';
@@ -35,6 +47,21 @@ const KNOWN_SIZES = {
   'mistral-small3.2:latest': 15_000_000_000,
   'mistral-small3.2:24b-instruct-2506-q4_k_m': 15_000_000_000,
 };
+
+/** Chargement à froid d'un modèle, en nanosecondes, en plus de --load-ms ; modèle déjà chargé : durée de rappel. */
+const COLD_LOAD_NS = 1_800_000_000;
+const WARM_LOAD_NS = 12_000_000;
+/** Vitesse simulée selon l'emplacement du modèle (jetons par seconde) : lecture de la demande, rédaction. */
+const SPEEDS = {
+  none: { prompt: 80, output: 9 },
+  partial: { prompt: 200, output: 18 },
+  full: { prompt: 1_500, output: 60 },
+};
+/** Part du modèle en mémoire de carte graphique pour --vram partial. */
+const PARTIAL_VRAM_SHARE = 0.4;
+/** Mémoire du cache de contexte par jeton, en octets (s'ajoute à la taille du modèle dans /api/ps). */
+const KV_BYTES_PER_TOKEN = 100_000;
+const DEFAULT_NUM_CTX = 4_096;
 
 /** Erreurs mémoire au format du moteur (Ollama v0.34 : llama-server, ordonnanceur ; anciennes versions). */
 const OOM_MESSAGES = {
@@ -97,6 +124,30 @@ function olderThanRegistryMin(version) {
   return false;
 }
 
+/** Emplacement simulé : 'none' | 'partial' | 'full' ou un nombre d'octets (size_vram). */
+function vramMode(value) {
+  if (value === 'partial' || value === 'full') return value;
+  return 'none';
+}
+
+/** Durées d'une réponse (nanosecondes), déterministes : fonction des jetons lus et produits, et de l'emplacement. */
+function durationsFor({ promptTokens, outputTokens, coldLoad, loadMs, vram, cachedTokens = 0 }) {
+  const speed = SPEEDS[vramMode(vram)];
+  const load = coldLoad ? Math.round((loadMs ?? 0) * 1_000_000) + COLD_LOAD_NS : WARM_LOAD_NS;
+  // Ollama compte dans prompt_eval_count les jetons déjà en mémoire (prompt_eval_cached_count) : seuls les autres sont lus.
+  const prompt = Math.round(((promptTokens - cachedTokens) / speed.prompt) * 1_000_000_000);
+  const output = Math.round((outputTokens / speed.output) * 1_000_000_000);
+  return {
+    total_duration: load + prompt + output + 5_000_000,
+    load_duration: load,
+    prompt_eval_count: promptTokens,
+    prompt_eval_cached_count: cachedTokens,
+    prompt_eval_duration: prompt,
+    eval_count: outputTokens,
+    eval_duration: output,
+  };
+}
+
 /** Modèles Mistral 3 de la bibliothèque (ceux qui exigent Ollama 0.13.1). */
 const needsRecentEngine = name => /^(ministral-3|mistral-small3\.2)[:]/.test(name);
 
@@ -105,7 +156,7 @@ const needsRecentEngine = name => /^(ministral-3|mistral-small3\.2)[:]/.test(nam
  * sur l'objet passé change le comportement du serveur en cours de route.
  * @param {{ port?: number, host?: string, models?: string[], missingModel?: boolean, oom?: boolean,
  *   oomFormat?: 'legacy' | 'llama-server' | 'gpu', unknownPull?: boolean, pull412?: boolean, pullMs?: number,
- *   chatDelayMs?: number, loadMs?: number, version?: string }} [options]
+ *   chatDelayMs?: number, loadMs?: number, version?: string, vram?: 'none' | 'partial' | 'full' | number, noPs?: boolean }} [options]
  */
 export async function startMockOllama(options = {}) {
   const state = {
@@ -115,11 +166,30 @@ export async function startMockOllama(options = {}) {
     requests: [],
     /** Corps utiles des /api/chat reçus : { model, think, messages (nombre), stream, keepAlive, numCtx }. */
     chats: [],
+    /** Modèles chargés en mémoire : nom → { numCtx, loadedAt, lastPrompt } (rempli par /api/chat et /api/generate, vidé par keep_alive 0). */
+    loaded: new Map(),
   };
   // Options relues à chaque requête : un test peut les modifier pendant que le serveur tourne.
   const pullMsNow = () => options.pullMs ?? 2_000;
   const chatDelayMsNow = () => options.chatDelayMs ?? 15;
   const versionNow = () => options.version ?? MOCK_DEFAULT_VERSION;
+
+  /** Chargement à froid : modèle absent de la mémoire, ou taille de contexte demandée différente (Ollama recharge alors le modèle). */
+  const needsLoad = (name, numCtx) => !state.loaded.has(name) || (typeof numCtx === 'number' && state.loaded.get(name).numCtx !== numCtx);
+  /** Charge le modèle avec sa taille de contexte (un chargement à froid vide le cache de préfixe). */
+  const load = (name, numCtx) => {
+    const previous = state.loaded.get(name);
+    const warm = previous !== undefined && !needsLoad(name, numCtx);
+    state.loaded.set(name, { numCtx: numCtx ?? previous?.numCtx ?? DEFAULT_NUM_CTX, loadedAt: Date.now(), lastPrompt: warm ? previous.lastPrompt : '' });
+  };
+  /** size_vram selon l'emplacement simulé (relu à chaque requête). */
+  const vramBytes = size => {
+    const v = options.vram;
+    if (typeof v === 'number' && Number.isFinite(v)) return Math.max(0, Math.min(size, Math.round(v)));
+    if (v === 'full') return size;
+    if (v === 'partial') return Math.round(size * PARTIAL_VRAM_SHARE);
+    return 0;
+  };
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -135,6 +205,41 @@ export async function startMockOllama(options = {}) {
             size: KNOWN_SIZES[name] ?? 4_000_000_000,
             details: { family: 'mistral', parameter_size: name.split(':')[1]?.toUpperCase() ?? '8B' },
           })),
+        });
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/ps') {
+        if (options.noPs) return json(res, 404, { error: 'not found' });
+        return json(res, 200, {
+          models: [...state.loaded].map(([name, info]) => {
+            const size = (KNOWN_SIZES[name] ?? 4_000_000_000) + info.numCtx * KV_BYTES_PER_TOKEN;
+            return {
+              name,
+              model: name,
+              size,
+              digest: 'sha256:mock',
+              details: { family: 'mistral', parameter_size: name.split(':')[1]?.toUpperCase() ?? '8B' },
+              expires_at: new Date(info.loadedAt + 15 * 60_000).toISOString(),
+              size_vram: vramBytes(size),
+              context_length: info.numCtx,
+            };
+          }),
+        });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/generate') {
+        const body = await readBody(req);
+        const name = norm(String(body.model ?? ''));
+        if (!state.models.has(name)) return json(res, 404, { error: `model '${body.model}' not found, try pulling it first` });
+        const unload = body.keep_alive === 0 || body.keep_alive === '0';
+        if (unload) state.loaded.delete(name);
+        else load(name, body.options?.num_ctx);
+        return json(res, 200, {
+          model: body.model,
+          created_at: new Date().toISOString(),
+          response: '',
+          done: true,
+          done_reason: unload ? 'unload' : 'load',
         });
       }
 
@@ -218,15 +323,20 @@ export async function startMockOllama(options = {}) {
         if (options.oom || options.oomFormat) {
           return json(res, 500, { error: OOM_MESSAGES[options.oomFormat ?? 'legacy'] ?? OOM_MESSAGES.legacy });
         }
-        if (options.loadMs) await sleep(options.loadMs);
+        const cold = needsLoad(name, body.options?.num_ctx);
+        if (cold && options.loadMs) await sleep(options.loadMs);
+        load(name, body.options?.num_ctx);
         // Préchargement : aucun message → le modèle est chargé, réponse JSON unique (pas de flux), comme Ollama.
         if (messages.length === 0) {
+          const { total_duration, load_duration } = durationsFor({ promptTokens: 0, outputTokens: 0, coldLoad: cold, loadMs: options.loadMs, vram: options.vram });
           return json(res, 200, {
             model: body.model,
             created_at: new Date().toISOString(),
             message: { role: 'assistant', content: '' },
             done: true,
             done_reason: 'load',
+            total_duration,
+            load_duration,
           });
         }
         const user = String(messages.filter(m => m.role === 'user').at(-1)?.content ?? '');
@@ -248,7 +358,18 @@ export async function startMockOllama(options = {}) {
           const chatDelayMs = chatDelayMsNow();
           if (chatDelayMs) await sleep(chatDelayMs);
         }
-        res.write(`${JSON.stringify({ model: body.model, message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop', prompt_eval_count: Math.ceil(user.length / 3.2), eval_count: tokens.length })}\n`);
+        // Cache de préfixe : le début commun avec la requête précédente sur ce modèle est déjà en mémoire (rien d'autre n'est relu).
+        const promptTokens = Math.ceil(user.length / 3.2);
+        const loaded = state.loaded.get(name);
+        const previous = cold ? '' : loaded?.lastPrompt ?? '';
+        let common = 0;
+        while (common < previous.length && common < user.length && previous[common] === user[common]) common++;
+        if (loaded) loaded.lastPrompt = user;
+        const cachedTokens = Math.min(Math.max(0, promptTokens - 1), Math.floor(common / 3.2));
+        const durations = durationsFor({
+          promptTokens, outputTokens: tokens.length, coldLoad: cold, loadMs: options.loadMs, vram: options.vram, cachedTokens,
+        });
+        res.write(`${JSON.stringify({ model: body.model, message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop', ...durations })}\n`);
         return res.end();
       }
 
@@ -294,6 +415,10 @@ function parseArgs(argv) {
     else if (arg === '--pull-ms') opts.pullMs = Number(next());
     else if (arg === '--chat-delay-ms') opts.chatDelayMs = Number(next());
     else if (arg === '--load-ms') opts.loadMs = Number(next());
+    else if (arg === '--vram') {
+      const v = next();
+      opts.vram = /^\d+$/.test(v) ? Number(v) : v;
+    } else if (arg === '--no-ps') opts.noPs = true;
   }
   return opts;
 }

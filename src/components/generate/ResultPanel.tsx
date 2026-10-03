@@ -18,6 +18,7 @@ import type { GenerationRequest } from '@shared/types';
 import { toMagistraError, type ErrorCode } from '@shared/errors';
 import LoadingSkeleton from './LoadingSkeleton';
 import { FOCUS_RING } from './fieldUtils';
+import SpeedDetails from './SpeedDetails';
 
 interface ResultPanelProps {
   state: GenerationState;
@@ -224,6 +225,9 @@ export default function ResultPanel({ state, mode, store, onStop, onRestart, con
           )}
         </div>
       )}
+
+      {/* Vitesse : moteur de cet ordinateur seulement, jamais pour un exemple pré-rédigé. */}
+      {!running && !example && result && <SpeedDetails metrics={result.metrics} />}
     </section>
   );
 }

@@ -3,7 +3,7 @@
 import { MagistraError } from '../errors.js';
 import {
   collectStream, type AIProvider, type ChatMessage, type ChatOptions, type FinishReason, type GenerateResult,
-  type HealthStatus, type ModelInfo, type StreamEvent,
+  type HealthStatus, type ModelInfo, type StreamEvent, type Usage,
 } from './provider.js';
 
 export interface MockProviderOptions {
@@ -17,6 +17,8 @@ export interface MockProviderOptions {
   model?: string;
   local?: boolean;
   contextTokens?: number;
+  /** Mesures jointes à l'évènement de fin (durées du moteur, placement), pour tester l'affichage de la vitesse. */
+  usage?: Usage;
   /** État renvoyé par health() (ex. { ok: true, warning: { code: 'AI_STATUS_UNKNOWN', … } }), prioritaire sur failWith. */
   healthStatus?: HealthStatus;
 }
@@ -54,7 +56,7 @@ export class MockProvider implements AIProvider {
     }
     if (this.opts.failWith) throw this.opts.failWith;
     if (options.signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
-    yield { type: 'end', finishReason: this.opts.finishReason ?? 'stop' };
+    yield { type: 'end', finishReason: this.opts.finishReason ?? 'stop', ...(this.opts.usage ? { usage: this.opts.usage } : {}) };
   }
 
   generate(options: ChatOptions): Promise<GenerateResult> {

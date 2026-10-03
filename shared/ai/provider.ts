@@ -2,6 +2,7 @@
 // Le reste de Magistra ne sait jamais s'il parle à Ollama, vLLM ou un autre serveur compatible OpenAI.
 
 import type { ErrorCode } from '../errors.js';
+import type { EnginePlacement, EngineTimings } from './timings.js';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -21,6 +22,12 @@ export type FinishReason = 'stop' | 'length' | 'unknown';
 export interface Usage {
   promptTokens?: number;
   completionTokens?: number;
+  /** Durées mesurées par le moteur (Ollama : dernier objet du flux), pour la fenêtre « Détails de vitesse ». */
+  timings?: EngineTimings;
+  /** Délai mesuré côté client entre l'envoi de la requête et le premier mot reçu. */
+  timeToFirstDeltaMs?: number;
+  /** Où le modèle s'exécute (carte graphique, processeur), relevé une fois pendant la génération (moteur local). */
+  placement?: EnginePlacement;
 }
 
 export type StreamEvent =

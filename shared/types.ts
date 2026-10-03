@@ -6,6 +6,7 @@ import type {
 import type { Bareme, BesoinParticulier, TonRedaction, TypeEvaluation } from './formats.js';
 import type { NiveauScolaire } from './levels.js';
 import type { ErrorCode } from './errors.js';
+import type { EnginePlacement, EngineTimings } from './ai/timings.js';
 
 export type ResearchMode = 'documents' | 'academic' | 'internet' | 'documents_internet';
 
@@ -177,6 +178,32 @@ export interface UsageStats {
 
 export type GenerationStage = 'research' | 'context' | 'loading_model' | 'generating' | 'finalizing';
 
+/**
+ * Mesures d'une génération, jointes à l'évènement « done » (champ facultatif) pour la fenêtre « Détails de vitesse ».
+ * Uniquement des nombres et des énumérations : jamais le prompt, le contenu, un nom de fichier ni une requête. Affichées
+ * pour la session seulement : jamais enregistrées dans l'historique.
+ */
+export interface GenerationMetrics {
+  /** Durée de la génération, de la demande validée à la fin (sauvegarde comprise). */
+  totalMs: number;
+  /** Préparation : sélection des passages de documents et recherche de sources. */
+  prepMs?: number;
+  /** Attente de la fin du chargement du modèle (préchargement), après la préparation. */
+  waitModelMs?: number;
+  /** Délai avant l'apparition du premier mot, depuis le début de la génération. */
+  firstWordMs?: number;
+  /** Durées mesurées par le moteur (moteur de l'ordinateur seulement). */
+  engine?: EngineTimings;
+  /** Carte graphique ou processeur (moteur de l'ordinateur seulement). */
+  placement?: EnginePlacement;
+  /** Taille de contexte demandée au moteur (num_ctx). */
+  contextTokens: number;
+  /** Jetons du prompt final (estimation). */
+  promptTokens?: number;
+  /** Plafond de jetons demandé pour la réponse. */
+  outputBudgetTokens?: number;
+}
+
 export type GenerationEvent =
   | { type: 'status'; stage: GenerationStage; message: string }
   | { type: 'sources'; sources: SourceRef[]; internetUsed: boolean }
@@ -191,6 +218,8 @@ export type GenerationEvent =
       saved: boolean;
       id?: string;
       model: string;
+      /** Mesures de vitesse (facultatif : une application plus ancienne ne l'envoie pas, un client plus ancien l'ignore). */
+      metrics?: GenerationMetrics;
       /**
        * Génération à enregistrer par le site (connecteur local uniquement : PipelineDeps.includeRecord). Retiré par le
        * client du site avant l'affichage ; jamais présent quand `saved` est vrai.

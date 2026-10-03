@@ -18,6 +18,7 @@ import {
   abortedByTimeout, fetchWithTimeout, isNetworkError, linkSignals, lowerFirst, raceAbort, readErrorDetail, readLines, safeJsonParse,
   trimSlash, type TimeoutOptions,
 } from './streams.js';
+import { ollamaTimingsFromChunk, placementFromPs, type EnginePlacement } from './timings.js';
 
 export const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434';
 
@@ -33,6 +34,8 @@ export const PULL_IDLE_MS = 300_000;
 export const PULL_VERIFY_IDLE_MS = 15 * 60_000;
 /** Délai maximal du préchargement d'un modèle en mémoire (preload). */
 export const PRELOAD_TIMEOUT_MS = 10 * 60_000;
+/** Délai de la lecture des modèles chargés (GET /api/ps) : une mesure facultative, jamais une attente. */
+export const RUNNING_TIMEOUT_MS = 3_000;
 
 export { isLoopbackUrl };
 
@@ -164,6 +167,25 @@ export class OllamaClient {
       return await this.checkVersion(signal);
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Modèles actuellement chargés en mémoire (GET /api/ps), tels que les décrit Ollama (voir placementFromPs,
+   * shared/ai/timings.ts : carte graphique, processeur ou les deux). Mesure facultative : délai court (3 s) et
+   * jamais d'erreur — `undefined` si le moteur ne répond pas, refuse l'accès ou ne renvoie pas du JSON.
+   * Ne contacte que le moteur configuré (même adresse que les autres requêtes).
+   */
+  async running(signal?: AbortSignal, timeoutMs: number = RUNNING_TIMEOUT_MS): Promise<unknown> {
+    try {
+      const res = await this.request('/api/ps', { signal }, timeoutMs);
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => undefined);
+        return undefined;
+      }
+      return await res.json();
+    } catch {
+      return undefined;
     }
   }
 
@@ -307,6 +329,8 @@ export interface OllamaProviderConfig {
   /** Fuseau horaire des messages de quota (défaut Europe/Paris). */
   timeZone?: string;
   fetch?: FetchLike;
+  /** Horloge en millisecondes (tests) : défaut performance.now(). */
+  now?: () => number;
 }
 
 export class OllamaProvider implements AIProvider {
@@ -325,9 +349,11 @@ export class OllamaProvider implements AIProvider {
   private readonly adaptiveFirstChunk: boolean;
   private readonly timeZone?: string;
   private readonly fetchImpl: FetchLike;
+  private readonly now: () => number;
 
   constructor(config: OllamaProviderConfig) {
     this.fetchImpl = config.fetch ?? ((input, init) => fetch(input, init));
+    this.now = config.now ?? (() => performance.now());
     this.model = config.model;
     this.recipient = config.recipient ?? 'poste';
     const baseUrl = config.baseUrl ?? DEFAULT_OLLAMA_URL;
@@ -383,6 +409,7 @@ export class OllamaProvider implements AIProvider {
     const { controller, dispose } = linkSignals(options.signal);
     const ctx = this.errorContext;
     const timeouts: TimeoutOptions = { firstChunkMs: this.firstChunkTimeoutMs(options.messages), idleMs: this.timeouts.idleMs };
+    const startedAt = this.now();
     try {
       let res: Response;
       try {
@@ -415,6 +442,10 @@ export class OllamaProvider implements AIProvider {
 
       let finishReason: FinishReason = 'unknown';
       let usage: Usage | undefined;
+      let firstDeltaMs: number | undefined;
+      // Placement du modèle (GET /api/ps), relevé en tâche de fond après le premier mot : la rédaction n'attend jamais
+      // cette mesure ; si elle n'est pas revenue à la fin, elle est simplement absente.
+      const probe: { placement?: EnginePlacement } = {};
       for await (const line of readLines(res.body, controller, timeouts, options.signal)) {
         if (options.signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
         if (!line.trim()) continue;
@@ -430,14 +461,28 @@ export class OllamaProvider implements AIProvider {
         if (!msg || typeof msg !== 'object') continue;
         if (msg.error) throw mapHttpError(500, String(msg.error), ctx);
         const text = msg.message?.content;
-        if (typeof text === 'string' && text.length > 0) yield { type: 'delta', text };
+        if (typeof text === 'string' && text.length > 0) {
+          if (firstDeltaMs === undefined) {
+            firstDeltaMs = Math.max(0, Math.round(this.now() - startedAt));
+            if (this.onThisComputer) {
+              void this.client.running(controller.signal).then(body => {
+                probe.placement = placementFromPs(body, this.model);
+              }).catch(() => undefined);
+            }
+          }
+          yield { type: 'delta', text };
+        }
         if (msg.done) {
           finishReason = msg.done_reason === 'length' ? 'length' : 'stop';
-          usage = { promptTokens: msg.prompt_eval_count, completionTokens: msg.eval_count };
+          const timings = ollamaTimingsFromChunk(msg);
+          usage = { promptTokens: msg.prompt_eval_count, completionTokens: msg.eval_count, ...(timings ? { timings } : {}) };
           break;
         }
       }
       if (options.signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
+      if (usage && (firstDeltaMs !== undefined || probe.placement)) {
+        usage = { ...usage, ...(firstDeltaMs !== undefined ? { timeToFirstDeltaMs: firstDeltaMs } : {}), ...(probe.placement ? { placement: probe.placement } : {}) };
+      }
       yield { type: 'end', finishReason, usage };
     } catch (err) {
       if (options.signal?.aborted) throw new MagistraError('GENERATION_ABORTED');

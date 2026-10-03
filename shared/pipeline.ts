@@ -7,7 +7,8 @@
 // Les évènements produits (GenerationEvent) sont transmis tels quels au navigateur
 // (flux NDJSON) ou à la fenêtre Electron (IPC).
 
-import type { AIProvider } from './ai/provider.js';
+import type { AIProvider, Usage } from './ai/provider.js';
+import { cleanEnginePlacement, cleanEngineTimings } from './ai/timings.js';
 import { getMatiereLabel, getToolLabel, type TypeContenu } from './catalog.js';
 import { documentSourceRef, extractUrls, finalizeCitations } from './citations.js';
 import { buildClozeDocument, ClozeStream, isClozeRequest } from './cloze.js';
@@ -21,7 +22,10 @@ import { buildMessages, estimateTokens, generationTemperature, targetLanguageOf,
 import { planResearch, runResearch, type ResearchConfig, type ResearchDeps, type ResearchOutcome } from './research/index.js';
 import type { ResearchSource } from './research/types.js';
 import { normalizeFrenchTypography } from './typography.js';
-import { modeUsesDocuments, type DocumentPassage, type GenerationEvent, type GenerationRecordDraft, type GenerationRequest, type SourceRef } from './types.js';
+import {
+  modeUsesDocuments, type DocumentPassage, type GenerationEvent, type GenerationMetrics, type GenerationRecordDraft, type GenerationRequest,
+  type SourceRef,
+} from './types.js';
 import { displaySujet, RECORD_LIMITS } from './validation.js';
 
 export type NewGenerationRecord = GenerationRecordDraft;
@@ -53,6 +57,8 @@ export interface PipelineDeps {
    * ne compte plus le chargement. Désactivé par défaut.
    */
   preloadModel?: boolean;
+  /** Horloge en millisecondes (tests) : défaut performance.now(). Sert aux seules mesures de vitesse (GenerationMetrics). */
+  now?: () => number;
 }
 
 /**
@@ -281,10 +287,44 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]).finally(() => clearTimeout(timer));
 }
 
+interface MetricsInput {
+  totalMs: number;
+  prepMs?: number;
+  waitModelMs?: number;
+  firstWordMs?: number;
+  usage?: Usage;
+  promptTokens: number;
+  outputBudgetTokens: number;
+}
+
+/**
+ * Mesures jointes à « done » : uniquement des nombres et des énumérations (jamais de texte). Les durées du moteur et
+ * le placement ne sont donnés que pour le moteur de cet ordinateur ; ce qu'un fournisseur renvoie est filtré champ par champ.
+ */
+function buildMetrics(provider: AIProvider, m: MetricsInput): GenerationMetrics {
+  const engine = provider.local ? cleanEngineTimings(m.usage?.timings) : undefined;
+  const placement = provider.local ? cleanEnginePlacement(m.usage?.placement) : undefined;
+  const contextTokens = Number.isFinite(provider.contextTokens) ? Math.max(0, Math.round(provider.contextTokens)) : 0;
+  return {
+    totalMs: m.totalMs,
+    ...(m.prepMs !== undefined ? { prepMs: m.prepMs } : {}),
+    ...(m.waitModelMs !== undefined ? { waitModelMs: m.waitModelMs } : {}),
+    ...(m.firstWordMs !== undefined ? { firstWordMs: m.firstWordMs } : {}),
+    ...(engine ? { engine } : {}),
+    ...(placement ? { placement } : {}),
+    contextTokens,
+    promptTokens: m.promptTokens,
+    outputBudgetTokens: m.outputBudgetTokens,
+  };
+}
+
 const DOCS_REDUCED_WARNING = 'Vos documents dépassent la capacité du modèle : seuls les passages les plus pertinents ont été utilisés.';
 
 export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps): AsyncGenerator<GenerationEvent> {
   const { provider, signal } = deps;
+  const now = deps.now ?? (() => performance.now());
+  const startedAt = now();
+  const elapsedSince = (from: number) => Math.max(0, Math.round(now() - from));
   let text = '';
   let providedForPartial: SourceRef[] = [];
   let allowedUrls: string[] = [];
@@ -396,12 +436,15 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
       ...[req.sujet, req.objectifs, req.consignes, req.contenuSource, req.texteEleve].flatMap(t => (t ? extractUrls(t) : [])),
     ];
     allowedExactUrls = sources.filter(s => s.ref.kind !== 'document').flatMap(s => extractUrls(s.text));
+    const prepMs = elapsedSince(startedAt);
     yield { type: 'sources', sources: provided, internetUsed };
 
     // ─── Chargement du modèle (facultatif) ───────────────────────────────
     let preloaded = false;
+    let waitModelMs: number | undefined;
     if (preload) {
       yield { type: 'status', stage: 'loading_model', message: 'Chargement du modèle…' };
+      const waitStartedAt = now();
       try {
         await preload;
         preloaded = true;
@@ -409,6 +452,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
         // Une panne passagère est laissée aux nouveaux essais de la rédaction ; le reste est affiché tout de suite.
         if (!(err instanceof MagistraError && TRANSIENT_AI_ERRORS.includes(err.code))) throw err;
       }
+      waitModelMs = elapsedSince(waitStartedAt);
       if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
     }
 
@@ -424,6 +468,8 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     };
     providedForPartial = provided;
     let finishReason: 'stop' | 'length' | 'unknown' = 'unknown';
+    let usage: Usage | undefined;
+    let firstWordMs: number | undefined;
     const retryDelays = deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
     const live = cloze ? new ClozeStream(cloze.max) : null;
     for (let attempt = 0; ; attempt++) {
@@ -432,11 +478,13 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
           if (signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
           if (event.type === 'delta') {
             if (!event.text) continue;
+            if (firstWordMs === undefined) firstWordMs = elapsedSince(startedAt);
             text += event.text;
             const shown = live ? live.push(event.text) : event.text;
             if (shown) yield { type: 'delta', text: shown };
           } else {
             finishReason = event.finishReason;
+            usage = event.usage;
           }
         }
         break;
@@ -510,8 +558,11 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
       }
     }
 
+    const metrics = buildMetrics(provider, {
+      totalMs: elapsedSince(startedAt), prepMs, waitModelMs, firstWordMs, usage, promptTokens, outputBudgetTokens: outputTokens,
+    });
     yield {
-      type: 'done', content: final.content, sources: final.used, truncated, internetUsed, saved, id, model: provider.model,
+      type: 'done', content: final.content, sources: final.used, truncated, internetUsed, saved, id, model: provider.model, metrics,
       ...(!deps.save && deps.includeRecord ? { record } : {}),
     };
   } catch (err) {
