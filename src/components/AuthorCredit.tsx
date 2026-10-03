@@ -4,7 +4,7 @@
 //
 // Rien n'est inventé : la présentation dit seulement ce que le dépôt établit (conçu et développé par Juan Robin, dans le
 // cadre du projet FutureAI ; gratuit, IA qui reste sur l'ordinateur). Le lien de profil vient de authorProfile
-// (https seulement, repli sur le profil GitHub) ; il s'ouvre dans un nouvel onglet — dans l'application Windows, le
+// (https seulement, repli sur le profil LinkedIn) ; il s'ouvre dans un nouvel onglet — dans l'application Windows, le
 // gestionnaire d'ouverture d'Electron l'envoie au navigateur du système.
 
 import { Sparkles } from 'lucide-react';

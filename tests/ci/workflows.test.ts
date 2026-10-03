@@ -437,11 +437,11 @@ describe('profil de l’auteur : variable de build VITE_AUTHOR_PROFILE_URL (lien
     for (const name of ['checks', 'e2e-web', 'electron']) expect(job(ci, name), name).not.toContain('VITE_AUTHOR_PROFILE_URL');
   });
 
-  it('README, .env.example : variable de build facultative et publique, vide par défaut, profil GitHub par défaut', () => {
+  it('README, .env.example : variable de build facultative et publique, vide par défaut, profil LinkedIn par défaut', () => {
     expect(read('.env.example')).toMatch(/^VITE_AUTHOR_PROFILE_URL=$/m);
-    expect(read('.env.example')).toContain('https://github.com/juanrobin09-stack');
+    expect(read('.env.example')).toContain('https://www.linkedin.com/in/juanrobin/');
     expect(readme).toContain('`VITE_AUTHOR_PROFILE_URL`');
-    expect(readme).toContain('https://github.com/juanrobin09-stack');
+    expect(readme).toContain('https://www.linkedin.com/in/juanrobin/');
   });
 });
 
@@ -490,7 +490,7 @@ describe('README : attribution, architecture et déploiement du site vitrine', (
 
   it('en tête : « Magistra, créé par Juan Robin », courte présentation, lien du profil (remplaçable), un projet FutureAI', () => {
     expect(readme.startsWith('# Magistra, créé par Juan Robin\n')).toBe(true);
-    expect(top).toContain('[Juan Robin](https://github.com/juanrobin09-stack)');
+    expect(top).toContain('[Juan Robin](https://www.linkedin.com/in/juanrobin/)');
     expect(top).toContain('`VITE_AUTHOR_PROFILE_URL`');
     expect(top).toMatch(/profil professionnel/);
     expect(top).toContain('Un projet [FutureAI](https://futurai.space)');

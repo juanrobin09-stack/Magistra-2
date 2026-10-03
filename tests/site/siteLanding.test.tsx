@@ -217,7 +217,7 @@ describe('Site vitrine : attribution', () => {
     stubReleaseFetch(RELEASE);
     const { container } = await mountSite();
     const profile = container.querySelector<HTMLAnchorElement>(`a[href="${AUTHOR_DEFAULT_PROFILE_URL}"]`)!;
-    expect(profile.textContent).toContain('Profil GitHub');
+    expect(profile.textContent).toContain('Profil LinkedIn');
     expect(profile.target).toBe('_blank');
     expect(profile.rel).toBe('noopener noreferrer');
     for (const a of Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href^="http"]'))) {

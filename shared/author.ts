@@ -15,7 +15,7 @@ export const AUTHOR_CREDIT = `Magistra, créé par ${AUTHOR_NAME}`;
 export const AUTHOR_CONTACT_EMAIL = 'juanrobin89@gmail.com';
 
 /** Profil affiché quand VITE_AUTHOR_PROFILE_URL est absente ou refusée. */
-export const AUTHOR_DEFAULT_PROFILE_URL = 'https://github.com/juanrobin09-stack';
+export const AUTHOR_DEFAULT_PROFILE_URL = 'https://www.linkedin.com/in/juanrobin/';
 
 const MAX_URL_LENGTH = 300;
 

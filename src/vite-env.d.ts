@@ -10,7 +10,7 @@ interface ImportMetaEnv {
   readonly VITE_LEGAL_CONTACT?: string;
   readonly VITE_LEGAL_HOST?: string;
   readonly VITE_LEGAL_DATA_REGION?: string;
-  /** Profil professionnel de l'auteur (https, 300 caractères au plus) ; repli : profil GitHub par défaut (shared/author.ts). */
+  /** Profil professionnel de l'auteur (https, 300 caractères au plus) ; repli : profil LinkedIn par défaut (shared/author.ts). */
   readonly VITE_AUTHOR_PROFILE_URL?: string;
 }
 

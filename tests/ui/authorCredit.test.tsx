@@ -69,7 +69,7 @@ describe('AuthorCredit : variantes', () => {
 
   it('pied de page avec « showProfile » (Réglages) : le lien de profil suit', async () => {
     const { container } = await render(<AuthorCredit variant="footer" showProfile />);
-    expect(container.textContent).toContain('Application gratuite · Profil GitHub');
+    expect(container.textContent).toContain('Application gratuite · Profil LinkedIn');
     const [link] = profileLinks(container, AUTHOR_DEFAULT_PROFILE_URL);
     expect(link.target).toBe('_blank');
     expect(link.rel).toBe('noopener noreferrer');
@@ -134,7 +134,7 @@ describe('Attribution dans l’application', () => {
     const about = container.querySelector('section[aria-labelledby="settings-about"]')!;
     expect(about.textContent).toContain(`${AUTHOR_CREDIT} · Un projet FutureAI · Bordeaux, France`);
     const [link] = profileLinks(about, AUTHOR_DEFAULT_PROFILE_URL);
-    expect(link.textContent).toContain('Profil GitHub');
+    expect(link.textContent).toContain('Profil LinkedIn');
     expect(link.target).toBe('_blank');
     expect(link.rel).toBe('noopener noreferrer');
   });

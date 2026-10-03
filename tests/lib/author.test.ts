@@ -40,10 +40,10 @@ describe('authorProfile : profil par défaut', () => {
     ['espaces seuls', env('   ')],
     ['valeur qui n’est pas du texte', env(42)],
     ['null', env(null)],
-  ])('%s : profil GitHub par défaut', (_name, value) => {
+  ])('%s : profil LinkedIn par défaut', (_name, value) => {
     expect(authorProfile(value as Record<string, unknown> | undefined)).toEqual({
-      url: 'https://github.com/juanrobin09-stack',
-      label: 'Profil GitHub',
+      url: 'https://www.linkedin.com/in/juanrobin/',
+      label: 'Profil LinkedIn',
     });
   });
 });
@@ -92,7 +92,7 @@ describe('authorProfile : adresses refusées (retour au profil par défaut)', ()
   ] as const;
 
   it.each(REFUSED)('%s', (_name, value) => {
-    expect(authorProfile(env(value))).toEqual({ url: AUTHOR_DEFAULT_PROFILE_URL, label: 'Profil GitHub' });
+    expect(authorProfile(env(value))).toEqual({ url: AUTHOR_DEFAULT_PROFILE_URL, label: 'Profil LinkedIn' });
   });
 
   it('300 caractères au plus : 300 acceptés, 301 refusés', () => {
