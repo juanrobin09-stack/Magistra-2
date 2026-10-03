@@ -10,6 +10,7 @@ import SetupChecklist from '@/components/ai/SetupChecklist';
 import TierPicker from '@/components/ai/TierPicker';
 import { MagistraError } from '@shared/errors';
 import { ENGINE_STARTING_MESSAGE } from '@shared/ipc';
+import { ENGINE_WINDOW_DONE_NOTE, ENGINE_WINDOW_NOTE } from '@/components/localEngine/texts';
 import { ENGINE_WATCH_TIMEOUT_MESSAGE, PROXY_RESTART_MESSAGE } from '../../electron/ollamaSetup';
 import type { AIController } from '@/hooks/useAIStatus';
 import { EMPTY_PROGRESS, type AIProgressState } from '@/lib/ai-ui/progress';
@@ -127,7 +128,7 @@ describe('SetupChecklist', () => {
 function fakeController(
   status: ReturnType<typeof makeStatus>,
   progress: AIProgressState = EMPTY_PROGRESS,
-  extra: Partial<Pick<AIController, 'errors' | 'engineUpdate' | 'pending'>> = {},
+  extra: Partial<Pick<AIController, 'errors' | 'engineUpdate' | 'pending' | 'manualInstall'>> = {},
 ): AIController {
   const noop = async () => undefined;
   return {
@@ -136,7 +137,7 @@ function fakeController(
     errors: extra.errors ?? {},
     ...(extra.engineUpdate !== undefined ? { engineUpdate: extra.engineUpdate } : {}),
     pending: extra.pending ?? { status: false, engine: false, start: false, model: false, config: false },
-    manualInstall: false,
+    manualInstall: extra.manualInstall ?? false,
     activation: { state: 'idle', step: null, plan: null, resumed: false },
     loadedAt: 1,
     refresh: async () => status,
@@ -307,7 +308,7 @@ describe('EngineSetupPanel (moteur trop ancien)', () => {
     const missing = makeStatus({ engine: 'not_installed', installed: [] });
     const progress: AIProgressState = { engine: { stage: 'install', message: 'Installation du moteur IA…' }, model: null };
     const html = render(createElement(EngineSetupPanel, { ai: fakeController(missing, progress), status: missing }));
-    expect(html).toContain('Une fenêtre Ollama peut s&#x27;ouvrir : vous pouvez la fermer, aucun compte n&#x27;est nécessaire.');
+    expect(html).toContain(ENGINE_WINDOW_NOTE);
     expect(html).not.toMatch(/autorisation/);
   });
 
@@ -323,6 +324,77 @@ describe('EngineSetupPanel (moteur trop ancien)', () => {
     const ai = fakeController(missing, EMPTY_PROGRESS, { errors: { engine: new MagistraError('NETWORK_ERROR', 'Téléchargement impossible.') } });
     const html = render(createElement(EngineSetupPanel, { ai, status: missing }));
     expect(html).toContain('un proxy ou un filtrage peut bloquer le téléchargement');
+  });
+});
+
+/** Notes « une fenêtre Ollama peut s'ouvrir » (role="note") du rendu. */
+function windowNotes(html: string): string[] {
+  return [...html.matchAll(/<p[^>]*data-testid="engine-window-note"[^>]*>(.*?)<\/p>/g)].map(m => m[0]);
+}
+
+describe('EngineSetupPanel : explication sur la fenêtre d’Ollama (Windows, installateur officiel)', () => {
+  const missing = makeStatus({ engine: 'not_installed', installed: [] });
+  const stages: [string, AIProgressState][] = [
+    ['préparation', { engine: { stage: 'starting' }, model: null }],
+    ['téléchargement', { engine: { stage: 'download', receivedMB: 300, totalMB: 1200 }, model: null }],
+    ['installation', { engine: { stage: 'install', message: 'Installation du moteur IA…' }, model: null }],
+  ];
+
+  it('avant le clic : la note accompagne la taille annoncée, lisible (role="note"), sans bouton ni focus', () => {
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(missing), status: missing }));
+    const [note, ...others] = windowNotes(html);
+    expect(others).toEqual([]);
+    expect(note).toContain('role="note"');
+    expect(note).toContain(ENGINE_WINDOW_NOTE);
+    expect(note).not.toMatch(/tabindex|autofocus|aria-live|<button/i);
+    // Entre le tableau « Avant de commencer » (taille) et le bouton « Installer le moteur IA ».
+    expect(html.indexOf('Avant de commencer')).toBeLessThan(html.indexOf('data-testid="engine-window-note"'));
+    expect(html.indexOf('data-testid="engine-window-note"')).toBeLessThan(html.search(/<button[^>]*>.*Installer le moteur IA<\/button>/));
+  });
+
+  it.each(stages)('pendant l’installation du moteur (%s) : la note est affichée, une seule fois', (_name, progress) => {
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(missing, progress), status: missing }));
+    expect(windowNotes(html)).toHaveLength(1);
+    expect(html).toContain(ENGINE_WINDOW_NOTE);
+  });
+
+  it('pendant le démarrage du moteur installé (attente) : la note est affichée', () => {
+    const progress: AIProgressState = { engine: { stage: 'waiting', message: ENGINE_STARTING_MESSAGE }, model: null };
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(missing, progress), status: missing }));
+    expect(windowNotes(html)).toHaveLength(1);
+    expect(html).toContain(ENGINE_WINDOW_NOTE);
+  });
+
+  it('attente d’une installation depuis la page officielle (Windows) : la note est affichée', () => {
+    const progress: AIProgressState = { engine: { stage: 'waiting', message: 'En attente de l’installation d’Ollama…' }, model: null };
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(missing, progress, { manualInstall: true }), status: missing }));
+    expect(windowNotes(html)).toHaveLength(1);
+  });
+
+  it('mise à jour du moteur (Windows) : avant le clic et pendant la mise à jour', () => {
+    const outdated = makeStatus({ engine: 'running', installed: [], engineVersion: '0.12.3', outdated: true });
+    const before = render(createElement(EngineSetupPanel, { ai: fakeController(outdated), status: outdated }));
+    expect(windowNotes(before)).toHaveLength(1);
+    const progress: AIProgressState = { engine: { stage: 'install', message: 'Mise à jour du moteur IA en cours…' }, model: null };
+    const during = render(createElement(EngineSetupPanel, { ai: fakeController(outdated, progress, { engineUpdate: true }), status: outdated }));
+    expect(windowNotes(during)).toHaveLength(1);
+  });
+
+  it('jamais hors Windows, ni quand Magistra ne fait que démarrer le moteur, ni avec un moteur installé par le service informatique', () => {
+    const other = makeStatus({ engine: 'not_installed', installed: [], platformSupported: false, hardware: { platform: 'linux' } });
+    const waiting: AIProgressState = { engine: { stage: 'waiting', message: 'En attente de l’installation d’Ollama…' }, model: null };
+    expect(render(createElement(EngineSetupPanel, { ai: fakeController(other), status: other }))).not.toContain('engine-window-note');
+    expect(render(createElement(EngineSetupPanel, { ai: fakeController(other, waiting, { manualInstall: true }), status: other }))).not.toContain('engine-window-note');
+    const stopped = makeStatus({ engine: 'installed_stopped', installed: [] });
+    expect(render(createElement(EngineSetupPanel, { ai: fakeController(stopped), status: stopped }))).not.toContain('engine-window-note');
+    const managed = makeStatus({ engine: 'running', installed: [], engineVersion: '0.12.3', outdated: true, managedByAdmin: true });
+    expect(render(createElement(EngineSetupPanel, { ai: fakeController(managed), status: managed }))).not.toContain('engine-window-note');
+  });
+
+  it('la suite (« si elle est encore ouverte ») n’est pas celle de l’installation', () => {
+    expect(ENGINE_WINDOW_DONE_NOTE).not.toBe(ENGINE_WINDOW_NOTE);
+    const html = render(createElement(EngineSetupPanel, { ai: fakeController(missing), status: missing }));
+    expect(html).not.toContain(ENGINE_WINDOW_DONE_NOTE);
   });
 });
 

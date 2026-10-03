@@ -10,11 +10,13 @@ import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowRight, CheckCircle2, ChevronRight, ExternalLink, GraduationCap, Loader2, RefreshCw, Server } from 'lucide-react';
 import ActivateAICard from '@/components/ai/ActivateAICard';
 import AdvancedAIOptions from '@/components/ai/AdvancedAIOptions';
+import EngineWindowNote from '@/components/ai/EngineWindowNote';
 import HardwareSummary from '@/components/ai/HardwareSummary';
 import ModelSetupPanel from '@/components/ai/ModelSetupPanel';
 import { ErrorBox } from '@/components/ai/Notices';
 import SetupChecklist from '@/components/ai/SetupChecklist';
 import { useAIStatus, type AIController } from '@/hooks/useAIStatus';
+import { engineWindowMayOpen } from '@/lib/ai-ui/activation';
 import { isModelPulling } from '@/lib/ai-ui/progress';
 import { aiPhase, engineHostIfRemote, setupChecks } from '@/lib/ai-ui/status';
 import type { AIStatus } from '@shared/ipc';
@@ -112,6 +114,12 @@ function MainStep({ ai, status, fromSettings, onDone }: {
               ? `Magistra utilise ${status.activeLabel} sur le serveur Ollama « ${engineHost} ». Les données utilisées pour la génération sont transmises à cette machine.`
               : `Magistra utilise ${status.activeLabel}, directement sur votre ordinateur. Vos documents et vos contenus restent chez vous.`}
         </p>
+        {/* Activation qui vient d'installer le moteur : la fenêtre d'Ollama a pu rester ouverte. */}
+        {ai.activation.state === 'done' && engineWindowMayOpen(status, ai.activation.plan?.engine ?? null) && (
+          <div className="max-w-md mx-auto text-left">
+            <EngineWindowNote moment="done" />
+          </div>
+        )}
         <button type="button" className="btn-primary mx-auto" onClick={onDone} autoFocus>
           {fromSettings ? 'Retour aux réglages' : 'Commencer'} <ArrowRight size={16} aria-hidden="true" />
         </button>

@@ -51,6 +51,22 @@ export function engineSelfUpdatable(status: AIStatus): boolean {
 }
 
 /**
+ * Une fenêtre d'Ollama peut-elle s'ouvrir pendant cette action sur le moteur ? Oui quand un installateur officiel
+ * d'Ollama est lancé sur CET ordinateur sous Windows : « install » et « update » (Magistra le lance en silence),
+ * « manual » (l'enseignant l'ouvre depuis la page officielle). L'installateur lance Ollama à la fin, sans les arguments
+ * qui le cachent (OLLAMA_APP_ARGS, electron/ollamaSetup.ts) : l'application ouvre alors sa fenêtre d'accueil.
+ * Non pour « start » (Magistra lance elle-même Ollama sans fenêtre), pour « admin » (rien ne s'installe), hors Windows
+ * (installation à la main, aucune fenêtre n'est promise), ni quand Magistra utilise un serveur IA ou un moteur placé
+ * sur un autre ordinateur (rien ne s'installe ici).
+ */
+export function engineWindowMayOpen(status: AIStatus, action: EngineAction | null): boolean {
+  if (action !== 'install' && action !== 'update' && action !== 'manual') return false;
+  return status.engineDownload.platformSupported
+    && status.config.mode !== 'remote'
+    && engineHostIfRemote(status.engine.url) === null;
+}
+
+/**
  * Pourquoi l'activation en un clic ne s'applique pas, alors que l'IA de cet ordinateur n'est pas prête (réglages des
  * options avancées) :
  *  - remote-engine : adresse du moteur IA réglée sur un autre ordinateur — rien ne s'installe ni ne démarre ici, et

@@ -3,6 +3,10 @@
 //
 // Règles d'écriture : jamais d'adresse (localhost, 127.0.0.1…), jamais de port, jamais le nom du moteur (« Ollama »),
 // jamais de clé à saisir ; l'enseignant n'a qu'à ouvrir Magistra et cliquer.
+// Seule exception : le message sur la fenêtre d'Ollama pendant l'installation de l'IA (ENGINE_WINDOW_NOTE et sa suite
+// ENGINE_WINDOW_DONE_NOTE, tout en bas). Le nom est nécessaire pour que l'enseignant reconnaisse la fenêtre à fermer ;
+// ces deux textes ne s'affichent que dans l'application Windows, jamais sur le site. Un test fait respecter la règle :
+// aucun autre texte de ce fichier ne nomme le moteur (tests/ui/engineWindowNote.test.ts).
 
 import { defaultMessage } from '@shared/errors';
 import type { LocalEngineState } from '@/lib/localConnector/controller';
@@ -133,6 +137,22 @@ export const WEBSITE_TOGGLE_LABEL = 'Permettre au site Magistra d’utiliser l�
 /** Note affichée quand le système ne permet pas de chiffrer les autorisations sur le disque. */
 export const NOT_PERSISTENT_NOTE =
   'Ce système ne permet pas de protéger les autorisations sur le disque : elles durent jusqu’à la fermeture de Magistra. Il faudra reconnecter le site après chaque redémarrage de l’application.';
+
+// ─── Installation de l'IA dans l'application Windows : fenêtre d'Ollama ─────
+// Le seul endroit qui nomme le moteur. L'installateur officiel d'Ollama lance Ollama à la fin de l'installation, avec
+// sa fenêtre d'accueil (qui propose de se connecter à un compte), alors que Magistra, elle, le démarre sans fenêtre
+// (--hide). L'enseignant ne doit ni s'inquiéter ni se connecter : il ferme la fenêtre avec sa croix ; l'icône d'Ollama
+// près de l'horloge reste, car le moteur doit continuer à tourner pour que Magistra l'utilise.
+
+/**
+ * Avant le clic sur « Activer l'IA » et pendant le téléchargement, l'installation et le démarrage du moteur : la
+ * fenêtre peut s'ouvrir. Texte unique, partagé par la carte d'activation et les réglages du moteur (EngineWindowNote).
+ */
+export const ENGINE_WINDOW_NOTE =
+  'Pendant l’installation, une fenêtre Ollama peut s’ouvrir : c’est normal (Ollama est le moteur d’IA qui fonctionne sur votre ordinateur). Fermez-la simplement avec sa croix, sans vous connecter : Magistra continue. L’icône d’Ollama près de l’horloge peut rester.';
+/** Moteur installé (modèle en téléchargement, puis « L'IA est prête ») : la fenêtre a pu rester ouverte. */
+export const ENGINE_WINDOW_DONE_NOTE =
+  'Si une fenêtre Ollama est encore ouverte, vous pouvez la fermer avec sa croix : l’IA de Magistra continue de fonctionner. L’icône d’Ollama près de l’horloge peut rester.';
 
 // ─── Textes sûrs ────────────────────────────────────────────────────────────
 

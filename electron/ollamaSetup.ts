@@ -13,7 +13,9 @@
 //   0.13.1) est signalé (AIStatus.engine.outdated) AVANT tout téléchargement de modèle, avec une mise à jour en un
 //   clic (installEngine({ update: true })) ou « demandez au service informatique » (Ollama dans Program Files) ;
 // - Ollama est lancé sans fenêtre (« ollama app.exe » --hide --fast-startup, comme sa propre ligne de commande), avec
-//   le proxy du système en HTTPS_PROXY : Ollama ignore le proxy de Windows. Aucun identifiant de proxy n'est journalisé ;
+//   le proxy du système en HTTPS_PROXY : Ollama ignore le proxy de Windows. Aucun identifiant de proxy n'est journalisé.
+//   Seul l'installateur officiel le lance à la fin de l'installation, sans ces arguments : sa fenêtre d'accueil peut
+//   alors s'ouvrir ; l'interface l'annonce avant et pendant l'installation (ENGINE_WINDOW_NOTE, texts.ts) ;
 // - si le moteur ne démarre pas, la cause probable est donnée (journal du moteur filtré, antivirus, port occupé).
 
 import { createHash } from 'node:crypto';

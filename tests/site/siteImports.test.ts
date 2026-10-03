@@ -82,6 +82,8 @@ const FORBIDDEN_FILES = [
   /^src\/lib\/localConnector\//,
   /^src\/hooks\/useAIStatus\.ts$/,
   /^src\/hooks\/useGeneration\.ts$/,
+  // Installation de l'IA (activation, moteur) et sa note sur la fenêtre d'Ollama : application Windows seulement.
+  /^src\/components\/ai\//,
   /^src\/components\/localEngine\/(?:LocalEngineStatus|localActions|PermissionNotes|texts|WindowsDownloadSection|EngineSettings|LocalEngineCard)\.tsx?$/,
   /^src\/components\/(?:guards|PersonalAccess|ProfileCacheCleaner|AppIntro|WebSignOutButton|UpdateCheck)\.tsx$/,
   /^src\/pages\/(?:LandingPage|LegalPage|OnboardingPage|SetupPage|SettingsPage|DashboardPage|GeneratePage)\.tsx$/,

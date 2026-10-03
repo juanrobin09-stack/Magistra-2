@@ -3,10 +3,12 @@ import { ArrowUpCircle, CheckCircle2, Download, ExternalLink, Loader2, Play, Ref
 import { ENGINE_STARTING_MESSAGE, type AIStatus } from '@shared/ipc';
 import type { AIController } from '@/hooks/useAIStatus';
 import { engineDownloadText, formatGB, formatTransfer, progressPercent } from '@/lib/ai-ui/format';
+import { engineWindowMayOpen } from '@/lib/ai-ui/activation';
 import { isEngineBusy } from '@/lib/ai-ui/progress';
 import {
   engineManagedByAdminText, engineOutdatedText, networkHint, recommendedTier,
 } from '@/lib/ai-ui/status';
+import EngineWindowNote from './EngineWindowNote';
 import { ErrorBox, WarningNote } from './Notices';
 import ProgressBar from './ProgressBar';
 
@@ -15,13 +17,11 @@ interface EngineSetupPanelProps {
   status: AIStatus;
 }
 
-/** Texte affiché pendant l'installation : l'installateur d'Ollama ne demande aucune autorisation, mais peut ouvrir sa fenêtre. */
-export const ENGINE_WINDOW_NOTE = "Une fenêtre Ollama peut s'ouvrir : vous pouvez la fermer, aucun compte n'est nécessaire.";
-
 /**
  * Étape « moteur IA » : installation (avec consentement explicite avant tout téléchargement),
  * installation manuelle depuis la page officielle avec détection automatique, démarrage,
- * ou mise à jour d'un moteur trop ancien.
+ * ou mise à jour d'un moteur trop ancien. Sous Windows, là où l'installateur officiel est lancé (consentement,
+ * mise à jour, installation en cours, attente), la note « une fenêtre Ollama peut s'ouvrir : fermez-la » (EngineWindowNote).
  */
 export default function EngineSetupPanel({ ai, status }: EngineSetupPanelProps) {
   const [wantInstall, setWantInstall] = useState(false);
@@ -43,8 +43,8 @@ export default function EngineSetupPanel({ ai, status }: EngineSetupPanelProps) 
     return () => window.clearInterval(id);
   }, [waiting, refresh]);
 
-  if (installing) return <InstallingView ai={ai} update={ai.engineUpdate === true} />;
-  if (waiting) return <WaitingView ai={ai} manual={ai.manualInstall} message={progress?.message} />;
+  if (installing) return <InstallingView ai={ai} status={status} update={ai.engineUpdate === true} />;
+  if (waiting) return <WaitingView ai={ai} status={status} manual={ai.manualInstall} message={progress?.message} />;
 
   if (progress?.stage === 'ready') {
     return (
@@ -113,6 +113,7 @@ export function EngineUpdateAction({ ai, status }: { ai: AIController; status: A
         <dt className="text-mg-200">Vos modèles d'IA</dt>
         <dd className="text-mg-50">conservés (rien à retélécharger)</dd>
       </dl>
+      {engineWindowMayOpen(status, 'update') && <EngineWindowNote moment="install" />}
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" className="btn-primary" onClick={() => void ai.installEngine({ update: true })} disabled={ai.pending.engine}>
           <ArrowUpCircle size={16} aria-hidden="true" /> Mettre à jour le moteur IA
@@ -191,6 +192,8 @@ function ConsentView({ ai, status, errorMessage, errorHint, cancelled }: {
         )}
       </section>
 
+      {engineWindowMayOpen(status, 'install') && <EngineWindowNote moment="install" />}
+
       {cancelled && !errorMessage && (
         <p className="text-sm text-mg-200" role="status">Installation annulée. Vous pouvez la relancer quand vous le souhaitez.</p>
       )}
@@ -231,7 +234,7 @@ function ConsentView({ ai, status, errorMessage, errorHint, cancelled }: {
   );
 }
 
-function InstallingView({ ai, update }: { ai: AIController; update: boolean }) {
+function InstallingView({ ai, status, update }: { ai: AIController; status: AIStatus; update: boolean }) {
   const p = ai.progress.engine;
   const stage = p?.stage ?? 'starting';
   const percent = stage === 'download' ? progressPercent({ completed: p?.receivedMB, total: p?.totalMB }) : null;
@@ -260,7 +263,7 @@ function InstallingView({ ai, update }: { ai: AIController; update: boolean }) {
           {percent !== null && ` · ${percent} %`}
         </p>
       )}
-      {stage === 'install' && <p className="text-sm text-mg-200">{ENGINE_WINDOW_NOTE}</p>}
+      {engineWindowMayOpen(status, update ? 'update' : 'install') && <EngineWindowNote moment="install" />}
       <p className="text-xs text-mg-200">Vous pouvez continuer à utiliser votre ordinateur pendant ce temps.</p>
       {canCancel && (
         <button type="button" className="btn-secondary text-sm py-2 px-4" onClick={() => void ai.cancelEngineInstall()}>
@@ -271,7 +274,7 @@ function InstallingView({ ai, update }: { ai: AIController; update: boolean }) {
   );
 }
 
-function WaitingView({ ai, manual, message }: { ai: AIController; manual: boolean; message?: string }) {
+function WaitingView({ ai, status, manual, message }: { ai: AIController; status: AIStatus; manual: boolean; message?: string }) {
   return (
     <div className="card space-y-4">
       <h2 className="text-lg text-white" style={{ fontFamily: 'var(--font-display)' }}>
@@ -282,6 +285,7 @@ function WaitingView({ ai, manual, message }: { ai: AIController; manual: boolea
         {message || "En attente de l'installation du moteur IA…"}
       </p>
       <ProgressBar percent={null} label="En attente du moteur IA" />
+      {engineWindowMayOpen(status, manual ? 'manual' : 'install') && <EngineWindowNote moment="install" />}
       {manual && (
         <ol className="list-decimal pl-5 space-y-1.5 text-sm text-mg-100">
           <li>Sur la page qui s'est ouverte dans votre navigateur, téléchargez Ollama pour Windows.</li>

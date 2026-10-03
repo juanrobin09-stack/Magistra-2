@@ -281,6 +281,23 @@ async function clickActivate(page: Page, name: string | RegExp = 'Activer l’IA
   await expect(started).toBeVisible();
 }
 
+/**
+ * Note « une fenêtre Ollama peut s'ouvrir : fermez-la » : affichée seulement là où Magistra installe le moteur avec
+ * l'installateur officiel (Windows). Sous Linux et macOS (la CI), l'installation se fait à la main depuis la page
+ * officielle et la note n'apparaît jamais : c'est ce qui est vérifié ici, aux endroits où la carte annonce l'installation
+ * du moteur, sans lancer un test de plus.
+ */
+async function expectEngineWindowNote(scope: Locator): Promise<void> {
+  const note = scope.getByTestId('engine-window-note');
+  if (process.platform === 'win32') {
+    await expect(note).toHaveCount(1);
+    await expect(note).toHaveAttribute('role', 'note');
+    await expect(note).toContainText(/une fenêtre Ollama peut s’ouvrir.*Fermez-la simplement/);
+  } else {
+    await expect(note).toHaveCount(0);
+  }
+}
+
 /** Barre de progression unique de l'activation (moteur + modèle). */
 function activationBar(page: Page): Locator {
   return activateCard(page).getByRole('progressbar', { name: 'Activation de l’IA' });
@@ -647,6 +664,8 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     if (!status.engineDownload.platformSupported) {
       await expect(card.getByText(/le moteur IA s’installe depuis sa page officielle/)).toBeVisible();
     }
+    // Windows : « une fenêtre Ollama peut s'ouvrir » annoncé avant le clic ; ailleurs, rien.
+    await expectEngineWindowNote(card);
     await shot(page, '03a-moteur-absent-activer-ia');
 
     // Réglages : la même activation en un clic que le tableau de bord (taille annoncée, rien avant le clic, reprise au
@@ -657,6 +676,7 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     await expect(settingsCard.getByTestId('activate-ai-size')).toContainText(/^Environ \d+(,\d)?\sGo à télécharger en tout, une seule fois\./);
     await expect(settingsCard.getByText(/Rien n’est téléchargé avant votre clic\./)).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Installer le moteur IA' })).toHaveCount(0);
+    await expectEngineWindowNote(settingsCard);
     await shot(page, '03b-reglages-moteur-absent');
 
     // Recours (installation automatique bloquée) : la page officielle, depuis la page de l'IA ; Magistra attend le
@@ -671,6 +691,8 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     await expect(waiting.getByText('En attente de l’installation du moteur IA depuis sa page officielle…')).toBeVisible();
     await expect(waiting.getByRole('list', { name: 'Étapes de l’activation' })).toHaveCount(0);
     expect(await visibleText(waiting)).not.toMatch(/\d+ %|Go sur/);
+    // Installateur officiel lancé par l'enseignant : sous Windows, sa fenêtre peut s'ouvrir ; sous Linux, rien n'est annoncé.
+    await expectEngineWindowNote(waiting);
     expect(await openedUrls(app)).toEqual(['https://ollama.com/download']);
     await shot(page, '03c-reglages-attente-installation-manuelle');
     await waiting.getByRole('button', { name: 'Annuler', exact: true }).click();
@@ -732,6 +754,8 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     await expect(steps.nth(0)).toContainText('Installation du moteur IA');
     await expect(steps.nth(1)).toContainText(/Téléchargement de Magistra (Léger|Standard|Qualité)/);
     await expect(card.getByText('En attente de l’installation du moteur IA depuis sa page officielle…')).toBeVisible();
+    // Hors Windows (ce test ne tourne pas sous Windows), l'installation se fait à la main : aucune fenêtre n'est annoncée.
+    await expectEngineWindowNote(card);
     await expect.poll(() => openedUrls(app)).toEqual(['https://ollama.com/download']);
     expect((await prefs(page)).aiSetupRequested).toBe(true);
     await shot(page, '03g-activation-attente-du-moteur');
@@ -806,6 +830,7 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     const size = activateCard(page).getByTestId('activate-ai-size');
     await expect(size).toContainText(/^Environ \d+(,\d)?\sGo à télécharger en tout/);
     await expect(size).toContainText('moteur IA : environ');
+    await expectEngineWindowNote(activateCard(page));
     await shot(page, '03k-moteur-trop-ancien-activer-ia');
 
     // Réglages : cause précise (versions) et la même activation (mise à jour du moteur comprise), jamais sans clic.
