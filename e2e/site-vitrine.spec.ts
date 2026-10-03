@@ -5,6 +5,8 @@
 // site et GET /api/windows-release (jamais /api/mode, /api/status, un service de connexion ou une base de données).
 
 import { expect, test as base, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { SITE_TITLE, SITE_IMAGE_PATH } from '../shared/siteSeo';
 import { buildRobotsTxt, buildSitemapXml, SITE_ORIGIN } from '../shared/site';
 
 const SITE_HOST = '127.0.0.1:4174';
@@ -83,13 +85,55 @@ async function pageText(page: Page): Promise<string> {
   return page.evaluate(() => document.body.innerText);
 }
 
+test('SEO sans JavaScript : présentation, sources, FAQ et lien de téléchargement restent utilisables', async ({ browser }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  try {
+    const page = await context.newPage();
+    const requests: string[] = [];
+    page.on('request', request => requests.push(request.url()));
+    await page.goto(`http://${SITE_HOST}/`);
+    await expect(page.getByRole('heading', { level: 1 })).toContainText("L'IA qui prépare");
+    await expect(page.getByRole('heading', { name: 'Sources officielles et académiques' })).toHaveCount(1);
+    const question = page.locator('details').filter({ hasText: 'Sur quelles sources l’IA peut-elle s’appuyer ?' });
+    await question.locator('summary').click();
+    await expect(question).toHaveAttribute('open', '');
+    await expect(question.locator('p')).toBeVisible();
+    await expect(question.locator('p')).toContainText('HAL, Crossref et OpenAlex');
+    await expect(page.getByRole('link', { name: 'Télécharger Magistra pour Windows', exact: true }).first()).toHaveAttribute('href', '/telecharger');
+    expect(requests.some(url => url.includes('/api/'))).toBe(false);
+  } finally {
+    await context.close();
+  }
+});
+
+test('SEO avec la CSP de production : hydratation, métadonnées de navigation et sources sur mobile', async ({ page }, testInfo) => {
+  const config = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'));
+  const securityHeaders = Object.fromEntries(config.headers[0].headers.map((header: { key: string; value: string }) => [header.key, header.value]));
+  await page.route('**/*', async route => {
+    if (route.request().resourceType() !== 'document') return route.fallback();
+    const response = await route.fetch();
+    await route.fulfill({ response, headers: { ...response.headers(), ...securityHeaders } });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page).toHaveTitle(SITE_TITLE);
+  const card = page.getByRole('heading', { name: 'Sources officielles et académiques' }).locator('..');
+  await expect(card).toContainText('HAL, Crossref, OpenAlex');
+  await card.screenshot({ path: testInfo.outputPath('sources-mobile.png') });
+  await page.getByRole('link', { name: 'Politique de confidentialité', exact: true }).click();
+  await expect(page).toHaveTitle('Politique de confidentialité — Magistra');
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex, follow');
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `${SITE_ORIGIN}/confidentialite`);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
+});
+
 // ─── 1. Accueil ─────────────────────────────────────────────────────────────
 
 test('accueil : se charge, un seul h1, aucun accès à une application, « Télécharger pour Windows » présent', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
   await expect(page.getByRole('heading', { level: 1 })).toContainText('L\'IA qui prépare');
-  await expect(page).toHaveTitle('Magistra — assistant pédagogique IA');
+  await expect(page).toHaveTitle(SITE_TITLE);
 
   // Aucun bouton, aucun lien nommé « Commencer », « Se connecter », « Accéder à Magistra », « Mon espace ».
   await expect(page.getByRole('button', { name: NO_APP_ACCESS })).toHaveCount(0);
@@ -134,12 +178,17 @@ test('référencement : lien canonique et Open Graph à l’adresse officielle, 
   expect(og).toEqual({
     'og:type': 'website',
     'og:site_name': 'Magistra',
-    'og:title': 'Magistra — assistant pédagogique IA',
+    'og:title': SITE_TITLE,
     'og:description': await page.locator('meta[name="description"]').getAttribute('content'),
     'og:url': `${SITE_ORIGIN}/`,
     'og:locale': 'fr_FR',
+    'og:image': `${SITE_ORIGIN}${SITE_IMAGE_PATH}`,
+    'og:image:width': '512',
+    'og:image:height': '512',
+    'og:image:type': 'image/png',
+    'og:image:alt': 'Logo Magistra',
   });
-  expect(Object.keys(og)).not.toContain('og:image');
+  expect(Object.keys(og)).toContain('og:image');
 
   const robots = await page.request.get('/robots.txt');
   expect(robots.status()).toBe(200);
@@ -156,7 +205,8 @@ test('référencement : lien canonique et Open Graph à l’adresse officielle, 
   // L'accueil seul : les pages légales sont servies avec le lien canonique de l'accueil, elles ne sont pas à indexer.
   expect([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(location => location[1])).toEqual([`${SITE_ORIGIN}/`]);
   await page.goto('/mentions-legales');
-  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `${SITE_ORIGIN}/`);
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `${SITE_ORIGIN}/mentions-legales`);
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex, follow');
 });
 
 // ─── 2. Attribution ─────────────────────────────────────────────────────────
@@ -268,7 +318,7 @@ test('« Magistra pour Windows » : aucune version publiée → bouton inactif e
 const LEGAL_PAGES = [
   { path: '/mentions-legales', title: 'Mentions légales', tab: 'Mentions légales', link: 'Mentions légales', contains: ['Éditeur du site', 'Hébergement', 'Hébergeur du site : Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, États-Unis (https://vercel.com).', 'Magistra est une application pédagogique gratuite, conçue et développée par Juan Robin'] },
   { path: '/confidentialite', title: 'Politique de confidentialité', tab: 'Politique de confidentialité', link: 'Politique de confidentialité', contains: ['Ce que ce site ne fait pas', 'Journaux techniques de l\'hébergeur', 'servi par GitHub'] },
-  { path: '/cgu', title: 'Conditions générales d\'utilisation', tab: 'Conditions d\'utilisation', link: 'Conditions d\'utilisation', contains: ['Ce site présente Magistra', 'Usage du site'] },
+  { path: '/cgu', title: 'Conditions générales d\'utilisation', tab: 'Conditions générales d\'utilisation', link: 'Conditions d\'utilisation', contains: ['Ce site présente Magistra', 'Usage du site'] },
 ] as const;
 
 for (const legal of LEGAL_PAGES) {
@@ -305,10 +355,9 @@ test('pied de page : les trois pages légales s\'ouvrent, « Retour » ramène �
 // ─── 5. Les adresses de l'application reviennent à l'accueil ────────────────
 
 for (const path of ['/app', '/app/generate', '/app/history', '/onboarding', '/setup', '/presentation', '/inconnu']) {
-  test(`${path} : retour à l'accueil, sans application`, async ({ page }) => {
+  test(`${path} : route absente dans l’aperçu, aucune application embarquée`, async ({ page }) => {
     await page.goto(path);
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole('heading', { level: 1 })).toContainText('L\'IA qui prépare');
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('introuvable');
     await expect(page.getByRole('link', { name: NO_APP_ACCESS })).toHaveCount(0);
     expect(await pageText(page)).not.toMatch(/Tableau de bord|Bienvenue sur Magistra|Générer/);
   });

@@ -19,7 +19,7 @@ const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^
 
 describe('Scripts npm du site vitrine', () => {
   it('build:site, preview:site et verify:site', () => {
-    expect(pkg.scripts['build:site']).toBe('tsc -b && vite build --config vite.site.config.ts');
+    expect(pkg.scripts['build:site']).toBe('tsc -b && vite build --config vite.site.config.ts && node scripts/prerender-site.mjs && npm run verify:site');
     expect(pkg.scripts['preview:site']).toBe('vite preview --config vite.site.config.ts --port 4174 --strictPort --host 127.0.0.1');
     expect(pkg.scripts['verify:site']).toBe('node scripts/verify-site.mjs');
   });

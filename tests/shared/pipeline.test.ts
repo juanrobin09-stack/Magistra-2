@@ -92,6 +92,13 @@ describe('runGeneration — déroulé nominal', () => {
     expect(sources.sources[0]).toMatchObject({ docName: 'Cours gouvernance.pdf', locator: { type: 'pages', start: 14, end: 18 } });
     expect(sources.internetUsed).toBe(true);
 
+    // Vérifie le contexte réellement transmis au modèle, pas seulement les étiquettes de l’interface.
+    const prompt = provider.calls[0].messages.map(message => message.content).join('\n');
+    expect(prompt).toContain('Résumé : la gouvernance des systèmes d’information améliore la performance des organisations publiques.');
+    expect(prompt).toContain('L’UNESCO recommande une gouvernance numérique transparente');
+    expect(prompt).toContain('Source officielle (UNESCO)');
+    expect(prompt).toContain("documents de l'enseignant > sources officielles > publications > Wikipédia");
+
     const deltas = ofType(events, 'delta').map(e => e.text).join('');
     expect(deltas).toContain('[S1]');
 

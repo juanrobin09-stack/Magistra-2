@@ -16,7 +16,7 @@
     "test:real-ai": "node scripts/real-ai-check.mjs",
     "research:check": "node scripts/research-check.mjs",
     "preview": "vite preview",
-    "build:site": "tsc -b && vite build --config vite.site.config.ts",
+    "build:site": "tsc -b && vite build --config vite.site.config.ts && node scripts/prerender-site.mjs && npm run verify:site",
     "preview:site": "vite preview --config vite.site.config.ts --port 4174 --strictPort --host 127.0.0.1",
     "verify:site": "node scripts/verify-site.mjs",
     "electron:build": "node scripts/build-electron.mjs",

@@ -63,6 +63,12 @@ export default function ResearchModePicker({ options, value, onChange, hints }: 
       </div>
 
       <div aria-live="polite" className="space-y-2 mt-3">
+        {value !== 'documents' && (
+          <p className="text-xs text-mg-200 leading-relaxed">
+            Les sources officielles et les publications sont privilégiées lorsqu’elles sont disponibles.
+            Seuls les extraits trouvés sont transmis à l’IA ; les références utilisées sont indiquées dans le résultat.
+          </p>
+        )}
         {hints.documentsIgnored && (
           <p className="text-xs text-warning">{DOCUMENTS_IGNORED_NOTE}</p>
         )}

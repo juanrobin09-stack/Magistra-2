@@ -7,22 +7,17 @@
 // Les pages sont chargées avec le site (aucun chargement différé) : une version déployée pendant qu'une page est ouverte
 // ne casse aucune navigation, et le site n'écrit rien dans le navigateur.
 
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter } from 'react-router-dom';
 import ErrorBoundary from '@/components/ErrorBoundary';
-import ShowcaseLegalPage from '@/pages/legal/ShowcaseLegal';
-import SiteLanding from './SiteLanding';
+import SiteRoutes from './SiteRoutes';
+import SiteMetadata from './SiteMetadata';
 
 export default function SiteApp() {
   return (
     <ErrorBoundary>
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<SiteLanding />} />
-          <Route path="/mentions-legales" element={<ShowcaseLegalPage page="mentions" />} />
-          <Route path="/confidentialite" element={<ShowcaseLegalPage page="confidentialite" />} />
-          <Route path="/cgu" element={<ShowcaseLegalPage page="cgu" />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <SiteRoutes />
+        <SiteMetadata />
       </BrowserRouter>
     </ErrorBoundary>
   );

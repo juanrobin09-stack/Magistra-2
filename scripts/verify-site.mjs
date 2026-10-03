@@ -37,6 +37,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMainModule } from './mainModule.mjs';
+import { checkPrerenderedPage } from './verify-prerender.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -646,7 +647,8 @@ function withLines(html, errors) {
  * (fichier, ligne, balise, raison). `source: true` : le gabarit site/index.html (le point d'entrée n'est pas encore
  * remplacé par Vite) ; sinon la page construite (dist-site/index.html).
  */
-export function checkIndexHtml(html, { siteOrigin = readSiteOrigin(), source = false } = {}) {
+export function checkIndexHtml(html, { siteOrigin = readSiteOrigin(), source = false, pagePath = '/' } = {}) {
+  if (!source && /<main(?:\s|>)/.test(html)) return checkPrerenderedPage(html, { siteOrigin, pagePath });
   const found = withLines(html, analyzeIndex(html, { siteOrigin, source }));
   const lines = found.slice(0, MAX_INDEX_ERRORS).map(({ line, message }) => (line === null ? `index.html : ${message}` : `index.html : ligne ${line} : ${message}`));
   if (found.length > MAX_INDEX_ERRORS) lines.push(`index.html : … et ${found.length - MAX_INDEX_ERRORS} autre(s) écart(s) non détaillé(s)`);
@@ -728,6 +730,11 @@ export function verifySite(dir, { siteOrigin = readSiteOrigin() } = {}) {
   errors.push(...checkForbiddenContent(files));
   const index = files.find(f => f.name === 'index.html');
   if (index) errors.push(...checkIndexHtml(index.text, { siteOrigin }), ...checkSearchTags(index.text));
+  for (const file of files.filter(f => /\.html$/.test(f.name) && f.name !== 'index.html')) {
+    const pagePath = `/${file.name.replace(/\.html$/, '')}`;
+    if (!['/mentions-legales', '/confidentialite', '/cgu', '/404'].includes(pagePath)) errors.push(`${file.name} : page inattendue`);
+    else errors.push(...checkPrerenderedPage(file.text, { siteOrigin, pagePath }));
+  }
   errors.push(...checkSearchFiles(files, { siteOrigin }));
   return errors;
 }
@@ -745,5 +752,5 @@ if (isMainModule(import.meta.url)) {
     console.error(`[verify-site] ${errors.length} écart(s) dans ${dir}.`);
     process.exit(1);
   }
-  console.log(`[verify-site] ${dir} : aucun code de l'application, index.html conforme à la liste blanche (aucun script en ligne, aucun commentaire, aucune ressource d'un autre domaine), aucune sourcemap ; lien canonique, robots.txt et sitemap.xml conformes à ${readSiteOrigin()}.`);
+  console.log(`[verify-site] ${dir} : aucun code de l'application, aucune sourcemap ni script inline exécutable ; pages pré-rendues et ressources contrôlées, JSON-LD autorisé par empreinte CSP ; robots.txt et sitemap.xml conformes à ${readSiteOrigin()}.`);
 }

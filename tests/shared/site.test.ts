@@ -34,9 +34,9 @@ describe('adresse officielle du site', () => {
     expect(SITE_APEX_ORIGIN).toBe('https://mag-istra.fr');
   });
 
-  it('plan du site : l’accueil seul ; les pages légales (même page statique, donc même lien canonique) n’y sont pas', () => {
+  it('plan du site : l’accueil seul ; les pages légales (noindex et lien canonique propre) n’y sont pas', () => {
     expect([...SITE_PATHS]).toEqual(['/']);
-    const routes = [...read('src/site/SiteApp.tsx').matchAll(/<Route path="([^"]+)"/g)].map(m => m[1]).filter(route => route !== '*');
+    const routes = [...read('src/site/SiteRoutes.tsx').matchAll(/<Route path="([^"]+)"/g)].map(m => m[1]).filter(route => route !== '*');
     // Le site a quatre routes ; une seule est à indexer.
     expect([...routes].sort()).toEqual(['/', ...Object.values(LEGAL_PATHS)].sort());
     for (const page of Object.values(LEGAL_PATHS)) expect(SITE_PATHS, page).not.toContain(page);

@@ -59,20 +59,20 @@ describe('Site vitrine : routes', () => {
     '/presentation',
     '/inconnu',
     '/mentions-legales/autre',
-  ])('%s : retour à l’accueil, sans trace de l’application', async path => {
+  ])('%s : page introuvable, sans trace de l’application', async path => {
     const { container } = await visit(path);
-    expect(window.location.pathname).toBe('/');
-    expect(h1(container)).toContain('vos cours');
+    expect(window.location.pathname).toBe(path);
+    expect(h1(container)).toContain('introuvable');
     expect(container.textContent).not.toMatch(/Commencer|Se connecter|Mon espace|Tableau de bord|Bienvenue sur Magistra/);
   });
 
-  it('une adresse inconnue ne laisse pas dans l’historique du navigateur la page inexistante (remplacement)', async () => {
+  it('une adresse inconnue reste une 404 sans fabriquer de navigation', async () => {
     window.history.replaceState(null, '', '/app/generate');
     const before = window.history.length;
     await render(<SiteApp />);
     await flush(4);
     expect(window.history.length).toBe(before);
-    expect(window.location.pathname).toBe('/');
+    expect(window.location.pathname).toBe('/app/generate');
   });
 });
 

@@ -1,22 +1,28 @@
 // Cohérence des fichiers de déploiement (Vercel, serveur autonome, Supabase, .env.example).
 
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CONNECTOR_HOST, CONNECTOR_PORTS } from '../../shared/localConnector.js';
 import { SITE_ORIGIN } from '../../shared/site.js';
+import { SITE_STRUCTURED_DATA } from '../../shared/siteSeo.js';
 import { ROUTE_METHODS } from '../../server/handlers.js';
 import { securityHeaders } from '../../server/standalone.js';
 import { COMMERCIAL_VENDOR } from '../vendor';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (p: string) => readFileSync(path.join(root, p), 'utf8');
+const JSON_LD_HASH = `'sha256-${createHash('sha256').update(JSON.stringify(SITE_STRUCTURED_DATA).replace(/</g, '\\u003c')).digest('base64')}'`;
 
 interface VercelConfig {
   buildCommand: string;
   outputDirectory: string;
+  cleanUrls: boolean;
+  trailingSlash: boolean;
+  redirects: { source: string; destination: string; permanent: boolean }[];
   rewrites: { source: string; destination: string }[];
   functions: Record<string, { maxDuration?: number }>;
   headers: { source: string; headers: { key: string; value: string }[] }[];
@@ -41,23 +47,23 @@ describe('déploiement', () => {
   const vercel = JSON.parse(read('vercel.json')) as VercelConfig;
 
   /** Réécriture vers l'interface (application monopage). */
-  const spaRule = () => vercel.rewrites.find(r => r.destination === '/index.html')!;
+  const isSpaRewrite = (url: string) => vercel.rewrites.some(r => r.destination === '/index.html' && new RegExp(`^${r.source}$`).test(url));
   const globalHeaders = () => Object.fromEntries(vercel.headers.find(h => h.source === '/(.*)')!.headers.map(h => [h.key, h.value]));
 
-  it('vercel.json : build du site vitrine, réécriture SPA hors /api et /assets', () => {
+  it('vercel.json : pages statiques propres et vraies 404, sans réécriture SPA globale', () => {
     expect(vercel.buildCommand).toBe('npm run build:site');
     expect(vercel.outputDirectory).toBe('dist-site');
     expect(vercel.rewrites).toEqual([
       { source: '/telecharger', destination: '/api/download' },
-      { source: '/((?!api/|assets/).*)', destination: '/index.html' },
     ]);
-    const spa = new RegExp(`^${spaRule().source}$`);
-    expect(spa.test('/mentions-legales')).toBe(true);
-    expect(spa.test('/api/windows-release')).toBe(false);
+    expect(vercel.cleanUrls).toBe(true);
+    expect(vercel.trailingSlash).toBe(false);
+    expect(isSpaRewrite('/mentions-legales')).toBe(false);
+    expect(isSpaRewrite('/api/windows-release')).toBe(false);
     // Un fichier de /assets/ qui n'existe plus (ancien hash après un déploiement) donne un vrai 404, pas index.html
     // en 200 « immutable » (comme le serveur autonome).
-    expect(spa.test('/assets/index-ancienhash.js')).toBe(false);
-    expect(spa.test('/assets-publics')).toBe(true);
+    expect(isSpaRewrite('/assets/index-ancienhash.js')).toBe(false);
+    expect(isSpaRewrite('/page-inexistante')).toBe(false);
     for (const file of Object.keys(vercel.functions)) expect(existsSync(path.join(root, file)), file).toBe(true);
   });
 
@@ -70,22 +76,22 @@ describe('déploiement', () => {
       'Cross-Origin-Opener-Policy': 'same-origin',
       // Sans « preload » : l'inscription à la liste des navigateurs est irréversible, elle reste une décision du propriétaire.
       'Strict-Transport-Security': 'max-age=63072000; includeSubDomains',
-      'Content-Security-Policy': "default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+      'Content-Security-Policy': `default-src 'self'; script-src 'self' ${JSON_LD_HASH}; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; `
         + "font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'",
     });
     expect(globalHeaders()['Strict-Transport-Security']).not.toMatch(/preload/i);
     expect(JSON.stringify(vercel)).not.toContain('Access-Control-Allow-Origin');
     // Les ressources hachées de /assets/ sont immuables ; rien d'autre ne l'est.
-    const assets = vercel.headers.filter(h => h.source !== '/(.*)');
+    const assets = vercel.headers.filter(h => h.source === '/assets/(.*)');
     expect(assets).toEqual([{ source: '/assets/(.*)', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] }]);
   });
 
   it('nouveau domaine du site : vercel.json ne change pas (aucune redirection de l’ancienne adresse, aucune règle d’hôte, CSP sans aucun domaine)', () => {
     // Le domaine se rattache au projet dans Vercel (Settings → Domains) : une redirection permanente écrite ici casserait
     // l'ancienne adresse tant que le nouveau domaine n'est pas attaché et validé.
-    expect(Object.keys(vercel).sort()).toEqual(['$schema', 'buildCommand', 'framework', 'functions', 'headers', 'outputDirectory', 'regions', 'rewrites']);
-    expect(vercel).not.toHaveProperty('redirects');
-    expect(JSON.stringify(vercel)).not.toMatch(/mag-istra|vercel\.app|"has"|"missing"|"host"|"permanent"|"statusCode"/);
+    expect(Object.keys(vercel).sort()).toEqual(['$schema', 'buildCommand', 'cleanUrls', 'framework', 'functions', 'headers', 'outputDirectory', 'redirects', 'regions', 'rewrites', 'trailingSlash']);
+    expect(vercel.redirects.every(r => r.destination === '/' && r.permanent)).toBe(true);
+    expect(JSON.stringify(vercel)).not.toMatch(/mag-istra|vercel\.app|"has"|"missing"|"host"|"statusCode"/);
     expect(vercel.rewrites.every(r => r.destination.startsWith('/'))).toBe(true);
     // CSP : uniquement le site lui-même (et des images et polices data:) ; ni le nouveau domaine, ni aucun service externe.
     const csp = parseCsp(globalHeaders()['Content-Security-Policy']);
@@ -93,10 +99,13 @@ describe('déploiement', () => {
       'base-uri', 'connect-src', 'default-src', 'font-src', 'form-action', 'frame-ancestors', 'img-src', 'object-src', 'script-src', 'style-src',
     ]);
     for (const [directive, values] of Object.entries(csp)) {
-      for (const value of values) expect(value, directive).toMatch(/^(?:'self'|'none'|'unsafe-inline'|data:)$/);
+      for (const value of values) {
+        if (directive === 'script-src' && value === JSON_LD_HASH) continue;
+        expect(value, directive).toMatch(/^(?:'self'|'none'|'unsafe-inline'|data:)$/);
+      }
     }
     expect(globalHeaders()['Content-Security-Policy']).not.toMatch(/https?:|\*|mag-istra/);
-    expect(csp['script-src']).toEqual(["'self'"]);
+    expect(csp['script-src']).toEqual(["'self'", JSON_LD_HASH]);
     expect(csp['img-src']).toEqual(["'self'", 'data:']);
   });
 
@@ -125,14 +134,14 @@ describe('déploiement', () => {
   it('GET /api/windows-release : fonction Vercel courte, hors de la réécriture vers l’interface', () => {
     expect(vercel.functions['api/windows-release.ts'].maxDuration).toBeGreaterThanOrEqual(10);
     expect(vercel.functions['api/windows-release.ts'].maxDuration).toBeLessThanOrEqual(30);
-    expect(new RegExp(`^${spaRule().source}$`).test('/api/windows-release')).toBe(false);
+    expect(isSpaRewrite('/api/windows-release')).toBe(false);
   });
 
-  it('GET /telecharger (lien du site) : réécrit vers la fonction de téléchargement AVANT la réécriture vers l’interface', () => {
-    // Vercel applique la première réécriture qui correspond : /telecharger ne doit jamais tomber sur l'interface.
+  it('GET /telecharger (lien du site) : réécrit vers la fonction de téléchargement, jamais vers l’interface', () => {
+    // La seule réécriture publique conduit à la fonction de téléchargement.
     const first = vercel.rewrites.findIndex(r => new RegExp(`^${r.source}$`).test('/telecharger'));
     expect(vercel.rewrites[first]).toEqual({ source: '/telecharger', destination: '/api/download' });
-    expect(first).toBeLessThan(vercel.rewrites.indexOf(spaRule()));
+    expect(first).toBe(0);
     expect(vercel.functions['api/download.ts'].maxDuration).toBeLessThanOrEqual(30);
   });
 
@@ -146,7 +155,7 @@ describe('déploiement', () => {
       const served = route === 'windows-release' || route === 'download';
       expect(files.includes(`${route}.ts`), route).toBe(served);
       expect(`api/${route}.ts` in vercel.functions, route).toBe(served);
-      expect(new RegExp(`^${spaRule().source}$`).test(`/api/${route}`), route).toBe(false);
+      expect(isSpaRewrite(`/api/${route}`), route).toBe(false);
     }
     expect(existsSync(path.join(root, 'netlify.toml'))).toBe(false);
   });
@@ -282,8 +291,8 @@ describe('CSP du site vitrine (vercel.json)', () => {
   const csp = header('Content-Security-Policy');
   const directives = parseCsp(csp);
 
-  it('script-src : « \'self\' » seul, jamais de script en ligne ni d’eval', () => {
-    expect(directives['script-src']).toEqual(["'self'"]);
+  it('script-src : ressources du site et empreinte JSON-LD précise, jamais de script inline générique ni d’eval', () => {
+    expect(directives['script-src']).toEqual(["'self'", JSON_LD_HASH]);
     expect(csp).not.toMatch(/unsafe-eval|wasm-unsafe-eval|strict-dynamic|unsafe-hashes/);
     // « unsafe-inline » n'est toléré que pour les styles (attribut « style » du squelette de chargement).
     for (const [name, values] of Object.entries(directives)) {
@@ -296,6 +305,7 @@ describe('CSP du site vitrine (vercel.json)', () => {
     for (const [name, values] of Object.entries(directives)) {
       for (const value of values) {
         if (value === "'unsafe-inline'" && name === 'style-src') continue;
+        if (value === JSON_LD_HASH && name === 'script-src') continue;
         expect(allowed.has(value), `${name} ${value}`).toBe(true);
       }
     }
@@ -306,7 +316,7 @@ describe('CSP du site vitrine (vercel.json)', () => {
   it('directives exactes : défaut, connexions et images du site, objets et formulaires fermés, jamais intégré dans un cadre', () => {
     expect(directives).toEqual({
       'default-src': ["'self'"],
-      'script-src': ["'self'"],
+      'script-src': ["'self'", JSON_LD_HASH],
       'connect-src': ["'self'"],
       'img-src': ["'self'", 'data:'],
       'style-src': ["'self'", "'unsafe-inline'"],
@@ -332,15 +342,19 @@ describe('CSP du site vitrine (vercel.json)', () => {
   function expectFitsPolicy(html: string): void {
     const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
     for (const [, attributes, body] of scripts) {
+      if (attributes === ' type="application/ld+json"') {
+        expect(JSON.parse(body)).toEqual(SITE_STRUCTURED_DATA);
+        expect(`'sha256-${createHash('sha256').update(body).digest('base64')}'`).toBe(JSON_LD_HASH);
+        continue;
+      }
       expect(attributes).toMatch(/\bsrc="(?!(?:https?:)?\/\/)[^"]+"/);
       expect(body.trim()).toBe('');
     }
     expect(html).not.toMatch(/\son[a-z]+\s*=/i);
     expect(html).not.toMatch(/javascript:/i);
-    // Seule adresse absolue admise : le lien canonique du site (shared/site.ts), qui n'est jamais chargé par la page ; une
-    // seconde occurrence, ou toute autre adresse, reste refusée.
+    // Aucune ressource exécutable ou média externe. Les liens de navigation et métadonnées sont contrôlés par verify-site.
     const withoutCanonical = html.replace(CANONICAL_LINK, '');
-    for (const [, url] of withoutCanonical.matchAll(/\b(?:src|href|action|poster)\s*=\s*"([^"]*)"/gi)) expect(url, url).not.toMatch(/^(?:https?:)?\/\//);
+    for (const [, url] of withoutCanonical.matchAll(/\b(?:src|action|poster)\s*=\s*"([^"]*)"/gi)) expect(url, url).not.toMatch(/^(?:https?:)?\/\//);
     // Le seul style en ligne est l'attribut « style » du squelette de chargement (style-src 'unsafe-inline').
     expect(html).not.toMatch(/<style\b[^>]*>(?![\s]*<\/style>)/i);
   }

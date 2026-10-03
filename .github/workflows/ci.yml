@@ -40,7 +40,7 @@ jobs:
       # « npm test » passe avant la construction du site : ses contrôles sur dist-site/ (page réelle dans la politique de
       # sécurité du contenu de vercel.json) sont donc rejoués ici, une fois le site construit.
       - name: Politique de sécurité du site construit
-        run: npx vitest run tests/server/deploy.test.ts tests/site/siteBuild.test.ts
+        run: npx vitest run tests/server/deploy.test.ts tests/site/siteBuild.test.ts tests/site/seo.test.ts
       - name: Build serveur autonome
         run: npm run build:server
       - name: Audit des dépendances de production

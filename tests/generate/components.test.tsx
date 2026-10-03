@@ -398,7 +398,7 @@ describe('ResearchModePicker', () => {
     );
     expect(html).toContain('Vos documents ne seront pas utilisés dans ce mode');
     // Ce qui sera réellement consulté, et ce qui ne le sera pas, dit sous le mode.
-    expect(html.replace(/&#x27;/g, "'")).toContain('Consulté : publications HAL, Crossref et OpenAlex, Wikipédia (à recouper). Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.');
+    expect(html.replace(/&#x27;/g, "'")).toContain('Recherche prévue : publications HAL, Crossref et OpenAlex, Wikipédia (à recouper). Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.');
   });
 });
 
@@ -409,9 +409,9 @@ describe('ResearchModePicker — sites officiels vérifiés', () => {
     const html = renderToStaticMarkup(
       <ResearchModePicker options={options} value="internet" onChange={noop} hints={researchHints('internet', 0, '4eme', options)} />,
     );
-    expect(html).toContain('Consulté : sites officiels vérifiés cités par Wikipédia, ses articles (à recouper).');
+    expect(html).toContain('Recherche prévue : sites officiels vérifiés cités par Wikipédia, ses articles (à recouper).');
     expect(html).not.toContain('non consultés');
-    expect(html).toContain('Recherche en ligne, sans utiliser vos documents.');
+    expect(html).toContain('Sites officiels et sources en ligne disponibles, sans utiliser vos documents.');
     expect(html).not.toMatch(/UNESCO|Éduscol/);
   });
 });

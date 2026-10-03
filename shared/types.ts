@@ -12,9 +12,9 @@ export type ResearchMode = 'documents' | 'academic' | 'internet' | 'documents_in
 
 export const RESEARCH_MODES: { value: ResearchMode; label: string; description: string; network: boolean }[] = [
   { value: 'documents', label: 'Mes documents uniquement', description: 'Aucune recherche externe. Fonctionne hors ligne.', network: false },
-  { value: 'academic', label: 'Sources académiques', description: 'Vos documents + publications scientifiques (HAL, Crossref, OpenAlex) et sites officiels vérifiés.', network: true },
-  { value: 'internet', label: 'Internet', description: 'Recherche en ligne, sans utiliser vos documents.', network: true },
-  { value: 'documents_internet', label: 'Documents + Internet', description: 'Vos documents en priorité, complétés par une recherche en ligne.', network: true },
+  { value: 'academic', label: 'Sources académiques', description: 'Publications et sites institutionnels disponibles, en complément de vos documents.', network: true },
+  { value: 'internet', label: 'Internet', description: 'Sites officiels et sources en ligne disponibles, sans utiliser vos documents.', network: true },
+  { value: 'documents_internet', label: 'Documents + Internet', description: 'Vos documents en priorité, complétés par des sources officielles et en ligne disponibles.', network: true },
 ];
 
 export function isResearchMode(value: unknown): value is ResearchMode {

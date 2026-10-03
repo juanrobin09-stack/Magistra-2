@@ -11,6 +11,7 @@ import { Download } from 'lucide-react';
 import WindowsDownloadPanel from '@/components/localEngine/WindowsDownloadPanel';
 import { CTA_CLASS, WINDOWS_SECTION_HREF } from '@/pages/landing/content';
 import LandingContent from '@/pages/landing/LandingContent';
+import SiteFaq from './SiteFaq';
 
 /** Ouverture directe d'une ancre (« /#magistra-windows ») : la page n'existe qu'après son rendu, le navigateur ne peut pas y défiler seul. */
 function scrollToHash(): void {
@@ -44,6 +45,7 @@ export default function SiteLanding() {
       }
       windowsSection={<WindowsDownloadPanel variant="landing" mode="showcase" />}
       windowsLinks={false}
+      questions={<SiteFaq />}
     />
   );
 }

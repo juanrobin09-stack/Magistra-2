@@ -15,7 +15,7 @@ export interface ResearchSource {
 }
 
 export interface ResearchConfig {
-  /** HAL + Crossref + OpenAlex (API publiques, sans clé). */
+  /** HAL + Crossref + OpenAlex (API publiques ; accès anonyme soumis aux quotas de chaque service). */
   academic: boolean;
   /** URL d'une instance SearXNG (recherche web), facultative. */
   searxngUrl?: string;
@@ -26,7 +26,7 @@ export interface ResearchConfig {
    * l'administrateur d'un serveur auto-hébergé (RESEARCH_TRUSTED_ONLY=false) : le web général est alors admis.
    */
   trustedOnly?: boolean;
-  /** Adresse de contact transmise à Crossref et à OpenAlex (paramètre « mailto », accès prioritaire), facultative. */
+  /** Adresse de contact transmise à Crossref et à OpenAlex ; accès prioritaire chez Crossref seulement. */
   crossrefMailto?: string;
   /** Délai maximal par requête externe. */
   timeoutMs: number;

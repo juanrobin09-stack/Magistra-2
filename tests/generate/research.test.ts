@@ -39,11 +39,11 @@ describe('modes de recherche', () => {
 
   it('moteur web configuré : annonce les sites officiels vérifiés, les publications (supérieur) puis Wikipédia « à recouper »', () => {
     const sup = describeResearchOptions(caps(), 'web', 'licence_2');
-    expect(note(sup, 'internet')).toBe(`Consulté : ${PUBLICATIONS}, ${OFFICIAL_SEARCH}, ${WIKIPEDIA}.`);
+    expect(note(sup, 'internet')).toBe(`Recherche prévue : ${PUBLICATIONS}, ${OFFICIAL_SEARCH}, ${WIKIPEDIA}.`);
     expect(note(sup, 'documents_internet')).toBe(note(sup, 'internet'));
-    expect(note(sup, 'academic')).toBe(`Consulté : ${PUBLICATIONS}, ${OFFICIAL_SEARCH}.`);
+    expect(note(sup, 'academic')).toBe(`Recherche prévue : ${PUBLICATIONS}, ${OFFICIAL_SEARCH}.`);
     const scolaire = describeResearchOptions(caps(), 'web', '4eme');
-    expect(note(scolaire, 'internet')).toBe(`Consulté : ${OFFICIAL_SEARCH}, ${WIKIPEDIA}.`);
+    expect(note(scolaire, 'internet')).toBe(`Recherche prévue : ${OFFICIAL_SEARCH}, ${WIKIPEDIA}.`);
     // Rien n'est restreint : tout est disponible, aucune mention « non consultés ».
     for (const options of [sup, scolaire]) {
       expect(options.every(o => o.available)).toBe(true);
@@ -54,9 +54,9 @@ describe('modes de recherche', () => {
 
   it('sans moteur web (cas normal d’un enseignant) : les sites officiels sont ceux que les références de Wikipédia citent', () => {
     const c = caps({ research: { web: false, institutional: true } });
-    expect(note(describeResearchOptions(c, 'local', 'master_1'), 'internet')).toBe(`Consulté : ${PUBLICATIONS}, ${OFFICIAL_WIKIPEDIA}, ses articles (à recouper).`);
-    expect(note(describeResearchOptions(c, 'local', 'cm2'), 'internet')).toBe(`Consulté : ${OFFICIAL_WIKIPEDIA}, ses articles (à recouper).`);
-    expect(note(describeResearchOptions(c, 'local', 'cm2'), 'academic')).toBe(`Consulté : ${PUBLICATIONS}, ${OFFICIAL_WIKIPEDIA}.`);
+    expect(note(describeResearchOptions(c, 'local', 'master_1'), 'internet')).toBe(`Recherche prévue : ${PUBLICATIONS}, ${OFFICIAL_WIKIPEDIA}, ses articles (à recouper).`);
+    expect(note(describeResearchOptions(c, 'local', 'cm2'), 'internet')).toBe(`Recherche prévue : ${OFFICIAL_WIKIPEDIA}, ses articles (à recouper).`);
+    expect(note(describeResearchOptions(c, 'local', 'cm2'), 'academic')).toBe(`Recherche prévue : ${PUBLICATIONS}, ${OFFICIAL_WIKIPEDIA}.`);
     expect(describeResearchOptions(c, 'local', 'cm2').every(o => o.available)).toBe(true);
   });
 
@@ -64,15 +64,15 @@ describe('modes de recherche', () => {
     const c = caps({ research: { web: false, institutional: false, wikipedia: true } });
     // Application Windows : réglages de l'application, SearXNG nommé.
     expect(note(describeResearchOptions(c, 'local', '4eme'), 'internet'))
-      .toBe(`Consulté : ${WIKIPEDIA}. Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.`);
+      .toBe(`Recherche prévue : ${WIKIPEDIA}. Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.`);
     // Serveur en ligne : rien à régler pour l'enseignant.
     expect(note(describeResearchOptions(c, 'web', '4eme'), 'documents_internet'))
-      .toBe(`Consulté : ${WIKIPEDIA}. Sites officiels non consultés : aucun moteur de recherche web configuré sur ce serveur.`);
+      .toBe(`Recherche prévue : ${WIKIPEDIA}. Sites officiels non consultés : aucun moteur de recherche web configuré sur ce serveur.`);
     // Supérieur : les publications restent consultées ; mode académique : publications seules.
     expect(note(describeResearchOptions(c, 'local', 'master_1'), 'internet'))
-      .toBe(`Consulté : ${PUBLICATIONS}, ${WIKIPEDIA}. Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.`);
+      .toBe(`Recherche prévue : ${PUBLICATIONS}, ${WIKIPEDIA}. Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.`);
     expect(note(describeResearchOptions(c, 'local', 'master_1'), 'academic'))
-      .toBe(`Consulté : ${PUBLICATIONS}. Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.`);
+      .toBe(`Recherche prévue : ${PUBLICATIONS}. Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.`);
     expect(describeResearchOptions(c, 'local', '4eme').every(o => o.available)).toBe(true);
   });
 
@@ -85,10 +85,10 @@ describe('modes de recherche', () => {
     const master = describeResearchOptions(c, 'local', 'master_1');
     expect(master.find(o => o.value === 'internet')).toMatchObject({
       available: true,
-      note: `Consulté : ${PUBLICATIONS}. Sites officiels non consultés : activez Wikipédia, ou indiquez un moteur de recherche web (SearXNG), dans les réglages.`,
+      note: `Recherche prévue : ${PUBLICATIONS}. Sites officiels non consultés : activez Wikipédia, ou indiquez un moteur de recherche web (SearXNG), dans les réglages.`,
     });
     expect(note(describeResearchOptions(c, 'web', 'master_1'), 'internet'))
-      .toBe(`Consulté : ${PUBLICATIONS}. Sites officiels non consultés : ni Wikipédia ni moteur de recherche web ne sont activés sur ce serveur.`);
+      .toBe(`Recherche prévue : ${PUBLICATIONS}. Sites officiels non consultés : ni Wikipédia ni moteur de recherche web ne sont activés sur ce serveur.`);
   });
 
   it('recherche académique désactivée : mode indisponible, retour aux documents ; Internet reste annoncé sans publications', () => {
@@ -96,7 +96,7 @@ describe('modes de recherche', () => {
     expect(options.find(o => o.value === 'academic')?.available).toBe(false);
     expect(effectiveResearchMode('academic', options)).toBe('documents');
     expect(effectiveResearchMode('internet', options)).toBe('internet');
-    expect(note(options, 'internet')).toBe(`Consulté : ${OFFICIAL_SEARCH}, ${WIKIPEDIA}.`);
+    expect(note(options, 'internet')).toBe(`Recherche prévue : ${OFFICIAL_SEARCH}, ${WIKIPEDIA}.`);
   });
 
   it('« Mes documents uniquement » : « Fonctionne hors ligne » dans l’application Windows SEULEMENT (le site nécessite Internet)', () => {
@@ -113,9 +113,9 @@ describe('modes de recherche', () => {
     const connector = (partial: Parameters<typeof caps>[0], niveau: Parameters<typeof describeResearchOptions>[2]) =>
       describeResearchOptions(caps(partial), 'web', niveau, 'local-connector');
     expect(note(connector({ research: { web: false, institutional: false } }, 'cm2'), 'internet'))
-      .toBe(`Consulté : ${WIKIPEDIA}. Sites officiels non consultés : indiquez un moteur de recherche web dans les réglages de l’application Magistra (Windows).`);
+      .toBe(`Recherche prévue : ${WIKIPEDIA}. Sites officiels non consultés : indiquez un moteur de recherche web dans les réglages de l’application Magistra (Windows).`);
     expect(note(connector({ research: { web: false, institutional: false, wikipedia: false } }, 'master_1'), 'internet'))
-      .toBe(`Consulté : ${PUBLICATIONS}. Sites officiels non consultés : activez Wikipédia, ou indiquez un moteur de recherche web, dans les réglages de l’application Magistra (Windows).`);
+      .toBe(`Recherche prévue : ${PUBLICATIONS}. Sites officiels non consultés : activez Wikipédia, ou indiquez un moteur de recherche web, dans les réglages de l’application Magistra (Windows).`);
     expect(connector({ research: { web: false, institutional: false, wikipedia: false, academic: true } }, '4eme').find(o => o.value === 'internet'))
       .toMatchObject({ available: false, note: NO_INTERNET_CONNECTOR_NOTE });
     expect(connector({ research: { academic: false } }, 'doctorat').find(o => o.value === 'academic'))
@@ -141,9 +141,9 @@ describe('modes de recherche', () => {
 
   it('descriptions des modes : sites officiels vérifiés, jamais « le web » en général, aucun site nommé comme garanti', () => {
     const descriptions = describeResearchOptions(caps(), 'local', '4eme').map(o => o.description);
-    expect(descriptions[1]).toBe('Vos documents + publications scientifiques (HAL, Crossref, OpenAlex) et sites officiels vérifiés.');
-    expect(descriptions[2]).toBe('Recherche en ligne, sans utiliser vos documents.');
-    expect(descriptions[3]).toBe('Vos documents en priorité, complétés par une recherche en ligne.');
+    expect(descriptions[1]).toBe('Publications et sites institutionnels disponibles, en complément de vos documents.');
+    expect(descriptions[2]).toBe('Sites officiels et sources en ligne disponibles, sans utiliser vos documents.');
+    expect(descriptions[3]).toBe('Vos documents en priorité, complétés par des sources officielles et en ligne disponibles.');
     expect(descriptions.join(' ')).not.toMatch(/UNESCO|Éduscol|\btous\b|tout le catalogue/);
   });
 
@@ -169,18 +169,18 @@ describe('modes de recherche', () => {
         }
       }
     }
-    expect(note(describeResearchOptions(legacy({}), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_LEGACY}, ${WIKIPEDIA}.`);
-    expect(note(describeResearchOptions(legacy({}), 'local', 'master_1'), 'academic')).toBe(`Consulté : ${PUBLICATIONS}, ${OFFICIAL_LEGACY}.`);
+    expect(note(describeResearchOptions(legacy({}), 'local', '4eme'), 'internet')).toBe(`Recherche prévue : ${OFFICIAL_LEGACY}, ${WIKIPEDIA}.`);
+    expect(note(describeResearchOptions(legacy({}), 'local', 'master_1'), 'academic')).toBe(`Recherche prévue : ${PUBLICATIONS}, ${OFFICIAL_LEGACY}.`);
     // Site web, Magistra locale : même texte prudent.
-    expect(note(describeResearchOptions(legacy({}), 'web', '4eme', 'local-connector'), 'internet')).toBe(`Consulté : ${OFFICIAL_LEGACY}, ${WIKIPEDIA}.`);
+    expect(note(describeResearchOptions(legacy({}), 'web', '4eme', 'local-connector'), 'internet')).toBe(`Recherche prévue : ${OFFICIAL_LEGACY}, ${WIKIPEDIA}.`);
     // Le champ explicitement faux vaut l'absence ; seul « vrai » annonce le catalogue.
-    expect(note(describeResearchOptions(legacy({ trustedCatalogue: false }), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_LEGACY}, ${WIKIPEDIA}.`);
-    expect(note(describeResearchOptions(caps({ research: { trustedCatalogue: true } }), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_SEARCH}, ${WIKIPEDIA}.`);
+    expect(note(describeResearchOptions(legacy({ trustedCatalogue: false }), 'local', '4eme'), 'internet')).toBe(`Recherche prévue : ${OFFICIAL_LEGACY}, ${WIKIPEDIA}.`);
+    expect(note(describeResearchOptions(caps({ research: { trustedCatalogue: true } }), 'local', '4eme'), 'internet')).toBe(`Recherche prévue : ${OFFICIAL_SEARCH}, ${WIKIPEDIA}.`);
     // Sans moteur de recherche web, « institutional » ne vient que du chemin par Wikipédia, propre aux versions actuelles.
-    expect(note(describeResearchOptions(legacy({ web: false }), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_WIKIPEDIA}, ses articles (à recouper).`);
+    expect(note(describeResearchOptions(legacy({ web: false }), 'local', '4eme'), 'internet')).toBe(`Recherche prévue : ${OFFICIAL_WIKIPEDIA}, ses articles (à recouper).`);
     // Sans chemin vers les sites officiels : le champ ne change rien (rien n'est promis).
     expect(note(describeResearchOptions(legacy({ web: false, institutional: false }), 'local', '4eme'), 'internet'))
-      .toBe(`Consulté : ${WIKIPEDIA}. Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.`);
+      .toBe(`Recherche prévue : ${WIKIPEDIA}. Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.`);
   });
 });
 

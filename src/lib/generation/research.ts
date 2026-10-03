@@ -88,9 +88,9 @@ const NOTES_BY_SIDE: Record<ResearchSettingsSide, { academicDisabled: string; no
   server: { academicDisabled: ACADEMIC_DISABLED_SERVER_NOTE, noInternet: NO_INTERNET_SERVER_NOTE },
 };
 
-/** « Consulté : … » : ce que la recherche interrogera, dans l'ordre de priorité, et ce qu'elle ne peut pas interroger. */
+/** « Recherche prévue : … » : capacités avant génération, jamais une confirmation de récupération effective. */
 function consultedNote(parts: (string | null)[], missingOfficial: string | null): string {
-  return `Consulté : ${parts.filter(Boolean).join(', ')}.${missingOfficial ? ` ${missingOfficial}` : ''}`;
+  return `Recherche prévue : ${parts.filter(Boolean).join(', ')}.${missingOfficial ? ` ${missingOfficial}` : ''}`;
 }
 
 /**

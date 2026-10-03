@@ -20,10 +20,8 @@ export const SITE_ORIGIN = 'https://www.mag-istra.fr';
 export const SITE_LEGACY_ORIGIN = 'https://magistra-2.vercel.app';
 
 /**
- * Pages du plan du site (sitemap.xml) : l'accueil seul. Toutes les routes du site (accueil et pages légales,
- * src/site/SiteApp.tsx) sont servies par la même page statique, donc avec le même lien canonique et la même adresse
- * og:url : celles de l'accueil. Lister les pages légales comme pages distinctes contredirait ce lien canonique, et elles
- * n'ont pas à être indexées.
+ * Pages du plan du site (sitemap.xml) : l'accueil seul. Les pages légales sont pré-rendues avec leur propre
+ * URL canonique et la directive noindex, follow. Elles restent accessibles depuis le pied de page.
  */
 export const SITE_PATHS: readonly string[] = ['/'];
 

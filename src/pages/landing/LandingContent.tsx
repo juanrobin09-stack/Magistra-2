@@ -27,10 +27,12 @@ interface LandingContentProps {
   finalAction?: ReactNode;
   /** Les cartes qui mènent au téléchargement affichent leur lien « Télécharger pour Windows ». */
   windowsLinks?: boolean;
+  /** Questions propres au site public ; aucun ajout à l’application installée. */
+  questions?: ReactNode;
 }
 
 export default function LandingContent({
-  navAction, heroAction, heroNote, windowsSection, finalAction, windowsLinks = true,
+  navAction, heroAction, heroNote, windowsSection, finalAction, windowsLinks = true, questions,
 }: LandingContentProps) {
   useDocumentTitle(null);
 
@@ -70,7 +72,8 @@ export default function LandingContent({
             <p className="text-mg-200 text-base sm:text-lg max-w-xl mx-auto mb-8 leading-relaxed">
               Magistra est un assistant pédagogique gratuit pour les enseignants, de la maternelle au doctorat,
               avec un accent sur le supérieur. Préparez cours, TD, examens et syllabus à partir de vos propres documents,
-              avec des sources vérifiables — des brouillons solides, à relire et adapter.
+              complétés si besoin par des sources officielles et académiques grâce à la recherche en ligne.
+              Des brouillons structurés, à relire et adapter.
             </p>
 
             <div className="flex flex-col sm:flex-row sm:flex-wrap items-center justify-center gap-3">
@@ -223,6 +226,8 @@ export default function LandingContent({
         </section>
 
         <div className="glow-line max-w-xl mx-auto" aria-hidden="true" />
+
+        {questions}
 
         {/* Auteur */}
         <AuthorCredit variant="section" />

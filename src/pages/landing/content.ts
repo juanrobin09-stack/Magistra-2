@@ -57,14 +57,14 @@ export const FEATURES_PLUS: { icon: LucideIcon; iconColor: string; title: string
     link: { href: WINDOWS_SECTION_HREF, label: 'Télécharger pour Windows' },
   },
   { icon: WifiOff, iconColor: 'text-teal-300', title: 'Gratuit, sans compte, hors connexion', desc: 'L’application Windows est gratuite : ni abonnement, ni compte à créer. Une fois l’IA activée, elle fonctionne sur votre ordinateur, même sans Internet.' },
-  { icon: BookOpenCheck, iconColor: 'text-gold', title: 'Sources vérifiables', desc: 'Vos documents (PDF, Word, PowerPoint…), HAL, Crossref, OpenAlex et des sites officiels vérifiés (ceux que Wikipédia cite pour votre sujet, ou les principaux avec un moteur de recherche web) : les citations renvoient aux sources réellement utilisées, avec leur niveau de fiabilité.' },
+  { icon: BookOpenCheck, iconColor: 'text-gold', title: 'Sources officielles et académiques', desc: 'Avec la recherche activée, l’IA reçoit les extraits trouvés dans des publications (HAL, Crossref, OpenAlex) et sur des sites institutionnels reconnus, en complément de vos documents. Les sources utilisées sont identifiées, selon le mode choisi et leur disponibilité.' },
   { icon: Folders, iconColor: 'text-accent', title: 'Votre espace pédagogique', desc: 'Retrouvez vos préparations dans votre historique et adaptez votre profil à vos niveaux et à vos matières.' },
   { icon: FilePenLine, iconColor: 'text-rose-300', title: 'À relire et adapter', desc: 'Magistra propose des brouillons structurés ; vous restez l’auteur. Relisez et vérifiez, puis copiez ou exportez (Markdown, PDF) pour adapter le texte dans votre traitement de texte. Besoin d’un autre angle ? Précisez vos consignes et relancez.' },
 ];
 
 export const STEPS = [
   { num: '1', title: 'Créez votre profil', desc: 'Niveaux, matière, discipline : Magistra adapte le vocabulaire et les exigences à votre contexte. Votre profil reste propre à votre ordinateur.' },
-  { num: '2', title: 'Choisissez un outil et vos sources', desc: `${NB_OUTILS} outils : cours, TD, examens, syllabus, appréciations, différenciation, courriers… Ajoutez vos documents ou activez la recherche HAL, Crossref, OpenAlex ou sur les sites officiels vérifiés.` },
+  { num: '2', title: 'Choisissez un outil et vos sources', desc: `${NB_OUTILS} outils : cours, TD, examens, syllabus, appréciations, différenciation, courriers… Ajoutez vos documents et, si besoin, activez la recherche de sources officielles et académiques. Magistra transmet à l’IA les extraits disponibles pour étayer votre préparation.` },
   { num: '3', title: 'Relisez, exportez, adaptez', desc: 'Magistra rédige un brouillon structuré qui cite ses sources. Vous le relisez, le copiez ou l’exportez en Markdown ou en PDF, puis l’adaptez dans votre traitement de texte.' },
 ];
 
