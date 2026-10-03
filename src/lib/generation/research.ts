@@ -129,7 +129,10 @@ export function describeResearchOptions(
     }
 
     // Internet / Documents + Internet : on annonce seulement ce qui sera réellement consulté.
-    const parts = [isSuperieur(niveau) && academic ? PUBLICATIONS_CONSULTED : null, official, wikipedia ? WIKIPEDIA_CONSULTED : null];
+    const wiki = wikipedia
+      ? official === OFFICIAL_VIA_WIKIPEDIA_CONSULTED ? 'ses articles (à recouper)' : WIKIPEDIA_CONSULTED
+      : null;
+    const parts = [isSuperieur(niveau) && academic ? PUBLICATIONS_CONSULTED : null, official, wiki];
     if (!parts.some(Boolean)) return { ...base, available: false, note: notes.noInternet };
     return { ...base, note: consultedNote(parts, missingOfficial) };
   });

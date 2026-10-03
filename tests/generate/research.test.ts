@@ -54,8 +54,8 @@ describe('modes de recherche', () => {
 
   it('sans moteur web (cas normal d’un enseignant) : les sites officiels sont ceux que les références de Wikipédia citent', () => {
     const c = caps({ research: { web: false, institutional: true } });
-    expect(note(describeResearchOptions(c, 'local', 'master_1'), 'internet')).toBe(`Consulté : ${PUBLICATIONS}, ${OFFICIAL_WIKIPEDIA}, ${WIKIPEDIA}.`);
-    expect(note(describeResearchOptions(c, 'local', 'cm2'), 'internet')).toBe(`Consulté : ${OFFICIAL_WIKIPEDIA}, ${WIKIPEDIA}.`);
+    expect(note(describeResearchOptions(c, 'local', 'master_1'), 'internet')).toBe(`Consulté : ${PUBLICATIONS}, ${OFFICIAL_WIKIPEDIA}, ses articles (à recouper).`);
+    expect(note(describeResearchOptions(c, 'local', 'cm2'), 'internet')).toBe(`Consulté : ${OFFICIAL_WIKIPEDIA}, ses articles (à recouper).`);
     expect(note(describeResearchOptions(c, 'local', 'cm2'), 'academic')).toBe(`Consulté : ${PUBLICATIONS}, ${OFFICIAL_WIKIPEDIA}.`);
     expect(describeResearchOptions(c, 'local', 'cm2').every(o => o.available)).toBe(true);
   });
@@ -142,8 +142,8 @@ describe('modes de recherche', () => {
   it('descriptions des modes : sites officiels vérifiés, jamais « le web » en général, aucun site nommé comme garanti', () => {
     const descriptions = describeResearchOptions(caps(), 'local', '4eme').map(o => o.description);
     expect(descriptions[1]).toBe('Vos documents + publications scientifiques (HAL, Crossref, OpenAlex) et sites officiels vérifiés.');
-    expect(descriptions[2]).toBe('Sites officiels vérifiés et Wikipédia, sans vos documents.');
-    expect(descriptions[3]).toBe('Vos documents en priorité, complétés par les sites officiels vérifiés et Wikipédia.');
+    expect(descriptions[2]).toBe('Recherche en ligne, sans utiliser vos documents.');
+    expect(descriptions[3]).toBe('Vos documents en priorité, complétés par une recherche en ligne.');
     expect(descriptions.join(' ')).not.toMatch(/UNESCO|Éduscol|\btous\b|tout le catalogue/);
   });
 
@@ -177,7 +177,7 @@ describe('modes de recherche', () => {
     expect(note(describeResearchOptions(legacy({ trustedCatalogue: false }), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_LEGACY}, ${WIKIPEDIA}.`);
     expect(note(describeResearchOptions(caps({ research: { trustedCatalogue: true } }), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_SEARCH}, ${WIKIPEDIA}.`);
     // Sans moteur de recherche web, « institutional » ne vient que du chemin par Wikipédia, propre aux versions actuelles.
-    expect(note(describeResearchOptions(legacy({ web: false }), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_WIKIPEDIA}, ${WIKIPEDIA}.`);
+    expect(note(describeResearchOptions(legacy({ web: false }), 'local', '4eme'), 'internet')).toBe(`Consulté : ${OFFICIAL_WIKIPEDIA}, ses articles (à recouper).`);
     // Sans chemin vers les sites officiels : le champ ne change rien (rien n'est promis).
     expect(note(describeResearchOptions(legacy({ web: false, institutional: false }), 'local', '4eme'), 'internet'))
       .toBe(`Consulté : ${WIKIPEDIA}. Sites officiels non consultés : indiquez un moteur de recherche web (SearXNG) dans les réglages.`);

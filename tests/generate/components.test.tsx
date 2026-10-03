@@ -409,9 +409,9 @@ describe('ResearchModePicker — sites officiels vérifiés', () => {
     const html = renderToStaticMarkup(
       <ResearchModePicker options={options} value="internet" onChange={noop} hints={researchHints('internet', 0, '4eme', options)} />,
     );
-    expect(html).toContain('Consulté : sites officiels vérifiés cités par Wikipédia, Wikipédia (à recouper).');
+    expect(html).toContain('Consulté : sites officiels vérifiés cités par Wikipédia, ses articles (à recouper).');
     expect(html).not.toContain('non consultés');
-    expect(html).toContain('Sites officiels vérifiés et Wikipédia, sans vos documents.');
+    expect(html).toContain('Recherche en ligne, sans utiliser vos documents.');
     expect(html).not.toMatch(/UNESCO|Éduscol/);
   });
 });

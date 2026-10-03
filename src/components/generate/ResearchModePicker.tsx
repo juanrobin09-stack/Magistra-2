@@ -29,7 +29,8 @@ export default function ResearchModePicker({ options, value, onChange, hints }: 
         {options.map(o => {
           const Icon = ICONS[o.value];
           const active = o.value === value;
-          const noteId = o.note ? `gen-research-note-${o.value}` : undefined;
+          const showNote = Boolean(o.note && (active || !o.available));
+          const noteId = showNote ? `gen-research-note-${o.value}` : undefined;
           return (
             <button
               key={o.value}
@@ -50,7 +51,7 @@ export default function ResearchModePicker({ options, value, onChange, hints }: 
               <span className="min-w-0">
                 <span className={`block text-sm font-medium ${active ? 'text-white' : 'text-mg-100'}`}>{o.label}</span>
                 <span className="block text-xs text-mg-200 leading-snug mt-0.5">{o.description}</span>
-                {o.note && (
+                {showNote && (
                   <span id={noteId} className={`block text-xs leading-snug mt-1 ${o.available ? 'text-accent-bright' : 'text-warning'}`}>
                     {o.note}
                   </span>
