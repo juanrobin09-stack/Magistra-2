@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import AppErrorBoundary from '@/components/AppErrorBoundary';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { resetWindowsReleaseCache } from '@/components/localEngine/windowsRelease';
 import WindowsDownloadPanel from '@/components/localEngine/WindowsDownloadPanel';
@@ -111,7 +112,7 @@ describe('ErrorBoundary du site vitrine', () => {
   it('sans « Refaire mon profil » (le site n’a pas de profil) ; Recharger et Revenir à l’accueil restent', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { container } = await render(
-      <ErrorBoundary withProfileReset={false}>
+      <ErrorBoundary>
         <Boom />
       </ErrorBoundary>,
     );
@@ -122,12 +123,12 @@ describe('ErrorBoundary du site vitrine', () => {
     vi.restoreAllMocks();
   });
 
-  it('application : « Refaire mon profil » reste proposé', async () => {
+  it('application (AppErrorBoundary) : « Refaire mon profil » reste proposé', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { container } = await render(
-      <ErrorBoundary>
+      <AppErrorBoundary>
         <Boom />
-      </ErrorBoundary>,
+      </AppErrorBoundary>,
     );
     expect(button(container, 'Refaire mon profil')).not.toBeNull();
     vi.restoreAllMocks();

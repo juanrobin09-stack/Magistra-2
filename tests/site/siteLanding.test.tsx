@@ -42,6 +42,35 @@ async function mountSite() {
 const FORBIDDEN_WORDING = /Commencer|Se connecter|Connexion|Accéder à Magistra|Mon espace|démonstration/;
 const ASSUMES_BROWSER = /Sur le web|Sur le site|ce site|dans (?:votre|le) navigateur|IA annoncée clairement|Le site indique/;
 
+describe('Site vitrine : ancre ouverte directement', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  it('« /#magistra-windows » fait défiler jusqu’à la section de téléchargement', async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    window.history.replaceState(null, '', '/#magistra-windows');
+    stubReleaseFetch(RELEASE);
+    const { container } = await mountSite();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.contexts[0]).toBe(container.querySelector('#magistra-windows'));
+  });
+
+  it('sans ancre, ou avec une ancre inconnue ou mal encodée : aucun défilement, aucune erreur', async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    stubReleaseFetch(RELEASE);
+    for (const hash of ['', '#inconnue', '#%E0%A4%A']) {
+      window.history.replaceState(null, '', `/${hash}`);
+      cleanup();
+      await mountSite();
+    }
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+});
+
 describe('Site vitrine : aucun accès à l’application', () => {
   it('aucune occurrence de « Commencer », « Se connecter », « Connexion », « Accéder à Magistra », « Mon espace », « démonstration »', async () => {
     stubReleaseFetch(RELEASE);

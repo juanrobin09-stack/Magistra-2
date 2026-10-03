@@ -26,7 +26,7 @@ function publishEntryAtRoot(): Plugin {
 // Construction du SITE VITRINE (npm run build:site → dist-site/) : présentation, téléchargement de l'application
 // Windows, pages légales. Mêmes plugins et mêmes alias que l'application (vite.config.ts), mais ni l'API de
 // développement (magistraDevApi), ni le service de connexion, ni le connecteur local, ni le code de l'application :
-// le point d'entrée est src/site/main.tsx. Le build de l'application (dist/, utilisé par Electron) est inchangé.
+// le point d'entrée est src/site/main.tsx. Le build de l'application (dist/, utilisé par Electron) est distinct : npm run build.
 // scripts/verify-site.mjs contrôle le résultat.
 export default defineConfig({
   base: '/',

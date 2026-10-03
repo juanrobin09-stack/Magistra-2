@@ -190,6 +190,8 @@ export interface GenerationMetrics {
   prepMs?: number;
   /** Attente de la fin du chargement du modèle (préchargement), après la préparation. */
   waitModelMs?: number;
+  /** Durée de chargement du modèle annoncée par le moteur pour le préchargement (souvent recouverte par la préparation). */
+  preloadLoadMs?: number;
   /** Délai avant l'apparition du premier mot, depuis le début de la génération. */
   firstWordMs?: number;
   /** Durées mesurées par le moteur (moteur de l'ordinateur seulement). */

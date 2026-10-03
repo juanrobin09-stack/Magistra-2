@@ -55,7 +55,7 @@ describe('déploiement', () => {
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'strict-origin-when-cross-origin',
       'X-Frame-Options': 'DENY',
-      'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=(), serial=(), bluetooth=()',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=()',
       'Cross-Origin-Opener-Policy': 'same-origin',
       // Sans « preload » : l'inscription à la liste des navigateurs est irréversible, elle reste une décision du propriétaire.
       'Strict-Transport-Security': 'max-age=63072000; includeSubDomains',
@@ -161,18 +161,20 @@ describe('déploiement', () => {
     // Site vitrine : informations légales, profil de l'auteur (publics par nature, vides), puis les deux variables lues
     // par les fonctions du site. Ni Clerk, ni Supabase, ni IA.
     expect(site.map(v => v.name)).toEqual([
-      'VITE_LEGAL_PUBLISHER', 'VITE_LEGAL_DIRECTOR', 'VITE_LEGAL_ADDRESS', 'VITE_LEGAL_CONTACT', 'VITE_LEGAL_HOST', 'VITE_LEGAL_DATA_REGION',
+      'VITE_LEGAL_PUBLISHER', 'VITE_LEGAL_DIRECTOR', 'VITE_LEGAL_ADDRESS', 'VITE_LEGAL_CONTACT', 'VITE_LEGAL_HOST',
       'VITE_LEGAL_VALIDATED', 'VITE_AUTHOR_PROFILE_URL', 'MAGISTRA_RELEASES_REPO', 'GITHUB_TOKEN',
     ]);
     // Aucune identité ni adresse n'est livrée dans le dépôt : chaque éditeur renseigne les siennes (et valide lui-même ses
     // textes : VITE_LEGAL_VALIDATED reste vide).
     for (const v of site) expect(v.value, v.name).toBe('');
 
-    // Hébergement personnel : la seule variable VITE_ est la clé publiable Clerk ; toutes les valeurs secrètes sont vides.
-    expect(personal.filter(v => v.name.startsWith('VITE_')).map(v => v.name)).toEqual(['VITE_CLERK_PUBLISHABLE_KEY']);
+    // Hébergement personnel : les seules variables VITE_ sont la région de la base (pages légales) et la clé publiable
+    // Clerk ; toutes les valeurs secrètes sont vides.
+    expect(personal.filter(v => v.name.startsWith('VITE_')).map(v => v.name)).toEqual(['VITE_LEGAL_DATA_REGION', 'VITE_CLERK_PUBLISHABLE_KEY']);
     expect(variables(env).filter(v => v.name.startsWith('VITE_')).map(v => v.name)).toEqual([
-      ...site.filter(v => v.name.startsWith('VITE_')).map(v => v.name), 'VITE_CLERK_PUBLISHABLE_KEY',
+      ...site.filter(v => v.name.startsWith('VITE_')).map(v => v.name), 'VITE_LEGAL_DATA_REGION', 'VITE_CLERK_PUBLISHABLE_KEY',
     ]);
+    expect(personal.find(v => v.name === 'VITE_LEGAL_DATA_REGION')?.value).toBe('');
     for (const secret of ['CLERK_SECRET_KEY', 'CLERK_JWT_KEY', 'CLERK_WEBHOOK_SECRET', 'SUPABASE_SERVICE_ROLE_KEY', 'AI_API_KEY', 'GITHUB_TOKEN']) {
       expect(variables(env).find(v => v.name === secret)?.value, secret).toBe('');
     }
@@ -184,7 +186,7 @@ describe('déploiement', () => {
     }
     // Le site vitrine n'utilise ni compte ni IA : rien de tout cela dans sa partie du fichier.
     expect(site.filter(v => /^(CLERK_|SUPABASE_|AI_|MAGISTRA_AUTH|MAGISTRA_STORE|MAGISTRA_DATA_DIR)/.test(v.name))).toEqual([]);
-    // Plus aucune consigne de configurer Clerk, Supabase ou l'IA dans Vercel ni de modifier la CSP de vercel.json.
+    // Aucune consigne de configurer Clerk, Supabase ou l'IA dans Vercel ni de modifier la CSP de vercel.json.
     expect(env).not.toMatch(/api\/generate\.ts|NODEJS_HELPERS|vercel env pull|ajoutez ce domaine aux directives/i);
   });
 
@@ -287,7 +289,7 @@ describe('CSP du site vitrine (vercel.json)', () => {
 
   it('Permissions-Policy : toutes les fonctions sensibles fermées', () => {
     const features = header('Permissions-Policy').split(',').map(f => f.trim());
-    expect(features.sort()).toEqual(['bluetooth=()', 'camera=()', 'geolocation=()', 'interest-cohort=()', 'microphone=()', 'payment=()', 'serial=()', 'usb=()']);
+    expect(features.sort()).toEqual(['camera=()', 'geolocation=()', 'microphone=()', 'payment=()', 'serial=()', 'usb=()']);
   });
 
   /** La page doit tenir dans cette politique : aucun script en ligne, aucun gestionnaire d'évènement, aucune ressource externe. */

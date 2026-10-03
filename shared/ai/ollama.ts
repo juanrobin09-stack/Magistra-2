@@ -12,7 +12,7 @@ import { MODEL_TIERS, normalizeModelName, tierForModel } from './models.js';
 import { addressKind } from './presets.js';
 import {
   collectStream, type AIProvider, type ChatMessage, type ChatOptions, type FetchLike, type FinishReason, type GenerateResult,
-  type HealthStatus, type ModelInfo, type PreloadOptions, type StreamEvent, type Usage,
+  type HealthStatus, type ModelInfo, type PreloadOptions, type PreloadResult, type StreamEvent, type Usage,
 } from './provider.js';
 import {
   abortedByTimeout, fetchWithTimeout, isNetworkError, linkSignals, lowerFirst, raceAbort, readErrorDetail, readLines, safeJsonParse,
@@ -506,7 +506,7 @@ export class OllamaProvider implements AIProvider {
    * provoquer un second chargement. À afficher avec le statut « Chargement du modèle… ».
    * Lève MODEL_NOT_INSTALLED, OUT_OF_MEMORY, ENGINE_NOT_RUNNING, AI_TIMEOUT (au-delà de 10 min par défaut)…
    */
-  async preload(options: PreloadOptions = {}): Promise<void> {
+  async preload(options: PreloadOptions = {}): Promise<PreloadResult | void> {
     const { controller, dispose } = linkSignals(options.signal);
     const ctx = this.errorContext;
     const timeoutMs = options.timeoutMs ?? PRELOAD_TIMEOUT_MS;
@@ -527,14 +527,19 @@ export class OllamaProvider implements AIProvider {
       if (!res.body) return;
       // Réponse attendue : un seul objet JSON { done: true, done_reason: 'load' }. Un serveur qui répondrait par un
       // flux est accepté aussi : la première ligne valide suffit à savoir que le modèle est chargé.
+      let loadMs: number | undefined;
       for await (const line of readLines(res.body, controller, { firstChunkMs: timeoutMs, idleMs: this.timeouts.idleMs }, options.signal)) {
         if (!line.trim()) continue;
         const msg = safeJsonParse(line) as { error?: unknown } | undefined;
         if (!msg || typeof msg !== 'object') continue;
         if (msg.error) throw mapHttpError(500, String(msg.error), ctx);
+        // Durée de chargement annoncée par le moteur (load_duration, en nanosecondes) : le vrai coût du chargement,
+        // même quand il s'est fait pendant la préparation de la demande.
+        loadMs = ollamaTimingsFromChunk(msg)?.loadMs;
         break;
       }
       if (options.signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
+      return loadMs !== undefined ? { loadMs } : undefined;
     } catch (err) {
       if (options.signal?.aborted) throw new MagistraError('GENERATION_ABORTED');
       if (err instanceof MagistraError) throw localizeEngineError(err, this.onThisComputer);

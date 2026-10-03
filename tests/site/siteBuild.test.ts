@@ -29,7 +29,7 @@ describe('Scripts npm du site vitrine', () => {
     const app = read('vite.config.ts');
     expect(app).toContain("outDir: 'dist'");
     expect(app).toContain('magistraDevApi(env)');
-    expect(app).not.toMatch(/site/i);
+    expect(app).not.toMatch(/vite\.site|dist-site|site\/index\.html/);
   });
 });
 

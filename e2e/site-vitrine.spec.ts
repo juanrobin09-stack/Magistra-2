@@ -72,7 +72,7 @@ const test = base.extend<{ monitor: Monitor }>({
   ],
 });
 
-/** Pages du site, et adresses de l'ancienne application qui y reviennent : chargées comme page HTML (aucune API). */
+/** Pages du site, et adresses de l'application qui y reviennent à l'accueil : chargées comme page HTML (aucune API). */
 const LEGAL_OR_APP_PATH = /^\/(?:mentions-legales|confidentialite|cgu|app(?:\/.*)?|onboarding|setup|presentation|inconnu)$/;
 
 const FORBIDDEN_API = /\/api\/(?:mode|status|generate|generation|history|profile|account|stats)|clerk|supabase|127\.0\.0\.1:478\d\d/i;

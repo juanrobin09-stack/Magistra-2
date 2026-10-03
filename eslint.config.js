@@ -8,7 +8,7 @@ import { defineConfig, globalIgnores } from 'eslint/config';
 const unusedVars = ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', destructuredArrayIgnorePattern: '^_', caughtErrors: 'none' }];
 
 export default defineConfig([
-  globalIgnores(['dist', 'dist-electron', 'dist-server', 'release', 'node_modules', 'playwright-report', 'test-results', 'coverage']),
+  globalIgnores(['dist', 'dist-site', 'dist-electron', 'dist-server', 'release', 'node_modules', 'playwright-report', 'test-results', 'coverage']),
   {
     files: ['src/**/*.{ts,tsx}'],
     extends: [js.configs.recommended, tseslint.configs.recommended, reactHooks.configs.flat.recommended, reactRefresh.configs.vite],

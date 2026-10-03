@@ -39,6 +39,9 @@ export const FORBIDDEN_TEXTS = [
   ['/api/mode', 'route de découverte du mode de l\'application'],
   ['47831', 'port du connecteur local'],
   ['localConnector', 'connecteur local'],
+  ['/onboarding', 'création du profil de l\'application'],
+  ['Refaire mon profil', 'action du profil de l\'application'],
+  ['Depuis ce site', 'phrase du site avec comptes (connecteur local)'],
 ];
 
 /** Clés et secrets : jamais livrés (même motifs que scripts/verify-package.mjs pour l'application empaquetée). */

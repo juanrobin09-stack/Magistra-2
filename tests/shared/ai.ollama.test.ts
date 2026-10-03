@@ -417,6 +417,19 @@ describe('OllamaProvider.preload — chargement du modèle sans génération', (
     expect(PRELOAD_TIMEOUT_MS).toBe(600_000);
   });
 
+  it('durée de chargement annoncée par le moteur (load_duration, en nanosecondes) rendue en millisecondes', async () => {
+    const withDuration = () => jsonResponse({ model: 'ministral-3:14b', message: { role: 'assistant', content: '' }, done: true, done_reason: 'load', total_duration: 4_300_000_000, load_duration: 4_200_000_000 });
+    expect(await localProvider(mockFetch(() => withDuration())).preload()).toEqual({ loadMs: 4_200 });
+  });
+
+  it('sans durée, ou durée inexploitable : aucun résultat (jamais une valeur inventée)', async () => {
+    expect(await localProvider(mockFetch(() => loaded())).preload()).toBeUndefined();
+    for (const load_duration of [-1, 'long', null, Number.NaN]) {
+      const odd = () => jsonResponse({ done: true, done_reason: 'load', load_duration });
+      expect(await localProvider(mockFetch(() => odd())).preload(), String(load_duration)).toBeUndefined();
+    }
+  });
+
   it('serveur qui répond par un flux (faux Ollama) : la première ligne suffit, la connexion est libérée', async () => {
     const body = streamBody([ollamaLine('Un')], { hang: true });
     const fetchImpl = mockFetch(() => streamResponse(body, 'application/x-ndjson'));

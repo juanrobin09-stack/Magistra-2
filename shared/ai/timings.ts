@@ -149,6 +149,9 @@ function placementOf(sizeBytes: number, sizeVramBytes: number, contextTokens: nu
  * l'entrée du modèle demandé (même nom, « :latest » implicite) donne « gpu » (tout en mémoire de carte graphique),
  * « cpu » (rien en mémoire de carte graphique, ou champ absent) ou « mixed ». undefined si le modèle n'est pas listé
  * ou si les tailles sont inexploitables.
+ * Limite du moteur : sur les processeurs à instructions AMX (Xeon récents), Ollama compte les poids réorganisés pour
+ * ces instructions dans size_vram ; un calcul entièrement sur processeur y apparaît alors « mixed ». Ces processeurs sont
+ * absents des ordinateurs d'enseignants courants ; l'affichage reste donc prudent (« d'après le moteur »).
  */
 export function placementFromPs(psBody: unknown, model: string): EnginePlacement | undefined {
   const body = record(psBody);

@@ -25,9 +25,23 @@ const LOADED_MS = 500;
 /** En dessous, une vitesse en jetons par seconde ne veut rien dire (quelques jetons : la durée est celle du démarrage). */
 const MIN_TOKENS_FOR_SPEED = 16;
 
+/** Valeur de la ligne « Chargement du modèle » : durée réelle du chargement et part que l'enseignant a attendue. */
+function loadingValue(loadedMs: number | undefined, waitedMs: number | undefined): string {
+  const waited = waitedMs ?? 0;
+  const loaded = Math.max(loadedMs ?? 0, waited);
+  if (loaded < LOADED_MS) return 'aucune attente (modèle déjà en mémoire)';
+  // Le chargement a commencé avec la préparation de la demande : la part recouverte n'a pas été attendue.
+  if (waited + LOADED_MS <= loaded) {
+    return waited < LOADED_MS
+      ? `${formatDuration(loaded)}, sans attente (pendant la préparation de la demande)`
+      : `${formatDuration(loaded)}, dont ${formatDuration(waited)} d’attente (le reste pendant la préparation de la demande)`;
+  }
+  return formatDuration(loaded);
+}
+
 export const CPU_EXPLANATION = "Cet ordinateur calcule avec le processeur : la rédaction est plus lente qu'avec une carte graphique compatible.";
 export const MIXED_EXPLANATION =
-  "Le modèle ne tient qu'en partie dans la mémoire de la carte graphique : une partie du calcul se fait sur le processeur, ce qui ralentit.";
+  "D'après le moteur, le modèle ne tient qu'en partie dans la mémoire de la carte graphique : une partie du calcul se fait sur le processeur, ce qui ralentit.";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -108,12 +122,15 @@ export function speedView(metrics: unknown): SpeedView | undefined {
   const firstWordMs = duration(m.firstWordMs);
   const prepMs = duration(m.prepMs);
   const waitMs = duration(m.waitModelMs);
+  const preloadLoadMs = duration(m.preloadLoadMs);
 
   const rows: SpeedRow[] = [];
   if (prepMs !== undefined && prepMs >= NOTICEABLE_MS) rows.push({ label: 'Préparation de la demande', value: formatDuration(prepMs) });
-  if (engine.loadMs !== undefined || waitMs !== undefined) {
-    const loadMs = (engine.loadMs ?? 0) + (waitMs ?? 0);
-    rows.push({ label: 'Chargement du modèle', value: loadMs < LOADED_MS ? 'aucune attente (modèle déjà en mémoire)' : formatDuration(loadMs) });
+  if (engine.loadMs !== undefined || waitMs !== undefined || preloadLoadMs !== undefined) {
+    const engineLoad = engine.loadMs ?? 0;
+    const loadedMs = engine.loadMs !== undefined || preloadLoadMs !== undefined ? engineLoad + (preloadLoadMs ?? 0) : undefined;
+    const waitedMs = engine.loadMs !== undefined || waitMs !== undefined ? engineLoad + (waitMs ?? 0) : undefined;
+    rows.push({ label: 'Chargement du modèle', value: loadingValue(loadedMs, waitedMs) });
   }
   // Jetons déjà en mémoire d'une requête précédente : non relus, donc hors du nombre de jetons lus et de la vitesse.
   const cached = engine.promptTokens !== undefined && engine.promptCachedTokens !== undefined && engine.promptCachedTokens <= engine.promptTokens

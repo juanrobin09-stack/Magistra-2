@@ -291,6 +291,7 @@ interface MetricsInput {
   totalMs: number;
   prepMs?: number;
   waitModelMs?: number;
+  preloadLoadMs?: number;
   firstWordMs?: number;
   usage?: Usage;
   promptTokens: number;
@@ -309,6 +310,7 @@ function buildMetrics(provider: AIProvider, m: MetricsInput): GenerationMetrics 
     totalMs: m.totalMs,
     ...(m.prepMs !== undefined ? { prepMs: m.prepMs } : {}),
     ...(m.waitModelMs !== undefined ? { waitModelMs: m.waitModelMs } : {}),
+    ...(provider.local && m.preloadLoadMs !== undefined ? { preloadLoadMs: m.preloadLoadMs } : {}),
     ...(m.firstWordMs !== undefined ? { firstWordMs: m.firstWordMs } : {}),
     ...(engine ? { engine } : {}),
     ...(placement ? { placement } : {}),
@@ -355,8 +357,13 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     // du premier mot ne le compte plus. Un échec est repris plus bas ; jamais de rejet non géré si la recherche, ou
     // « Arrêter », met fin à la génération avant.
     let preload: Promise<void> | undefined;
+    let preloadLoadMs: number | undefined;
     if (deps.preloadModel && typeof provider.preload === 'function') {
-      preload = Promise.resolve().then(() => provider.preload!({ signal }));
+      preload = Promise.resolve()
+        .then(() => provider.preload!({ signal }))
+        .then(result => {
+          if (result && typeof result.loadMs === 'number') preloadLoadMs = result.loadMs;
+        });
       preload.catch(() => {});
     }
     const toolUsesResearch = RESEARCH_TOOLS.has(req.type);
@@ -559,7 +566,7 @@ export async function* runGeneration(req: GenerationRequest, deps: PipelineDeps)
     }
 
     const metrics = buildMetrics(provider, {
-      totalMs: elapsedSince(startedAt), prepMs, waitModelMs, firstWordMs, usage, promptTokens, outputBudgetTokens: outputTokens,
+      totalMs: elapsedSince(startedAt), prepMs, waitModelMs, preloadLoadMs, firstWordMs, usage, promptTokens, outputBudgetTokens: outputTokens,
     });
     yield {
       type: 'done', content: final.content, sources: final.used, truncated, internetUsed, saved, id, model: provider.model, metrics,

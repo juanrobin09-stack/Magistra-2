@@ -66,6 +66,11 @@ export interface HealthStatus {
   warning?: { code: ErrorCode; message: string };
 }
 
+/** Ce que le moteur annonce à la fin d'un préchargement : durée de chargement du modèle, en millisecondes. */
+export interface PreloadResult {
+  loadMs?: number;
+}
+
 export interface PreloadOptions {
   signal?: AbortSignal;
   /** Délai maximal du chargement (défaut propre au fournisseur, 10 min pour Ollama). */
@@ -94,7 +99,7 @@ export interface AIProvider {
    * premier mot ne compte plus le chargement. Lève une MagistraError (MODEL_NOT_INSTALLED, OUT_OF_MEMORY…).
    * La pipeline l'appelle si PipelineDeps.preloadModel est vrai, avec le statut « Chargement du modèle… ».
    */
-  preload?(options?: PreloadOptions): Promise<void>;
+  preload?(options?: PreloadOptions): Promise<PreloadResult | void>;
 }
 
 /** Implémentation générique de generate() à partir de stream(). */

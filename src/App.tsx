@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ClerkFailed, ClerkLoaded, ClerkLoading, ClerkProvider, RedirectToSignIn, useAuth } from '@clerk/react';
 import AppIntro from '@/components/AppIntro';
-import ErrorBoundary from '@/components/ErrorBoundary';
+import ErrorBoundary from '@/components/AppErrorBoundary';
 import { AuthUnavailable, FullPageSpinner, ProfileGuard } from '@/components/guards';
 import { PersonalAccessGate } from '@/components/PersonalAccess';
 import ProfileCacheCleaner from '@/components/ProfileCacheCleaner';

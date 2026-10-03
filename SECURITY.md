@@ -43,7 +43,7 @@ Hors périmètre : failles des services tiers eux-mêmes (Clerk, Supabase, Verce
 
 ## Ce que Magistra fait pour votre sécurité
 
-- Le **site vitrine** n'a ni compte, ni base de données, ni clé d'IA : ses deux fonctions publiques ne lisent que le dépôt des versions et, facultativement, un jeton GitHub en lecture seule, qui n'est envoyé qu'à `api.github.com` (jamais au navigateur ni aux journaux). Sa politique de sécurité du contenu n'autorise que le site lui-même, et aucun script en ligne.
+- Le **site vitrine** n'a ni compte, ni base de données, ni clé d'IA : ses deux fonctions publiques ne lisent que le dépôt des versions et, facultativement, un jeton GitHub en lecture seule, qui n'est envoyé qu'à `api.github.com` (jamais au navigateur ni aux journaux). Sa politique de sécurité du contenu n'autorise que le site lui-même (et des images et polices `data:`), aucun script en ligne ni domaine tiers ; seuls les styles en ligne sont tolérés.
 - Dans l'**hébergement personnel avancé**, la **clé de l'IA** (`AI_API_KEY`) et la clé « service_role » de Supabase restent sur le serveur : jamais dans le navigateur ni dans l'application Windows.
 - Le **connecteur local** n'écoute que sur l'adresse de bouclage (`127.0.0.1`), refuse toute origine ou tout hôte inattendu, et n'accepte que cinq opérations Magistra, après l'accord de l'enseignant.
 - L'application Windows durcit Electron (fusibles : pas de `runAsNode`, chargement depuis l'archive intègre uniquement ; isolation du contexte et bac à sable). La CI vérifie ces réglages sur le paquet construit.

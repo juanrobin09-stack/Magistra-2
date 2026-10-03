@@ -64,7 +64,7 @@ describe('speedView — texte des mesures', () => {
     const view = speedView({ ...METRICS, placement: { processor: 'mixed', gpuPercent: 40, sizeBytes: 1_000, sizeVramBytes: 400 } });
     expect(view?.rows.find(r => r.label === 'Calcul')?.value).toBe('partagé : 40 % carte graphique, le reste sur le processeur');
     expect(view?.explanation).toBe(MIXED_EXPLANATION);
-    expect(MIXED_EXPLANATION).toBe("Le modèle ne tient qu'en partie dans la mémoire de la carte graphique : une partie du calcul se fait sur le processeur, ce qui ralentit.");
+    expect(MIXED_EXPLANATION).toBe("D'après le moteur, le modèle ne tient qu'en partie dans la mémoire de la carte graphique : une partie du calcul se fait sur le processeur, ce qui ralentit.");
   });
 
   it('carte graphique : rien à améliorer, donc aucune explication', () => {
@@ -89,6 +89,20 @@ describe('speedView — texte des mesures', () => {
     const view = speedView(withoutPlacement);
     expect(view?.rows.some(r => r.label === 'Calcul')).toBe(false);
     expect(view?.explanation).toBeUndefined();
+  });
+
+  it('chargement fait pendant la préparation de la demande : sa vraie durée, et la part réellement attendue', () => {
+    const loading = (extra: Record<string, unknown>) => speedView({ ...METRICS, ...extra })?.rows.find(r => r.label === 'Chargement du modèle')?.value;
+    expect(loading({ preloadLoadMs: 14_000, waitModelMs: 0, engine: { ...METRICS.engine, loadMs: 12 } }))
+      .toBe('14 s, sans attente (pendant la préparation de la demande)');
+    expect(loading({ preloadLoadMs: 14_000, waitModelMs: 3_000, engine: { ...METRICS.engine, loadMs: 12 } }))
+      .toBe('14 s, dont 3 s d’attente (le reste pendant la préparation de la demande)');
+    // Aucun recouvrement : toute la durée a été attendue.
+    expect(loading({ preloadLoadMs: 6_000, waitModelMs: 6_000, engine: { ...METRICS.engine, loadMs: 0 } })).toBe('6 s');
+    // Modèle déjà chargé : rien à attendre, même si le moteur annonce quelques millisecondes.
+    expect(loading({ preloadLoadMs: 40, waitModelMs: 0, engine: { ...METRICS.engine, loadMs: 12 } })).toBe('aucune attente (modèle déjà en mémoire)');
+    // Valeur invalide : ignorée comme les autres mesures.
+    expect(loading({ preloadLoadMs: Number.NaN, waitModelMs: 0, engine: { ...METRICS.engine, loadMs: 12 } })).toBe('aucune attente (modèle déjà en mémoire)');
   });
 
   it('modèle déjà en mémoire : « aucune attente » plutôt que 0 s', () => {

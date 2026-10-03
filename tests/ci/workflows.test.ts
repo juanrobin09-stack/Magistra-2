@@ -392,6 +392,11 @@ describe('ci.yml : site vitrine construit et vérifié à chaque envoi', () => {
     expectInOrder(checks, ['run: npx vite build', 'run: npm run build:site', 'run: npm run verify:site', 'run: npm run build:server']);
   });
 
+  it('la politique de sécurité du contenu est contrôlée sur la page réelle du site construit (le test ignoré par « npm test » est rejoué)', () => {
+    const checks = job(ci, 'checks');
+    expectInOrder(checks, ['run: npm run build:site', 'run: npx vitest run tests/server/deploy.test.ts tests/site/siteBuild.test.ts', 'run: npm run build:server']);
+  });
+
   it('job « E2E web (démo) » : construit aussi le site, puis lance les projets « web » et « site »', () => {
     const e2e = job(ci, 'e2e-web');
     expect(e2e).toContain('name: E2E web (démo)');
@@ -436,9 +441,11 @@ describe('README : attribution, architecture et déploiement du site vitrine', (
     const beforeCleanup = deploy.slice(0, deploy.indexOf('### Nettoyage de Vercel'));
     expect(deploy).toContain('**aucune clé Clerk, Supabase ni IA**');
     expect(beforeCleanup).not.toMatch(/\b(?:CLERK|SUPABASE|AI)_[A-Z_]+|NODEJS_HELPERS|VITE_CLERK/);
-    for (const name of [...Object.values(LEGAL_ENV_NAMES), 'VITE_LEGAL_VALIDATED', 'VITE_AUTHOR_PROFILE_URL', 'GITHUB_TOKEN', 'MAGISTRA_RELEASES_REPO']) {
+    // La région de la base de données n'existe que pour l'hébergement personnel avec base distante : pas sur le site vitrine.
+    for (const name of [...Object.values(LEGAL_ENV_NAMES).filter(n => n !== 'VITE_LEGAL_DATA_REGION'), 'VITE_LEGAL_VALIDATED', 'VITE_AUTHOR_PROFILE_URL', 'GITHUB_TOKEN', 'MAGISTRA_RELEASES_REPO']) {
       expect(beforeCleanup, name).toContain(`\`${name}\``);
     }
+    expect(beforeCleanup).not.toContain('VITE_LEGAL_DATA_REGION');
     for (const fragment of ['`npm run build:site`', '`dist-site/`', '`api/windows-release.ts`', '`api/download.ts`', 'sans `preload`']) expect(deploy, fragment).toContain(fragment);
     // Les fonctions du site fonctionnent sans autre variable : le README le dit.
     expect(deploy).toMatch(/fonctionnent sans aucune autre variable/);

@@ -47,6 +47,8 @@ interface WindowsDownloadPanelProps {
    */
   mode: PageMode;
   afterDownload?: AfterDownloadSlot;
+  /** Phrase ajoutée au texte d'introduction de la section publique (fournie par l'appelant, jamais par le panneau). */
+  introExtra?: string;
 }
 
 function Sha256({ value }: { value: string }) {
@@ -134,7 +136,7 @@ function ReleaseFacts({ state, queried }: { state: WindowsReleaseState; queried:
   );
 }
 
-export default function WindowsDownloadPanel({ variant, mode, afterDownload }: WindowsDownloadPanelProps) {
+export default function WindowsDownloadPanel({ variant, mode, afterDownload, introExtra }: WindowsDownloadPanelProps) {
   const queried = mode !== 'local';
   const showcase = mode === 'showcase';
   const release = useWindowsRelease(queried);
@@ -189,8 +191,7 @@ export default function WindowsDownloadPanel({ variant, mode, afterDownload }: W
           </h2>
           <p className="text-sm text-mg-200 mt-3 max-w-xl mx-auto leading-relaxed">
             L’intelligence artificielle de Magistra sur votre ordinateur : gratuite, sans compte, même sans Internet.
-            {/* Seul le site avec comptes peut confier ses générations à l'application (connecteur local). */}
-            {mode === 'web' && ' Depuis ce site, vous pourrez aussi l’utiliser pour vos générations.'}
+            {introExtra}
           </p>
         </div>
         {content}

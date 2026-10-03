@@ -99,6 +99,9 @@ describe('verify-site : code de l’application dans le build', () => {
     ['/api/mode', 'fetch("/api/mode")'],
     ['47831', 'const p=47831'],
     ['localConnector', 'const localConnector={}'],
+    ['/onboarding', 'location.href="/onboarding?edit=1"'],
+    ['Refaire mon profil', 'label:"Refaire mon profil"'],
+    ['Depuis ce site', 'text:"Depuis ce site, vous pourrez"'],
   ];
 
   it('chaque mot interdit de la liste est testé ici', () => {

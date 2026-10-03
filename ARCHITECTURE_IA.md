@@ -373,6 +373,7 @@ Fichier : `server/aiCheck.ts` (compilé à la volée par esbuild ; aussi `node d
 ```bash
 npm run ai:check                                     # serveur autonome : lit .env
 npm run ai:check -- --dev                            # comme npm run dev : .env, .env.local, .env.development
+# serveur de type Vercel hors site public (le site public n'exécute aucune IA) :
 npx vercel env pull --environment=production .env.prod.local && npm run ai:check -- --vercel --env-file .env.prod.local
 ```
 

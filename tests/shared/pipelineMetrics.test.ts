@@ -83,6 +83,24 @@ describe('runGeneration — metrics de l’évènement « done »', () => {
     expect(metrics).toMatchObject({ prepMs: 300, waitModelMs: 700, firstWordMs: 3_000, totalMs: 3_050 });
   });
 
+  it('durée de chargement annoncée au préchargement : jointe aux mesures du moteur de cet ordinateur seulement', async () => {
+    for (const local of [true, false]) {
+      const provider = new MockProvider({ reply: 'Contenu.', local, usage: { timings: TIMINGS } });
+      (provider as MockProvider & { preload?: () => Promise<{ loadMs: number }> }).preload = async () => ({ loadMs: 14_000 });
+      const events = await collect(runGeneration(request(), { provider, preloadModel: true }));
+      const { metrics } = doneOf(events);
+      if (local) expect(metrics?.preloadLoadMs).toBe(14_000);
+      else expect(metrics).not.toHaveProperty('preloadLoadMs');
+    }
+  });
+
+  it('préchargement sans durée annoncée (ou qui échoue de façon passagère) : pas de preloadLoadMs', async () => {
+    const provider = new MockProvider({ reply: 'Contenu.', local: true, usage: { timings: TIMINGS } });
+    (provider as MockProvider & { preload?: () => Promise<void> }).preload = async () => undefined;
+    const { metrics } = doneOf(await collect(runGeneration(request(), { provider, preloadModel: true })));
+    expect(metrics).not.toHaveProperty('preloadLoadMs');
+  });
+
   it('préparation : le temps passé avant « sources » (documents, recherche) est compté à part', async () => {
     const c = clock();
     const fetchImpl = async () => {

@@ -20,7 +20,7 @@ import { personalUnauthenticated } from './personal.js';
 import { sanitizeProfile } from './profile.js';
 import { HISTORY_LIMITS, isStorageFullError, STORAGE_FULL_MESSAGE, type GenerationAdmission, type GenerationStore } from './store.js';
 import { normalizeTimeZone } from './time.js';
-import { fetchLatestWindowsRelease, STABLE_INSTALLER_NAME, windowsReleaseCacheControl } from './windowsRelease.js';
+import { downloadLocation, fetchLatestWindowsRelease, windowsReleaseCacheControl } from './windowsRelease.js';
 
 export type RouteName =
   | 'mode' | 'status' | 'generate' | 'history' | 'generation' | 'windows-release' | 'download' | 'stats' | 'profile' | 'account'
@@ -508,11 +508,7 @@ async function download(deps: ServerDeps): Promise<ApiResult> {
     log: message => deps.log(message),
   });
   const headers = { 'Cache-Control': 'no-store' };
-  if (release.available) return { type: 'redirect', location: release.downloadUrl, headers };
-  if (release.reason === 'unavailable') {
-    return { type: 'redirect', location: `https://github.com/${repo}/releases/latest/download/${STABLE_INSTALLER_NAME}`, headers };
-  }
-  return { type: 'redirect', location: '/#magistra-windows', headers };
+  return { type: 'redirect', location: downloadLocation(release, repo), headers };
 }
 
 /** Webhook Clerk : « user.deleted » → même suppression que DELETE /api/account ; autres évènements ignorés. */

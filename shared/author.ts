@@ -35,7 +35,7 @@ function safeProfileUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const raw = value.trim();
   // eslint-disable-next-line no-control-regex
-  if (!raw || raw.length > MAX_URL_LENGTH || /[\u0000- \u007f]/.test(raw)) return null;
+  if (!raw || raw.length > MAX_URL_LENGTH || /[\u0000-\u0020\u007f]/.test(raw)) return null;
   try {
     const url = new URL(raw);
     if (url.protocol !== 'https:' || url.username || url.password || !url.hostname) return null;

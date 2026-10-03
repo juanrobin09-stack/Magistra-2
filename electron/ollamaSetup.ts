@@ -28,7 +28,7 @@ import {
 import { OllamaClient, OllamaProvider, sameModel, type OllamaModel, type PullProgress } from '../shared/ai/ollama.js';
 import { isOllamaCloudName, isRemoteOllamaModel, ollamaDestination, REMOTE_MODEL_REFUSED } from '../shared/ai/ollamaRemote.js';
 import { providerInfoFor } from '../shared/ai/presets.js';
-import type { AIProvider, ChatOptions, FetchLike, HealthStatus, PreloadOptions, StreamEvent } from '../shared/ai/provider.js';
+import type { AIProvider, ChatOptions, FetchLike, HealthStatus, PreloadOptions, PreloadResult, StreamEvent } from '../shared/ai/provider.js';
 import { networkFailureKind } from '../shared/ai/streams.js';
 import { MagistraError, isMagistraError } from '../shared/errors.js';
 import {
@@ -164,9 +164,9 @@ export class LocalOllamaProvider extends OllamaProvider {
     }
   }
 
-  override async preload(options?: PreloadOptions): Promise<void> {
+  override async preload(options?: PreloadOptions): Promise<PreloadResult | void> {
     try {
-      await super.preload(options);
+      return await super.preload(options);
     } catch (err) {
       throw this.adapt(err);
     }

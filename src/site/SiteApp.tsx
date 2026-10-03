@@ -2,7 +2,7 @@
 //
 // Aucune application dans le navigateur, aucune connexion, aucun compte : ni fournisseur d'exécution, ni service de
 // connexion, ni connecteur local, ni découverte du mode (GET /api/mode). La seule requête du site est la recherche de la
-// dernière version (GET /api/windows-release, faite par le panneau de téléchargement). Les anciennes adresses de
+// dernière version (GET /api/windows-release, faite par le panneau de téléchargement). Les adresses de
 // l'application (/app, /app/…, /onboarding, /setup, /presentation) et toute adresse inconnue reviennent à l'accueil.
 // Les pages sont chargées avec le site (aucun chargement différé) : une version déployée pendant qu'une page est ouverte
 // ne casse aucune navigation, et le site n'écrit rien dans le navigateur.
@@ -14,7 +14,7 @@ import SiteLanding from './SiteLanding';
 
 export default function SiteApp() {
   return (
-    <ErrorBoundary withProfileReset={false}>
+    <ErrorBoundary>
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<SiteLanding />} />

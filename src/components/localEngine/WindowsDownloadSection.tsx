@@ -102,5 +102,7 @@ function AfterDownload({ mode }: { mode: RuntimeMode }) {
 export default function WindowsDownloadSection({ variant, mode }: WindowsDownloadSectionProps) {
   // Site vitrine : rien à connecter, donc rien après le clic.
   const afterDownload = mode === 'showcase' ? undefined : { announcement: AFTER_DOWNLOAD_ANNOUNCEMENT, render: () => <AfterDownload mode={mode} /> };
-  return <WindowsDownloadPanel variant={variant} mode={mode} afterDownload={afterDownload} />;
+  // Seul le site avec comptes peut confier ses générations à l'application (connecteur local).
+  const introExtra = mode === 'web' ? ' Depuis ce site, vous pourrez aussi l’utiliser pour vos générations.' : undefined;
+  return <WindowsDownloadPanel variant={variant} mode={mode} afterDownload={afterDownload} introExtra={introExtra} />;
 }
