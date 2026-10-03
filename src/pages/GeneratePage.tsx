@@ -15,7 +15,7 @@
 // (erreur précise si l'IA n'est pas prête) : jamais d'exemple silencieux.
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { useLocation, useNavigationType, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigationType, useSearchParams } from 'react-router-dom';
 import { Info, LayoutGrid, Loader2, Settings2, Sparkles } from 'lucide-react';
 import { getToolInfo, isTypeContenu, TOOL_GROUPS } from '@shared/catalog';
 import { toMagistraError } from '@shared/errors';
@@ -96,6 +96,10 @@ export default function GeneratePage() {
   const [showErrors, setShowErrors] = useState(false);
   const [submitNotice, setSubmitNotice] = useState<string | null>(null);
   const [chosenMode, setChosenMode] = useState<ResearchMode | null>(reused?.researchMode ?? null);
+  // Formulaire de la séquence d'où l'on part pour « Développer une séance » : « Développer » remplace tout le formulaire,
+  // et le retour à « Séquence » (bouton Précédent du navigateur, barre latérale) le retrouve tel quel plutôt que rempli des
+  // valeurs de la fiche. En mémoire de la page seulement : ni l'adresse, ni le stockage du navigateur.
+  const [departure, setDeparture] = useState<{ form: GenerateForm; chosenMode: ResearchMode | null } | null>(null);
 
   // Nouvelle demande à reprendre alors que la page est déjà affichée (« Développer une séance » sous le plan, qui reste
   // sur « Générer ») : le formulaire est rempli à nouveau et la page revient en haut. Pas au retour arrière du navigateur
@@ -108,6 +112,8 @@ export default function GeneratePage() {
     setSeenReuse(reuseKey);
     const next = navigationType === 'POP' ? null : reusedFromState(location.state, profile);
     if (next) {
+      // Départ de la séquence : son formulaire est gardé (une seconde séance développée depuis la fiche ne l'écrase pas).
+      if (form.type === 'sequence') setDeparture({ form, chosenMode });
       setReused(next);
       setForm(next.form);
       setChosenMode(next.researchMode);
@@ -143,7 +149,14 @@ export default function GeneratePage() {
   if (lastUrlType !== urlType) {
     setLastUrlType(urlType);
     if (isTypeContenu(urlType) && urlType !== form.type) {
-      setForm(f => ({ ...f, type: urlType }));
+      if (urlType === 'sequence' && departure) {
+        // Retour à la séquence après « Développer une séance » : son formulaire, pas celui de la fiche.
+        setForm(departure.form);
+        setChosenMode(departure.chosenMode);
+        setDeparture(null);
+      } else {
+        setForm(f => ({ ...f, type: urlType }));
+      }
       setShowErrors(false);
       setSubmitNotice(null);
     }
@@ -459,6 +472,14 @@ export default function GeneratePage() {
               <ul className="mt-1.5 list-disc pl-5 space-y-0.5 text-mg-200 [overflow-wrap:anywhere]">
                 {reused.notes.map(note => <li key={note}>{note}</li>)}
               </ul>
+            )}
+            {/* Séance préparée à partir d'un plan enregistré : retour au plan (jamais de lien sans plan enregistré). */}
+            {reused.planId && (
+              <p className="mt-2">
+                <Link to={`/app/history?id=${encodeURIComponent(reused.planId)}`} className={`text-accent hover:underline rounded ${FOCUS_RING}`}>
+                  Revenir au plan
+                </Link>
+              </p>
             )}
           </div>
         )}

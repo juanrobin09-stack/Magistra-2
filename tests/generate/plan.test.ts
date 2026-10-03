@@ -220,6 +220,11 @@ describe('parsePlan — entrées démesurées (jamais de lenteur)', () => {
       '\n'.repeat(big),
       '| \n'.repeat(big / 3),
       `${'| N° | Titre |\n|---|---|\n| x | y |\n\n'.repeat(big / 40)}`,
+      // Milliers de tableaux valides (tous lus : le meilleur est choisi), de renvois en listes de numéros, de numéros démesurés.
+      `${'| N° | Titre |\n|---|---|\n| 1 | y |\n| 2 | z |\n\n'.repeat(big / 50)}`,
+      `${`| Séance | Compétence |\n|---|---|\n| ${'1, '.repeat(190)}| y |\n\n`.repeat(big / 600)}`,
+      `${'| Séance | Titre |\n|---|---|\n| 365 | y |\n| 3 et 5 | z |\n\n'.repeat(big / 55)}`,
+      `| N° | Titre |\n|---|---|\n${'| 1-2 ; 3-4 ; 5-6 ; | y |\n'.repeat(big / 25)}`,
       `<br>`.repeat(big / 4),
       `**${'a'.repeat(big)}`,
     ];
@@ -321,7 +326,7 @@ describe('buildDevelopPrefill — demande préparée pour l’outil « fiche de 
     expect(consignes).toBe(
       'Séance 2 sur 4 d\'une séquence « La Révolution française ». '
       + 'Objectifs et problématique de la séquence : objectifs : Situer les grandes étapes de la Révolution ; Comprendre la fin de l\'Ancien Régime ; Analyser des documents ; '
-      + 'problématique : Comment la Révolution française transforme-t-elle la société et le pouvoir en France ?. '
+      + 'problématique : Comment la Révolution française transforme-t-elle la société et le pouvoir en France ? '
       + 'Ligne du plan : Titre : 1789 : la prise de la Bastille ; Objectif : Expliquer les causes de la Révolution ; Activités : Frise chronologique ; Durée : 55 min. '
       + 'Séance précédente : séance 1 — L\'Ancien Régime. Séance suivante : séance 3 — La fin de la monarchie. Respecte ce plan.',
     );
@@ -335,9 +340,15 @@ describe('buildDevelopPrefill — demande préparée pour l’outil « fiche de 
     expect(first.startsWith('Séance 1 sur 4')).toBe(true);
   });
 
-  it('sans objectifs ni problématique lisibles : objectifs de l’enseignant, sinon « non précisés dans le plan »', () => {
+  it('sans objectifs ni problématique lisibles : objectifs de l’enseignant, sinon la phrase est omise (jamais « non précisés »)', () => {
     const bare = readPlan(['| N° | Titre |', '|---|---|', row('1', 'A'), row('2', 'B')].join('\n'))!;
-    expect(buildDevelopPrefill(ORIGIN, bare, 0)!.reuse.params!.consignes).toContain('Objectifs et problématique de la séquence : non précisés dans le plan.');
+    const consignes = buildDevelopPrefill(ORIGIN, bare, 0)!.reuse.params!.consignes as string;
+    expect(consignes).not.toContain('Objectifs et problématique');
+    expect(consignes).not.toMatch(/non précis/i);
+    expect(consignes).toBe(
+      'Séance 1 sur 2 d\'une séquence « La Révolution française ». Ligne du plan : Titre : A. '
+      + 'Séance précédente : aucune (première séance de la séquence). Séance suivante : séance 2 — B. Respecte ce plan.',
+    );
     const withTeacher = buildDevelopPrefill({ ...ORIGIN, objectifs: 'Maîtriser la chronologie' }, bare, 0)!;
     expect(withTeacher.reuse.params!.consignes).toContain('Objectifs et problématique de la séquence : objectifs : Maîtriser la chronologie.');
     // Pas de colonne « objectif » : le champ « objectifs » du formulaire reste vide.

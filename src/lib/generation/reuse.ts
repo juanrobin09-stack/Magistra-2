@@ -24,6 +24,8 @@ export interface ReusedRequest {
   notes: string[];
   /** Rappel affiché à la place de « Demande reprise depuis l'historique » (séance préparée à partir d'un plan). */
   notice?: string;
+  /** Plan enregistré dans l'historique d'où vient la demande (« Revenir au plan »), s'il l'est. */
+  planId?: string;
 }
 
 /**
@@ -35,6 +37,8 @@ export interface ReuseState {
   reuse?: ReusableRecord;
   /** Phrase de rappel propre à l'origine de la demande (facultative). */
   reuseNotice?: string;
+  /** Identifiant, dans l'historique, du plan d'où vient la demande (facultatif : plan non enregistré). */
+  planId?: string;
 }
 
 function isReusableRecord(value: unknown): value is ReusableRecord {
@@ -47,10 +51,14 @@ function isReusableRecord(value: unknown): value is ReusableRecord {
 export function reusedFromState(state: unknown, profile: TeacherProfile | null | undefined): ReusedRequest | null {
   const reuse = typeof state === 'object' && state !== null ? (state as ReuseState).reuse : undefined;
   if (!isReusableRecord(reuse)) return null;
-  const notice = (state as ReuseState).reuseNotice;
+  const { reuseNotice: notice, planId } = state as ReuseState;
   try {
     const reused = formFromRecord(reuse, profile);
-    return typeof notice === 'string' && notice.trim() ? { ...reused, notice: notice.slice(0, 500) } : reused;
+    return {
+      ...reused,
+      ...(typeof notice === 'string' && notice.trim() ? { notice: notice.slice(0, 500) } : {}),
+      ...(typeof planId === 'string' && planId !== '' && planId.length <= 200 ? { planId } : {}),
+    };
   } catch {
     return null;
   }

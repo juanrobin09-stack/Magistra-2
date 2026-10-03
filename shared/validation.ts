@@ -48,12 +48,17 @@ const BESOINS: BesoinParticulier[] = BESOINS_PARTICULIERS.map(b => b.value);
 /** Identifiant de format enregistré avec une génération (liste ouverte : une application plus récente peut en ajouter). */
 const MODALITE_ID = /^[a-z][a-z_]{0,39}$/;
 
-/** Retire les caractères de contrôle invisibles (sauf tabulation et retours à la ligne). */
+/**
+ * Retire les caractères de contrôle invisibles (sauf tabulation et retours à la ligne) et les demi-paires de substitution
+ * isolées (un texte coupé au milieu d'un emoji : JSON refusé par certains fournisseurs d'IA, U+FFFD après un aller-retour
+ * UTF-8). Une paire complète (« ch » de deux unités) est conservée.
+ */
 function stripControlChars(value: string): string {
   let out = '';
   for (const ch of value) {
     const code = ch.charCodeAt(0);
     if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) continue;
+    if (ch.length === 1 && code >= 0xd800 && code <= 0xdfff) continue;
     out += ch;
   }
   return out;

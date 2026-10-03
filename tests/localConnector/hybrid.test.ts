@@ -13,9 +13,10 @@ import { resetEngineChoiceMemory, setEngineChoice } from '@/lib/localConnector/e
 import { MemoryPairingStore } from '@/lib/localConnector/pairingStore';
 import type { LoopbackPermission } from '@/lib/localConnector/permission';
 import {
-  appSupportsToolOptions, HybridGenerationClient, ignoredToolOptions, ignoredToolOptionsMessage, localAppTooOldMessage,
+  appSupportsToolOption, appSupportsToolOptions, HybridGenerationClient, ignoredToolOptions, ignoredToolOptionsMessage, localAppTooOldMessage,
   LOCAL_NEEDS_PERMISSION_MESSAGE, LOCAL_NOT_CONNECTED_MESSAGE, LOCAL_PRIVACY_MESSAGE, LOCAL_SAVE_FAILED_MESSAGE, localCapabilities,
-  recentMatiere, requestedToolOptions, substitutedRequestMessage, TOOL_OPTIONS_MIN_APP_VERSION,
+  PLAN_FIRST_MIN_APP_VERSION, recentMatiere, requestedToolOptions, substitutedRequestMessage, TOOL_OPTIONS_MIN_APP_VERSION,
+  toolOptionMinVersion,
 } from '@/lib/runtime/hybrid';
 import type { GenerationClient } from '@/lib/runtime/types';
 import { ApiDataStore } from '@/lib/runtime/web';
@@ -643,18 +644,47 @@ describe('options des outils et version de l’application Windows (protocole in
     expect(requestedToolOptions({ ...request, planSeulement: false })).toEqual(['nombreSeances']);
     expect(ignoredToolOptions(request, { researchMode: 'documents', nombreSeances: 6 })).toEqual(['planSeulement']);
     expect(ignoredToolOptions(request, { researchMode: 'documents', nombreSeances: 6, planSeulement: true })).toEqual([]);
-    // Option plus récente que les options des outils : le message demande la dernière version, jamais « 2.0.3 ».
-    for (const message of [ignoredToolOptionsMessage(['planSeulement']), localAppTooOldMessage(['planSeulement'])]) {
-      expect(message).toContain("plan d'abord");
-      expect(message).toContain('la dernière version de Magistra pour Windows');
-      expect(message).not.toContain(TOOL_OPTIONS_MIN_APP_VERSION);
-    }
+  });
+
+  it('« plan d’abord » : version minimale PROPRE à l’option (2.0.4), messages « 2.0.4 ou plus récente » exacts', () => {
+    expect(PLAN_FIRST_MIN_APP_VERSION).toBe('2.0.4');
+    expect(toolOptionMinVersion('planSeulement')).toBe('2.0.4');
+    expect(toolOptionMinVersion('nombreSeances')).toBe(TOOL_OPTIONS_MIN_APP_VERSION);
+    expect(toolOptionMinVersion('ton')).toBe('2.0.3');
+
     expect(ignoredToolOptionsMessage(['planSeulement'])).toBe(
-      "Votre choix (plan d'abord) n'a pas été appliqué : l'application Magistra de cet ordinateur est trop ancienne. Installez la dernière version de Magistra pour Windows (Réglages → « Magistra pour Windows »), puis relancez la génération.",
+      "Votre choix (plan d'abord) n'a pas été appliqué : l'application Magistra de cet ordinateur est trop ancienne. Installez Magistra pour Windows 2.0.4 ou plus récente (Réglages → « Magistra pour Windows »), puis relancez la génération.",
     );
-    expect(localAppTooOldMessage(['nombreSeances', 'planSeulement'])).toMatch(/^Vos choix \(nombre de séances, plan d'abord\) demandent la dernière version de Magistra pour Windows, et l'application/);
-    // Les autres options gardent leur message (version 2.0.3).
-    expect(ignoredToolOptionsMessage(['nombreSeances'])).toContain(`Magistra pour Windows ${TOOL_OPTIONS_MIN_APP_VERSION} ou plus récente`);
+    expect(localAppTooOldMessage(['planSeulement'])).toBe(
+      "Votre choix (plan d'abord) demande Magistra pour Windows 2.0.4 ou plus récente, et l'application de cet ordinateur est plus ancienne : installez la dernière version (Réglages → « Magistra pour Windows »), puis réessayez, ou générez sans ce choix.",
+    );
+    expect(localAppTooOldMessage(['nombreSeances', 'planSeulement'])).toMatch(/^Vos choix \(nombre de séances, plan d'abord\) demandent Magistra pour Windows 2\.0\.4 ou plus récente, et l'application/);
+    // La plus récente des versions nécessaires l'emporte (matière récente : 2.0.3 ; plan d'abord : 2.0.4).
+    expect(localAppTooOldMessage(['ton', 'planSeulement'], 'temps_espace')).toContain('Magistra pour Windows 2.0.4 ou plus récente');
+    // Les autres choix gardent leur version et leur message (2.0.3).
+    for (const message of [ignoredToolOptionsMessage(['nombreSeances']), localAppTooOldMessage(['nombreSeances']), localAppTooOldMessage([], 'temps_espace')]) {
+      expect(message).toContain(`Magistra pour Windows ${TOOL_OPTIONS_MIN_APP_VERSION} ou plus récente`);
+      expect(message).not.toContain('2.0.4');
+    }
+    // Plus de « dernière version » sans numéro pour cette option.
+    for (const message of [ignoredToolOptionsMessage(['planSeulement']), localAppTooOldMessage(['planSeulement'])]) {
+      expect(message).not.toContain('la dernière version de Magistra pour Windows');
+    }
+  });
+
+  it('applique-t-elle l’option ? version propre à chaque option (2.0.3 applique les options des outils, pas « plan d’abord »)', () => {
+    expect(appSupportsToolOption('2.0.2', 'nombreSeances')).toBe(false);
+    expect(appSupportsToolOption('2.0.3', 'nombreSeances')).toBe(true);
+    expect(appSupportsToolOption('2.0.3', 'planSeulement')).toBe(false);
+    expect(appSupportsToolOption('2.0.3-beta.1', 'planSeulement')).toBe(false);
+    expect(appSupportsToolOption('2.0.4', 'planSeulement')).toBe(true);
+    expect(appSupportsToolOption('2.0.4-beta.1', 'planSeulement')).toBe(true);
+    expect(appSupportsToolOption('2.1.0', 'planSeulement')).toBe(true);
+    expect(appSupportsToolOption(undefined, 'planSeulement')).toBeNull();
+    expect(appSupportsToolOption('dev', 'planSeulement')).toBeNull();
+    // Les options des outils : même règle qu'avant.
+    expect(appSupportsToolOptions('2.0.3')).toBe(true);
+    expect(appSupportsToolOptions('2.0.2')).toBe(false);
   });
 
   describe('séquence « plan d’abord » avec Magistra locale', () => {
@@ -666,17 +696,21 @@ describe('options des outils et version de l’application Windows (protocole in
         ? { ...e, record: { ...RECORD, type: 'sequence', niveau: '4eme', matiere: 'francais', sources: [], params } }
         : e));
     };
-    const runPlan = async (client: GenerationClient) => {
+    const setVersion = (connector: FakeConnector, version: string) => {
+      connector.version = version;
+      connector.status = { ...structuredClone(READY_STATUS), version };
+    };
+    const runPlan = async (client: GenerationClient, request: GenerationRequest = PLAN_REQUEST) => {
       const events: GenerationEvent[] = [];
-      await client.generate(PLAN_REQUEST, e => events.push(e), new AbortController().signal);
+      await client.generate(request, e => events.push(e), new AbortController().signal);
       return events;
     };
+    const APPLIED_PLAN = { researchMode: 'documents', nombreSeances: 6, planSeulement: true };
 
     it('application récente : le champ est envoyé tel quel (protocole inchangé), appliqué : aucun avertissement', async () => {
       const ctx = setup();
-      ctx.connector.version = '2.1.0';
-      ctx.connector.status = { ...structuredClone(READY_STATUS), version: '2.1.0' };
-      planRecord(ctx.connector, { researchMode: 'documents', nombreSeances: 6, planSeulement: true });
+      setVersion(ctx.connector, '2.1.0');
+      planRecord(ctx.connector, APPLIED_PLAN);
       await ctx.controller.connect();
       const events = await runPlan(ctx.client);
       expect(JSON.parse(ctx.connector.calls(CONNECTOR_ROUTES.generate)[0].body)).toMatchObject({ type: 'sequence', nombreSeances: 6, planSeulement: true });
@@ -684,27 +718,79 @@ describe('options des outils et version de l’application Windows (protocole in
       expect(events.at(-1)).toMatchObject({ type: 'done', saved: true, id: 'gen-42' });
     });
 
-    it('application 2.0.4 qui ignore l’option : le contenu est gardé, avertissement « dernière version » avant « done »', async () => {
+    it('application 2.0.4 (et pré-version) : envoyée sans relecture, aucun avertissement', async () => {
+      for (const version of ['2.0.4', '2.0.4-beta.1']) {
+        const ctx = setup();
+        setVersion(ctx.connector, version);
+        planRecord(ctx.connector, APPLIED_PLAN);
+        await ctx.controller.connect();
+        const statusCalls = ctx.connector.calls(CONNECTOR_ROUTES.status).length;
+        const events = await runPlan(ctx.client);
+        expect(ctx.connector.calls(CONNECTOR_ROUTES.generate), version).toHaveLength(1);
+        expect(ctx.connector.calls(CONNECTOR_ROUTES.status), version).toHaveLength(statusCalls);
+        expect(events.filter(e => e.type === 'warning' || e.type === 'error'), version).toEqual([]);
+      }
+    });
+
+    it('application 2.0.3 (celle des options des outils) : « plan d’abord » refusé AVANT l’envoi, « 2.0.4 ou plus récente », seul ce choix est cité', async () => {
       const ctx = setup();
-      ctx.connector.version = '2.0.4';
-      ctx.connector.status = { ...structuredClone(READY_STATUS), version: '2.0.4' };
+      setVersion(ctx.connector, '2.0.3');
+      await ctx.controller.connect();
+      const events = await runPlan(ctx.client);
+      const message = "Votre choix (plan d'abord) demande Magistra pour Windows 2.0.4 ou plus récente, et l'application de cet ordinateur est plus ancienne : installez la dernière version (Réglages → « Magistra pour Windows »), puis réessayez, ou générez sans ce choix.";
+      expect(events).toEqual([{ type: 'error', code: 'CONNECTOR_UNREACHABLE', message, retryable: true }]);
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(0);
+      expect(ctx.saveDraft).not.toHaveBeenCalled();
+      expect(ctx.serverCalls).toEqual([]);
+      // Les autres choix de la même demande (nombre de séances) sont appliqués par 2.0.3 : jamais cités à tort.
+      expect(message).not.toContain('nombre de séances');
+    });
+
+    it('application 2.0.3, demande sans « plan d’abord » : envoyée (les options des outils y sont appliquées)', async () => {
+      const ctx = setup();
+      setVersion(ctx.connector, '2.0.3');
+      planRecord(ctx.connector, { researchMode: 'documents', nombreSeances: 6 });
+      await ctx.controller.connect();
+      const events = await runPlan(ctx.client, { ...PLAN_REQUEST, planSeulement: undefined });
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+      expect(events.filter(e => e.type === 'warning' || e.type === 'error')).toEqual([]);
+    });
+
+    it('application d’avant 2.0.3 : refusée AVANT l’envoi, les deux choix cités, « 2.0.4 ou plus récente »', async () => {
+      const ctx = setup();
+      setVersion(ctx.connector, '2.0.2');
+      await ctx.controller.connect();
+      const events = await runPlan(ctx.client);
+      expect(events).toEqual([{ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: localAppTooOldMessage(['nombreSeances', 'planSeulement']), retryable: true }]);
+      expect(events[0]).toMatchObject({ message: expect.stringContaining("Vos choix (nombre de séances, plan d'abord) demandent Magistra pour Windows 2.0.4 ou plus récente") });
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(0);
+    });
+
+    it('version affichée périmée (application mise à jour de 2.0.3 vers 2.0.4) : relue avant de refuser, puis envoyée', async () => {
+      const ctx = setup();
+      setVersion(ctx.connector, '2.0.3');
+      await ctx.controller.connect();
+      setVersion(ctx.connector, '2.0.4');
+      planRecord(ctx.connector, APPLIED_PLAN);
+      expect(ctx.controller.getSnapshot().appVersion).toBe('2.0.3');
+      const events = await runPlan(ctx.client);
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
+      expect(events.at(-1)).toMatchObject({ type: 'done', saved: true });
+      expect(ctx.controller.getSnapshot()).toMatchObject({ kind: 'connected', appVersion: '2.0.4' });
+    });
+
+    it('version illisible : envoyée ; option absente des paramètres renvoyés → avertissement « 2.0.4 ou plus récente » avant « done », contenu gardé', async () => {
+      const ctx = setup();
+      setVersion(ctx.connector, 'dev');
       planRecord(ctx.connector, { researchMode: 'documents', nombreSeances: 6 });
       await ctx.controller.connect();
       const events = await runPlan(ctx.client);
+      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(1);
       expect(events.slice(-2)).toEqual([
         { type: 'warning', code: 'CONNECTOR_UNREACHABLE', message: ignoredToolOptionsMessage(['planSeulement']) },
         expect.objectContaining({ type: 'done', saved: true, id: 'gen-42' }),
       ]);
-    });
-
-    it('application d’avant 2.0.3 : refusée AVANT l’envoi, sans citer 2.0.3', async () => {
-      const ctx = setup();
-      ctx.connector.version = '2.0.2';
-      ctx.connector.status = { ...structuredClone(READY_STATUS), version: '2.0.2' };
-      await ctx.controller.connect();
-      const events = await runPlan(ctx.client);
-      expect(events).toEqual([{ type: 'error', code: 'CONNECTOR_UNREACHABLE', message: localAppTooOldMessage(['nombreSeances', 'planSeulement']), retryable: true }]);
-      expect(ctx.connector.calls(CONNECTOR_ROUTES.generate)).toHaveLength(0);
+      expect(ignoredToolOptionsMessage(['planSeulement'])).toContain('Installez Magistra pour Windows 2.0.4 ou plus récente');
     });
   });
 });

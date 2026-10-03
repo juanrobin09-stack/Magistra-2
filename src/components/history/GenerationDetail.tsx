@@ -261,14 +261,16 @@ export default function GenerationDetail({
           </button>
         </div>
         <MarkdownView content={content} className="max-w-3xl" />
-        {/* Plan seul (« Commencer par le plan ») : les séances à développer ; tableau illisible : rien. */}
-        {isPlanFirst(record) && (
+        {/* Plan seul (« Commencer par le plan ») : les séances à développer ; tableau illisible : rien. Jamais pour un exemple
+            pré-rédigé de la démonstration (son plan est fixe, sans rapport avec le sujet enregistré). */}
+        {isPlanFirst(record) && !isDemo && (
           <div className="max-w-3xl">
             <DevelopSessions
               key={record.id}
               content={content}
               origin={planOriginFromRecord(record)}
               requested={typeof record.params?.nombreSeances === 'number' ? record.params.nombreSeances : undefined}
+              planId={record.id}
             />
           </div>
         )}

@@ -19,9 +19,11 @@ interface DevelopSessionsProps {
   origin: PlanOrigin;
   /** Nombre de séances demandé, s'il l'a été. */
   requested?: number;
+  /** Identifiant du plan enregistré dans l'historique, s'il l'est : « Revenir au plan » depuis la fiche préparée. */
+  planId?: string;
 }
 
-export default function DevelopSessions({ content, origin, requested }: DevelopSessionsProps) {
+export default function DevelopSessions({ content, origin, requested, planId }: DevelopSessionsProps) {
   const navigate = useNavigate();
   const plan = useMemo(() => readPlan(content, requested), [content, requested]);
   if (!plan) return null;
@@ -30,7 +32,7 @@ export default function DevelopSessions({ content, origin, requested }: DevelopS
     const prefill = buildDevelopPrefill(origin, plan, index);
     if (!prefill) return;
     // Le formulaire voyage dans l'état du routeur (jamais dans l'adresse : taille, historique du navigateur).
-    const state: ReuseState = { reuse: prefill.reuse, reuseNotice: prefill.reuseNotice };
+    const state: ReuseState = { reuse: prefill.reuse, reuseNotice: prefill.reuseNotice, ...(planId ? { planId } : {}) };
     navigate('/app/generate?type=fiche_prep', { state });
   };
 
@@ -48,6 +50,8 @@ export default function DevelopSessions({ content, origin, requested }: DevelopS
         {plan.sessions.map((session, index) => {
           const label = sessionLabel(session);
           const name = `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+          // « la séance 3 », mais « les séances 3 et 4 » (une ligne qui en regroupe plusieurs).
+          const article = session.fin === undefined ? 'la' : 'les';
           return (
             <li key={session.numero} className="flex items-center justify-between gap-3 py-2">
               <p className="min-w-0 text-sm text-mg-100 [overflow-wrap:anywhere]">
@@ -57,7 +61,7 @@ export default function DevelopSessions({ content, origin, requested }: DevelopS
               <button
                 type="button"
                 onClick={() => develop(index)}
-                aria-label={`Développer la ${label}${session.titre ? ` : ${session.titre}` : ''}`}
+                aria-label={`Développer ${article} ${label}${session.titre ? ` : ${session.titre}` : ''}`}
                 className={`btn-secondary shrink-0 text-xs py-1.5 px-3 ${FOCUS_RING}`}
               >
                 Développer <ArrowRight size={13} aria-hidden="true" />

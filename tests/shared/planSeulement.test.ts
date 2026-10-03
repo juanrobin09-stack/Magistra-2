@@ -194,6 +194,17 @@ describe('enregistrement dans l’historique (POST /api/generation) — planSeul
     }
   });
 
+  it('choix voulu : non booléen, « plan d’abord » est IGNORÉ dans une demande (comme « sansCorrige ») mais REFUSÉ dans une génération enregistrée', () => {
+    for (const value of ['true', 'oui', 1, {}, []]) {
+      // Demande : valeur facultative inconnue, ignorée sans erreur (la génération se fait sans cette option).
+      expect(validateGenerationRequest({ ...req(), planSeulement: value }), String(value)).not.toHaveProperty('planSeulement');
+      expect(validateGenerationRequest({ ...req({ type: 'exercices' }), sansCorrige: value }), String(value)).not.toHaveProperty('sansCorrige');
+      // Génération enregistrée : un enregistrement incohérent est refusé (400), jamais corrigé en silence.
+      expect(() => validateGenerationRecordDraft(draft({ planSeulement: value })), String(value)).toThrow(/plan d’abord/);
+      expect(() => validateGenerationRecordDraft(draft({ sansCorrige: value }, 'exercices')), String(value)).toThrow(/sans corrigé/);
+    }
+  });
+
   it('refusé hors de l’outil Séquence', () => {
     for (const type of ['cours', 'fiche_prep', 'exercices', 'evaluation', 'progression'] as TypeContenu[]) {
       expect(() => validateGenerationRecordDraft(draft({ planSeulement: true }, type)), type).toThrow(/plan d’abord/);
@@ -249,6 +260,29 @@ describe('contrôle du nombre de séances — plan d’abord', () => {
 
   it('pas de nombre demandé : rien à comparer', () => {
     expect(checkOutputStructure(req({ planSeulement: true }), plan(rowsOf(3)))).toEqual([]);
+  });
+
+  it('un autre tableau avant le tableau des séances (objectifs « N° | Objectif », matrice de compétences, chronologie) : compte juste', () => {
+    const synoptic = (n: number) => `| N° | Titre | Objectif |\n|---|---|---|\n${rowsOf(n).join('\n')}`;
+    const objectives = '| N° | Objectif |\n|---|---|\n| 1 | Situer |\n| 2 | Comprendre |\n| 3 | Analyser |';
+    const matrix = '| Compétence | Séances concernées |\n|---|---|\n| Lire | 1, 3, 5 |\n| Écrire | 2 et 4 |\n| Compter | 1-2 ; 3-4 |';
+    const timeline = `| N° | Événement | Date |\n|---|---|---|\n${Array.from({ length: 9 }, (_, i) => `| ${i + 1} | Événement ${i + 1} | ${1780 + i} |`).join('\n')}`;
+    for (const before of [objectives, matrix, timeline, `${matrix}\n\n${objectives}\n\n${timeline}`]) {
+      const doc = `# Plan\n\n${before}\n\n## Tableau synoptique\n\n${synoptic(6)}\n\n## Prolongements\n\nVisite.`;
+      expect(checkOutputStructure(planReq(6), doc), before.slice(0, 20)).toEqual([]);
+      // Plan réellement incomplet : l'avertissement compte les lignes du tableau des séances, pas celles de l'autre tableau.
+      expect(checkOutputStructure(planReq(6), `# Plan\n\n${before}\n\n${synoptic(4)}`), before.slice(0, 20)).toEqual([
+        'Le plan compte 4 séances au lieu des 6 demandées : vérifiez-le avant de l’utiliser, ou relancez la génération.',
+      ]);
+    }
+    // Matrice seule : aucun tableau de séances, compte incertain, aucun avertissement.
+    expect(checkOutputStructure(planReq(6), `# Plan\n\n${matrix}`)).toEqual([]);
+  });
+
+  it('un numéro démesuré (« | 365 | A | ») n’est pas une séance : ignoré, jamais un faux avertissement', () => {
+    const doc = (extra: string) => `# Plan\n\n| N° | Titre |\n|---|---|\n| 1 | A |\n| 2 | B |\n${extra}\n`;
+    expect(checkOutputStructure(planReq(2), doc('| 365 | C |'))).toEqual([]);
+    expect(checkOutputStructure(planReq(2), doc('| 61 | C |\n| Séances 59 à 62 | D |'))).toEqual([]);
   });
 
   it('séquence complète (sans l’option) : contrôle inchangé', () => {

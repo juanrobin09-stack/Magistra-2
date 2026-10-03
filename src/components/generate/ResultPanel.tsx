@@ -211,9 +211,16 @@ export default function ResultPanel({ state, mode, store, onStop, onRestart, con
       )}
 
       {/* Plan d'une séquence (« Commencer par le plan ») : les séances à développer ensuite. Jamais pour une autre demande,
-          ni pour un exemple pré-rédigé, ni avant la fin de la génération. */}
-      {state.phase === 'done' && !example && text && req.type === 'sequence' && req.planSeulement === true && (
-        <DevelopSessions key={`plan-${state.runId}`} content={text} origin={planOriginFromRequest(req)} requested={req.nombreSeances} />
+          ni pour un exemple pré-rédigé, ni avant la fin de la génération, ni en démonstration (le « plan » y est un exemple
+          fixe, sans rapport avec le sujet saisi : les séances proposées ne seraient pas celles de l'enseignant). */}
+      {state.phase === 'done' && !example && mode !== 'demo' && text && req.type === 'sequence' && req.planSeulement === true && (
+        <DevelopSessions
+          key={`plan-${state.runId}`}
+          content={text}
+          origin={planOriginFromRequest(req)}
+          requested={req.nombreSeances}
+          planId={save?.saved ? result?.id : undefined}
+        />
       )}
 
       {save && (
