@@ -102,7 +102,7 @@ describe('origines et expéditeur IPC', () => {
       }
     }
     const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8');
-    expect(main).toContain('if (isSafeExternalUrl(url) && !isTrustedUrl(url, origins)) {');
+    expect(main).toContain('if ((isSafeExternalUrl(url) && !isTrustedUrl(url, origins)) || isSafeMailtoUrl(url)) {');
     expect(main.match(/openExternalSafely\(/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
