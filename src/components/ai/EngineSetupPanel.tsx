@@ -153,7 +153,7 @@ function ConsentView({ ai, status, errorMessage, errorHint, cancelled }: {
         <h2 className="text-lg text-white mb-2" style={{ fontFamily: 'var(--font-display)' }}>Installer le moteur IA</h2>
         <p className="text-mg-50">Magistra utilise une intelligence artificielle locale gratuite qui fonctionne sur votre ordinateur.</p>
         <p className="text-sm text-mg-200 mt-2">
-          Pour cela, Magistra doit d'abord installer le moteur IA (Ollama, un logiciel libre et gratuit).
+          Pour cela, Magistra doit d'abord installer le moteur IA (Ollama, un logiciel gratuit).
           Vos documents et vos contenus restent sur cet ordinateur.
         </p>
       </div>

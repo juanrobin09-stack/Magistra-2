@@ -1,7 +1,7 @@
 {
   "appId": "com.futureai.magistra",
   "productName": "Magistra",
-  "copyright": "Copyright © 2026 FutureAI — logiciel libre (licence MIT)",
+  "copyright": "Copyright © 2026 FutureAI",
   "directories": {
     "output": "release",
     "buildResources": "build"
@@ -10,6 +10,7 @@
     "dist-electron/**",
     "dist/**",
     "package.json",
+    "LICENSE",
     "!**/*.map",
     "!node_modules/**"
   ],

@@ -803,7 +803,6 @@ function About({ mode }: { mode: RuntimeMode }) {
       </p>
       {updateBridge && <UpdateCheck bridge={updateBridge} />}
       <p>Assistant pédagogique pour les enseignants, de la maternelle au doctorat.</p>
-      <p>Code source publié sous licence MIT.</p>
       <p>
         Un projet <ExternalAnchor href="https://futurai.space">FutureAI</ExternalAnchor> · Bordeaux
       </p>

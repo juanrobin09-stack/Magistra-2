@@ -70,7 +70,7 @@
     "vite": "^7.3.1",
     "vitest": "^5.0.2"
   },
-  "description": "Magistra — assistant pédagogique IA open source pour les enseignants, de la maternelle au doctorat",
+  "description": "Magistra — assistant pédagogique IA gratuit pour les enseignants, de la maternelle au doctorat",
   "license": "MIT",
   "author": "FutureAI",
   "engines": {

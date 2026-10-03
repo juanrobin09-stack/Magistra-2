@@ -10,7 +10,7 @@ function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
 
 async function getJson<T>(deps: ResearchDeps, url: string, signal: AbortSignal | undefined, timeoutMs: number): Promise<T> {
   const res = await deps.fetch(url, {
-    headers: { Accept: 'application/json', 'User-Agent': 'Magistra/2.0 (outil pedagogique open source)' },
+    headers: { Accept: 'application/json', 'User-Agent': 'Magistra/2.0 (outil pedagogique)' },
     signal: withTimeout(signal, timeoutMs),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

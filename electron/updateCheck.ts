@@ -13,12 +13,12 @@ import { MagistraError } from '../shared/errors.js';
 import type { UpdateCheckResult } from '../shared/ipc.js';
 import { isSafeExternalUrl } from './security.js';
 
-export const RELEASES_API_URL = 'https://api.github.com/repos/juanrobin09-stack/magistra-2/releases/latest';
+export const RELEASES_API_URL = 'https://api.github.com/repos/juanrobin09-stack/magistra-downloads/releases/latest';
 /**
  * Seules pages de version que l'application accepte d'ouvrir. Propriétaire et dépôt sont comparés sans tenir compte de
- * la casse, comme le fait GitHub : l'API renvoie le nom exact du dépôt (« Magistra-2 »).
+ * la casse, comme le fait GitHub : l'API renvoie le nom exact du dépôt (« Magistra-Downloads »).
  */
-export const RELEASES_PAGE_PREFIX = 'https://github.com/juanrobin09-stack/magistra-2/releases/';
+export const RELEASES_PAGE_PREFIX = 'https://github.com/juanrobin09-stack/magistra-downloads/releases/';
 const API_ORIGIN = 'https://api.github.com';
 const TIMEOUT_MS = 10_000;
 const MAX_BYTES = 512 * 1024;
@@ -130,7 +130,7 @@ export async function checkForUpdate(deps: UpdateCheckDeps): Promise<UpdateCheck
   const signal = AbortSignal.timeout(deps.timeoutMs ?? TIMEOUT_MS);
   const headers = {
     Accept: 'application/vnd.github+json',
-    'User-Agent': `Magistra/${formatVersion(current)} (outil pedagogique open source)`,
+    'User-Agent': `Magistra/${formatVersion(current)} (outil pedagogique)`,
   };
 
   let url = RELEASES_API_URL;
