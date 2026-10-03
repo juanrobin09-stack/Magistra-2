@@ -215,7 +215,7 @@ export default function AppLayout() {
               <GraduationCap size={18} className="text-mg-900" aria-hidden="true" />
             </div>
             <span className="text-lg font-semibold tracking-tight text-white" style={{ fontFamily: 'var(--font-display)' }}>
-              Magistra<span className="text-accent">.</span>
+              Magistra<span className="text-gold">.</span>
             </span>
           </Link>
           <button
@@ -325,7 +325,7 @@ export default function AppLayout() {
             <Menu size={20} aria-hidden="true" />
           </button>
           <span className="text-sm font-semibold text-white" style={{ fontFamily: 'var(--font-display)' }}>
-            Magistra<span className="text-accent">.</span>
+            Magistra<span className="text-gold">.</span>
           </span>
           {showUserButton ? <UserButton appearance={{ elements: { avatarBox: 'w-7 h-7' } }} /> : <span className="w-9" aria-hidden="true" />}
         </header>

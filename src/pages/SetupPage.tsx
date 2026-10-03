@@ -40,7 +40,7 @@ export default function SetupPage() {
               <GraduationCap size={20} className="text-mg-900" aria-hidden="true" />
             </div>
             <span className="text-xl font-semibold tracking-tight text-white" style={{ fontFamily: 'var(--font-display)' }}>
-              Magistra<span className="text-accent">.</span>
+              Magistra<span className="text-gold">.</span>
             </span>
           </div>
           <h1 className="text-3xl text-white mb-2" style={{ fontFamily: 'var(--font-display)' }}>

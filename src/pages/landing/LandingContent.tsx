@@ -42,7 +42,7 @@ export default function LandingContent({
               <GraduationCap size={18} className="text-mg-900" aria-hidden="true" />
             </div>
             <span className="text-lg font-semibold tracking-tight text-white" style={{ fontFamily: 'var(--font-display)' }}>
-              Magistra<span className="text-accent">.</span>
+              Magistra<span className="text-gold">.</span>
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -269,7 +269,7 @@ export default function LandingContent({
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <span className="text-sm text-mg-200" style={{ fontFamily: 'var(--font-display)' }}>
-              Magistra<span className="text-accent">.</span>
+              Magistra<span className="text-gold">.</span>
             </span>
           </div>
           <p className="text-xs text-mg-300 text-center">

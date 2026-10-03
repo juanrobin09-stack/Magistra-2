@@ -38,7 +38,7 @@ export function PersonalAccessScreen({ rejected = false }: { rejected?: boolean 
             <GraduationCap size={20} className="text-mg-900" aria-hidden="true" />
           </div>
           <span className="text-xl font-semibold tracking-tight text-white" style={{ fontFamily: 'var(--font-display)' }}>
-            Magistra<span className="text-accent">.</span>
+            Magistra<span className="text-gold">.</span>
           </span>
         </div>
 

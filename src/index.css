@@ -21,6 +21,8 @@
   --color-accent: #c8b6ff;
   --color-accent-bright: #e0d4ff;
   --color-accent-dim: #9b87d4;
+  /* Le point du nom « Magistra. » (accueil, barre latérale, pages légales, animation d'ouverture). */
+  --color-gold: #d4af37;
   --color-success: #6ee7b7;
   --color-warning: #fbbf24;
   --color-danger: #f87171;
@@ -324,7 +326,7 @@
   .intro-word { position: relative; font-size: clamp(3.25rem, 7vw, 5.25rem); line-height: 1; letter-spacing: -0.01em; color: #fff; }
   .intro-letters { display: inline-block; white-space: nowrap; }
   .intro-letter { display: inline-block; animation: introLetter 0.75s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-  .intro-dot { display: inline-block; color: var(--color-accent); animation: introDot 0.55s cubic-bezier(0.3, 1.6, 0.5, 1) 1.45s both; }
+  .intro-dot { display: inline-block; color: var(--color-gold); animation: introDot 0.55s cubic-bezier(0.3, 1.6, 0.5, 1) 1.45s both; }
   .intro-shine {
     position: absolute; inset: 0; white-space: nowrap; pointer-events: none;
     color: transparent; -webkit-background-clip: text; background-clip: text;

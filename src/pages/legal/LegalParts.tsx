@@ -121,7 +121,7 @@ export function LegalShell({ page, info, mode, children }: { page: LegalPageKind
               <GraduationCap size={18} className="text-mg-900" aria-hidden="true" />
             </span>
             <span className="text-lg font-semibold tracking-tight" style={{ fontFamily: 'var(--font-display)' }}>
-              Magistra<span className="text-accent">.</span>
+              Magistra<span className="text-gold">.</span>
             </span>
           </Link>
           <Link to="/" onClick={goBack} className="inline-flex items-center gap-1.5 text-sm text-mg-200 hover:text-white">
