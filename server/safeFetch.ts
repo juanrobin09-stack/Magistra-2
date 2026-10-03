@@ -405,7 +405,7 @@ export function createSafePageFetcher(
           address,
           signal: combined,
           headers: {
-            'User-Agent': 'Magistra/2.0 (outil pedagogique open source)',
+            'User-Agent': 'Magistra/2.0 (outil pedagogique)',
             Accept: 'text/html, text/plain;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Accept-Language': 'fr, en;q=0.5',

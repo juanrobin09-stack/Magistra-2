@@ -1,5 +1,5 @@
 // Vérifie que toutes les dépendances de production ont une licence compatible
-// avec la distribution open source et non lucrative de Magistra (licence MIT).
+// avec la distribution de Magistra et les notices fournies dans le logiciel.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

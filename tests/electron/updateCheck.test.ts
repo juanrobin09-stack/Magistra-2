@@ -29,7 +29,7 @@ import {
   UPDATE_CHECK_UNAVAILABLE_MESSAGE,
 } from '../../electron/updateCheck.js';
 
-const PAGE = 'https://github.com/juanrobin09-stack/magistra-2/releases/tag/v2.1.0';
+const PAGE = 'https://github.com/juanrobin09-stack/magistra-downloads/releases/tag/v2.1.0';
 
 function release(tag: unknown, url: unknown = PAGE): Response {
   return Response.json({ tag_name: tag, html_url: url, name: 'Magistra', assets: [] });
@@ -72,21 +72,21 @@ describe('numéros de version', () => {
 
   it('lien de version : uniquement le dépôt officiel sur github.com', () => {
     expect(releasePageUrl(PAGE)).toBe(PAGE);
-    // Nom exact renvoyé par l'API GitHub (« Magistra-2 ») : propriétaire et dépôt sont insensibles à la casse.
-    const canonical = 'https://github.com/juanrobin09-stack/Magistra-2/releases/tag/v2.1.0';
+    // Nom exact renvoyé par l'API GitHub (« Magistra-Downloads ») : propriétaire et dépôt sont insensibles à la casse.
+    const canonical = 'https://github.com/juanrobin09-stack/Magistra-Downloads/releases/tag/v2.1.0';
     expect(releasePageUrl(canonical)).toBe(canonical);
-    expect(releasePageUrl('https://github.com/JuanRobin09-Stack/MAGISTRA-2/releases/tag/v2.1.0')).not.toBeNull();
+    expect(releasePageUrl('https://github.com/JuanRobin09-Stack/Magistra-Downloads/releases/tag/v2.1.0')).not.toBeNull();
     for (const bad of [
       'https://github.com/juanrobin09-stack/autre-depot/releases/tag/v2.1.0',
       'https://github.com/pirate/magistra-2/releases/tag/v2.1.0',
       'https://github.com/juanrobin09-stack/Magistra-3/releases/tag/v2.1.0',
-      'https://evil.example/juanrobin09-stack/magistra-2/releases/tag/v2.1.0',
-      'http://github.com/juanrobin09-stack/magistra-2/releases/tag/v2.1.0',
-      'https://github.com.evil.example/juanrobin09-stack/magistra-2/releases/',
-      'https://user:pass@github.com/juanrobin09-stack/magistra-2/releases/tag/v2.1.0',
-      'https://github.com/juanrobin09-stack/magistra-2/releases/../../pirate/releases/tag/v9',
-      'https://github.com/juanrobin09-stack/magistra-2/releases/%2e%2e/%2e%2e/pirate/tag/v9',
-      'https://github.com/juanrobin09-stack/magistra-2/releases/',
+      'https://evil.example/juanrobin09-stack/magistra-downloads/releases/tag/v2.1.0',
+      'http://github.com/juanrobin09-stack/magistra-downloads/releases/tag/v2.1.0',
+      'https://github.com.evil.example/juanrobin09-stack/magistra-downloads/releases/',
+      'https://user:pass@github.com/juanrobin09-stack/magistra-downloads/releases/tag/v2.1.0',
+      'https://github.com/juanrobin09-stack/magistra-downloads/releases/../../pirate/releases/tag/v9',
+      'https://github.com/juanrobin09-stack/magistra-downloads/releases/%2e%2e/%2e%2e/pirate/tag/v9',
+      'https://github.com/juanrobin09-stack/magistra-downloads/releases/',
       'javascript:alert(1)',
       42,
     ]) {
@@ -109,7 +109,7 @@ describe('recherche d’une mise à jour', () => {
   });
 
   it('2.0.3 installée : la 2.0.4 publiée est proposée (page de sa version) ; la 2.0.4 installée est à jour ; seule la dernière version publiée est interrogée', async () => {
-    const page = 'https://github.com/juanrobin09-stack/magistra-2/releases/tag/v2.0.4';
+    const page = 'https://github.com/juanrobin09-stack/magistra-downloads/releases/tag/v2.0.4';
     const { fetch, calls } = fakeFetch(() => release('v2.0.4', page));
     await expect(checkForUpdate({ fetch, currentVersion: '2.0.3' })).resolves.toEqual({
       currentVersion: '2.0.3', latestVersion: '2.0.4', upToDate: false, url: page,
@@ -120,7 +120,7 @@ describe('recherche d’une mise à jour', () => {
     // GitHub exclut d'office les brouillons et les préversions de « /releases/latest » : c'est la seule adresse interrogée
     // (jamais la liste des versions, qui les contient).
     expect(calls.map(c => c.url)).toEqual([RELEASES_API_URL, RELEASES_API_URL]);
-    expect(RELEASES_API_URL).toMatch(/^https:\/\/api\.github\.com\/repos\/juanrobin09-stack\/magistra-2\/releases\/latest$/);
+    expect(RELEASES_API_URL).toMatch(/^https:\/\/api\.github\.com\/repos\/juanrobin09-stack\/magistra-downloads\/releases\/latest$/);
   });
 
   it('à jour (même version, ou version publiée plus ancienne) : pas de lien', async () => {

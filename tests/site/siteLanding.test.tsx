@@ -171,7 +171,7 @@ describe('Site vitrine : section « Magistra pour Windows »', () => {
     const { container } = await mountSite();
     const section = container.querySelector<HTMLElement>('section#magistra-windows')!;
     const download = Array.from(section.querySelectorAll<HTMLAnchorElement>('a')).find(a => a.textContent?.includes('Télécharger Magistra pour Windows'))!;
-    expect(download.getAttribute('href')).toBe('https://github.com/juanrobin09-stack/magistra-2/releases/latest/download/Magistra-Setup.exe');
+    expect(download.getAttribute('href')).toBe('https://github.com/juanrobin09-stack/magistra-downloads/releases/latest/download/Magistra-Setup.exe');
     expect(section.textContent).toContain('Les détails de la dernière version (taille, date, empreinte) ne sont pas disponibles pour le moment');
     expect(section.querySelector('[data-testid="windows-version"]')).toBeNull();
   });
@@ -210,7 +210,7 @@ describe('Site vitrine : attribution', () => {
     expect(hero.textContent).toContain(AUTHOR_CREDIT);
     expect(hero.textContent).toContain('un projet FutureAI');
     expect(container.querySelector('#author-title')?.textContent).toBe('Qui est derrière Magistra ?');
-    expect(container.querySelector('footer')?.textContent).toContain(`${AUTHOR_CREDIT} · Un projet FutureAI · Bordeaux, France · Logiciel libre sous licence MIT`);
+    expect(container.querySelector('footer')?.textContent).toContain(`${AUTHOR_CREDIT} · Un projet FutureAI · Bordeaux, France · Application gratuite`);
   });
 
   it('lien de profil : https, nouvel onglet, noopener noreferrer ; tout lien externe est sûr', async () => {

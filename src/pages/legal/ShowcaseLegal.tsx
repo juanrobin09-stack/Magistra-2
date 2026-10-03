@@ -13,7 +13,6 @@ import { AUTHOR_NAME } from '@shared/author';
 import {
   LEGAL_NON_PROFESSIONAL_NOTICE, LEGAL_PATHS, readLegalInfo, showsNonProfessionalNotice, type LegalInfo, type LegalPageKind,
 } from '@/lib/legal';
-import { REPOSITORY_URL } from '@/lib/links';
 import { ContactField, Ext, HostField, LegalShell } from './LegalParts';
 
 const FUTUREAI_URL = 'https://futurai.space';
@@ -57,14 +56,13 @@ function Mentions({ info }: { info: LegalInfo }) {
 
       <h2>Le logiciel Magistra</h2>
       <p>
-        Magistra est un logiciel libre et gratuit, publié sous licence MIT. Son code source est consultable sur{' '}
-        <Ext href={REPOSITORY_URL}>le dépôt public du projet</Ext>. Magistra est conçu et développé par {AUTHOR_NAME}, dans le
+        Magistra est une application pédagogique gratuite, conçue et développée par {AUTHOR_NAME}, dans le
         cadre du projet <Ext href={FUTUREAI_URL}>FutureAI</Ext> (Bordeaux, France).
       </p>
 
       <h2>Propriété intellectuelle</h2>
       <p>
-        Le code de Magistra est distribué selon les termes de la licence MIT. Les contenus que vous générez avec
+        Les conditions de licence applicables au logiciel sont fournies avec l’application. Les contenus que vous générez avec
         l'application restent les vôtres, sous réserve des droits des tiers sur les documents et sources que vous utilisez
         (voir les <Link to={LEGAL_PATHS.cgu}>conditions d'utilisation</Link>).
       </p>
@@ -127,7 +125,7 @@ function Privacy({ info }: { info: LegalInfo }) {
         </li>
         <li>
           <strong>Liens externes</strong> : les liens vers <Ext href={FUTUREAI_URL}>FutureAI</Ext>, vers le profil
-          professionnel de l'auteur et vers le dépôt GitHub du projet quittent ce site ; ces services appliquent leur propre
+          professionnel de l'auteur et vers les pages de téléchargement quittent ce site ; ces services appliquent leur propre
           politique.
         </li>
       </ul>
@@ -186,7 +184,7 @@ function Terms({ info }: { info: LegalInfo }) {
       <h2>1. Objet</h2>
       <p>
         Ce site présente Magistra, un assistant gratuit destiné aux enseignants, et permet de télécharger son application
-        Windows. Utiliser le site, c'est accepter ces conditions. Le logiciel, lui, est publié sous licence MIT.
+        Windows. Utiliser le site, c'est accepter ces conditions. Les conditions de licence applicables au logiciel sont fournies avec l’application.
       </p>
 
       <h2>2. Accès au site</h2>
@@ -211,7 +209,7 @@ function Terms({ info }: { info: LegalInfo }) {
 
       <h2>5. Propriété intellectuelle</h2>
       <p>
-        Le code de Magistra est distribué selon les termes de la licence MIT. Vous conservez vos droits sur les contenus
+        Les conditions de licence applicables au logiciel sont fournies avec l’application. Vous conservez vos droits sur les contenus
         que vous créez avec l'application ; Magistra ne revendique aucun droit sur vos productions.
       </p>
 

@@ -14,15 +14,15 @@ const RELEASE = {
   available: true,
   version: '2.0.0',
   fileName: 'Magistra-Setup-2.0.0.exe',
-  downloadUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases/download/v2.0.0/Magistra-Setup-2.0.0.exe',
+  downloadUrl: 'https://github.com/juanrobin09-stack/magistra-downloads/releases/download/v2.0.0/Magistra-Setup-2.0.0.exe',
   sizeBytes: 89_443_942,
   sha256: 'a3f5c0e1b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6',
   publishedAt: '2026-09-29T12:00:00Z',
-  releaseUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases/tag/v2.0.0',
+  releaseUrl: 'https://github.com/juanrobin09-stack/magistra-downloads/releases/tag/v2.0.0',
   requirements: 'Windows 10 ou 11 (64 bits)',
 } as const;
 
-const DIRECT_DOWNLOAD = 'https://github.com/juanrobin09-stack/magistra-2/releases/latest/download/Magistra-Setup.exe';
+const DIRECT_DOWNLOAD = 'https://github.com/juanrobin09-stack/magistra-downloads/releases/latest/download/Magistra-Setup.exe';
 
 /** Ce qu'aucun bouton, aucun lien ni aucun texte du site ne dit : l'application n'est pas dans le navigateur. */
 const NO_APP_ACCESS = /Commencer|Se connecter|Accéder à Magistra|Mon espace/;
@@ -175,7 +175,7 @@ test('« Qui est derrière Magistra ? » et pied de page : attribution, FutureAI
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Qui est derrière Magistra ?' })).toBeVisible();
   await expect(page.locator('main')).toContainText('Magistra est conçu et développé par Juan Robin, dans le cadre du projet FutureAI');
-  await expect(page.locator('footer')).toContainText('Magistra, créé par Juan Robin · Un projet FutureAI · Bordeaux, France · Logiciel libre sous licence MIT');
+  await expect(page.locator('footer')).toContainText('Magistra, créé par Juan Robin · Un projet FutureAI · Bordeaux, France · Application gratuite');
 });
 
 test('lien de profil : https, nouvel onglet, noopener noreferrer ; tous les liens externes sont sûrs', async ({ page }) => {
@@ -250,7 +250,7 @@ test('« Magistra pour Windows » : aucune version publiée → bouton inactif e
   await page.route('**/api/windows-release', route => route.fulfill({
     status: 200,
     contentType: 'application/json; charset=utf-8',
-    body: JSON.stringify({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases' }),
+    body: JSON.stringify({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-downloads/releases' }),
   }));
   await page.goto('/');
   const section = page.locator('section#magistra-windows');

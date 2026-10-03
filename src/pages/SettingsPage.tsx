@@ -927,7 +927,6 @@ function About({ mode }: { mode: RuntimeMode }) {
       </p>
       {updateBridge && <UpdateCheck bridge={updateBridge} />}
       <p>Assistant pédagogique pour les enseignants, de la maternelle au doctorat.</p>
-      <p>Code source publié sous licence MIT.</p>
       <p>
         Contact : <ContactLink contact={contact} className="text-accent hover:underline underline-offset-2 [overflow-wrap:anywhere]" />
       </p>

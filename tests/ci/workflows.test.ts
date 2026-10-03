@@ -387,7 +387,7 @@ describe('ton des textes sur l’avertissement de Windows : calme et factuel, sa
     expect(why).toContain('Windows SmartScreen peut afficher un avertissement : le fichier n\'est pas encore signé numériquement');
     expect(why).toContain('empreinte SHA-256');
     expect(why).toContain('**Informations complémentaires** → **Exécuter quand même**');
-    expect(why).toContain('[page officielle des versions](https://github.com/juanrobin09-stack/magistra-2/releases)');
+    expect(why).toContain('[page officielle des versions](https://github.com/juanrobin09-stack/magistra-downloads/releases)');
     expect(teacher).not.toMatch(EXCUSE);
     expect(readme).not.toMatch(EXCUSE);
   });
@@ -494,7 +494,7 @@ describe('README : attribution, architecture et déploiement du site vitrine', (
     expect(top).toContain('`VITE_AUTHOR_PROFILE_URL`');
     expect(top).toMatch(/profil professionnel/);
     expect(top).toContain('Un projet [FutureAI](https://futurai.space)');
-    // Aucune biographie inventée : seulement ce que le dépôt établit (auteur, outil libre et gratuit, IA sur l'ordinateur).
+    // Aucune biographie inventée : seulement ce que le dépôt établit (auteur, outil gratuit, IA sur l'ordinateur).
     expect(top).not.toMatch(/\b(ancien|diplômé|ingénieur|docteur|enseignant depuis|passionné|fondateur|CEO)\b/i);
   });
 

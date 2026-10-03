@@ -1002,7 +1002,7 @@ export class AIManager {
     let info: ReleaseInfo | null = null;
     try {
       const res = await this.deps.netFetch(OLLAMA_RELEASE_API, {
-        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Magistra (outil pedagogique open source)' },
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Magistra (outil pedagogique)' },
         signal: AbortSignal.timeout(6_000),
       });
       if (res.ok) {
@@ -1258,7 +1258,7 @@ export class AIManager {
 
     for (let attempt = 0; attempt < 2; attempt++) {
       const start = (await fsp.stat(partPath).catch(() => null))?.size ?? 0;
-      const headers: Record<string, string> = { 'User-Agent': 'Magistra (outil pedagogique open source)' };
+      const headers: Record<string, string> = { 'User-Agent': 'Magistra (outil pedagogique)' };
       if (start > 0) headers.Range = `bytes=${start}-`;
       let res: Response;
       try {

@@ -3,7 +3,7 @@
 // pied de page. FutureAI reste nommé : le visiteur comprend qui porte le projet et dans quel cadre.
 //
 // Rien n'est inventé : la présentation dit seulement ce que le dépôt établit (conçu et développé par Juan Robin, dans le
-// cadre du projet FutureAI ; libre, gratuit, IA qui reste sur l'ordinateur). Le lien de profil vient de authorProfile
+// cadre du projet FutureAI ; gratuit, IA qui reste sur l'ordinateur). Le lien de profil vient de authorProfile
 // (https seulement, repli sur le profil GitHub) ; il s'ouvre dans un nouvel onglet — dans l'application Windows, le
 // gestionnaire d'ouverture d'Electron l'envoie au navigateur du système.
 
@@ -46,7 +46,7 @@ export default function AuthorCredit({ variant, profile = authorProfile(import.m
   if (variant === 'footer') {
     return (
       <span data-testid="author-credit">
-        {AUTHOR_CREDIT} · Un projet <ExternalLink href={FUTUREAI_URL}>FutureAI</ExternalLink> · Bordeaux, France · Logiciel libre sous licence MIT
+        {AUTHOR_CREDIT} · Un projet <ExternalLink href={FUTUREAI_URL}>FutureAI</ExternalLink> · Bordeaux, France · Application gratuite
         {showProfile && (
           <>
             {' · '}
@@ -66,7 +66,7 @@ export default function AuthorCredit({ variant, profile = authorProfile(import.m
         </h2>
         <p className="text-sm sm:text-base text-mg-200 leading-relaxed max-w-xl mx-auto mb-6">
           Magistra est conçu et développé par <strong className="font-semibold text-white">{AUTHOR_NAME}</strong>, dans le cadre du projet{' '}
-          <ExternalLink href={FUTUREAI_URL}>FutureAI</ExternalLink> : un assistant libre et gratuit qui allège la préparation
+          <ExternalLink href={FUTUREAI_URL}>FutureAI</ExternalLink> : un assistant gratuit qui allège la préparation
           des enseignants, avec une IA qui reste sur leur ordinateur.
         </p>
         <a href={profile.url} target="_blank" rel="noopener noreferrer" className="btn-secondary inline-flex">

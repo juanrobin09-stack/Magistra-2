@@ -1,6 +1,6 @@
 # Architecture IA de Magistra
 
-Magistra est un projet **open source (licence MIT) et non lucratif**. Il ne dépend d'**aucune API payante** :
+Magistra est une application **gratuite pour les enseignants**. Il ne dépend d'**aucune API payante** :
 
 - **Application Windows** : une IA **locale**, open weights, qui tourne sur l'ordinateur de l'enseignant via [Ollama](https://ollama.com). Aucune clé, aucun compte, aucune limite d'utilisation.
 - **Site public (Vercel)** : une **vitrine** (§ 20). Il présente Magistra, propose le téléchargement de l'application Windows et publie les pages légales ; il n'exécute **aucune IA**, n'a ni compte ni base de données, et ne contient pas l'application.
@@ -659,7 +659,7 @@ Seules les variables d'identité publiques atteignent le code du site (`VITE_LEG
 
 ### Attribution
 
-`shared/author.ts` : « Magistra, créé par Juan Robin », une courte présentation et un lien vers le profil professionnel (`VITE_AUTHOR_PROFILE_URL`, https seulement, sans identifiants ni jeton, 300 caractères au plus ; à défaut le profil GitHub). Le composant `AuthorCredit` (badge, bloc « Qui est derrière Magistra ? », pied de page) est affiché sur le site, sur l'accueil de l'application et dans Réglages → « À propos ». FutureAI reste nommé (éditeur) ; la licence MIT (`LICENSE`) et le copyright d'`electron-builder.json` n'ont pas été modifiés.
+`shared/author.ts` : « Magistra, créé par Juan Robin », une courte présentation et un lien vers le profil professionnel (`VITE_AUTHOR_PROFILE_URL`, https seulement, sans identifiants ni jeton, 300 caractères au plus ; à défaut le profil GitHub). Le composant `AuthorCredit` (badge, bloc « Qui est derrière Magistra ? », pied de page) est affiché sur le site, sur l'accueil de l'application et dans Réglages → « À propos ». FutureAI reste nommé (éditeur) ; les notices de licence (`LICENSE`) et l’attribution du copyright restent conservées.
 
 ---
 

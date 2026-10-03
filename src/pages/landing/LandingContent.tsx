@@ -68,7 +68,7 @@ export default function LandingContent({
             </h1>
 
             <p className="text-mg-200 text-base sm:text-lg max-w-xl mx-auto mb-8 leading-relaxed">
-              Magistra est un assistant pédagogique open source pour les enseignants, de la maternelle au doctorat,
+              Magistra est un assistant pédagogique gratuit pour les enseignants, de la maternelle au doctorat,
               avec un accent sur le supérieur. Préparez cours, TD, examens et syllabus à partir de vos propres documents,
               avec des sources vérifiables — des brouillons solides, à relire et adapter.
             </p>
@@ -237,7 +237,7 @@ export default function LandingContent({
               Magistra fait partie d'un <em className="text-accent not-italic">mouvement</em>
             </h2>
             <p className="text-sm text-mg-200 leading-relaxed max-w-xl mx-auto mb-6">
-              FutureAI co-construit des outils d’IA open source avec des communautés du monde entier. Notre mission :
+              FutureAI co-construit des outils d’IA avec des communautés du monde entier. Notre mission :
               rendre l’intelligence artificielle utile, accessible et éthique — éducation, santé, agriculture —
               en France comme dans les pays en développement.
             </p>
@@ -258,7 +258,7 @@ export default function LandingContent({
                     Prêt à gagner du <em className="text-accent not-italic">temps</em> ?
                   </h2>
                   <p className="text-sm text-mg-200 mb-6 max-w-md mx-auto">
-                    Un outil open source et non lucratif, conçu pour simplifier le quotidien des enseignants.
+                    Un outil gratuit, conçu pour simplifier le quotidien des enseignants.
                   </p>
                   {finalAction}
                 </div>

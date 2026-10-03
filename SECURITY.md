@@ -1,13 +1,12 @@
 # Politique de sécurité
 
-Magistra est un logiciel libre et gratuit pour les enseignants, maintenu bénévolement. Merci de nous aider à protéger leurs données.
+Magistra est un logiciel gratuit pour les enseignants, maintenu bénévolement. Merci de nous aider à protéger leurs données.
 
 ## Signaler une vulnérabilité
 
 **N'ouvrez pas d'issue publique** pour une faille de sécurité : elle serait visible de tous avant d'être corrigée.
 
-Utilisez le signalement privé de GitHub : onglet **Security** du dépôt → **Report a vulnerability**
-(<https://github.com/juanrobin09-stack/Magistra-2/security/advisories/new>). Seuls les mainteneurs voient le message.
+Contactez directement l’éditeur à [juanrobin89@gmail.com](mailto:juanrobin89@gmail.com), l’adresse de contact publiée dans les mentions légales. Le dépôt de code est privé ; n’envoyez aucun détail de vulnérabilité dans les espaces publics de téléchargement.
 
 Merci d'indiquer :
 - le composant concerné et la version de Magistra (Réglages, ou numéro de l'installateur) ;

@@ -373,13 +373,13 @@ describe('Carte « Passez à la vraie IA » (démonstration)', () => {
     expect(cardOf(container).querySelector('[data-testid="windows-installer-facts"]')?.textContent).toBe('Windows 10 ou 11 (64 bits)');
     const download = downloadOf(cardOf(container));
     expect(download.getAttribute('href')).toBe(WINDOWS_DOWNLOAD_URL);
-    expect(WINDOWS_DOWNLOAD_URL).toBe('https://github.com/juanrobin09-stack/magistra-2/releases/latest/download/Magistra-Setup.exe');
+    expect(WINDOWS_DOWNLOAD_URL).toBe('https://github.com/juanrobin09-stack/magistra-downloads/releases/latest/download/Magistra-Setup.exe');
     expect(download.target).toBe('');
     expect(download.rel).toContain('noopener');
   });
 
   it('aucune version publiée : le bouton est inactif et le dit, aucun renvoi vers GitHub (la carte reste utile : « Ouvrir Magistra »)', async () => {
-    stubReleaseFetch({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases' });
+    stubReleaseFetch({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-downloads/releases' });
     const { container } = await mount(<DashboardPage />, 'demo', READY);
     const card = cardOf(container);
     const inactive = card.querySelector<HTMLElement>('[data-testid="windows-download-unavailable"]')!;

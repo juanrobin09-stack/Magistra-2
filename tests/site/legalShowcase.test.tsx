@@ -79,15 +79,15 @@ describe('Showcase : mentions légales', () => {
   it('attribution : conçu et développé par Juan Robin, dans le cadre du projet FutureAI ; vitrine sans compte', async () => {
     const { container } = await mount('mentions', FULL);
     const text = container.textContent ?? '';
-    expect(text).toContain('Magistra est conçu et développé par Juan Robin, dans le cadre du projet FutureAI (Bordeaux, France).');
+    expect(text).toContain('Magistra est une application pédagogique gratuite, conçue et développée par Juan Robin, dans le cadre du projet FutureAI (Bordeaux, France).');
     expect(text).toContain('Ce site est une vitrine');
     expect(text).toContain('Ce site ne produit aucun contenu.');
   });
 
-  it('conservé : licence MIT, propriété intellectuelle, contenus d\'IA à relire, empreinte du téléchargement servi par GitHub', async () => {
+  it('conservé : conditions de licence, propriété intellectuelle, contenus d\'IA à relire, empreinte du téléchargement servi par GitHub', async () => {
     const { container } = await mount('mentions');
     const text = container.textContent ?? '';
-    expect(text).toContain('licence MIT');
+    expect(text).toContain('conditions de licence applicables au logiciel sont fournies avec l’application');
     expect([...container.querySelectorAll('h2')].map(h => h.textContent)).toEqual(
       expect.arrayContaining(['Propriété intellectuelle', 'Contenus générés par intelligence artificielle', 'Données personnelles']),
     );
@@ -192,7 +192,7 @@ describe('Showcase : conditions d’utilisation', () => {
     expect(container.querySelector('a[href="mailto:juanrobin89@gmail.com"]')).not.toBeNull();
     const text = container.textContent ?? '';
     expect(text).toContain('Dans les limites permises par la loi, l\'éditeur n\'est pas responsable');
-    expect(text).toContain('licence MIT');
+    expect(text).toContain('conditions de licence applicables au logiciel sont fournies avec l’application');
   });
 });
 

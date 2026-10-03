@@ -1,6 +1,6 @@
 // Textes et chiffres de la page d'accueil, communs à l'application (LandingPage) et au site vitrine (SiteLanding).
 
-import { BookOpenCheck, CodeXml, FilePenLine, GraduationCap, Monitor, WifiOff, type LucideIcon } from 'lucide-react';
+import { BookOpenCheck, Folders, FilePenLine, GraduationCap, Monitor, WifiOff, type LucideIcon } from 'lucide-react';
 import { ALL_MATIERES, ALL_TYPES, type TypeContenu } from '@shared/catalog';
 import { ALL_NIVEAUX } from '@shared/levels';
 
@@ -58,7 +58,7 @@ export const FEATURES_PLUS: { icon: LucideIcon; iconColor: string; title: string
   },
   { icon: WifiOff, iconColor: 'text-teal-300', title: 'Gratuit, sans compte, hors connexion', desc: 'L’application Windows est gratuite : ni abonnement, ni compte à créer. Une fois l’IA activée, elle fonctionne sur votre ordinateur, même sans Internet.' },
   { icon: BookOpenCheck, iconColor: 'text-gold', title: 'Sources vérifiables', desc: 'Vos documents (PDF, Word, PowerPoint…), HAL, Crossref, OpenAlex et des sites officiels vérifiés (ceux que Wikipédia cite pour votre sujet, ou les principaux avec un moteur de recherche web) : les citations renvoient aux sources réellement utilisées, avec leur niveau de fiabilité.' },
-  { icon: CodeXml, iconColor: 'text-accent', title: 'Open source, licence MIT', desc: 'Code public et auditable, projet non lucratif : pas d’abonnement, pas de quota commercial.' },
+  { icon: Folders, iconColor: 'text-accent', title: 'Votre espace pédagogique', desc: 'Retrouvez vos préparations dans votre historique et adaptez votre profil à vos niveaux et à vos matières.' },
   { icon: FilePenLine, iconColor: 'text-rose-300', title: 'À relire et adapter', desc: 'Magistra propose des brouillons structurés ; vous restez l’auteur. Relisez et vérifiez, puis copiez ou exportez (Markdown, PDF) pour adapter le texte dans votre traitement de texte. Besoin d’un autre angle ? Précisez vos consignes et relancez.' },
 ];
 
@@ -71,5 +71,5 @@ export const STEPS = [
 export const STATS = [
   { value: String(NB_OUTILS), label: 'Outils pédagogiques : cours, exercices et TD, évaluations, séquences, fiches de séance, progressions, appréciations, différenciation, courriers, cahier journal, corrigés.' },
   { value: String(NB_NIVEAUX), label: `Niveaux, de la Toute Petite Section au doctorat, et ${NB_MATIERES} matières. Dans le supérieur, les outils parlent CM, TD, examens et syllabus.` },
-  { value: 'MIT', label: 'Open source sous licence MIT : code public et auditable, projet non lucratif. Les contenus produits sont à relire et adapter par l’enseignant.' },
+  { value: '0 €', label: 'Application gratuite, sans abonnement. Les contenus produits sont à relire et adapter par l’enseignant.' },
 ];

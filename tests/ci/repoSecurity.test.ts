@@ -46,11 +46,11 @@ describe('CODEOWNERS et SECURITY.md', () => {
   it('SECURITY.md : signalement privé, délais, périmètre, versions prises en charge (aucune adresse inventée)', () => {
     const security = read('SECURITY.md');
     expect(security).toContain('N\'ouvrez pas d\'issue publique');
-    expect(security).toContain('https://github.com/juanrobin09-stack/Magistra-2/security/advisories/new');
+    expect(security).toContain('mailto:juanrobin89@gmail.com');
     expect(security).toMatch(/accusé de réception\*\* sous 7 jours/);
     expect(security).toContain('## Périmètre');
     expect(security).toContain('## Versions prises en charge');
-    expect(security).not.toMatch(/[\w.-]+@[\w-]+\.[a-z]{2,}/i);
+    expect(security).not.toContain('/security/advisories/new');
   });
 
   it('SECURITY.md : périmètre à jour (site vitrine statique sans compte, application locale, connecteur local = surface résiduelle)', () => {

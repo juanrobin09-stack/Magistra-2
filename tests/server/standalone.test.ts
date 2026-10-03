@@ -130,7 +130,7 @@ describe('serveur autonome', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('application/json');
     expect(String(res.headers['content-security-policy'])).toContain('http://127.0.0.1:47831');
-    expect(JSON.parse(res.body)).toEqual({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-2/releases' });
+    expect(JSON.parse(res.body)).toEqual({ available: false, reason: 'none', releasesUrl: 'https://github.com/juanrobin09-stack/magistra-downloads/releases' });
   });
 
   it('GET /telecharger : lien de téléchargement du site servi par l’API (jamais la page de l’interface)', async () => {

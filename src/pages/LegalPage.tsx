@@ -15,7 +15,7 @@ import {
   hasDatabase, hasHosting, LEGAL_NON_PROFESSIONAL_NOTICE, LEGAL_PATHS, readLegalInfo, showsNonProfessionalNotice,
   type LegalInfo, type LegalPageKind,
 } from '@/lib/legal';
-import { REPOSITORY_URL, safeExternalUrl } from '@/lib/links';
+import { safeExternalUrl } from '@/lib/links';
 import { getRuntimeConfig } from '@/lib/runtime/mode';
 import type { PageMode, RuntimeMode } from '@/lib/runtime/types';
 import { ContactField, Ext, HostField, LegalShell } from './legal/LegalParts';
@@ -65,14 +65,13 @@ function Mentions({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
 
       <h2>Le logiciel Magistra</h2>
       <p>
-        Magistra est un logiciel libre et gratuit, publié sous licence MIT. Son code source est consultable sur{' '}
-        <Ext href={REPOSITORY_URL}>le dépôt public du projet</Ext>. Magistra est conçu et développé par {AUTHOR_NAME}, dans le
+        Magistra est une application pédagogique gratuite, conçue et développée par {AUTHOR_NAME}, dans le
         cadre du projet FutureAI (Bordeaux, France).
       </p>
 
       <h2>Propriété intellectuelle</h2>
       <p>
-        Le code de Magistra est distribué selon les termes de la licence MIT. Les contenus que vous générez ou importez
+        Les conditions de licence applicables au logiciel sont fournies avec l’application. Les contenus que vous générez ou importez
         restent les vôtres, sous réserve des droits des tiers sur les documents et sources que vous utilisez (voir les{' '}
         <Link to={LEGAL_PATHS.cgu}>conditions d'utilisation</Link>).
       </p>
@@ -413,7 +412,7 @@ function Terms({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
         <p>
           Vous conservez vos droits sur les contenus que vous créez avec Magistra. Vous garantissez avoir le droit
           d'utiliser les documents que vous importez. Magistra ne revendique aucun droit sur vos productions et ne les
-          utilise pas pour d'autres finalités que le service. Le logiciel est publié sous licence MIT.
+          utilise pas pour d'autres finalités que le service. Les conditions de licence applicables au logiciel sont fournies avec l’application.
         </p>
       ),
     },

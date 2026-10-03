@@ -1,8 +1,8 @@
 # Icônes et vérification de sécurité — 3 octobre 2026
 
-Revue initiale effectuée sur `e398d3000344d41debf94fb8ff475c758db0b5b3`, tête de `claude/production-hardening-1o7pn8` au moment de la vérification, avec les modifications d'icônes de cette branche.
+Revue initiale effectuée sur `e398d3000344d41debf94fb8ff475c758db0b5b3`, tête de la branche d’intégration (PR #6) au moment de la vérification, avec les modifications d'icônes de cette branche.
 
-Avant publication, les modifications ont été rebasées sans conflit sur `bedbd19c5f3429dd54a4f4c04acd866c6dc1fad9`, nouvelle tête de la branche de Claude. Les changements d'origines officielles et d'ouverture des liens externes ont été relus ; les builds et les tests ci-dessous ont été relancés sur cette version synchronisée. Le verrou de dépendances n'a pas changé.
+Avant publication, les modifications ont été rebasées sans conflit sur `bedbd19c5f3429dd54a4f4c04acd866c6dc1fad9`, nouvelle tête de la branche d’intégration. Les changements d'origines officielles et d'ouverture des liens externes ont été relus ; les builds et les tests ci-dessous ont été relancés sur cette version synchronisée. Le verrou de dépendances n'a pas changé.
 
 ## Rendu
 
@@ -20,7 +20,7 @@ Captures de l'aperçu local :
 
 ## Sécurité : résultats et périmètre
 
-Cette vérification ciblée complète les protections déjà présentes dans la branche de Claude. Elle associe lecture du code, tests locaux et interrogation du registre npm. Aucune nouvelle faille exploitable n'a été confirmée dans les chemins examinés ; les résultats ci-dessous ne constituent pas un audit exhaustif.
+Cette vérification ciblée complète les protections déjà présentes dans la branche d’intégration. Elle associe lecture du code, tests locaux et interrogation du registre npm. Aucune nouvelle faille exploitable n'a été confirmée dans les chemins examinés ; les résultats ci-dessous ne constituent pas un audit exhaustif.
 
 | Surface examinée | Contrôles vérifiés |
 | --- | --- |

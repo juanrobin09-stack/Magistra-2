@@ -72,7 +72,8 @@ describe('Landing — affirmations', () => {
     const { container } = await mount(fakeRuntime(new MemoryStore()));
     const text = container.textContent ?? '';
     expect(text).toContain(`${ALL_NIVEAUX.length} niveaux`);
-    expect(text).toMatch(/licence MIT/i);
+    expect(text).toContain('Application gratuite, sans abonnement.');
+    expect(text).not.toMatch(/open.?source|licence MIT|code public et auditable/i);
     expect(text).toMatch(/IA locale gratuite sur Windows/);
     expect(text).toMatch(/vos documents restent sur votre ordinateur/);
     // Engagement vrai pour le site comme pour l'application : gratuit, sans compte, hors connexion.

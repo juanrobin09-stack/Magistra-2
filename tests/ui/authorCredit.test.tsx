@@ -44,7 +44,7 @@ describe('AuthorCredit : variantes', () => {
     expect(container.querySelector('h2')?.textContent).toBe('Qui est derrière Magistra ?');
     const text = container.textContent ?? '';
     expect(text).toContain(
-      'Magistra est conçu et développé par Juan Robin, dans le cadre du projet FutureAI : un assistant libre et gratuit qui allège la préparation des enseignants, avec une IA qui reste sur leur ordinateur.',
+      'Magistra est conçu et développé par Juan Robin, dans le cadre du projet FutureAI : un assistant gratuit qui allège la préparation des enseignants, avec une IA qui reste sur leur ordinateur.',
     );
     // Aucune biographie : ni diplôme, ni ville, ni entreprise, ni parcours.
     expect(text).not.toMatch(/ancien|diplôm|ingénieur|enseignant depuis|ans d['’]expérience|fondateur|CEO|université|école de|né à|vit à|habite/i);
@@ -59,9 +59,9 @@ describe('AuthorCredit : variantes', () => {
     expect(futureAI.rel).toBe('noopener noreferrer');
   });
 
-  it('pied de page : attribution, FutureAI, Bordeaux, licence MIT', async () => {
+  it('pied de page : attribution, FutureAI, Bordeaux, gratuité', async () => {
     const { container } = await render(<AuthorCredit variant="footer" />);
-    expect(container.textContent).toBe('Magistra, créé par Juan Robin · Un projet FutureAI · Bordeaux, France · Logiciel libre sous licence MIT');
+    expect(container.textContent).toBe('Magistra, créé par Juan Robin · Un projet FutureAI · Bordeaux, France · Application gratuite');
     expect(container.querySelector('a[href="https://futurai.space"]')).not.toBeNull();
     // Sans « showProfile » : pas de lien de profil.
     expect(container.querySelectorAll('a')).toHaveLength(1);
@@ -69,7 +69,7 @@ describe('AuthorCredit : variantes', () => {
 
   it('pied de page avec « showProfile » (Réglages) : le lien de profil suit', async () => {
     const { container } = await render(<AuthorCredit variant="footer" showProfile />);
-    expect(container.textContent).toContain('Logiciel libre sous licence MIT · Profil GitHub');
+    expect(container.textContent).toContain('Application gratuite · Profil GitHub');
     const [link] = profileLinks(container, AUTHOR_DEFAULT_PROFILE_URL);
     expect(link.target).toBe('_blank');
     expect(link.rel).toBe('noopener noreferrer');
@@ -113,7 +113,7 @@ describe('Attribution dans l’application', () => {
     const hero = container.querySelector('main section')!;
     expect(hero.textContent).toContain(AUTHOR_CREDIT);
     expect(container.querySelector('#author-title')?.textContent).toBe('Qui est derrière Magistra ?');
-    expect(container.querySelector('footer')?.textContent).toContain(`${AUTHOR_CREDIT} · Un projet FutureAI · Bordeaux, France · Logiciel libre sous licence MIT`);
+    expect(container.querySelector('footer')?.textContent).toContain(`${AUTHOR_CREDIT} · Un projet FutureAI · Bordeaux, France · Application gratuite`);
     expect(container.textContent).toContain(AUTHOR_NAME);
     // FutureAI reste présent.
     expect(container.querySelectorAll('a[href="https://futurai.space"]').length).toBeGreaterThanOrEqual(2);

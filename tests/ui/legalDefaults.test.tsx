@@ -216,10 +216,10 @@ describe('Conditions d\'utilisation selon le mode', () => {
       '5. Vos contenus et la propriété intellectuelle', '6. Disponibilité', '7. Responsabilité', '8. Données personnelles',
       '9. Évolution des conditions et droit applicable',
     ]);
-    // Conservé : relecture des contenus d'IA, pas de données d'élèves, licence MIT, droit français, contact.
+    // Conservé : relecture des contenus d'IA, pas de données d'élèves, conditions de licence, droit français, contact.
     expect(text).toContain('L\'enseignant relit, vérifie et adapte chaque contenu');
     expect(text).toContain('données personnelles d\'élèves');
-    expect(text).toContain('licence MIT');
+    expect(text).toContain('conditions de licence applicables au logiciel sont fournies avec l’application');
     expect(text).toContain('soumises au droit français');
     expect(container.querySelector(DEFAULT_MAILTO)).not.toBeNull();
   });

@@ -1,7 +1,7 @@
 // Liens publics affichés dans l'interface (aucun secret, aucune adresse interne).
 
-/** Dépôt du projet. */
-export const REPOSITORY_URL = 'https://github.com/juanrobin09-stack/magistra-2';
+/** Téléchargements publics, séparés du dépôt de code privé. */
+export const REPOSITORY_URL = 'https://github.com/juanrobin09-stack/magistra-downloads';
 
 /**
  * Installateur de la dernière version STABLE de l'application Windows, sous son nom fixe (release.yml le publie à côté
@@ -15,8 +15,7 @@ export const WINDOWS_DOWNLOAD_URL = `${REPOSITORY_URL}/releases/latest/download/
 export const WINDOWS_RELEASES_URL = `${REPOSITORY_URL}/releases`;
 
 /**
- * Mode d'emploi de l'administrateur et du développeur dans le README : brancher une vraie IA (préréglage du site en
- * ligne, `npm run dev` avec Ollama, détails de l'application Windows). L'enseignant, lui, n'a que les trois étapes
+ * Guide public de mise en route de l’IA dans l’application Windows. L'enseignant, lui, n'a que les trois étapes
  * de l'application Windows, affichées dans l'interface. Même ancre que les notes de version (release.yml). Si l'ancre
  * n'existe pas, GitHub affiche le début du README.
  */

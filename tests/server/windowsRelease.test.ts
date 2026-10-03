@@ -17,7 +17,7 @@ import { DEV_DOWNLOAD_PATH } from '../../server/viteDevApi.js';
 import { SITE_DOWNLOAD_PATH } from '@/components/localEngine/windowsRelease';
 import { startApi, testDeps, type TestServer } from './helpers.js';
 
-const REPO = 'juanrobin09-stack/magistra-2';
+const REPO = 'juanrobin09-stack/magistra-downloads';
 const API = `https://api.github.com/repos/${REPO}/releases/latest`;
 const TAG = 'v2.1.0';
 const EXE = 'Magistra-Setup-2.1.0.exe';
@@ -226,7 +226,7 @@ describe('fetchLatestWindowsRelease — dernière version stable', () => {
       expect(await run(fetch), String(browser_download_url)).toEqual(UNAVAILABLE);
     }
     // Casse du propriétaire et du dépôt : indifférente pour GitHub (nom canonique renvoyé par l'API).
-    const canonical = `https://github.com/JuanRobin09-Stack/Magistra-2/releases/download/${TAG}/${EXE}`;
+    const canonical = `https://github.com/JuanRobin09-Stack/Magistra-Downloads/releases/download/${TAG}/${EXE}`;
     expect(verifiedDownloadUrl(canonical, REPO, TAG, EXE)).toBe(canonical);
     const fetch = fakeGitHub({ [API]: () => jsonResponse(release({ assets: [asset(EXE, { browser_download_url: canonical })] })) });
     expect(await run(fetch)).toMatchObject({ available: true, downloadUrl: canonical });
