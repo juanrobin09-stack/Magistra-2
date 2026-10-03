@@ -24,7 +24,7 @@
 import { CLOZE_BLANK, isClozeRequest } from './cloze.js';
 import { countText, countUnit } from './formats.js';
 import { getLevelGroup, SUPERIEUR_GROUPS } from './levels.js';
-import { countSessions, readPlanTable } from './planTable.js';
+import { countSessions, readPlanTable, safeSpan } from './planTable.js';
 import type { GenerationRequest } from './types.js';
 
 const ADVICE = 'vérifiez-le avant de l’utiliser, ou relancez la génération.';
@@ -574,8 +574,8 @@ function quotedSegments(content: string, limit: number): QuotedSegment[] {
         const start = m.index ?? 0;
         found.push({
           text: m[1],
-          before: part.slice(Math.max(0, start - QUOTE_CONTEXT_CHARS), start),
-          after: part.slice(start + m[0].length, start + m[0].length + QUOTE_CONTEXT_CHARS),
+          before: safeSpan(part, start - QUOTE_CONTEXT_CHARS, start),
+          after: safeSpan(part, start + m[0].length, start + m[0].length + QUOTE_CONTEXT_CHARS),
           column: columns?.[cellOf(base + start)],
         });
       };

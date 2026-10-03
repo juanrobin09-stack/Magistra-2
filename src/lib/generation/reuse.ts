@@ -10,6 +10,7 @@ import {
   type Bareme, type BesoinParticulier, type TonRedaction, type TypeEvaluation,
 } from '@shared/formats';
 import { getLevelGroup, isNiveau, isSuperieur } from '@shared/levels';
+import { safeSlice } from '@shared/planTable';
 import { REQUEST_LIMITS } from '@shared/validation';
 import { RESEARCH_MODES, type GenerationRecord, type ResearchMode, type TeacherProfile } from '@shared/types';
 import { createInitialForm, pickMatiere, type GenerateForm, type Trimestre } from './request';
@@ -56,7 +57,7 @@ export function reusedFromState(state: unknown, profile: TeacherProfile | null |
     const reused = formFromRecord(reuse, profile);
     return {
       ...reused,
-      ...(typeof notice === 'string' && notice.trim() ? { notice: notice.slice(0, 500) } : {}),
+      ...(typeof notice === 'string' && notice.trim() ? { notice: safeSlice(notice, 500) } : {}),
       ...(typeof planId === 'string' && planId !== '' && planId.length <= 200 ? { planId } : {}),
     };
   } catch {
@@ -64,7 +65,7 @@ export function reusedFromState(state: unknown, profile: TeacherProfile | null |
   }
 }
 
-const text = (value: unknown, max: number): string => (typeof value === 'string' ? value.slice(0, max) : '');
+const text = (value: unknown, max: number): string => (typeof value === 'string' ? safeSlice(value, max) : '');
 const oneOf = <T extends string>(value: unknown, list: readonly { value: T }[]): T | undefined =>
   list.find(item => item.value === value)?.value;
 const labelOf = (value: unknown, list: readonly { value: string; label: string }[]): string | undefined =>
@@ -127,7 +128,7 @@ export function describeRecordParams(record: ReusableRecord): { label: string; v
     add('Besoins particuliers', p.besoins.map(v => labelOf(v, BESOINS_PARTICULIERS)).filter(Boolean).join(', '));
   }
   const source = text(p.contenuSource, REQUEST_LIMITS.contenuSource);
-  add('Contenu adapté', source.length > 300 ? `${source.slice(0, 299)}…` : source);
+  add('Contenu adapté', source.length > 300 ? `${safeSlice(source, 299)}…` : source);
   if (typeof p.texteEleveLength === 'number') {
     add('Travail corrigé', `non conservé (${p.texteEleveLength.toLocaleString('fr-FR')} caractères)`);
   }

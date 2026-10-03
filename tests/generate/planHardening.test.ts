@@ -237,7 +237,9 @@ describe('parsePlan — plusieurs tableaux : le tableau des séances, pas le pre
     const six = synoptic(6);
     const ten = ['| N° | Titre |', '|---|---|', ...Array.from({ length: 10 }, (_, i) => row(String(i + 1), `Étape ${i + 1}`))].join('\n');
     expect(titles(`${ten}\n\n${six}`, 6)).toEqual(SIX);
-    expect(titles(`${ten}\n\n${six}`)).toHaveLength(10);
+    // Sans nombre demandé, les colonnes (« Séance | Titre | Objectif | Durée ») priment sur le nombre de lignes : le
+    // tableau de dix lignes « N° | Titre » n'est pas préféré au synoptique (voir aussi planTableChoice.test.ts).
+    expect(titles(`${ten}\n\n${six}`)).toEqual(SIX);
     expect(titles(`${six}\n\n${ten}`, 10)).toHaveLength(10);
   });
 
@@ -293,7 +295,8 @@ describe('readPlan — total de séances', () => {
     const fourth = buildDevelopPrefill(ORIGIN, plan, 2)!;
     expect(fourth.reuse.params!.consignes).toMatch(/^Séance 4 d'une séquence « La Révolution française »\. /);
     expect(fourth.reuseNotice).toContain('(séance 4 de la séquence');
-    expect(buildDevelopPrefill(ORIGIN, plan, 1)!.reuse.params!.consignes).toMatch(/^Séance 2 sur 3 d'une séquence/);
+    // Le total lu (3) serait faux : « sur N » est omis pour toutes les séances, pas seulement pour la séance 4.
+    expect(buildDevelopPrefill(ORIGIN, plan, 1)!.reuse.params!.consignes).toMatch(/^Séance 2 d'une séquence/);
     // Avec le nombre demandé, le total est celui-là.
     expect(buildDevelopPrefill(ORIGIN, readPlan(rows([1, 2, 4]), 4)!, 2)!.reuse.params!.consignes).toMatch(/^Séance 4 sur 4 /);
   });
@@ -480,7 +483,8 @@ describe('décisions de l’enseignant reprises dans la demande de la fiche (con
       // Le garde-fou final ne sert jamais : le gabarit n'est pas coupé (début, phrase de l'enseignant, durée, fin).
       expect(consignes).toMatch(/^Séance \d sur 4 d'une séquence « S{300} »\. /);
       expect(consignes).toContain('Consignes de l\'enseignant pour la séquence : mot mot');
-      expect(consignes).toContain(`Durée prévue pour la séquence : ${'d'.repeat(REQUEST_LIMITS.duree)}.`);
+      // Durée illisible (ni durée de séance ni durée longue) : étiquette neutre.
+      expect(consignes).toContain(`Durée indiquée dans la demande de séquence : ${'d'.repeat(REQUEST_LIMITS.duree)}.`);
       expect(consignes).toMatch(/Séance suivante : [^]*Respecte ce plan\.$/);
       expect(consignes.length, 'marge du gabarit').toBeLessThan(REQUEST_LIMITS.consignes - 100);
       expect(() => validateGenerationRequest({
