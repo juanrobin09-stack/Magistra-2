@@ -20,6 +20,7 @@ import {
 } from '../shared/ai/presets.js';
 import { DEFAULT_RETRY_DELAYS_MS } from '../shared/pipeline.js';
 import type { ResearchConfig } from '../shared/research/types.js';
+import { SITE_ORIGIN } from '../shared/site.js';
 import type { AINotice, ProviderInfo } from '../shared/types.js';
 import { parseWebhookSecret } from './clerkWebhook.js';
 import { REQUEST_LIMITS } from '../shared/validation.js';
@@ -429,7 +430,7 @@ function loadClerk(env: Env, problems: string[], production: boolean): ClerkConf
   // Sans origines autorisées, Clerk ne contrôle pas l'origine (azp) des jetons : simple avertissement, aucune valeur
   // par défaut déduite (elle pourrait bloquer des enseignants : domaine personnalisé, préproduction) et le serveur démarre.
   if (production && !(parties && parties.length)) {
-    problems.push("CLERK_AUTHORIZED_PARTIES est vide : l'origine (azp) des jetons de session n'est pas vérifiée. Renseignez les origines du site (ex. https://magistra-2.vercel.app).");
+    problems.push(`CLERK_AUTHORIZED_PARTIES est vide : l'origine (azp) des jetons de session n'est pas vérifiée. Renseignez les origines du site (ex. ${SITE_ORIGIN}).`);
   }
   return { secretKey, jwtKey, authorizedParties: parties && parties.length ? parties : undefined };
 }

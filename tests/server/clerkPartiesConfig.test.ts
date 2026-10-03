@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../../server/config.js';
+import { SITE_ORIGIN } from '../../shared/site.js';
 
 const MESSAGE = /CLERK_AUTHORIZED_PARTIES est vide/;
 const base = { CLERK_SECRET_KEY: 'sk_test_exemple' };
@@ -12,6 +13,9 @@ describe('CLERK_AUTHORIZED_PARTIES', () => {
     for (const env of [{ NODE_ENV: 'production' }, { VERCEL: '1' }]) {
       const cfg = loadConfig({ ...base, ...env });
       expect(cfg.problems.join('\n')).toMatch(MESSAGE);
+      // L'exemple donné est l'adresse officielle du site (shared/site.ts), jamais l'adresse de l'ancien déploiement.
+      expect(cfg.problems.join('\n')).toContain(`Renseignez les origines du site (ex. ${SITE_ORIGIN}).`);
+      expect(cfg.problems.join('\n')).toContain('(ex. https://www.mag-istra.fr).');
       expect(cfg.clerk?.authorizedParties).toBeUndefined();
     }
   });

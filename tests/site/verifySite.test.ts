@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
+import { buildRobotsTxt, buildSitemapXml, SITE_ORIGIN } from '../../shared/site';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const script = path.join(root, 'scripts', 'verify-site.mjs');
@@ -15,15 +16,23 @@ afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 type Mod = {
   FORBIDDEN_TEXTS: [string, string][];
-  verifySite(dir: string): string[];
-  checkIndexHtml(html: string): string[];
+  readSiteOrigin(file?: string): string;
+  verifySite(dir: string, options?: { siteOrigin?: string }): string[];
+  checkIndexHtml(html: string, options?: { siteOrigin?: string }): string[];
+  checkSearchTags(html: string): string[];
+  checkSearchFiles(files: { name: string; text: string }[], options?: { siteOrigin?: string }): string[];
   checkForbiddenContent(files: { name: string; text: string }[]): string[];
   checkNoSourceMaps(names: string[]): string[];
 };
 const mod = (await import(pathToFileURL(script).href)) as Mod;
 
+/** Seules adresses https externes d'index.html : le lien canonique et og:url, à l'adresse officielle (shared/site.ts). */
+const CANONICAL = `<link rel="canonical" href="${SITE_ORIGIN}/" />`;
+const OG_URL = `<meta property="og:url" content="${SITE_ORIGIN}/" />`;
 const GOOD_INDEX = `<!doctype html>
 <html lang="fr"><head><meta charset="UTF-8" /><title>Magistra</title>
+${CANONICAL}
+${OG_URL}
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3C/svg%3E" />
 <script type="module" crossorigin src="/assets/index-abc.js"></script>
 <link rel="stylesheet" crossorigin href="/assets/index-abc.css"></head>
@@ -43,7 +52,14 @@ function site(files: Record<string, string | Buffer>): string {
   return dir;
 }
 
-const GOOD = { 'index.html': GOOD_INDEX, 'assets/index-abc.js': GOOD_JS, 'assets/index-abc.css': GOOD_CSS, 'assets/font.woff2': Buffer.from([0, 1, 2, 3]) };
+const GOOD = {
+  'index.html': GOOD_INDEX,
+  'robots.txt': buildRobotsTxt(),
+  'sitemap.xml': buildSitemapXml(),
+  'assets/index-abc.js': GOOD_JS,
+  'assets/index-abc.css': GOOD_CSS,
+  'assets/font.woff2': Buffer.from([0, 1, 2, 3]),
+};
 
 function run(dir?: string) {
   const result = spawnSync(process.execPath, dir === undefined ? [script] : [script, dir], { cwd: tmp, encoding: 'utf8' });
@@ -187,6 +203,240 @@ describe('verify-site : index.html', () => {
   it('adresse de données dans une icône (« data: » contenant http://www.w3.org) et liens du site : permis', () => {
     expect(mod.checkIndexHtml(GOOD_INDEX)).toEqual([]);
     expect(mod.checkIndexHtml('<a href="https://futurai.space">FutureAI</a><link rel="icon" href="/favicon.svg">')).toEqual([]);
+  });
+});
+
+describe('verify-site : adresse officielle, lien canonique et og:url (liste blanche étroite)', () => {
+  const OK = `${SITE_ORIGIN}/`;
+  /** Fragment <head> : la seule exception admise, puis ce que le test essaie de faire passer. */
+  const head = (extra: string) => `${CANONICAL}${OG_URL}${extra}`;
+
+  it('SITE_ORIGIN est lue dans shared/site.ts (source unique) ; fichier sans constante : erreur claire', () => {
+    expect(mod.readSiteOrigin()).toBe(SITE_ORIGIN);
+    expect(SITE_ORIGIN).toBe('https://www.mag-istra.fr');
+    const dir = site({ 'site.ts': "export const SITE_ORIGIN = 'https://exemple.fr';\nexport const AUTRE = 'https://autre.fr';" });
+    expect(mod.readSiteOrigin(path.join(dir, 'site.ts'))).toBe('https://exemple.fr');
+    const empty = site({ 'vide.ts': 'export const AUTRE = 1;' });
+    expect(() => mod.readSiteOrigin(path.join(empty, 'vide.ts'))).toThrow(/SITE_ORIGIN introuvable/);
+  });
+
+  it('seule adresse https externe permise : <link rel="canonical"> et <meta property="og:url"> valant EXACTEMENT « <SITE_ORIGIN>/ »', () => {
+    expect(mod.checkIndexHtml(GOOD_INDEX)).toEqual([]);
+    expect(mod.checkIndexHtml(head(''))).toEqual([]);
+    // Ordre des attributs, guillemets, casse des noms : même balise pour le navigateur.
+    for (const link of [
+      `<link href="${OK}" rel="canonical">`, `<link rel='canonical' href='${OK}'>`, `<link rel=canonical href=${OK}>`, `<LINK REL="Canonical" HREF="${OK}" />`,
+      `<link  rel = "canonical"\n  href = "${OK}"\n/>`,
+    ]) {
+      expect(mod.checkIndexHtml(`${link}${OG_URL}`), link).toEqual([]);
+      expect(mod.checkSearchTags(`${link}${OG_URL}`), link).toEqual([]);
+    }
+    for (const meta of [`<meta content="${OK}" property="og:url">`, `<META PROPERTY='OG:URL' CONTENT='${OK}' />`]) {
+      expect(mod.checkIndexHtml(`${CANONICAL}${meta}`), meta).toEqual([]);
+    }
+  });
+
+  it('la liste blanche suit shared/site.ts : une autre adresse officielle est refusée, même bien formée', () => {
+    expect(mod.checkIndexHtml(CANONICAL, { siteOrigin: 'https://www.mag-istra.fr' })).toEqual([]);
+    expect(mod.checkIndexHtml(CANONICAL, { siteOrigin: 'https://exemple.fr' }).join('\n')).toContain('le lien canonique doit être « https://exemple.fr/ »');
+    expect(mod.checkIndexHtml(OG_URL, { siteOrigin: 'https://exemple.fr' }).join('\n')).toContain('og:url doit être « https://exemple.fr/ »');
+  });
+
+  it.each([
+    ['apex', 'https://mag-istra.fr/'],
+    ['http', 'http://www.mag-istra.fr/'],
+    ['sans barre finale', SITE_ORIGIN],
+    ['chemin', `${SITE_ORIGIN}/cgu`],
+    ['port', `${SITE_ORIGIN}:443/`],
+    ['port 8443', `${SITE_ORIGIN}:8443/`],
+    ['identifiants', 'https://user@www.mag-istra.fr/'],
+    ['sous-domaine', 'https://app.www.mag-istra.fr/'],
+    ['suffixe collé', 'https://www.mag-istra.fr.evil.example/'],
+    ['préfixe collé', 'https://evil-www.mag-istra.fr/'],
+    ['majuscules', 'https://WWW.MAG-ISTRA.FR/'],
+    ['point final', 'https://www.mag-istra.fr./'],
+    ['requête', `${OK}?a=1`],
+    ['fragment', `${OK}#a`],
+    ['protocole relatif', '//www.mag-istra.fr/'],
+    ['autre domaine', 'https://evil.example/'],
+    ['ancienne adresse', 'https://magistra-2.vercel.app/'],
+    ['homographe (punycode)', 'https://www.xn--mag-istr-8cf.fr/'],
+    ['relatif (un canonique doit être absolu)', '/'],
+    ['vide', ''],
+  ])('lien canonique : %s refusé', (_name, href) => {
+    const errors = mod.checkIndexHtml(`<link rel="canonical" href="${href}" />`);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(`le lien canonique doit être « ${OK} »`);
+  });
+
+  it.each([
+    ['apex', 'https://mag-istra.fr/'], ['http', 'http://www.mag-istra.fr/'], ['sans barre finale', SITE_ORIGIN], ['chemin', `${SITE_ORIGIN}/cgu`],
+    ['suffixe collé', 'https://www.mag-istra.fr.evil.example/'], ['autre domaine', 'https://evil.example/'], ['vide', ''], ['relatif', '/'],
+  ])('og:url : %s refusée', (_name, content) => {
+    const errors = mod.checkIndexHtml(`<meta property="og:url" content="${content}" />`);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(`og:url doit être « ${OK} »`);
+  });
+
+  it('ressources externes : échec, même vers le domaine du site (script, feuille de style, image, cadre, préchargement, icône, média…)', () => {
+    const resources = [
+      '<script type="module" src="https://cdn.example/a.js"></script>',
+      `<script type="module" src="${OK}a.js"></script>`,
+      '<script src="//cdn.example/a.js"></script>',
+      '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=X">',
+      `<link rel="stylesheet" href="${OK}a.css">`,
+      '<link rel="preload" href="https://cdn.example/a.woff2" as="font" crossorigin>',
+      `<link rel="preload" href="${OK}a.woff2" as="font">`,
+      '<link rel="modulepreload" href="https://cdn.example/a.js">',
+      '<link rel="prefetch" href="https://cdn.example/a.js">',
+      '<link rel="preconnect" href="https://cdn.example">',
+      '<link rel="dns-prefetch" href="//cdn.example">',
+      `<link rel="icon" href="${OK}favicon.ico">`,
+      `<link rel="alternate" hreflang="en" href="${OK}en">`,
+      `<link rel="manifest" href="${OK}site.webmanifest">`,
+      '<img src="https://tracker.example/p.gif">',
+      `<img src="${OK}logo.png" alt="">`,
+      '<img srcset="https://cdn.example/a.png 1x, /b.png 2x" src="/a.png">',
+      '<img src="/a.png" srcset="/a.png 1x, https://cdn.example/b.png 2x">',
+      '<iframe src="https://evil.example/"></iframe>',
+      `<iframe src="${OK}embed"></iframe>`,
+      '<source src="https://cdn.example/a.mp4">',
+      '<video poster="https://cdn.example/p.jpg"></video>',
+      '<audio src="https://cdn.example/a.mp3"></audio>',
+      '<embed src="https://cdn.example/a.swf">',
+      '<object data="https://cdn.example/a.pdf"></object>',
+    ];
+    for (const html of resources) {
+      const errors = mod.checkIndexHtml(head(html));
+      expect(errors, html).toHaveLength(1);
+      expect(errors[0], html).toContain('ressource chargée depuis un autre domaine');
+    }
+  });
+
+  it('balise canonique détournée : un autre « rel », une ressource ajoutée à la balise, ou une adresse cachée dans une valeur', () => {
+    const tricks = [
+      `<link rel="canonical stylesheet" href="${OK}">`,
+      `<link rel="stylesheet canonical" href="${OK}">`,
+      `<link rel="canonical" href="${OK}" src="https://cdn.example/a.js">`,
+      `<link rel="canonical" href="${OK}" srcset="https://cdn.example/a.png 1x">`,
+      '<link title=">" rel="stylesheet" href="https://evil.example/a.css">',
+      `<link title='rel="canonical"' rel="stylesheet" href="${OK}a.css">`,
+      `<link data-note="rel=canonical" rel="preload" href="${OK}a.js" as="script">`,
+      '<link rel="stylesheet" href="\\\\evil.example/a.css">',
+      '<link rel="stylesheet" href="/\\evil.example/a.css">',
+      '<link rel="stylesheet" href="ht\ntps://evil.example/a.css">',
+      '<link rel="stylesheet" href=" https://evil.example/a.css">',
+      '<link rel="stylesheet" href="&#104;ttps://evil.example/a.css">',
+      '<link rel="stylesheet" href="&#x68;ttps://evil.example/a.css">',
+      '<link rel="stylesheet" href="HTTPS://EVIL.EXAMPLE/A.CSS">',
+      '<link rel="stylesheet" href="ftp://evil.example/a.css">',
+    ];
+    for (const html of tricks) expect(mod.checkIndexHtml(head(html)), html).not.toEqual([]);
+  });
+
+  it('autres balises <meta> : adresse d’image ou redirection automatique refusées ; texte ordinaire permis', () => {
+    for (const meta of [
+      '<meta property="og:image" content="https://cdn.example/a.png" />',
+      `<meta property="og:image" content="${OK}a.png" />`,
+      '<meta name="twitter:image" content="https://cdn.example/a.png" />',
+      '<meta property="og:video" content="//cdn.example/a.mp4" />',
+      '<meta name="msapplication-TileImage" content="https://cdn.example/t.png" />',
+      '<meta http-equiv="refresh" content="0;url=https://evil.example/" />',
+      '<meta http-equiv="Refresh" content="5" />',
+    ]) {
+      const errors = mod.checkIndexHtml(head(meta));
+      expect(errors, meta).toHaveLength(1);
+    }
+    for (const meta of [
+      '<meta name="description" content="Voir https://futurai.space pour le projet." />', '<meta property="og:type" content="website" />',
+      '<meta property="og:site_name" content="Magistra" />', '<meta property="og:locale" content="fr_FR" />', '<meta name="viewport" content="width=device-width" />',
+    ]) {
+      expect(mod.checkIndexHtml(head(meta)), meta).toEqual([]);
+    }
+  });
+
+  it('une balise en commentaire est sans effet : ni refusée, ni comptée', () => {
+    expect(mod.checkIndexHtml(head('<!-- <script src="https://cdn.example/a.js"></script><link rel="stylesheet" href="https://cdn.example/a.css"> -->'))).toEqual([]);
+    expect(mod.checkSearchTags(`<!-- ${CANONICAL}${OG_URL} -->`)).toHaveLength(2);
+  });
+
+  it('exactement un lien canonique et une adresse og:url (verifySite) : absents ou en double, échec', () => {
+    const noCanonical = GOOD_INDEX.replace(CANONICAL, '');
+    expect(mod.checkSearchTags(noCanonical).join('\n')).toContain('0 lien(s) canonique(s)');
+    expect(mod.verifySite(site({ ...GOOD, 'index.html': noCanonical })).join('\n')).toContain('un seul <link rel="canonical"> est attendu');
+    expect(mod.verifySite(site({ ...GOOD, 'index.html': GOOD_INDEX.replace(CANONICAL, CANONICAL + CANONICAL) })).join('\n')).toContain('2 lien(s) canonique(s)');
+    expect(mod.verifySite(site({ ...GOOD, 'index.html': GOOD_INDEX.replace(OG_URL, '') })).join('\n')).toContain('0 balise(s) <meta property="og:url">');
+    expect(mod.verifySite(site({ ...GOOD, 'index.html': GOOD_INDEX.replace(OG_URL, OG_URL + OG_URL) })).join('\n')).toContain('2 balise(s) <meta property="og:url">');
+  });
+
+  it('verifySite et la ligne de commande : canonique d’un autre domaine, ressource externe ajoutée à côté d’un canonique correct', () => {
+    const wrong = GOOD_INDEX.replace(`${SITE_ORIGIN}/" />`, 'https://evil.example/" />');
+    expect(mod.verifySite(site({ ...GOOD, 'index.html': wrong })).join('\n')).toContain('le lien canonique doit être');
+    const { code, err } = run(site({ ...GOOD, 'index.html': wrong }));
+    expect(code).toBe(1);
+    expect(err).toContain('::error title=Site vitrine::index.html : le lien canonique doit être');
+    const withCdn = GOOD_INDEX.replace('</head>', '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=X"></head>');
+    const errors = mod.verifySite(site({ ...GOOD, 'index.html': withCdn }));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('ressource chargée depuis un autre domaine');
+    expect(run(site({ ...GOOD, 'index.html': withCdn })).code).toBe(1);
+  });
+
+  it('adresse officielle passée à verifySite : un site d’un autre domaine passe avec SA adresse, échoue avec celle-ci', () => {
+    const other = 'https://exemple.fr';
+    const files = {
+      ...GOOD,
+      'index.html': GOOD_INDEX.replaceAll(SITE_ORIGIN, other),
+      'robots.txt': buildRobotsTxt().replaceAll(SITE_ORIGIN, other),
+      'sitemap.xml': buildSitemapXml().replaceAll(SITE_ORIGIN, other),
+    };
+    expect(mod.verifySite(site(files), { siteOrigin: other })).toEqual([]);
+    expect(mod.verifySite(site(files)).length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe('verify-site : robots.txt et sitemap.xml', () => {
+  const without = (name: string) => Object.fromEntries(Object.entries(GOOD).filter(([key]) => key !== name));
+
+  it('publiés par le build : présents, conformes (les fichiers produits par shared/site.ts passent)', () => {
+    expect(mod.verifySite(site(GOOD))).toEqual([]);
+    expect(mod.checkSearchFiles([{ name: 'robots.txt', text: buildRobotsTxt() }, { name: 'sitemap.xml', text: buildSitemapXml() }])).toEqual([]);
+  });
+
+  it('absents : échec', () => {
+    expect(mod.verifySite(site(without('robots.txt'))).join('\n')).toContain('robots.txt absent');
+    expect(mod.verifySite(site(without('sitemap.xml'))).join('\n')).toContain('sitemap.xml absent');
+    const { code, err } = run(site(without('sitemap.xml')));
+    expect(code).toBe(1);
+    expect(err).toContain('::error title=Site vitrine::sitemap.xml absent');
+  });
+
+  it('robots.txt : plan du site à une autre adresse, absent ou « Disallow: / » : échec', () => {
+    const robots = (text: string) => mod.verifySite(site({ ...GOOD, 'robots.txt': text })).join('\n');
+    expect(robots('User-agent: *\nAllow: /\n')).toContain('« Sitemap: https://www.mag-istra.fr/sitemap.xml » attendu');
+    expect(robots('User-agent: *\nAllow: /\nSitemap: https://evil.example/sitemap.xml\n')).toContain('attendu');
+    expect(robots('User-agent: *\nAllow: /\nSitemap: https://magistra-2.vercel.app/sitemap.xml\n')).toContain('attendu');
+    expect(robots(`User-agent: *\nAllow: /\nSitemap: ${SITE_ORIGIN}/sitemap.xml\nSitemap: https://evil.example/s.xml\n`)).toContain('attendu');
+    expect(robots(`User-agent: *\nDisallow: /\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`)).toContain('« Disallow: / »');
+    expect(robots(`User-agent: *\nDisallow:\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`)).toBe('');
+    expect(robots(`User-agent: *\nDisallow: /api/\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`)).toBe('');
+  });
+
+  it('sitemap.xml : adresse d’un autre domaine, vide ou sans <loc> : échec', () => {
+    const sitemap = (text: string) => mod.verifySite(site({ ...GOOD, 'sitemap.xml': text })).join('\n');
+    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/cgu`, 'https://evil.example/cgu'))).toContain('n\'est pas une adresse de https://www.mag-istra.fr');
+    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'http://www.mag-istra.fr/'))).toContain('n\'est pas une adresse');
+    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'https://www.mag-istra.fr.evil.example/'))).toContain('n\'est pas une adresse');
+    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'https://mag-istra.fr/'))).toContain('n\'est pas une adresse');
+    expect(sitemap('<urlset></urlset>')).toContain('aucune adresse <loc>');
+    expect(sitemap('')).toContain('aucune adresse <loc>');
+  });
+
+  it('robots.txt et sitemap.xml sont lus comme du texte : un mot interdit y est aussi signalé', () => {
+    const errors = mod.verifySite(site({ ...GOOD, 'robots.txt': `${buildRobotsTxt()}# clerk\n` }));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('robots.txt');
+    expect(errors[0]).toContain('« clerk »');
   });
 });
 

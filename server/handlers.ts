@@ -46,8 +46,9 @@ export function isRouteName(value: string): value is RouteName {
 }
 
 /**
- * Adresse de téléchargement du site, à partager telle quelle (« magistra-2.vercel.app/telecharger ») : même route que
- * /api/download (réécriture dans vercel.json ; alias du serveur autonome et du serveur de développement).
+ * Adresse de téléchargement du site, à partager telle quelle (« www.mag-istra.fr/telecharger », ou
+ * « magistra-2.vercel.app/telecharger », l'adresse Vercel du projet) : même route que /api/download (réécriture dans
+ * vercel.json ; alias du serveur autonome et du serveur de développement).
  */
 export const DOWNLOAD_PATH = '/telecharger';
 

@@ -1,6 +1,7 @@
 // Sécurité du processus principal : origine de l'application, expéditeur IPC, liens externes,
 // et enregistrement réel des canaux IPC (module electron simulé).
 
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
@@ -17,6 +18,7 @@ vi.mock('electron', () => ({
 }));
 
 import { IPC } from '../../shared/ipc.js';
+import { OFFICIAL_WEB_ORIGINS } from '../../shared/localConnector.js';
 import { registerIpcHandlers, type IpcContext } from '../../electron/ipc.js';
 import {
   APP_ORIGIN, isSafeExternalUrl, isTrustedSender, isTrustedUrl, originOf, parseDevServerUrl, trustedOrigins,
@@ -71,6 +73,37 @@ describe('origines et expéditeur IPC', () => {
     const dev = trustedOrigins(parseDevServerUrl('http://127.0.0.1:5173/'));
     expect(isTrustedSender(event('http://127.0.0.1:5173/app'), fakeWindow(), dev)).toBe(true);
     expect(isTrustedSender(event('http://127.0.0.1:5174/app'), fakeWindow(), dev)).toBe(false);
+  });
+
+  it('le site Magistra (nouveau domaine, ancienne adresse, leurs pages) n’est jamais une origine de l’application : aucun accès IPC, même avec le serveur de développement', () => {
+    const win = fakeWindow();
+    const dev = trustedOrigins(parseDevServerUrl('http://localhost:5173/'));
+    for (const site of OFFICIAL_WEB_ORIGINS) {
+      for (const url of [site, `${site}/`, `${site}/app`, `${site}/telecharger`, `${site}/mentions-legales`]) {
+        expect(isTrustedUrl(url, origins), url).toBe(false);
+        expect(isTrustedUrl(url, dev), url).toBe(false);
+        expect(isTrustedSender(event(url), win, origins), url).toBe(false);
+        expect(isTrustedSender(event(url), win, dev), url).toBe(false);
+      }
+    }
+    // Les origines de confiance restent app://magistra (et le serveur de développement local) : rien d'autre.
+    expect(origins).toEqual([APP_ORIGIN]);
+    expect(dev).toEqual([APP_ORIGIN, 'http://localhost:5173']);
+  });
+
+  it('liens vers le site Magistra : navigateur du système (jamais la fenêtre), comme tout lien http(s) sûr ; adresses piégées avec identifiants refusées', () => {
+    // Décision de electron/main.ts (will-navigate, setWindowOpenHandler) : lien sûr ET hors des origines de confiance.
+    const opensInSystemBrowser = (url: string) => isSafeExternalUrl(url) && !isTrustedUrl(url, origins);
+    for (const site of OFFICIAL_WEB_ORIGINS) {
+      for (const url of [`${site}/`, `${site}/telecharger`, `${site}/mentions-legales`, `${site}/#magistra-windows`]) expect(opensInSystemBrowser(url), url).toBe(true);
+      const host = new URL(site).host;
+      for (const url of [`https://user@${host}/`, `https://user:mot@${host}/`, `https://${host}@evil.example/`, `${site}/\n`, `${site}/ telecharger`, `javascript:alert('${host}')`, `file:///${host}`]) {
+        expect(opensInSystemBrowser(url), url).toBe(false);
+      }
+    }
+    const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8');
+    expect(main).toContain('if (isSafeExternalUrl(url) && !isTrustedUrl(url, origins)) {');
+    expect(main.match(/openExternalSafely\(/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
   it("n'ouvre dans le navigateur que des liens http(s) sûrs", () => {
@@ -208,6 +241,25 @@ describe('enregistrement des canaux IPC', () => {
     expect(connector.setEnabled).toHaveBeenCalledTimes(1);
     // Aucun évènement IPC n'est accepté dans ce sens : connector:changed n'est émis que par le processus principal.
     expect(handlers.has(IPC.connectorChanged)).toBe(false);
+  });
+
+  it('le site Magistra n’a aucun accès IPC (nouveau domaine, ancienne adresse), mais ses liens s’ouvrent dans le navigateur du système', async () => {
+    const open = handlers.get(IPC.openExternal)!;
+    for (const site of OFFICIAL_WEB_ORIGINS) {
+      await expect(open(event(`${site}/`), `${site}/telecharger`)).rejects.toThrow(/^FORBIDDEN\|/);
+      await expect(handlers.get(IPC.prefsGet)!(event(`${site}/`))).rejects.toThrow(/^FORBIDDEN\|/);
+      await expect(handlers.get(IPC.connectorSetEnabled)!(event(`${site}/`), true)).rejects.toThrow(/^FORBIDDEN\|/);
+    }
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(store.getPreferences).not.toHaveBeenCalled();
+    expect(connector.setEnabled).not.toHaveBeenCalled();
+    for (const site of OFFICIAL_WEB_ORIGINS) await expect(open(event('app://magistra/'), `${site}/telecharger`)).resolves.toBe(true);
+    expect(openExternal.mock.calls).toEqual(OFFICIAL_WEB_ORIGINS.map(site => [`${site}/telecharger`]));
+    openExternal.mockClear();
+    for (const bad of ['https://www.mag-istra.fr@evil.example/', 'https://user@www.mag-istra.fr/', 'https://www.mag-istra.fr:443@evil.example/']) {
+      await expect(open(event('app://magistra/'), bad)).resolves.toBe(false);
+    }
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it('shell:open-external refuse les schémas dangereux', async () => {

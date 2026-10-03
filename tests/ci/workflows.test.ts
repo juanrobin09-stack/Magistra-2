@@ -13,6 +13,8 @@ import { LOCAL_NETWORK_ACCESS_ARGS, OTHER_SITE_PORT, SITE_PORT } from '../../e2e
 import { CONNECTOR_HARNESS_DIR, CONNECTOR_HARNESS_DIRS, CONNECTOR_PROJECTS, E2E_OUTPUT_DIRS, E2E_SCREENSHOT_DIRS, type E2EProject } from '../../e2e/outputDirs';
 import { PROVIDER_PRESETS } from '../../shared/ai/presets';
 import { MIN_OLLAMA_VERSION } from '../../shared/ai/models';
+import { OFFICIAL_WEB_ORIGINS } from '../../shared/localConnector';
+import { SITE_LEGACY_ORIGIN, SITE_ORIGIN } from '../../shared/site';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => readFileSync(path.join(root, file), 'utf8');
@@ -189,7 +191,11 @@ describe('documentation', () => {
     // Le bouton du site et le lien DU SITE (/telecharger : le serveur renvoie au fichier de l'installateur), jamais un
     // lien GitHub.
     expect(steps[0]).toContain('**Télécharger Magistra pour Windows**');
+    expect(steps[0]).toContain('[www.mag-istra.fr/telecharger](https://www.mag-istra.fr/telecharger)');
+    // L'ancienne adresse du projet reste citée (alias valable) ; ces deux liens sont ceux de SITE_ORIGIN et SITE_LEGACY_ORIGIN.
     expect(steps[0]).toContain('[magistra-2.vercel.app/telecharger](https://magistra-2.vercel.app/telecharger)');
+    expect(steps[0]).toContain(`${SITE_ORIGIN}/telecharger`);
+    expect(steps[0]).toContain(`${SITE_LEGACY_ORIGIN}/telecharger`);
     expect(steps[0]).not.toMatch(/github\.com/);
     expect(steps[1]).toContain('« Windows a protégé votre ordinateur »');
     expect(steps[1]).toContain('**Informations complémentaires** puis **Exécuter quand même**');
@@ -449,6 +455,35 @@ describe('README : attribution, architecture et déploiement du site vitrine', (
     for (const fragment of ['`npm run build:site`', '`dist-site/`', '`api/windows-release.ts`', '`api/download.ts`', 'sans `preload`']) expect(deploy, fragment).toContain(fragment);
     // Les fonctions du site fonctionnent sans autre variable : le README le dit.
     expect(deploy).toMatch(/fonctionnent sans aucune autre variable/);
+  });
+
+  it('README : adresse officielle du site et ancienne adresse (alias), rattachement du domaine à Vercel, liste exacte des origines de l’application', () => {
+    const deploy = section('## Déploiement du site (Vercel)');
+    const domain = deploy.slice(deploy.indexOf('### Domaine du site (www.mag-istra.fr)'), deploy.indexOf('### Nettoyage de Vercel'));
+    expect(domain.length).toBeGreaterThan(500);
+    for (const fragment of [
+      `\`${SITE_ORIGIN}\``, `\`${SITE_LEGACY_ORIGIN}\``, '*Settings* → *Domains* → *Add*', 'ajoutez `www.mag-istra.fr`', '**domaine principal**', 'branche `master`',
+      'Ajoutez ensuite `mag-istra.fr`', '**redirection vers `www.mag-istra.fr`**', 'Enregistrements DNS', '**CNAME** pour `www`', '**A** (ou **ALIAS**/**ANAME**', 'la valeur donnée par Vercel',
+      'HTTPS', '`curl -sI https://www.mag-istra.fr/`', '`curl -sI https://mag-istra.fr/`', '`VITE_LEGAL_*`', '`VITE_AUTHOR_PROFILE_URL`', 'reste **`master`**',
+      '**Ne redirigez pas l\'ancienne adresse.**', 'aucune redirection vers le nouveau domaine', '**2.0.4**', '`OFFICIAL_WEB_ORIGINS`',
+    ]) {
+      expect(domain, fragment).toContain(fragment);
+    }
+    // Étapes numérotées dans l'ordre : domaine, DNS, HTTPS, variables, ancienne adresse, application.
+    expect(domain.split('\n').filter(l => /^\d\. /.test(l))).toHaveLength(6);
+    // Mise en production et vérification : le nouveau domaine d'abord, l'ancienne adresse conservée.
+    expect(deploy).toContain("Le site public (`www.mag-istra.fr`, et l'ancienne adresse Vercel `magistra-2.vercel.app`) sert la branche **`master`**");
+    expect(deploy).toContain('`curl -sI https://www.mag-istra.fr/` montre la CSP et `Strict-Transport-Security`');
+    // Chapitre du connecteur : les deux adresses exactes de la liste compilée, l'apex absent, version de l'application.
+    const custom = readme.slice(readme.indexOf('**Adresses du site public**'), readme.indexOf('**Ports 47831–47833**'));
+    expect(custom.length).toBeGreaterThan(500);
+    for (const origin of OFFICIAL_WEB_ORIGINS) expect(custom, origin).toContain(`\`${origin}\``);
+    expect(custom).toContain("l'apex `https://mag-istra.fr` n'y figure pas");
+    expect(custom).toContain('La comparaison est **exacte**');
+    expect(custom).toContain('à partir de la version **2.0.4**');
+    expect(readme).not.toContain("aujourd'hui `https://magistra-2.vercel.app`, l'adresse du site public");
+    // Le domaine ne tient pas dans le code de vercel.json (voir tests/server/deploy.test.ts) : aucune redirection n'y est annoncée.
+    expect(read('vercel.json')).not.toMatch(/mag-istra|redirects/);
   });
 
   it('« Nettoyage de Vercel » : les anciennes variables peuvent être supprimées, la base Supabase et l’instance Clerk supprimées ou mises en pause', () => {

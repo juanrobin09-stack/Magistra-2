@@ -27,7 +27,7 @@ Il s'appuie sur **vos documents** et sur des **sources vérifiables**. L'enseign
 
 Installez Magistra sur votre ordinateur Windows (10 ou 11, 64 bits) : l'IA y fonctionne **gratuitement, en privé, même sans Internet**. Aucun compte, aucune clé, aucune ligne de commande.
 
-1. **Téléchargez Magistra** : sur le site Magistra, cliquez sur **Télécharger Magistra pour Windows**, ou ouvrez directement le lien du site [magistra-2.vercel.app/telecharger](https://magistra-2.vercel.app/telecharger). Le fichier `Magistra-Setup-x.y.z.exe` (dernière version) se télécharge aussitôt, sans autre page.
+1. **Téléchargez Magistra** : sur le site Magistra, cliquez sur **Télécharger Magistra pour Windows**, ou ouvrez directement le lien du site [www.mag-istra.fr/telecharger](https://www.mag-istra.fr/telecharger) (l'ancienne adresse, [magistra-2.vercel.app/telecharger](https://magistra-2.vercel.app/telecharger), fonctionne toujours). Le fichier `Magistra-Setup-x.y.z.exe` (dernière version) se télécharge aussitôt, sans autre page.
 2. **Ouvrez le fichier téléchargé.** Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur **Informations complémentaires** puis **Exécuter quand même**.
 3. **Magistra s'installe en quelques secondes**, sans droits d'administrateur, et s'ouvre toute seule.
 
@@ -259,7 +259,7 @@ Dans les deux cas, une fois la release publiée avec son installateur, le site l
 
 Ne sont **jamais** proposés : un brouillon, une préversion (tag `vX.Y.Z-rc.1`), une étiquette autre que `vX.Y.Z`, une release sans `Magistra-Setup-X.Y.Z.exe` du même numéro, ni un lien de téléchargement hors de `https://github.com/<dépôt>/releases/download/`.
 
-**Lien de téléchargement du site : `/telecharger`** (par exemple `https://magistra-2.vercel.app/telecharger`, à partager tel quel). C'est l'adresse du bouton « Télécharger » : le serveur y répond par une redirection vers le fichier, et le navigateur télécharge l'installateur sans quitter la page. Même route que `GET /api/download` (réécriture dans `vercel.json` ; `npm start` et `npm run dev` la servent aussi). Le fichier lui-même reste hébergé par la release GitHub : un installateur d'environ 100 Mo ne peut pas être versionné dans le dépôt (limite de 100 Mo par fichier) et épuiserait vite la bande passante gratuite de Vercel ; l'enseignant ne voit jamais de page GitHub.
+**Lien de téléchargement du site : `/telecharger`** (par exemple `https://www.mag-istra.fr/telecharger`, à partager tel quel ; l'ancienne adresse `https://magistra-2.vercel.app/telecharger` fonctionne aussi). C'est l'adresse du bouton « Télécharger » : le serveur y répond par une redirection vers le fichier, et le navigateur télécharge l'installateur sans quitter la page. Même route que `GET /api/download` (réécriture dans `vercel.json` ; `npm start` et `npm run dev` la servent aussi). Le fichier lui-même reste hébergé par la release GitHub : un installateur d'environ 100 Mo ne peut pas être versionné dans le dépôt (limite de 100 Mo par fichier) et épuiserait vite la bande passante gratuite de Vercel ; l'enseignant ne voit jamais de page GitHub.
 
 Le bouton télécharge **toujours un fichier**, jamais une page GitHub :
 - version connue : le lien du site, qui renvoie à son installateur `Magistra-Setup-X.Y.Z.exe` ;
@@ -276,8 +276,10 @@ Le bouton télécharge **toujours un fichier**, jamais une page GitHub :
 
 **Hébergement personnel avancé** : `POST /api/generation` enregistre le résultat d'une génération locale. Cette route compte pour `RATE_LIMIT_PER_MINUTE`, pas pour `RATE_LIMIT_GLOBAL_PER_MINUTE`. Après la mise à jour, réexécutez `supabase-schema.sql` : il ajoute la colonne `kind` de `api_requests`.
 
-**Domaine personnalisé** (hébergement personnel avancé) : l'application n'accepte que les origines de `OFFICIAL_WEB_ORIGINS` (`shared/localConnector.ts`, aujourd'hui `https://magistra-2.vercel.app`, l'adresse du site public, qui n'a pas d'interface avec comptes). Cette liste est **compilée dans l'application**. Pour servir l'interface sur un autre domaine (ou sur un serveur autonome d'établissement) :
-1. ajoutez l'origine exacte (`https://mon-domaine.fr`, sans chemin ni barre finale) ; gardez l'ancienne tant qu'elle sert ;
+**Adresses du site public** : l'adresse officielle est **`https://www.mag-istra.fr`** (domaine principal, constante `SITE_ORIGIN` de `shared/site.ts`, reprise par le lien canonique, le plan du site et `robots.txt`). L'ancienne adresse **`https://magistra-2.vercel.app`** (celle du projet Vercel) reste valable comme alias. Rattacher le domaine au projet : voir « [Domaine du site (www.mag-istra.fr)](#domaine-du-site-wwwmag-istrafr) ».
+
+**Domaine personnalisé** (hébergement personnel avancé) : l'application n'accepte que les origines de `OFFICIAL_WEB_ORIGINS` (`shared/localConnector.ts`), aujourd'hui exactement `https://magistra-2.vercel.app` et `https://www.mag-istra.fr` (les adresses du site public, qui n'a pas d'interface avec comptes). La comparaison est **exacte**, caractère pour caractère : ni joker, ni sous-domaine, ni `http://`, ni port, ni majuscules ; l'apex `https://mag-istra.fr` n'y figure pas (le projet ne le sert pas : Vercel le redirige vers `www`). Cette liste est **compilée dans l'application** : `www.mag-istra.fr` n'est reconnu qu'à partir de la version **2.0.4**. Pour servir l'interface sur un autre domaine (ou sur un serveur autonome d'établissement) :
+1. ajoutez l'origine exacte à `OFFICIAL_WEB_ORIGINS` (`https://mon-domaine.fr`, sans chemin ni barre finale ; les adresses du site public viennent de `shared/site.ts`) ; gardez les anciennes tant qu'elles servent ;
 2. **publiez une nouvelle version de l'application** et faites-la installer. Les versions déjà installées ignorent les demandes de connexion du nouveau domaine et refusent ses requêtes (403) : le site y affiche « Magistra n’est pas encore détectée. » ;
 3. la **CSP du serveur autonome reste inchangée** : `connect-src` vise les ports du connecteur (`http://127.0.0.1:47831 http://127.0.0.1:47832 http://127.0.0.1:47833`), pas le domaine du site.
 
@@ -306,7 +308,7 @@ Le site public est une **vitrine statique** : présentation, téléchargement de
 
 ### Mise en production
 
-Le site public (`magistra-2.vercel.app`) sert la branche **`master`** :
+Le site public (`www.mag-istra.fr`, et l'ancienne adresse Vercel `magistra-2.vercel.app`) sert la branche **`master`** :
 1. **Fusionnez la PR** de cette version dans `master` (sans cela, l'ancien code reste en ligne).
 2. Dans Vercel → *Settings* → *Environment Variables* (environnement **Production**), renseignez :
    - **à renseigner avant de diffuser**, les variables **de build** (publiques par nature) : les informations légales de l'éditeur affichées dans les pages *Mentions légales* et *Confidentialité* — `VITE_LEGAL_PUBLISHER` (nom ou raison sociale), `VITE_LEGAL_DIRECTOR` (directeur de la publication), `VITE_LEGAL_ADDRESS`, `VITE_LEGAL_CONTACT` (adresse électronique de contact, aussi utilisée pour les demandes de droits RGPD), et `VITE_LEGAL_HOST` (hébergeur du site : nom et adresse) — puis `VITE_LEGAL_VALIDATED=true` une fois les textes relus et validés par l'éditeur (sans elle, l'avis « projet de texte » reste affiché). Tant qu'une information manque, la page affiche un bandeau « à compléter » : le texte fourni est un **projet à faire valider** avant publication ;
@@ -314,7 +316,7 @@ Le site public (`magistra-2.vercel.app`) sert la branche **`master`** :
    - recommandé : `GITHUB_TOKEN`, jeton GitHub « fine-grained » en lecture seule, **sans aucune permission** (dépôts publics). Sur Vercel, les fonctions sortent par des adresses IP partagées avec d'autres clients : sans jeton, la limite de l'API GitHub (60 requêtes par heure et par adresse) peut être déjà atteinte : « Télécharger Magistra pour Windows » télécharge alors toujours la dernière version, mais sans afficher ni sa version, ni sa taille, ni son empreinte. Variable d'exécution, jamais envoyée au navigateur ;
    - facultatif : `MAGISTRA_RELEASES_REPO` (dépôt `propriétaire/dépôt` dont les versions sont proposées ; vide : le dépôt officiel).
 3. **Redéployez** (Vercel → *Deployments* → *Redeploy*) : une variable modifiée ne s'applique qu'au déploiement suivant ([Vercel](https://vercel.com/docs/environment-variables)), et les variables `VITE_*` sont intégrées à la construction du site.
-4. Vérifiez : la page d'accueil s'affiche sans connexion ; **Télécharger Magistra pour Windows** (et `/telecharger`) télécharge l'installateur ; `/api/windows-release` renvoie du JSON ; `curl -sI https://magistra-2.vercel.app/` montre la CSP et `Strict-Transport-Security`.
+4. Vérifiez : la page d'accueil s'affiche sans connexion ; **Télécharger Magistra pour Windows** (et `/telecharger`) télécharge l'installateur ; `/api/windows-release` renvoie du JSON ; `curl -sI https://www.mag-istra.fr/` montre la CSP et `Strict-Transport-Security` (même contrôle sur `https://magistra-2.vercel.app/`, qui reste servie).
 
 | Variable | Où | Rôle |
 |---|---|---|
@@ -322,6 +324,17 @@ Le site public (`magistra-2.vercel.app`) sert la branche **`master`** :
 | `VITE_AUTHOR_PROFILE_URL` | build (Vercel) et variable de dépôt GitHub (installateur) | profil de l'auteur, lié depuis « Magistra, créé par Juan Robin » ; vide : profil GitHub par défaut |
 | `GITHUB_TOKEN` | exécution (Vercel) | facultatif, recommandé : relève la limite de l'API GitHub pour la version Windows affichée |
 | `MAGISTRA_RELEASES_REPO` | exécution (Vercel) | facultatif : dépôt dont les versions sont proposées |
+
+### Domaine du site (www.mag-istra.fr)
+
+L'adresse officielle du site est `https://www.mag-istra.fr` ; `https://magistra-2.vercel.app` (adresse du projet Vercel) reste valable. À faire **une fois**, par le propriétaire du projet Vercel et du nom de domaine :
+
+1. **Attacher le domaine au projet.** Vercel → le projet → *Settings* → *Domains* → *Add* : ajoutez `www.mag-istra.fr` et définissez-le comme **domaine principal** (environnement Production, branche `master`). Ajoutez ensuite `mag-istra.fr` (sans `www`) avec la **redirection vers `www.mag-istra.fr`** : l'apex n'est pas servi par le projet, il renvoie vers `www`.
+2. **Enregistrements DNS.** Chez le registrar du nom de domaine (zone DNS de `mag-istra.fr`), créez ceux que Vercel affiche pour chaque domaine (page *Domains*, domaine en « Invalid Configuration ») : un enregistrement **CNAME** pour `www` vers la valeur donnée par Vercel, et, pour l'apex `mag-istra.fr`, un enregistrement **A** (ou **ALIAS**/**ANAME** si le registrar le propose) vers la valeur donnée par Vercel. Supprimez les enregistrements `A`, `AAAA` ou `CNAME` qui feraient double emploi (page de parking du registrar).
+3. **Vérifier le HTTPS.** Quand les enregistrements sont propagés (de quelques minutes à quelques heures), Vercel affiche « Valid Configuration » et délivre seul le certificat : rien à acheter ni à installer. Vérifiez avec `curl -sI https://www.mag-istra.fr/` (réponse `200`, avec la CSP et `Strict-Transport-Security`) et `curl -sI https://mag-istra.fr/` (redirection vers `https://www.mag-istra.fr/`) ; `https://www.mag-istra.fr/robots.txt` et `https://www.mag-istra.fr/sitemap.xml` doivent afficher leur texte (et non la page d'accueil). Une erreur de certificat dans un navigateur signifie que l'émission n'est pas terminée : attendez, puis regardez l'état du domaine dans Vercel.
+4. **Variables de build et branche de production.** Aucune variable n'est liée au nom de domaine : `VITE_LEGAL_*` (informations légales) et `VITE_AUTHOR_PROFILE_URL` restent celles de l'environnement **Production** (voir « Mise en production » ci-dessus ; redéployez après toute modification), et la branche de production du projet (*Settings* → *Git*) reste **`master`**. Le lien canonique de la page d'accueil, le plan du site (`sitemap.xml`) et `robots.txt` reprennent `SITE_ORIGIN` (`shared/site.ts`) : `npm run verify:site` échoue si l'un d'eux s'en écarte.
+5. **Ne redirigez pas l'ancienne adresse.** `magistra-2.vercel.app` reste un alias du projet : `vercel.json` ne contient aucune redirection vers le nouveau domaine, car elle casserait l'ancienne adresse tant que le nouveau domaine n'est pas rattaché et validé. Une fois l'étape 3 réussie, une redirection se règle dans Vercel (*Domains*), jamais dans le code.
+6. **Application Windows.** Le domaine n'est reconnu que par l'application **2.0.4** et les suivantes (`OFFICIAL_WEB_ORIGINS` est compilée dans l'application) : publiez cette version (voir « [Mainteneurs](#mainteneurs--versions-variables-domaine-ports) »). Une autorisation du connecteur local est liée à l'origine du site : sur le nouveau domaine, chaque navigateur doit se reconnecter.
 
 ### Nettoyage de Vercel
 

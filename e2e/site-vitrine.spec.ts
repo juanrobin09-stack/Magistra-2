@@ -5,6 +5,7 @@
 // site et GET /api/windows-release (jamais /api/mode, /api/status, un service de connexion ou une base de données).
 
 import { expect, test as base, type Page } from '@playwright/test';
+import { buildRobotsTxt, buildSitemapXml, SITE_ORIGIN } from '../shared/site';
 
 const SITE_HOST = '127.0.0.1:4174';
 
@@ -122,6 +123,37 @@ test('polices servies par le site lui-même, aucun service tiers', async ({ page
   const fonts = await page.evaluate(() => performance.getEntriesByType('resource').map(e => e.name).filter(n => /\.(woff2?|ttf|otf)(\?|$)/.test(n)));
   expect(fonts.length, 'polices chargées').toBeGreaterThan(0);
   for (const url of fonts) expect(new URL(url).host).toBe(SITE_HOST);
+});
+
+test('référencement : lien canonique et Open Graph à l’adresse officielle, robots.txt et plan du site servis par le site (jamais l’accueil)', async ({ page }) => {
+  await page.goto('/');
+  // Adresse officielle (shared/site.ts) : seulement des balises, jamais une ressource chargée (le moniteur le vérifie à la fin).
+  await expect(page.locator('link[rel="canonical"]')).toHaveCount(1);
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `${SITE_ORIGIN}/`);
+  const og = await page.locator('meta[property^="og:"]').evaluateAll(metas => Object.fromEntries(metas.map(m => [m.getAttribute('property'), m.getAttribute('content')])));
+  expect(og).toEqual({
+    'og:type': 'website',
+    'og:site_name': 'Magistra',
+    'og:title': 'Magistra — assistant pédagogique IA',
+    'og:description': await page.locator('meta[name="description"]').getAttribute('content'),
+    'og:url': `${SITE_ORIGIN}/`,
+    'og:locale': 'fr_FR',
+  });
+  expect(Object.keys(og)).not.toContain('og:image');
+
+  const robots = await page.request.get('/robots.txt');
+  expect(robots.status()).toBe(200);
+  expect(robots.headers()['content-type']).toContain('text/plain');
+  expect(await robots.text()).toBe(buildRobotsTxt());
+  expect(await robots.text()).toContain(`Sitemap: ${SITE_ORIGIN}/sitemap.xml`);
+
+  const sitemap = await page.request.get('/sitemap.xml');
+  expect(sitemap.status()).toBe(200);
+  expect(sitemap.headers()['content-type']).toMatch(/xml/);
+  const xml = await sitemap.text();
+  expect(xml).toBe(buildSitemapXml());
+  expect(xml).not.toContain('<html');
+  for (const location of xml.matchAll(/<loc>([^<]+)<\/loc>/g)) expect(location[1].startsWith(`${SITE_ORIGIN}/`)).toBe(true);
 });
 
 // ─── 2. Attribution ─────────────────────────────────────────────────────────

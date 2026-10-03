@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CONNECTOR_HOST, CONNECTOR_PORTS } from '../../shared/localConnector.js';
+import { SITE_ORIGIN } from '../../shared/site.js';
 import { ROUTE_METHODS } from '../../server/handlers.js';
 import { securityHeaders } from '../../server/standalone.js';
 import { COMMERCIAL_VENDOR } from '../vendor';
@@ -67,6 +68,26 @@ describe('déploiement', () => {
     // Les ressources hachées de /assets/ sont immuables ; rien d'autre ne l'est.
     const assets = vercel.headers.filter(h => h.source !== '/(.*)');
     expect(assets).toEqual([{ source: '/assets/(.*)', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] }]);
+  });
+
+  it('nouveau domaine du site : vercel.json ne change pas (aucune redirection de l’ancienne adresse, aucune règle d’hôte, CSP sans aucun domaine)', () => {
+    // Le domaine se rattache au projet dans Vercel (Settings → Domains) : une redirection permanente écrite ici casserait
+    // l'ancienne adresse tant que le nouveau domaine n'est pas attaché et validé.
+    expect(Object.keys(vercel).sort()).toEqual(['$schema', 'buildCommand', 'framework', 'functions', 'headers', 'outputDirectory', 'regions', 'rewrites']);
+    expect(vercel).not.toHaveProperty('redirects');
+    expect(JSON.stringify(vercel)).not.toMatch(/mag-istra|vercel\.app|"has"|"missing"|"host"|"permanent"|"statusCode"/);
+    expect(vercel.rewrites.every(r => r.destination.startsWith('/'))).toBe(true);
+    // CSP : uniquement le site lui-même (et des images et polices data:) ; ni le nouveau domaine, ni aucun service externe.
+    const csp = parseCsp(globalHeaders()['Content-Security-Policy']);
+    expect(Object.keys(csp).sort()).toEqual([
+      'base-uri', 'connect-src', 'default-src', 'font-src', 'form-action', 'frame-ancestors', 'img-src', 'object-src', 'script-src', 'style-src',
+    ]);
+    for (const [directive, values] of Object.entries(csp)) {
+      for (const value of values) expect(value, directive).toMatch(/^(?:'self'|'none'|'unsafe-inline'|data:)$/);
+    }
+    expect(globalHeaders()['Content-Security-Policy']).not.toMatch(/https?:|\*|mag-istra/);
+    expect(csp['script-src']).toEqual(["'self'"]);
+    expect(csp['img-src']).toEqual(["'self'", 'data:']);
   });
 
   it('en-têtes communs : le site vitrine et le serveur autonome envoient les mêmes (la CSP du site est plus stricte que celle de l’interface avec comptes)', () => {
@@ -292,6 +313,9 @@ describe('CSP du site vitrine (vercel.json)', () => {
     expect(features.sort()).toEqual(['camera=()', 'geolocation=()', 'microphone=()', 'payment=()', 'serial=()', 'usb=()']);
   });
 
+  /** Lien canonique de la page d'accueil du site : à l'adresse officielle, exactement. */
+  const CANONICAL_LINK = `<link rel="canonical" href="${SITE_ORIGIN}/" />`;
+
   /** La page doit tenir dans cette politique : aucun script en ligne, aucun gestionnaire d'évènement, aucune ressource externe. */
   function expectFitsPolicy(html: string): void {
     const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
@@ -301,7 +325,10 @@ describe('CSP du site vitrine (vercel.json)', () => {
     }
     expect(html).not.toMatch(/\son[a-z]+\s*=/i);
     expect(html).not.toMatch(/javascript:/i);
-    for (const [, url] of html.matchAll(/\b(?:src|href|action|poster)\s*=\s*"([^"]*)"/gi)) expect(url, url).not.toMatch(/^(?:https?:)?\/\//);
+    // Seule adresse absolue admise : le lien canonique du site (shared/site.ts), qui n'est jamais chargé par la page ; une
+    // seconde occurrence, ou toute autre adresse, reste refusée.
+    const withoutCanonical = html.replace(CANONICAL_LINK, '');
+    for (const [, url] of withoutCanonical.matchAll(/\b(?:src|href|action|poster)\s*=\s*"([^"]*)"/gi)) expect(url, url).not.toMatch(/^(?:https?:)?\/\//);
     // Le seul style en ligne est l'attribut « style » du squelette de chargement (style-src 'unsafe-inline').
     expect(html).not.toMatch(/<style\b[^>]*>(?![\s]*<\/style>)/i);
   }
@@ -309,12 +336,24 @@ describe('CSP du site vitrine (vercel.json)', () => {
   it('index.html (squelette de chargement) tient dans la politique', () => {
     const html = read('index.html');
     expectFitsPolicy(html);
+    // La page de l'application n'a pas de lien canonique (celui du site est dans site/index.html).
+    expect(html).not.toContain('rel="canonical"');
     expect(html).toMatch(/<div id="root"><div role="status"[^>]* style="[^"]*">/);
     // Icône « data: » : couverte par img-src.
     expect(html).toMatch(/<link rel="icon"[^>]* href="data:image\/svg\+xml,/);
   });
 
   it.skipIf(!existsSync(path.join(root, 'dist-site', 'index.html')))('dist-site/index.html (site construit) tient dans la politique', () => {
-    expectFitsPolicy(read('dist-site/index.html'));
+    const html = read('dist-site/index.html');
+    expectFitsPolicy(html);
+    expect([...html.matchAll(/rel="canonical"/g)]).toHaveLength(1);
+    expect(html).toContain(CANONICAL_LINK);
+  });
+
+  it('site/index.html (source) : le lien canonique est la seule adresse absolue d\'un attribut ; Open Graph sans image ni autre ressource', () => {
+    const html = read('site/index.html');
+    expect(html).toContain(CANONICAL_LINK);
+    expect(html.replace(CANONICAL_LINK, '')).not.toMatch(/\b(?:src|href|action|poster)\s*=\s*"(?:https?:)?\/\//i);
+    expect(html).not.toMatch(/og:image|og:video|og:audio/);
   });
 });

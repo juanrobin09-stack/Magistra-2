@@ -7,7 +7,7 @@ import { createServer as createNetServer, type Server as NetServer } from 'node:
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { buildPairingUrl, PAIR_CODE_RE, parseAppUrl, type ConnectorAppStatus } from '../../shared/localConnector.js';
+import { buildPairingUrl, OFFICIAL_WEB_ORIGINS, PAIR_CODE_RE, parseAppUrl, type ConnectorAppStatus } from '../../shared/localConnector.js';
 import type { Capabilities } from '../../shared/types.js';
 import type { SecretCipher } from '../../electron/aiConfig.js';
 import { pairCode, randomToken } from '../../electron/connector/crypto.js';
@@ -15,6 +15,7 @@ import { withFileLock } from '../../electron/jsonFile.js';
 import {
   appUrlFromArgv, DEV_DISABLED_PROBLEM, LocalConnector, NO_PORT_PROBLEM, PROTOCOL_HANDLER_ARGS, type ConnectorGenerationHost, type ConsentRequest, type LocalConnectorDeps,
 } from '../../electron/connector/service.js';
+import { originTraps, unicodeTraps } from './officialOrigins.js';
 
 const ORIGIN = 'https://magistra-2.vercel.app';
 
@@ -350,6 +351,80 @@ describe('URL magistra:// et consentement', () => {
     await c.init();
     await c.handleAppUrl(pairUrl(), () => undefined);
     expect(c.pairing.pending).toBeNull();
+  });
+});
+
+describe('URL magistra://pair : origines officielles (OFFICIAL_WEB_ORIGINS), exactes', () => {
+  it.each([...OFFICIAL_WEB_ORIGINS])('%s : fenêtre au premier plan, boîte au texte exact (nom d’hôte), demande en attente', async origin => {
+    const requests: ConsentRequest[] = [];
+    const focus = vi.fn();
+    const c = connector({
+      allowedOrigins: [...OFFICIAL_WEB_ORIGINS],
+      askConsent: async request => {
+        requests.push(request);
+        return true;
+      },
+    });
+    await c.init();
+    await c.start();
+    await c.handleAppUrl(pairUrl(origin), focus);
+    const host = new URL(origin).host;
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ origin, site: host, message: `Autoriser ${host} à utiliser l’intelligence locale de cet ordinateur ?` });
+    expect(c.pairing.pending).toMatchObject({ origin, state: 'approved' });
+    expect(logs.filter(l => l.includes('ignorée'))).toEqual([]);
+  });
+
+  it('le nouveau domaine : boîte « Autoriser www.mag-istra.fr à utiliser l’intelligence locale de cet ordinateur ? »', async () => {
+    const requests: ConsentRequest[] = [];
+    const c = connector({ allowedOrigins: [...OFFICIAL_WEB_ORIGINS], askConsent: async request => (requests.push(request), false) });
+    await c.init();
+    await c.handleAppUrl(pairUrl('https://www.mag-istra.fr'), vi.fn());
+    expect(requests.map(r => r.message)).toEqual(['Autoriser www.mag-istra.fr à utiliser l’intelligence locale de cet ordinateur ?']);
+    expect(c.pairing.pending).toMatchObject({ origin: 'https://www.mag-istra.fr', state: 'refused' });
+  });
+
+  it.each([...OFFICIAL_WEB_ORIGINS])('variantes piégées de %s (apex, http, port, identifiants, sous-domaine, suffixe, préfixe, casse, point final, punycode, Unicode…) : aucune boîte, aucune fenêtre', async official => {
+    const askConsent = vi.fn(async () => true);
+    const focus = vi.fn();
+    const c = connector({ allowedOrigins: [...OFFICIAL_WEB_ORIGINS], askConsent });
+    await c.init();
+    const traps = [...originTraps(official), ...unicodeTraps(official)];
+    expect(traps.length).toBeGreaterThan(70);
+    for (const trap of traps) await c.handleAppUrl(pairUrl(trap), focus);
+    expect(askConsent).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
+    expect(c.pairing.pending).toBeNull();
+    // Chaque variante est ignorée, pour l'une des deux raisons : forme inattendue (origine mal formée) ou site non autorisé.
+    const ignored = logs.filter(l => l.includes('forme inattendue') || l.includes('site non autorisé'));
+    expect(ignored).toHaveLength(traps.length);
+    expect(logs).toHaveLength(traps.length);
+  });
+
+  it('l’apex et un sous-domaine, bien formés, sont refusés comme « site non autorisé » (journal : le nom d’hôte seulement)', async () => {
+    const askConsent = vi.fn(async () => true);
+    const c = connector({ allowedOrigins: [...OFFICIAL_WEB_ORIGINS], askConsent });
+    await c.init();
+    await c.handleAppUrl(pairUrl('https://mag-istra.fr'), vi.fn());
+    await c.handleAppUrl(pairUrl('https://app.www.mag-istra.fr'), vi.fn());
+    await c.handleAppUrl(pairUrl('https://www.mag-istra.fr:8443'), vi.fn());
+    expect(askConsent).not.toHaveBeenCalled();
+    expect(logs).toEqual([
+      'Demande de connexion ignorée : site non autorisé (mag-istra.fr).',
+      'Demande de connexion ignorée : site non autorisé (app.www.mag-istra.fr).',
+      'Demande de connexion ignorée : site non autorisé (www.mag-istra.fr:8443).',
+    ]);
+  });
+
+  it('une demande en attente pour l’une des deux origines n’est pas reprise pour l’autre', async () => {
+    const requests: ConsentRequest[] = [];
+    const c = connector({ allowedOrigins: [...OFFICIAL_WEB_ORIGINS], askConsent: async request => (requests.push(request), true) });
+    await c.init();
+    await c.handleAppUrl(pairUrl('https://www.mag-istra.fr'), vi.fn());
+    await c.handleAppUrl(pairUrl('https://magistra-2.vercel.app'), vi.fn());
+    expect(requests.map(r => r.origin)).toEqual(['https://www.mag-istra.fr', 'https://magistra-2.vercel.app']);
+    expect(c.pairing.pending).toMatchObject({ origin: 'https://magistra-2.vercel.app' });
   });
 });
 

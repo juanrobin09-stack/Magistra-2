@@ -3,9 +3,10 @@
 // unique, liaison de l'accusé au port d'écoute (hôte). Horloge simulée.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canonicalPairAck, CONNECTOR_FORMATS, CONNECTOR_LIMITS, type PairingUrlParams } from '../../shared/localConnector.js';
+import { canonicalPairAck, CONNECTOR_FORMATS, CONNECTOR_LIMITS, OFFICIAL_WEB_ORIGINS, type PairingUrlParams } from '../../shared/localConnector.js';
 import { pairAck, randomToken, sha256Base64Url, fromBase64Url } from '../../electron/connector/crypto.js';
 import { MAX_PROMPTS_PER_MINUTE, PairingRegistry, type PairingTicket } from '../../electron/connector/pairing.js';
+import { originTraps } from './officialOrigins.js';
 
 const ORIGIN = 'https://magistra-2.vercel.app';
 /** Hôte du port d'écoute de l'application (fourni par le serveur à chaque réponse). */
@@ -185,6 +186,21 @@ describe('demande d’appairage', () => {
       expect(() => complete(registry, p, 'https://evil.example')).toThrow(expect.objectContaining({ code: 'FORBIDDEN', status: 403 }));
     }
     expect(complete(registry, p)).toMatchObject({ status: 'approved' });
+  });
+
+  it.each([...OFFICIAL_WEB_ORIGINS])('demande ouverte pour %s : liée à cette origine EXACTE (preuve de réception comme fin d’appairage), jamais à une variante ni à l’autre origine officielle', origin => {
+    const { registry } = setup();
+    const p = sitePairing(origin);
+    registry.answer(prompt(registry, p), true);
+    const others = [...originTraps(origin), ...OFFICIAL_WEB_ORIGINS.filter(other => other !== origin)];
+    expect(others.length).toBeGreaterThan(60);
+    for (const other of others) {
+      expect(() => acknowledge(registry, p, other), other).toThrow(expect.objectContaining({ code: 'FORBIDDEN', status: 403 }));
+      expect(() => complete(registry, p, other), other).toThrow(expect.objectContaining({ code: 'FORBIDDEN', status: 403 }));
+    }
+    // Aucun essai n'a été consommé : l'origine exacte aboutit encore, avec le bon vérificateur.
+    expect(acknowledge(registry, p, origin)).toMatchObject({ status: 'consented' });
+    expect(complete(registry, p, origin)).toMatchObject({ status: 'approved', origin });
   });
 
   it('une nouvelle demande remplace l’ancienne (boîte fermée, 404 pour l’ancienne) ; même demande : aucune nouvelle boîte', () => {

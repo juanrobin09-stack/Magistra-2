@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildRobotsTxt, buildSitemapXml } from './shared/site';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +24,21 @@ function publishEntryAtRoot(): Plugin {
   };
 }
 
+/**
+ * robots.txt et sitemap.xml, produits à partir de l'adresse officielle (shared/site.ts : SITE_ORIGIN et pages du site) et
+ * publiés à la racine de dist-site/ seulement. Ce plugin n'appartient qu'à cette configuration : le build de
+ * l'application (vite.config.ts, dist/, embarqué dans Electron) n'a ni robots.txt ni plan du site.
+ */
+function publishSearchFiles(): Plugin {
+  return {
+    name: 'magistra-site-search-files',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'robots.txt', source: buildRobotsTxt() });
+      this.emitFile({ type: 'asset', fileName: 'sitemap.xml', source: buildSitemapXml() });
+    },
+  };
+}
+
 // Construction du SITE VITRINE (npm run build:site → dist-site/) : présentation, téléchargement de l'application
 // Windows, pages légales. Mêmes plugins et mêmes alias que l'application (vite.config.ts), mais ni l'API de
 // développement (magistraDevApi), ni le service de connexion, ni le connecteur local, ni le code de l'application :
@@ -30,7 +46,7 @@ function publishEntryAtRoot(): Plugin {
 // scripts/verify-site.mjs contrôle le résultat.
 export default defineConfig({
   base: '/',
-  plugins: [react(), tailwindcss(), publishEntryAtRoot()],
+  plugins: [react(), tailwindcss(), publishEntryAtRoot(), publishSearchFiles()],
   resolve: {
     alias: {
       '@': path.resolve(root, 'src'),

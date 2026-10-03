@@ -2,13 +2,14 @@
 // Playwright « site » (port 4174, aperçu de dist-site/). Le contrat avec la CI et vercel.json : « build:site » produit
 // dist-site/index.html, « verify:site » le contrôle, le projet « site » le teste.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import playwrightConfig from '../../playwright.config';
 import { E2E_OUTPUT_DIRS, requestedProjects } from '../../e2e/outputDirs';
 import { APP_TITLE } from '@/hooks/useDocumentTitle';
+import { SITE_ORIGIN, SITE_PATHS } from '../../shared/site';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => readFileSync(path.join(root, file), 'utf8');
@@ -58,6 +59,22 @@ describe('vite.site.config.ts', () => {
     expect(code(config)).not.toMatch(/CLERK/i);
   });
 
+  it('robots.txt et plan du site : produits par cette configuration seulement, à partir de shared/site.ts ; le build de l’application n’en a pas', () => {
+    expect(config).toContain("import { buildRobotsTxt, buildSitemapXml } from './shared/site';");
+    expect(config).toContain("fileName: 'robots.txt', source: buildRobotsTxt()");
+    expect(config).toContain("fileName: 'sitemap.xml', source: buildSitemapXml()");
+    expect(config).toContain('plugins: [react(), tailwindcss(), publishEntryAtRoot(), publishSearchFiles()],');
+    // Aucune adresse écrite ici : tout vient de shared/site.ts.
+    expect(code(config)).not.toMatch(/mag-istra|vercel\.app/);
+    // Le build de l'application (dist/, embarqué dans Electron) ne produit ni ne copie rien de tel.
+    const app = read('vite.config.ts');
+    expect(app).not.toMatch(/robots|sitemap|shared\/site|publishSearchFiles/);
+    // Un dossier « public/ » (celui de Vite par défaut) serait copié dans dist/ ET dans dist-site/ : il n'existe pas.
+    expect(existsSync(path.join(root, 'public'))).toBe(false);
+    expect(app).not.toContain('publicDir');
+    expect(config).not.toContain('publicDir');
+  });
+
   it('le dossier de sortie et les fichiers du site sont couverts par TypeScript', () => {
     const node = JSON.parse(read('tsconfig.node.json')) as { include: string[] };
     expect(node.include).toContain('vite.site.config.ts');
@@ -78,6 +95,36 @@ describe('Pages d’entrée', () => {
     const skeleton = (html: string) => /<div id="root">[\s\S]*?<\/div><\/div>/.exec(html)?.[0];
     expect(skeleton(site)).toBeDefined();
     expect(skeleton(site)).toBe(skeleton(app));
+  });
+
+  it('site/index.html : lien canonique et Open Graph minimaux à l’adresse officielle (shared/site.ts), sans image', () => {
+    expect(SITE_ORIGIN).toBe('https://www.mag-istra.fr');
+    const links = [...site.matchAll(/<link\b[^>]*>/g)].map(m => m[0]).filter(tag => /rel="canonical"/.test(tag));
+    expect(links).toEqual(['<link rel="canonical" href="https://www.mag-istra.fr/" />']);
+    expect(links[0]).toContain(`href="${SITE_ORIGIN}/"`);
+    const og = Object.fromEntries([...site.matchAll(/<meta property="(og:[a-z_:]+)" content="([^"]*)" \/>/g)].map(m => [m[1], m[2]]));
+    const description = /<meta name="description" content="([^"]*)" \/>/.exec(site)![1];
+    expect(og).toEqual({
+      'og:type': 'website',
+      'og:site_name': 'Magistra',
+      'og:title': APP_TITLE,
+      'og:description': description,
+      'og:url': `${SITE_ORIGIN}/`,
+      'og:locale': 'fr_FR',
+    });
+    expect([...site.matchAll(/<meta\b[^>]*property="og:/g)]).toHaveLength(6);
+    expect(site).not.toMatch(/og:image|og:video|og:audio|twitter:/);
+    // Seules adresses absolues de la page : le lien canonique et og:url (le « http://www.w3.org » de l'icône SVG est un nom d'espace de noms).
+    const absolute = [...site.matchAll(/(?:https?:)?\/\/[^\s"'<>)]+/g)].map(m => m[0]).filter(url => !url.startsWith('http://www.w3.org/'));
+    expect(absolute).toEqual([`${SITE_ORIGIN}/`, `${SITE_ORIGIN}/`]);
+    // L'accueil est la seule page déclarée canonique ; les pages du plan du site sont celles du site.
+    expect(SITE_PATHS[0]).toBe('/');
+  });
+
+  it('site/index.html : le lien canonique et og:url sont les seules adresses externes que scripts/verify-site.mjs admet (contrôle réel de la page)', async () => {
+    const verify = (await import(pathToFileURL(path.join(root, 'scripts', 'verify-site.mjs')).href)) as { checkIndexHtml(html: string): string[]; checkSearchTags(html: string): string[] };
+    expect(verify.checkIndexHtml(site)).toEqual([]);
+    expect(verify.checkSearchTags(site)).toEqual([]);
   });
 
   it('site/index.html : un seul script, externe, qui démarre le site vitrine (aucun script en ligne)', () => {

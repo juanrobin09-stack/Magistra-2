@@ -11,8 +11,13 @@
 //    seule /api/windows-release est permise), le port du connecteur local (47831), le connecteur lui-même
 //    (localConnector), ni une clé secrète (sk_live_…, sk_test_…, service_role, sb_secret_…, whsec_…) ;
 // 3. index.html ne contient aucun script en ligne (la politique de sécurité du site peut ainsi les refuser) ni aucune
-//    ressource chargée depuis un autre domaine ;
-// 4. aucune sourcemap (.map) n'est publiée.
+//    ressource chargée depuis un autre domaine. Seule exception, à liste blanche étroite : une adresse https absolue
+//    n'est admise que dans le lien canonique (<link rel="canonical">) et dans <meta property="og:url">, et seulement si
+//    elle est EXACTEMENT « <SITE_ORIGIN>/ » (SITE_ORIGIN, lue dans shared/site.ts) : ni lien ni image ni script ni
+//    feuille de style ni préchargement d'un autre domaine, ni <meta http-equiv="refresh"> ;
+// 4. référencement : un lien canonique et une adresse og:url (uniques), robots.txt (plan du site déclaré, rien d'interdit)
+//    et sitemap.xml (toutes les adresses sous SITE_ORIGIN) sont publiés ;
+// 5. aucune sourcemap (.map) n'est publiée.
 //
 // Usage : node scripts/verify-site.mjs [dossier]   (défaut : dist-site)
 
@@ -52,7 +57,7 @@ export const SECRET_PATTERNS = [
   [/\bwhsec_[A-Za-z0-9+/=]{8,}/, 'secret de webhook (whsec_…)'],
 ];
 
-const TEXT_EXTENSIONS = /\.(?:js|mjs|cjs|css|html)$/i;
+const TEXT_EXTENSIONS = /\.(?:js|mjs|cjs|css|html|txt|xml)$/i;
 
 /** Fichiers du dossier, chemins relatifs avec « / », triés. */
 export function listFiles(dir) {
@@ -83,22 +88,150 @@ export function checkForbiddenContent(files) {
   return errors;
 }
 
-/** Balises qui chargent une ressource : une adresse absolue ou « // » y est un chargement depuis un autre domaine. */
-const RESOURCE_TAG = /<(script|link|img|iframe|source|video|audio|embed|object)\b[^>]*>/gi;
-const EXTERNAL_REFERENCE = /\b(?:src|href|data)\s*=\s*["']?\s*(?:https?:)?\/\//i;
+/**
+ * Adresse officielle du site, lue dans shared/site.ts (source unique, en TypeScript : ce script reste du JavaScript
+ * lancé tel quel par Node, sans compilation).
+ */
+export function readSiteOrigin(file = path.join(root, 'shared', 'site.ts')) {
+  const match = /^export const SITE_ORIGIN\s*=\s*'(https:\/\/[a-z0-9.-]+)'/m.exec(readFileSync(file, 'utf8'));
+  if (!match) throw new Error(`SITE_ORIGIN introuvable dans ${file}`);
+  return match[1];
+}
 
-/** index.html : aucun script en ligne, aucune ressource d'un autre domaine. */
-export function checkIndexHtml(html) {
+/** Balises qui chargent une ressource : une adresse absolue ou « // » y est un chargement depuis un autre domaine. */
+const RESOURCE_TAGS = ['script', 'link', 'img', 'iframe', 'source', 'video', 'audio', 'embed', 'object'];
+/** Attributs qui désignent une ressource (une seule adresse), et ceux qui en listent plusieurs (« adresse 2x, adresse 1x »). */
+const URL_ATTRIBUTES = ['src', 'href', 'data', 'poster'];
+const URL_LIST_ATTRIBUTES = ['srcset', 'imagesrcset'];
+
+/** Balise ouvrante « <nom … > », les guillemets des valeurs étant respectés (un « > » dans une valeur ne la termine pas). */
+const openingTag = name => new RegExp(`<${name}(?=[\\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>`, 'gi');
+
+/** Commentaires HTML : sans effet sur la page, donc ni contrôlés ni comptés. */
+const withoutComments = html => html.replace(/<!--[\s\S]*?-->/g, '');
+
+/** Attributs d'une balise (noms en minuscules ; doublon : le premier l'emporte, comme dans un navigateur). */
+export function parseAttributes(tag) {
+  const attributes = new Map();
+  const body = tag.replace(/^<[^\s/>]+/, '');
+  for (const [, name, double, single, bare] of body.matchAll(/([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+)))?/g)) {
+    const key = name.toLowerCase();
+    if (!attributes.has(key)) attributes.set(key, double ?? single ?? bare ?? '');
+  }
+  return attributes;
+}
+
+/** Les balises ouvrantes de ce nom : [{ tag, attributes }]. */
+function tagsNamed(html, name) {
+  return [...html.matchAll(openingTag(name))].map(([tag]) => ({ tag, attributes: parseAttributes(tag) }));
+}
+
+/** Adresse telle que la lit un navigateur : entités numériques décodées, espaces, tabulations et retours retirés, « \ » lu « / ». */
+function browserUrl(value) {
+  return value
+    .replace(/&#x([0-9a-f]+);?/gi, (_m, hex) => String.fromCodePoint(Math.min(parseInt(hex, 16), 0x10ffff)))
+    .replace(/&#(\d+);?/g, (_m, dec) => String.fromCodePoint(Math.min(Number(dec), 0x10ffff)))
+    .replace(/[\t\n\r]/g, '')
+    .trim()
+    .replace(/\\/g, '/');
+}
+
+/** Une adresse qui sort du site : avec un schéma (https:, http:, ftp:…) ou protocole relatif (« // »), suivi d'un hôte. */
+const isAbsoluteUrl = value => /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(browserUrl(value));
+
+/** Attributs d'une balise dont la valeur désigne une autre origine. */
+function externalAttributes(attributes) {
+  const found = [];
+  for (const name of URL_ATTRIBUTES) {
+    if (attributes.has(name) && isAbsoluteUrl(attributes.get(name))) found.push(name);
+  }
+  for (const name of URL_LIST_ATTRIBUTES) {
+    if (attributes.has(name) && attributes.get(name).split(',').some(candidate => isAbsoluteUrl(candidate))) found.push(name);
+  }
+  return found;
+}
+
+/** <link rel="canonical"> (le seul jeton de « rel » est « canonical »). */
+const isCanonicalLink = attributes => (attributes.get('rel') ?? '').trim().toLowerCase() === 'canonical';
+
+/** <meta property="og:url"> (casse du nom de propriété ignorée). */
+const isOgUrlMeta = attributes => (attributes.get('property') ?? '').trim().toLowerCase() === 'og:url';
+
+/**
+ * index.html : aucun script en ligne, aucune ressource d'un autre domaine. Seules adresses absolues admises : le lien
+ * canonique et og:url, qui valent EXACTEMENT « <siteOrigin>/ » (liste blanche étroite, jamais une adresse libre).
+ */
+export function checkIndexHtml(html, { siteOrigin = readSiteOrigin() } = {}) {
   const errors = [];
-  for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+  const page = withoutComments(html);
+  const expected = `${siteOrigin}/`;
+  for (const match of page.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
     const [, attributes, body] = match;
     if (!/\bsrc\s*=/i.test(attributes) || body.trim()) errors.push('index.html : script en ligne (le site charge tout son code depuis des fichiers)');
   }
-  const opened = (html.match(/<script\b/gi) ?? []).length;
-  const closed = (html.match(/<\/script\s*>/gi) ?? []).length;
+  const opened = (page.match(/<script\b/gi) ?? []).length;
+  const closed = (page.match(/<\/script\s*>/gi) ?? []).length;
   if (opened !== closed) errors.push('index.html : balises <script> mal formées (ouvertes et fermées en nombre différent)');
-  for (const [tag] of html.matchAll(RESOURCE_TAG)) {
-    if (EXTERNAL_REFERENCE.test(tag)) errors.push(`index.html : ressource chargée depuis un autre domaine (${tag.slice(0, 80)})`);
+  for (const name of RESOURCE_TAGS) {
+    for (const { tag, attributes } of tagsNamed(page, name)) {
+      const external = externalAttributes(attributes);
+      if (name === 'link' && isCanonicalLink(attributes)) {
+        const href = attributes.get('href') ?? '';
+        if (href !== expected) errors.push(`index.html : le lien canonique doit être « ${expected} » (lu : « ${href.slice(0, 80)} »)`);
+        // Le lien canonique est la seule balise de ressource admise vers une adresse absolue, et par « href » seulement.
+        if (external.length === 0 || (external.length === 1 && external[0] === 'href')) continue;
+      } else if (external.length === 0) {
+        continue;
+      }
+      errors.push(`index.html : ressource chargée depuis un autre domaine (${tag.slice(0, 80)})`);
+    }
+  }
+  for (const { tag, attributes } of tagsNamed(page, 'meta')) {
+    const content = attributes.get('content') ?? '';
+    if (isOgUrlMeta(attributes)) {
+      if (content !== expected) errors.push(`index.html : og:url doit être « ${expected} » (lu : « ${content.slice(0, 80)} »)`);
+    } else if ((attributes.get('http-equiv') ?? '').trim().toLowerCase() === 'refresh') {
+      errors.push(`index.html : redirection automatique (${tag.slice(0, 80)})`);
+    } else if (isAbsoluteUrl(content)) {
+      errors.push(`index.html : adresse d'un autre domaine dans une balise <meta> autre que og:url (${tag.slice(0, 80)})`);
+    }
+  }
+  return errors;
+}
+
+/** index.html : un seul lien canonique et une seule adresse og:url (leur valeur est contrôlée par checkIndexHtml). */
+export function checkSearchTags(html) {
+  const errors = [];
+  const page = withoutComments(html);
+  const canonicals = tagsNamed(page, 'link').filter(({ attributes }) => isCanonicalLink(attributes)).length;
+  if (canonicals !== 1) errors.push(`index.html : ${canonicals} lien(s) canonique(s) (un seul <link rel="canonical"> est attendu)`);
+  const ogUrls = tagsNamed(page, 'meta').filter(({ attributes }) => isOgUrlMeta(attributes)).length;
+  if (ogUrls !== 1) errors.push(`index.html : ${ogUrls} balise(s) <meta property="og:url"> (une seule est attendue)`);
+  return errors;
+}
+
+/** robots.txt et sitemap.xml (fichiers texte du build, `files` : [{ name, text }]) : présents et conformes à l'adresse officielle. */
+export function checkSearchFiles(files, { siteOrigin = readSiteOrigin() } = {}) {
+  const errors = [];
+  const robots = files.find(f => f.name === 'robots.txt');
+  if (!robots) {
+    errors.push('robots.txt absent (le site doit déclarer son plan du site)');
+  } else {
+    const sitemaps = [...robots.text.matchAll(/^\s*sitemap\s*:\s*(\S*)\s*$/gim)].map(m => m[1]);
+    if (sitemaps.length === 0 || sitemaps.some(url => url !== `${siteOrigin}/sitemap.xml`)) {
+      errors.push(`robots.txt : « Sitemap: ${siteOrigin}/sitemap.xml » attendu, et rien d'autre (lu : ${sitemaps.length ? sitemaps.join(', ') : 'aucun'})`);
+    }
+    if (/^\s*disallow\s*:\s*\/\s*$/im.test(robots.text)) errors.push('robots.txt : « Disallow: / » interdirait tout le site aux moteurs de recherche');
+  }
+  const sitemap = files.find(f => f.name === 'sitemap.xml');
+  if (!sitemap) {
+    errors.push('sitemap.xml absent (plan du site déclaré par robots.txt)');
+  } else {
+    const locations = [...sitemap.text.matchAll(/<loc>\s*([^<]*?)\s*<\/loc>/gi)].map(m => m[1]);
+    if (locations.length === 0) errors.push('sitemap.xml : aucune adresse <loc>');
+    for (const location of locations) {
+      if (!location.startsWith(`${siteOrigin}/`)) errors.push(`sitemap.xml : « ${location.slice(0, 80)} » n'est pas une adresse de ${siteOrigin}`);
+    }
   }
   return errors;
 }
@@ -109,7 +242,7 @@ export function checkNoSourceMaps(names) {
 }
 
 /** Inspecte un dossier de build du site : retourne la liste des erreurs (vide si tout est conforme). */
-export function verifySite(dir) {
+export function verifySite(dir, { siteOrigin = readSiteOrigin() } = {}) {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) return [`${dir} introuvable (npm run build:site l'a-t-il construit ?)`];
   const names = listFiles(dir);
   if (!names.includes('index.html')) return [`${path.join(dir, 'index.html')} introuvable : le site n'a pas de page d'entrée`];
@@ -124,7 +257,8 @@ export function verifySite(dir) {
   }
   errors.push(...checkForbiddenContent(files));
   const index = files.find(f => f.name === 'index.html');
-  if (index) errors.push(...checkIndexHtml(index.text));
+  if (index) errors.push(...checkIndexHtml(index.text, { siteOrigin }), ...checkSearchTags(index.text));
+  errors.push(...checkSearchFiles(files, { siteOrigin }));
   return errors;
 }
 
@@ -141,5 +275,5 @@ if (isMainModule(import.meta.url)) {
     console.error(`[verify-site] ${errors.length} écart(s) dans ${dir}.`);
     process.exit(1);
   }
-  console.log(`[verify-site] ${dir} : aucun code de l'application, aucun script en ligne, aucune sourcemap.`);
+  console.log(`[verify-site] ${dir} : aucun code de l'application, aucun script en ligne, aucune sourcemap ; lien canonique, robots.txt et sitemap.xml conformes à ${readSiteOrigin()}.`);
 }
