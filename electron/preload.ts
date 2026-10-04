@@ -31,6 +31,12 @@ const bridge: MagistraBridge = {
     },
     openExternal: url => ipcRenderer.invoke(IPC.openExternal, url),
     checkForUpdate: () => ipcRenderer.invoke(IPC.appCheckUpdate),
+    installUpdate: () => ipcRenderer.invoke(IPC.appInstallUpdate),
+    onUpdateProgress: listener => {
+      const handler = (_event: Electron.IpcRendererEvent, progress: import('../shared/ipc.js').UpdateProgress) => listener(progress);
+      ipcRenderer.on(IPC.appUpdateProgress, handler);
+      return () => ipcRenderer.removeListener(IPC.appUpdateProgress, handler);
+    },
   },
   ai: {
     status: () => ipcRenderer.invoke(IPC.aiStatus),

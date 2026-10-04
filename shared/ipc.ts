@@ -45,6 +45,8 @@ export const IPC = {
   appInfo: 'app:info',
   appReady: 'app:ready',
   appCheckUpdate: 'app:check-update',
+  appInstallUpdate: 'app:install-update',
+  appUpdateProgress: 'app:update-progress',
   /** Connecteur local (site web Magistra → IA de cet ordinateur) : état et navigateurs autorisés. */
   connectorStatus: 'connector:status',
   /** Retire l'autorisation d'un navigateur (argument : clientId). */
@@ -236,7 +238,7 @@ export interface AppInfo {
   isPackaged: boolean;
 }
 
-/** Résultat de « Rechercher une mise à jour » (à la demande uniquement : rien n'est téléchargé). */
+/** Résultat de la vérification des versions : aucun téléchargement d’installateur. */
 export interface UpdateCheckResult {
   /** Version installée. */
   currentVersion: string;
@@ -245,6 +247,13 @@ export interface UpdateCheckResult {
   upToDate: boolean;
   /** Page de la nouvelle version (github.com, dépôt officiel), présente seulement si une mise à jour existe. */
   url?: string;
+  /** Fichiers exacts de la même version stable, validés dans le processus principal. */
+  installer?: { name: string; url: string; checksumsUrl: string; size: number };
+}
+
+export interface UpdateProgress {
+  phase: 'idle' | 'downloading' | 'verifying' | 'installing';
+  percent: number;
 }
 
 export type Unsubscribe = () => void;
@@ -257,8 +266,11 @@ export interface MagistraBridge {
     /** Signale que l'interface est chargée (test de démarrage automatisé). */
     ready(): void;
     openExternal(url: string): Promise<boolean>;
-    /** Recherche une nouvelle version (une requête vers GitHub, au clic seulement). */
+    /** Vérifie la version sur GitHub ; ne transmet aucun document. */
     checkForUpdate(): Promise<UpdateCheckResult>;
+    /** Facultatif pour la compatibilité avec les anciens ponts. Aucun argument contrôlé par la fenêtre. */
+    installUpdate?(): Promise<boolean>;
+    onUpdateProgress?(listener: (progress: UpdateProgress) => void): Unsubscribe;
   };
   ai: {
     status(): Promise<AIStatus>;

@@ -215,7 +215,7 @@ describe('diagnostic', () => {
   it('--dev : lit .env puis .env.local ; les variables du terminal restent prioritaires', async () => {
     writeFileSync(path.join(cwd, '.env'), 'AI_PRESET=albert\nAI_API_KEY=cle-du-fichier\n');
     writeFileSync(path.join(cwd, '.env.local'), 'AI_PRESET=ovhcloud\n');
-    const { text } = await check(['--dev', '--no-generate'], { AI_SERVER_LABEL: 'Libellé du terminal' });
+    const { text } = await check(['--dev', '--no-generate'], { AI_SERVER_LABEL: 'Libellé du terminal' }, { fetch: offlineFetch() });
     expect(text).toContain('Configuration lue : .env, .env.local');
     expect(text).toContain('Préréglage « ovhcloud » : Libellé du terminal');
     expect(text).not.toContain('cle-du-fichier');

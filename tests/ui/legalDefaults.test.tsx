@@ -349,9 +349,9 @@ describe('Hébergeur : la ponctuation qui suit l\'adresse n\'est jamais dans le 
 });
 
 describe('Politique de confidentialité de l\'application : plus de renvoi à la politique du site', () => {
-  /** Puces de la rubrique « 3. Ce qui peut sortir de votre ordinateur… » (modes sans compte). */
+  /** Puces de la rubrique « 3. Connexions externes de votre ordinateur… » (modes sans compte). */
   const outgoing = (container: HTMLElement) => {
-    const heading = [...container.querySelectorAll('h2')].find(h => h.textContent?.startsWith('3. Ce qui peut sortir'));
+    const heading = [...container.querySelectorAll('h2')].find(h => h.textContent?.startsWith('3. Connexions externes'));
     return [...(heading?.nextElementSibling?.querySelectorAll('li') ?? [])].map(li => textOf(li as HTMLElement));
   };
 
@@ -367,7 +367,9 @@ describe('Politique de confidentialité de l\'application : plus de renvoi à la
     expect(local).toHaveLength(3);
     expect(local[0]).toMatch(/jamais vos documents ;$/);
     expect(local[1]).toMatch(/explicitement ;$/);
-    expect(local[2]).toMatch(/dépôt officiel du projet\.$/);
+    expect(local[2]).toMatch(/après votre confirmation\.$/);
+    expect(local[2]).toContain('désactivable');
+    expect(local[2]).toContain('Aucun document n’est envoyé');
     for (const mode of ['personal', 'demo']) {
       cleanup();
       const items = outgoing((await mount('confidentialite', mode)).container);

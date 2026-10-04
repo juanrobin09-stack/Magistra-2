@@ -1,13 +1,4 @@
-// Recherche d'une nouvelle version de Magistra, UNIQUEMENT quand l'enseignant clique sur « Rechercher une mise à
-// jour » (Réglages, À propos) : aucune vérification automatique, aucun téléchargement, aucune installation.
-//
-// Une seule requête, vers une adresse fixe (dernière version publiée du dépôt officiel sur l'API GitHub) :
-// - redirections suivies uniquement à l'intérieur de https://api.github.com (dépôt renommé), 3 au plus ;
-// - délai de 10 s, réponse bornée en taille, en-tête User-Agent explicite ;
-// - numéro de version (tag_name, « v » facultatif) comparé à celui de l'application (semver) ;
-// - lien renvoyé uniquement s'il désigne une page de version du dépôt officiel sur github.com.
-// Module sans import d'Electron : le fetch (net.fetch, qui respecte le proxy du système) est injecté.
-
+// Vérification des versions stables au démarrage et à la demande. Aucun document transmis.
 import type { FetchLike } from '../shared/ai/provider.js';
 import { MagistraError } from '../shared/errors.js';
 import type { UpdateCheckResult } from '../shared/ipc.js';
@@ -178,16 +169,40 @@ export async function checkForUpdate(deps: UpdateCheckDeps): Promise<UpdateCheck
     if (signal.aborted) throw new MagistraError('NETWORK_ERROR', UPDATE_CHECK_OFFLINE_MESSAGE, { cause: err });
     throw unavailable(err);
   }
-  const release = (data && typeof data === 'object' ? data : {}) as { tag_name?: unknown; html_url?: unknown };
+  const release = (data && typeof data === 'object' ? data : {}) as { tag_name?: unknown; html_url?: unknown; draft?: unknown; prerelease?: unknown; assets?: unknown };
   const latest = parseVersion(release.tag_name);
   const page = releasePageUrl(release.html_url);
   if (!latest || !page) throw unavailable();
 
+  if (release.draft === true || release.prerelease === true) throw unavailable();
   const upToDate = compareVersions(latest, current) <= 0;
+  let installer: UpdateCheckResult['installer'];
+  if (!upToDate && latest.prerelease.length === 0 && Array.isArray(release.assets)) {
+    const name = `Magistra-Setup-${formatVersion(latest)}.exe`;
+    const assets = release.assets as { name?: unknown; browser_download_url?: unknown; size?: unknown }[];
+    const setup = assets.filter(a => a && a.name === name);
+    const sums = assets.filter(a => a && a.name === 'SHA256SUMS.txt');
+    const safeAsset = (value: unknown, filename: string): value is string => {
+      if (typeof value !== 'string') return false;
+      try {
+        const url = new URL(value);
+        const expected = `/juanrobin09-stack/magistra-downloads/releases/download/${release.tag_name}/${filename}`;
+        return url.origin === 'https://github.com' && !url.username && !url.password && !url.search && !url.hash
+          && url.pathname.toLowerCase() === expected.toLowerCase();
+      } catch { return false; }
+    };
+    if (setup.length === 1 && sums.length === 1 && safeAsset(setup[0].browser_download_url, name)
+      && safeAsset(sums[0].browser_download_url, 'SHA256SUMS.txt')
+      && typeof setup[0].size === 'number' && Number.isSafeInteger(setup[0].size)
+      && setup[0].size > 0 && setup[0].size <= 512 * 1024 * 1024) {
+      installer = { name, url: setup[0].browser_download_url, checksumsUrl: sums[0].browser_download_url, size: setup[0].size };
+    }
+  }
   return {
     currentVersion: formatVersion(current),
     latestVersion: formatVersion(latest),
     upToDate,
     ...(upToDate ? {} : { url: page }),
+    ...(installer ? { installer } : {}),
   };
 }

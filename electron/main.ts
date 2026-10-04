@@ -41,6 +41,7 @@ import { devOptionsFrom } from './devOptions.js';
 import { APP_SCHEME, APP_URL, isSafeExternalUrl, isSafeMailtoUrl, isTrustedUrl, trustedOrigins } from './security.js';
 import { SmokeTest } from './smoke.js';
 import { checkForUpdate } from './updateCheck.js';
+import { installAppUpdate } from './appUpdater.js';
 import { configureWindowSession, denyAllPermissions, WINDOW_PARTITION } from './windowSession.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -504,6 +505,9 @@ async function start(): Promise<void> {
 
   // Une seule vérification de version à la fois (clics répétés : même réponse).
   let updateCheck: Promise<UpdateCheckResult> | null = null;
+  let updateInstall: Promise<boolean> | null = null;
+  let checkedAt = 0;
+  let cachedUpdate: UpdateCheckResult | null = null;
 
   registerIpcHandlers({
     getWindow: () => mainWindow,
@@ -518,10 +522,37 @@ async function start(): Promise<void> {
       isPackaged: app.isPackaged,
     }),
     openExternal: url => shell.openExternal(url),
-    checkForUpdate: () =>
-      (updateCheck ??= checkForUpdate({ fetch: internetFetch, currentVersion: app.getVersion() }).finally(() => {
-        updateCheck = null;
-      })),
+    checkForUpdate: () => {
+      if (cachedUpdate && Date.now() - checkedAt < 60_000) return Promise.resolve(cachedUpdate);
+      return (updateCheck ??= checkForUpdate({ fetch: internetFetch, currentVersion: app.getVersion() }).then(result => {
+        cachedUpdate = result;
+        checkedAt = Date.now();
+        return result;
+      }).finally(() => { updateCheck = null; }));
+    },
+    installUpdate: () => (updateInstall ??= installAppUpdate({
+      fetch: internetFetch,
+      currentVersion: app.getVersion(),
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      tempDirectory: app.getPath('temp'),
+      confirm: async () => {
+        if (!mainWindow || mainWindow.isDestroyed()) return false;
+        const { response } = await dialog.showMessageBox(mainWindow, {
+          type: 'question', title: 'Mettre à jour Magistra',
+          message: 'Télécharger et installer la nouvelle version ?',
+          detail: 'Enregistrez votre travail et terminez les générations en cours avant de continuer. Magistra se fermera pour lancer l’installateur Windows. Vos documents enregistrés, réglages et modèles IA seront conservés.',
+          buttons: ['Annuler', 'Télécharger et installer'], defaultId: 0, cancelId: 0,
+        });
+        return response === 1;
+      },
+      progress: event => sendToWindow(IPC.appUpdateProgress, event),
+      launch: async file => {
+        const error = await shell.openPath(file);
+        if (error) throw new Error('Installer launch failed');
+        setTimeout(() => app.quit(), 500);
+      },
+    }).finally(() => { updateInstall = null; })),
     onAppReady: () => services?.onAppReady(),
     connector: {
       status: () => localConnector.status(),

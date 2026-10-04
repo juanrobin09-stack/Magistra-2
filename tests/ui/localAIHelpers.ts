@@ -176,7 +176,7 @@ export function installFakeLocalAI(initial: StatusOptions, prefs: Partial<LocalP
       info: vi.fn(async () => ({ version: '2.0.0', platform: 'win32', userDataPath: 'C:\\Magistra', isPackaged: true })),
       ready: vi.fn(),
       openExternal: vi.fn(async () => true),
-      checkForUpdate: vi.fn(),
+      checkForUpdate: vi.fn(async () => ({ currentVersion: '2.0.6', latestVersion: '2.0.6', upToDate: true })),
     },
     ai: {
       status: vi.fn(async () => fake.status()),

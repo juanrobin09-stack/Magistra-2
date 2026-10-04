@@ -298,7 +298,7 @@ function PrivacyLocal({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
         </p>
       )}
 
-      <h2>3. Ce qui peut sortir de votre ordinateur, uniquement à votre demande</h2>
+      <h2>3. Connexions externes et choix disponibles</h2>
       <ul>
         <li>
           la <strong>recherche en ligne</strong>, si vous l'activez : le sujet et les mots-clés de la demande sont envoyés
@@ -308,7 +308,7 @@ function PrivacyLocal({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
         {mode === 'local' && (
           <>
             <li>le <strong>téléchargement du moteur et des modèles d'IA</strong>, que vous lancez explicitement ;</li>
-            <li>la <strong>recherche d'une mise à jour</strong>, au clic, auprès du dépôt officiel du projet.</li>
+            <li>la <strong>vérification des mises à jour</strong>, au démarrage puis toutes les six heures auprès de GitHub (désactivable dans Réglages → À propos). Aucun document n’est envoyé ; GitHub reçoit les données techniques de la requête, dont l’adresse IP. L’installateur est téléchargé et lancé uniquement après votre confirmation.</li>
           </>
         )}
       </ul>

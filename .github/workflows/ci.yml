@@ -167,3 +167,22 @@ jobs:
           path: release/Magistra-Setup-*.exe
           if-no-files-found: error
           retention-days: 14
+
+      - name: Préparer les fichiers de distribution vérifiables
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          cd release
+          cp "Magistra-Setup-$version.exe" "Magistra-Setup.exe"
+          sha256sum "Magistra-Setup-$version.exe" "Magistra-Setup.exe" "Magistra-$version-win-x64.zip" > SHA256SUMS.txt
+      - name: Distribution Windows complète
+        uses: actions/upload-artifact@v4
+        with:
+          name: magistra-distribution-windows
+          path: |
+            release/Magistra-Setup-*.exe
+            release/Magistra-Setup.exe
+            release/Magistra-*-win-x64.zip
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

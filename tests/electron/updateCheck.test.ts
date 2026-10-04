@@ -236,6 +236,17 @@ describe('canal IPC app:check-update et pont', () => {
     await expect(call(event('app://magistra/app/settings'))).resolves.toEqual({ currentVersion: '2.0.0', latestVersion: '2.1.0', upToDate: false, url: PAGE });
   });
 
+  it('installation : refuse les expéditeurs étrangers et tout argument, accepte le clic local sans URL', async () => {
+    const installUpdate = vi.fn(async () => true);
+    registerIpcHandlers(baseContext({ installUpdate }));
+    const call = handlers.get(IPC.appInstallUpdate)!;
+    await expect(call(event('https://evil.example/'))).rejects.toThrow(/^FORBIDDEN\|/);
+    await expect(call(event('app://magistra/'), 'https://evil.example/setup.exe')).rejects.toThrow(/^INVALID_REQUEST\|/);
+    expect(installUpdate).not.toHaveBeenCalled();
+    await expect(call(event('app://magistra/'))).resolves.toBe(true);
+    expect(installUpdate).toHaveBeenCalledOnce();
+  });
+
   it('erreur transmise sous la forme « CODE|message » (sans détail technique)', async () => {
     registerIpcHandlers(baseContext({ checkForUpdate: () => checkForUpdate({ fetch: fakeFetch(() => { throw new TypeError('getaddrinfo ENOTFOUND api.github.com'); }).fetch, currentVersion: '2.0.0' }) }));
     await expect(handlers.get(IPC.appCheckUpdate)!(event('app://magistra/'))).rejects.toThrow(`NETWORK_ERROR|${UPDATE_CHECK_OFFLINE_MESSAGE}`);
@@ -249,7 +260,7 @@ describe('canal IPC app:check-update et pont', () => {
     });
 
     it('window.magistra.app.checkForUpdate appelle le canal app:check-update, sans argument', async () => {
-      expect(Object.keys(bridge.app).sort()).toEqual(['checkForUpdate', 'info', 'openExternal', 'ready']);
+      expect(Object.keys(bridge.app).sort()).toEqual(['checkForUpdate', 'info', 'installUpdate', 'onUpdateProgress', 'openExternal', 'ready']);
       invoke.mockClear();
       await bridge.app.checkForUpdate();
       expect(invoke).toHaveBeenCalledWith(IPC.appCheckUpdate);

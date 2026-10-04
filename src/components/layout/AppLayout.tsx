@@ -5,6 +5,7 @@ import { GraduationCap, Heart, History, LayoutDashboard, Menu, Settings, Sparkle
 import { isTypeContenu, type TypeContenu } from '@shared/catalog';
 import { isNiveau, type NiveauScolaire } from '@shared/levels';
 import AIStatusBadge from '@/components/ai/AIStatusBadge';
+import { AppUpdateNotice } from '@/components/UpdateCheck';
 import SidebarTools from '@/components/layout/SidebarTools';
 import { isDrawerLayout, WIDE_LAYOUT_QUERY, type AppShell } from '@/components/layout/shell';
 import { appPageTitle, useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -334,6 +335,7 @@ export default function AppLayout() {
             cette zone défilante ; sinon ils allongeaient le document, qui défilait tout entier (barre latérale
             comprise) quand un résultat était amené à l'écran. */}
         <main ref={mainRef} id="main-content" tabIndex={-1} aria-label={appPageTitle(location.pathname)} className="relative flex-1 overflow-y-auto focus:outline-none">
+          {mode === 'local' && <AppUpdateNotice />}
           <Outlet context={shell} />
         </main>
       </div>

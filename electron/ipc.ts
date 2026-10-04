@@ -31,6 +31,7 @@ export interface IpcContext {
   openExternal: (url: string) => Promise<void>;
   /** Recherche d'une nouvelle version (au clic de l'enseignant uniquement) ; absente : « vérification impossible ». */
   checkForUpdate?: () => Promise<UpdateCheckResult>;
+  installUpdate?: () => Promise<boolean>;
   onAppReady: () => void;
   /** Connecteur local (site web Magistra → IA de cet ordinateur) : réglages « Site web Magistra ». */
   connector: {
@@ -94,6 +95,10 @@ export function registerIpcHandlers(ctx: IpcContext): () => void {
   handle(IPC.appCheckUpdate, () => {
     if (!ctx.checkForUpdate) throw new MagistraError('NETWORK_ERROR', UPDATE_CHECK_UNAVAILABLE_MESSAGE);
     return ctx.checkForUpdate();
+  });
+  handle(IPC.appInstallUpdate, (_e, ...args) => {
+    if (args.length || !ctx.installUpdate) throw new MagistraError('INVALID_REQUEST');
+    return ctx.installUpdate();
   });
   const onReady = (event: IpcMainEvent) => {
     if (trusted(event)) ctx.onAppReady();
