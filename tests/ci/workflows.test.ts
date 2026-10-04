@@ -546,8 +546,15 @@ describe('README : attribution, architecture et déploiement du site vitrine', (
     expect(custom).toContain('La comparaison est **exacte**');
     expect(custom).toContain('à partir de la version **2.0.4**');
     expect(readme).not.toContain("aujourd'hui `https://magistra-2.vercel.app`, l'adresse du site public");
-    // Le domaine ne tient pas dans le code de vercel.json (voir tests/server/deploy.test.ts) : aucune redirection n'y est annoncée.
-    expect(read('vercel.json')).not.toMatch(/mag-istra|redirects/);
+    // Le domaine ne tient pas dans le code de vercel.json (voir tests/server/deploy.test.ts) : aucune redirection d'une adresse
+    // à l'autre n'y est annoncée, seulement des redirections de chemins du site (anciennes routes de l'application → accueil).
+    const vercelJson = read('vercel.json');
+    expect(vercelJson).not.toMatch(/mag-istra/);
+    const redirects = (JSON.parse(vercelJson) as { redirects?: Array<{ source: string; destination: string; has?: unknown }> }).redirects ?? [];
+    for (const rule of redirects) {
+      expect(rule.destination, rule.source).toBe('/');
+      expect(rule.has, rule.source).toBeUndefined();
+    }
   });
 
   it('« Nettoyage de Vercel » : les anciennes variables peuvent être supprimées, la base Supabase et l’instance Clerk supprimées ou mises en pause', () => {

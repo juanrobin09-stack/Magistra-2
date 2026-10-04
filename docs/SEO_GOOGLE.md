@@ -16,7 +16,7 @@
 
 ## Publication dans le dépôt existant
 
-Dépôt : `juanrobin09-stack/Magistra-2`. Branche de collaboration : `claude/production-hardening-1o7pn8`. La production Vercel inspectée utilise `master`.
+Dépôt : `juanrobin09-stack/Magistra-2`. Branche de collaboration : la branche commune du dépôt. La production Vercel inspectée utilise `master`.
 
 Reprendre les derniers changements distants avant intégration ; ne pas forcer l’envoi. Fusionner la branche commune dans `master`, puis vérifier que le déploiement Vercel attendu est `READY`.
 

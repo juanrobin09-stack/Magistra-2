@@ -1,6 +1,6 @@
 # Sources de Magistra : vérification et affichage
 
-Vérification du 4 octobre 2026. Base examinée : `2c7c9af89b57acd97b105549e5c14dc442b997fa`, branche commune `claude/production-hardening-1o7pn8` du dépôt `juanrobin09-stack/Magistra-2`.
+Vérification du 4 octobre 2026. Base examinée : `2c7c9af89b57acd97b105549e5c14dc442b997fa`, branche commune du dépôt `juanrobin09-stack/Magistra-2`.
 
 ## Fonctionnement constaté
 
@@ -46,4 +46,4 @@ L’accès anonyme OpenAlex a répondu pendant la vérification. Sa documentatio
 
 ## Publication restante
 
-Le dépôt privé n’est pas accessible via la connexion GitHub actuelle (404), et le dépôt local ne peut pas s’authentifier pour un `fetch`. Aucun push, aucune fusion ni publication d’installateur n’est annoncé comme effectué. Réautoriser le dépôt, récupérer les nouveaux commits de Claude, intégrer ce correctif dans la branche commune, puis utiliser les circuits habituels de déploiement du site et de publication Windows.
+Le dépôt privé n’est pas accessible via la connexion GitHub actuelle (404), et le dépôt local ne peut pas s’authentifier pour un `fetch`. Aucun push, aucune fusion ni publication d’installateur n’est annoncé comme effectué. Réautoriser le dépôt, récupérer les nouveaux commits de la branche commune, intégrer ce correctif dans la branche commune, puis utiliser les circuits habituels de déploiement du site et de publication Windows.
