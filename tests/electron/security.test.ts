@@ -167,7 +167,7 @@ describe('enregistrement des canaux IPC', () => {
 
   it('enregistre tous les canaux invoqués du contrat', () => {
     // Évènements du processus principal vers la fenêtre (aucun gestionnaire) et signal app:ready (écouteur).
-    const events: string[] = [IPC.aiProgress, IPC.genEvent, IPC.connectorChanged, IPC.appReady];
+    const events: string[] = [IPC.aiProgress, IPC.genEvent, IPC.connectorChanged, IPC.appUpdateProgress, IPC.appReady];
     const invoked = Object.values(IPC).filter(c => !events.includes(c));
     for (const channel of invoked) expect(handlers.has(channel), channel).toBe(true);
     expect(listeners.has(IPC.appReady)).toBe(true);
