@@ -25,7 +25,8 @@ export const OFFICIAL_WIKIPEDIA_UNREACHABLE_MESSAGE = 'Sites officiels non consu
 export const WIKIPEDIA_AND_OFFICIAL_UNREACHABLE_MESSAGE = 'Wikipédia injoignable : les sites officiels qu’elle indique ne sont pas consultés non plus.';
 export const OFFICIAL_LINKS_UNAVAILABLE_MESSAGE = 'Sites officiels non consultés : les références de Wikipédia n’ont pas pu être lues.';
 
-const UNIVERSITY: LevelGroup[] = ['bts_but', 'cpge', 'licence', 'master', 'doctorat'];
+const DISCOVERY_PAGES = 4;
+const OFFICIAL_PAGES = 6;
 
 export interface ResearchQuery {
   /** Texte de recherche (sujet, discipline, mots-clés). Les documents de l'enseignant ne sont jamais envoyés. */
@@ -88,19 +89,17 @@ function boundedFetchPage(
  * Sources consultées selon le mode et le niveau :
  * - « Mes documents » : aucune recherche (hors ligne) ;
  * - « Sources académiques » : HAL, Crossref et OpenAlex, puis les sites vérifiés ;
- * - « Internet » / « Documents + Internet » :
- *   - supérieur : HAL, Crossref et OpenAlex > sites vérifiés > Wikipédia ;
- *   - scolaire : sites vérifiés > Wikipédia.
+ * - « Internet » / « Documents + Internet » : publications et sites vérifiés à tous les niveaux ;
+ *   Wikipédia reste un complément. Les réglages peuvent désactiver chaque famille de connecteurs.
  * Les sites vérifiés (`institutional`) sont interrogés par SearXNG (requêtes « site: » sur les principaux sites du
  * catalogue : SEARCHED_DOMAIN_COUNT) ou, sans lui, par les références de Wikipédia (les pages que Wikipédia cite pour le
  * sujet). `web` (web général) n'est consulté que si l'administrateur a levé la restriction `trustedOnly`.
  */
-export function planResearch(mode: ResearchMode, group: LevelGroup): ResearchPlan {
-  const university = UNIVERSITY.includes(group);
+export function planResearch(mode: ResearchMode, _group: LevelGroup): ResearchPlan {
   if (mode === 'documents') return { academic: false, institutional: false, web: false, wikipedia: false };
   if (mode === 'academic') return { academic: true, institutional: true, web: false, wikipedia: false };
   // Internet (avec ou sans documents)
-  return { academic: university, institutional: true, web: true, wikipedia: true };
+  return { academic: true, institutional: true, web: true, wikipedia: true };
 }
 
 /**
@@ -185,7 +184,7 @@ function dedupe(sources: ResearchSource[]): ResearchSource[] {
 
 /** Les références avec résumé d'abord (plus utiles au modèle), sans changer l'ordre de priorité des connecteurs. */
 function withAbstractsFirst(sources: ResearchSource[]): ResearchSource[] {
-  const hasAbstract = (s: ResearchSource) => s.text !== NO_ABSTRACT_TEXT && s.text.length > 120;
+  const hasAbstract = (s: ResearchSource) => s.text !== NO_ABSTRACT_TEXT && s.text.trim().length > 0;
   return [...sources.filter(hasAbstract), ...sources.filter(s => !hasAbstract(s))];
 }
 
@@ -234,7 +233,7 @@ export async function runResearch(
         return results.flatMap(r => (r.status === 'fulfilled' ? withAbstractsFirst(r.value) : []));
       })
     : Promise.resolve<ResearchSource[]>([]);
-  if (plan.academic && !config.academic) {
+  if (query.mode === 'academic' && !config.academic) {
     warnings.push({ code: 'ACADEMIC_UNAVAILABLE', message: 'Recherche académique désactivée dans les réglages.' });
   }
 
@@ -315,7 +314,7 @@ export async function runResearch(
 
   // 3. Wikipédia : encyclopédie (complément signalé) et, sans SearXNG, références vers les sites vérifiés.
   const wikiPagesTask: Promise<WikipediaPage[] | null> = config.wikipedia && (plan.wikipedia || (plan.institutional && viaWikipedia))
-    ? track(searchWikipediaPages(topic, deps, { max: 2, timeoutMs: t, signal: options.signal })).catch(() => {
+    ? track(searchWikipediaPages(topic, deps, { max: DISCOVERY_PAGES, timeoutMs: t, signal: options.signal })).catch(() => {
         // Sans SearXNG, les sites officiels ne sont atteints que par les références de Wikipédia : pas consultés non plus.
         const message = !plan.wikipedia
           ? OFFICIAL_WIKIPEDIA_UNREACHABLE_MESSAGE
@@ -325,12 +324,12 @@ export async function runResearch(
       })
     : Promise.resolve(null);
   const wikiTask = plan.wikipedia && config.wikipedia
-    ? wikiPagesTask.then(pages => (pages ? readWikipediaPages(pages, deps, { timeoutMs: t, signal: options.signal }) : []))
+    ? wikiPagesTask.then(pages => (pages ? readWikipediaPages(pages.slice(0, 2), deps, { timeoutMs: t, signal: options.signal }) : []))
     : Promise.resolve<ResearchSource[]>([]);
   const officialViaWikipediaTask = plan.institutional && viaWikipedia
     ? wikiPagesTask.then(async (pages): Promise<ResearchSource[]> => {
         if (!pages) return [];
-        // Liens externes des pages trouvées (une requête par page), puis au plus 3 pages des sites vérifiés.
+        // Liens externes des pages trouvées (une requête par page), puis au plus 6 pages des sites vérifiés, sur des hôtes distincts.
         const linkSets = await Promise.allSettled(pages.map(page => track(wikipediaExternalLinks(page.pageId, deps, { timeoutMs: t, signal: options.signal }))));
         // Le chemin n'a « répondu » que si une requête de liens a abouti (ou si Wikipédia n'a trouvé aucune page) : sinon
         // « aucune source officielle trouvée » serait faux, rien n'ayant été consulté.
@@ -339,7 +338,7 @@ export async function runResearch(
           return [];
         }
         officialResponded = true;
-        const links = selectTrustedLinks(linkSets.flatMap(r => (r.status === 'fulfilled' ? r.value : [])), 3);
+        const links = selectTrustedLinks(linkSets.flatMap(r => (r.status === 'fulfilled' ? r.value : [])), OFFICIAL_PAGES);
         const found = await Promise.all(links.map(async ({ url }): Promise<ResearchSource | null> => {
           try {
             const page = await boundedFetchPage(deps.fetchPage!, url, config.timeoutMs * 2, options.signal, fetchOptions);
@@ -353,11 +352,21 @@ export async function runResearch(
       })
     : Promise.resolve<ResearchSource[]>([]);
 
-  // Ordre de priorité : académique > sites vérifiés > Wikipédia.
+  // Les pages institutionnelles/recherche et les textes académiques précèdent Wikipédia ;
+  // les notices sans résumé restent des pistes bibliographiques, jamais une preuve.
   const [academic, web, official, wiki] = await Promise.all([academicTask, webTask.catch(() => []), officialViaWikipediaTask.catch(() => []), wikiTask]);
   // Une plateforme ouverte (HAL, data.gouv.fr…) est étiquetée « à recouper » : elle ne vaut pas une source officielle.
   const officialFound = [...web, ...official].some(s => s.kind === 'institutional' && trustedSiteFor(s.url ?? '')?.tier !== 'open');
-  let sources = dedupe([...academic, ...web, ...official, ...wiki]).filter(s => s.text.trim().length > 0);
+  const candidates = [...web, ...official, ...academic, ...wiki].filter(s => s.text.trim().length > 0);
+  const priority = (s: ResearchSource): number => {
+    if (s.text === NO_ABSTRACT_TEXT) return 4;
+    if (s.kind === 'institutional' && trustedSiteFor(s.url ?? '')?.tier !== 'open') return 0;
+    if (s.kind === 'wikipedia') return 3;
+    if (s.kind === 'web') return 2;
+    return 1;
+  };
+  // Tri stable : une vraie lecture passe avant une notice du même DOI lors du dédoublonnage.
+  let sources = dedupe(candidates.sort((a, b) => priority(a) - priority(b)));
 
   // Répartition du budget : chaque source reçoit une part, recentrée sur la question.
   if (sources.length) {

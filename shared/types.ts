@@ -286,6 +286,8 @@ export interface ResearchCapabilities {
   institutional: boolean;
   wikipedia: boolean;
   trustedCatalogue?: boolean;
+  /** Publications également interrogées en modes Internet aux niveaux scolaires. */
+  academicAllLevels?: boolean;
 }
 
 export interface Capabilities {

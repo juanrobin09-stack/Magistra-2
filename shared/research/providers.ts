@@ -384,6 +384,7 @@ export async function searchWikipediaPages(
   const hits = found.query?.search;
   return (Array.isArray(hits) ? hits : [])
     .filter(h => typeof h?.pageid === 'number')
+    .slice(0, Math.max(0, opts.max))
     .map(h => ({ pageId: h.pageid, title: typeof h.title === 'string' ? h.title : '' }));
 }
 

@@ -8,10 +8,14 @@ import {
 } from '../../shared/research/index';
 import { searchWikipediaPages, wikipediaExternalLinks } from '../../shared/research/providers';
 import { jsonResponse, networkError, textResponse } from './helpers';
-import { CONFIG, deps, EXTERNAL_LINKS, fakePages, NO_SEARX, router, wikiHandler } from './researchFixtures';
+import { CONFIG, deps, EXTERNAL_LINKS, fakePages as allFakePages, NO_SEARX as ACADEMIC_CONFIG, router, wikiHandler } from './researchFixtures';
 
 const QUERY = { text: 'la gouvernance des SI', topic: 'gouvernance des SI', mode: 'internet', group: 'college' } as const;
 const BUDGET = { budgetChars: 60_000 };
+const NO_SEARX = { ...ACADEMIC_CONFIG, academic: false };
+const CNRS = 'https://www.cnrs.fr/fr/gouvernance-des-donnees';
+const THESES = 'https://theses.fr/2019SACLS001';
+const fakePages = (overrides: Parameters<typeof allFakePages>[0] = {}) => allFakePages({ [CNRS]: null, [THESES]: null, ...overrides });
 
 /** URL des pages que fetchPage doit recevoir pour les liens de EXTERNAL_LINKS : éducation > international > recherche. */
 const EDUSCOL = 'https://eduscol.education.fr/sciences/gouvernance-si';
@@ -66,7 +70,7 @@ describe('connecteurs MediaWiki des références', () => {
 });
 
 describe('runResearch — sites officiels par les références de Wikipédia', () => {
-  it('liens des 2 pages trouvées, sites vérifiés seulement, 3 pages au plus, 1 par hôte, éducation > international > recherche', async () => {
+  it('liens des 2 pages trouvées, sites vérifiés seulement, 6 pages au plus, 1 par hôte, éducation > international > recherche', async () => {
     const fetchImpl = router();
     const fetchPage = fakePages();
     const outcome = await runResearch(QUERY, NO_SEARX, deps(fetchImpl, fetchPage), BUDGET);
@@ -77,13 +81,13 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
     for (const p of extlinks) {
       expect(Object.fromEntries(p)).toMatchObject({ ellimit: '500', elprotocol: 'https', formatversion: '2' });
     }
-    expect(new URL(fetchImpl.calls.find(c => c.url.includes('list=search'))!.url).searchParams.get('srlimit')).toBe('2');
+    expect(new URL(fetchImpl.calls.find(c => c.url.includes('list=search'))!.url).searchParams.get('srlimit')).toBe('4');
 
     // Seules les pages choisies sont récupérées : ni accueil, ni recherche, ni hôte hors catalogue, ni 2e page d'un même hôte.
-    expect(fetchPage.calls).toEqual([EDUSCOL, UNESCO, ILO]);
+    expect(fetchPage.calls).toEqual([EDUSCOL, UNESCO, ILO, CNRS, THESES]);
     expect(fetchPage.calls).not.toContain('https://www.unesco.org/');
     expect(fetchPage.calls).not.toContain('https://www.unesco.org/fr/articles/autre-page');
-    expect(fetchPage.calls.some(u => /evilunesco|example\.org|legifrance|theses|cnrs/.test(u))).toBe(false);
+    expect(fetchPage.calls.some(u => /evilunesco|example\.org|legifrance/.test(u))).toBe(false);
 
     expect(outcome.warnings).toEqual([]);
     expect(outcome.sources.map(s => [s.kind, s.venue, s.url])).toEqual([
@@ -96,7 +100,7 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
     expect(outcome.internetUsed).toBe(true);
   });
 
-  it('ne retient que 3 pages au total même quand plus de sites vérifiés sont cités', async () => {
+  it('récupère aussi les sites au-delà des trois premiers', async () => {
     const many = { '101': ['https://eduscol.education.fr/a', 'https://www.unesco.org/fr/b', 'https://www.who.int/fr/c', 'https://www.cnrs.fr/fr/d', 'https://www.fao.org/fr/e'], '102': [] };
     const wiki = (url: string) => {
       const p = new URL(url).searchParams;
@@ -106,7 +110,7 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
     };
     const fetchPage = fakePages();
     await runResearch(QUERY, NO_SEARX, deps(router({ wiki }), fetchPage), BUDGET);
-    expect(fetchPage.calls).toEqual(['https://eduscol.education.fr/a', 'https://www.unesco.org/fr/b', 'https://www.who.int/fr/c']);
+    expect(fetchPage.calls).toEqual(['https://eduscol.education.fr/a', 'https://www.unesco.org/fr/b', 'https://www.who.int/fr/c', 'https://www.fao.org/fr/e', 'https://www.cnrs.fr/fr/d']);
   });
 
   it('un lien du catalogue qui redirige hors du catalogue (hôte inconnu, http, suffixe collé) est écarté', async () => {
@@ -184,7 +188,7 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
       return { url, title: 'Page courte', text: 'Trop court.' };
     };
     const outcome = await runResearch(QUERY, NO_SEARX, deps(router(), fetchPage), BUDGET);
-    expect(calls).toEqual([EDUSCOL, UNESCO, ILO]);
+    expect(calls).toEqual([EDUSCOL, UNESCO, ILO, CNRS, THESES]);
     expect(outcome.sources.map(s => s.kind)).toEqual(['wikipedia']);
     expect(outcome.warnings).toEqual([{ code: 'INSTITUTIONAL_UNAVAILABLE', message: NO_OFFICIAL_FOUND_MESSAGE }]);
   });
@@ -196,7 +200,7 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
     const started = Date.now();
     const outcome = await runResearch(QUERY, { ...NO_SEARX, timeoutMs: 50 }, deps(router(), fetchPage), BUDGET);
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(outcome.sources.filter(s => s.kind === 'institutional').map(s => s.venue)).toEqual(['UNESCO', 'OIT']);
+    expect(outcome.sources.filter(s => s.kind === 'institutional').map(s => s.venue)).toEqual(['UNESCO', 'OIT', 'CNRS', 'theses.fr']);
   });
 
   it('références sans aucun site du catalogue : « Aucune source officielle trouvée », aucune page récupérée', async () => {
@@ -253,10 +257,10 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
   });
 
   it('Wikipédia injoignable mais un autre service répond : l’avertissement nomme Wikipédia et dit que les sites officiels qui en dépendent ne sont pas consultés', async () => {
-    const outcome = await runResearch({ ...QUERY, group: 'master' }, NO_SEARX, deps(router({ wiki: () => textResponse('x', 503) }), fakePages()), BUDGET);
+    const outcome = await runResearch({ ...QUERY, group: 'master' }, ACADEMIC_CONFIG, deps(router({ wiki: () => textResponse('x', 503) }), fakePages()), BUDGET);
     expect(outcome.warnings.map(w => w.message)).toEqual([WIKIPEDIA_AND_OFFICIAL_UNREACHABLE_MESSAGE]);
     expect(outcome.warnings.map(w => w.message)).not.toContain(NO_OFFICIAL_FOUND_MESSAGE);
-    expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'hal', 'crossref', 'openalex']);
+    expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'crossref', 'openalex', 'hal']);
   });
 
   it('références de Wikipédia injoignables mais encyclopédie lisible : « sites officiels non consultés », jamais un faux « aucune source officielle »', async () => {
@@ -288,7 +292,7 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
     const outcome = await runResearch(QUERY, NO_SEARX, deps(router({ wiki }), fetchPage), BUDGET);
     expect(outcome.warnings).toEqual([]);
     // Les références de la page 102 (OIT) n'ont pas pu être lues : seules celles de la page 101 sont suivies.
-    expect(fetchPage.calls).toEqual([EDUSCOL, UNESCO, 'https://www.cnrs.fr/fr/gouvernance-des-donnees']);
+    expect(fetchPage.calls).toEqual([EDUSCOL, UNESCO, CNRS, THESES]);
     expect(fetchPage.calls).not.toContain(ILO);
   });
 
@@ -303,15 +307,15 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
 
   it('« Sources académiques » : références injoignables, même avertissement (sites officiels non consultés)', async () => {
     const wiki = (url: string) => (new URL(url).searchParams.get('prop') === 'extlinks' ? textResponse('x', 500) : wikiHandler(url));
-    const outcome = await runResearch({ ...QUERY, mode: 'academic', group: 'licence' }, NO_SEARX, deps(router({ wiki }), fakePages()), BUDGET);
+    const outcome = await runResearch({ ...QUERY, mode: 'academic', group: 'licence' }, ACADEMIC_CONFIG, deps(router({ wiki }), fakePages()), BUDGET);
     expect(outcome.warnings).toEqual([{ code: 'INSTITUTIONAL_UNAVAILABLE', message: OFFICIAL_LINKS_UNAVAILABLE_MESSAGE }]);
-    expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'hal', 'crossref', 'openalex']);
+    expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'crossref', 'openalex', 'hal']);
   });
 
-  it('« Sources académiques » : publications puis sites officiels, sans l’article de Wikipédia (seulement ses références)', async () => {
+  it('« Sources académiques » : sites officiels puis publications, sans l’article de Wikipédia (seulement ses références)', async () => {
     const fetchImpl = router();
-    const outcome = await runResearch({ ...QUERY, mode: 'academic', group: 'licence' }, NO_SEARX, deps(fetchImpl, fakePages()), BUDGET);
-    expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'hal', 'crossref', 'openalex', 'institutional', 'institutional', 'institutional']);
+    const outcome = await runResearch({ ...QUERY, mode: 'academic', group: 'licence' }, ACADEMIC_CONFIG, deps(fetchImpl, fakePages()), BUDGET);
+    expect(outcome.sources.map(s => s.kind)).toEqual(['institutional', 'institutional', 'institutional', 'hal', 'crossref', 'openalex', 'hal']);
     expect(outcome.sources.some(s => s.kind === 'wikipedia')).toBe(false);
     // L'article lui-même n'est pas lu : ni extrait, ni page par page.
     expect(fetchImpl.calls.some(c => c.url.includes('prop=extracts'))).toBe(false);
@@ -319,15 +323,15 @@ describe('runResearch — sites officiels par les références de Wikipédia', (
   });
 
   it('« Sources académiques » avec Wikipédia injoignable : le message dit que ce sont les sites officiels qui ne sont pas consultés', async () => {
-    const outcome = await runResearch({ ...QUERY, mode: 'academic', group: 'licence' }, NO_SEARX, deps(router({ wiki: () => textResponse('x', 503) }), fakePages()), BUDGET);
+    const outcome = await runResearch({ ...QUERY, mode: 'academic', group: 'licence' }, ACADEMIC_CONFIG, deps(router({ wiki: () => textResponse('x', 503) }), fakePages()), BUDGET);
     expect(outcome.warnings.map(w => w.message)).toEqual(['Sites officiels non consultés : Wikipédia, qui indique où les trouver, est injoignable.']);
-    expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'hal', 'crossref', 'openalex']);
+    expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'crossref', 'openalex', 'hal']);
   });
 
-  it('supérieur, « Internet » : publications > sites officiels > Wikipédia', async () => {
-    const outcome = await runResearch({ ...QUERY, group: 'master' }, NO_SEARX, deps(router(), fakePages()), BUDGET);
+  it('supérieur, « Internet » : sites officiels > publications > Wikipédia > notices seules', async () => {
+    const outcome = await runResearch({ ...QUERY, group: 'master' }, ACADEMIC_CONFIG, deps(router(), fakePages()), BUDGET);
     const kinds = outcome.sources.map(s => s.kind);
-    expect(kinds).toEqual(['hal', 'hal', 'crossref', 'openalex', 'institutional', 'institutional', 'institutional', 'wikipedia']);
+    expect(kinds).toEqual(['institutional', 'institutional', 'institutional', 'hal', 'crossref', 'openalex', 'wikipedia', 'hal']);
   });
 
   it('« Documents + Internet » (scolaire) : mêmes sources que « Internet », sites officiels avant Wikipédia', async () => {

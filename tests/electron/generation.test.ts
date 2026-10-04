@@ -224,7 +224,7 @@ describe('capacités', () => {
     const { gm } = manager(new MockProvider(), { privacy: { level: 'local', message: 'IA locale — Vos documents et générations restent sur cet ordinateur.' } });
     expect(await gm.capabilities()).toEqual({
       maxDocumentChars: maxDocumentCharsFor(12_288),
-      research: { academic: false, web: true, institutional: true, wikipedia: true, trustedCatalogue: true },
+      research: { academic: false, web: true, institutional: true, wikipedia: true, trustedCatalogue: true, academicAllLevels: true },
       privacy: { level: 'local', message: 'IA locale — Vos documents et générations restent sur cet ordinateur.' },
       engineLabel: 'Magistra Standard',
       ready: true,
@@ -235,16 +235,16 @@ describe('capacités', () => {
     const fetchPage = async () => null;
     const research = async (deps: { fetchPage?: GenerationDeps['fetchPage'] } = {}) => (await manager(new MockProvider(), deps).gm.capabilities()).research;
     // Cas normal d'un enseignant : Wikipédia actif (défaut), pas de SearXNG.
-    expect(await research({ fetchPage })).toEqual({ academic: true, web: false, institutional: true, wikipedia: true, trustedCatalogue: true });
+    expect(await research({ fetchPage })).toEqual({ academic: true, web: false, institutional: true, wikipedia: true, trustedCatalogue: true, academicAllLevels: true });
     // Wikipédia désactivé : plus aucun chemin.
     await store.setPreferences({ wikipediaEnabled: false });
-    expect(await research({ fetchPage })).toEqual({ academic: true, web: false, institutional: false, wikipedia: false, trustedCatalogue: true });
+    expect(await research({ fetchPage })).toEqual({ academic: true, web: false, institutional: false, wikipedia: false, trustedCatalogue: true, academicAllLevels: true });
     // SearXNG indiqué : chemin direct, même sans Wikipédia.
     await store.setPreferences({ searxngUrl: 'https://searx.univ.fr' });
-    expect(await research({ fetchPage })).toEqual({ academic: true, web: true, institutional: true, wikipedia: false, trustedCatalogue: true });
+    expect(await research({ fetchPage })).toEqual({ academic: true, web: true, institutional: true, wikipedia: false, trustedCatalogue: true, academicAllLevels: true });
     // Sans récupération de pages, Wikipédia seul ne mène pas aux sites officiels.
     await store.setPreferences({ wikipediaEnabled: true, searxngUrl: '' });
-    expect(await research()).toEqual({ academic: true, web: false, institutional: false, wikipedia: true, trustedCatalogue: true });
+    expect(await research()).toEqual({ academic: true, web: false, institutional: false, wikipedia: true, trustedCatalogue: true, academicAllLevels: true });
   });
 
   it('application Windows : toujours les sites vérifiés seulement (aucune option pour le web général)', () => {

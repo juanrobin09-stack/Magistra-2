@@ -281,3 +281,15 @@ describe('indications en démonstration', () => {
     expect(researchHints('documents', 0, '4eme', options, 'web').modelOnly).toBe(true);
   });
 });
+
+
+describe('moteurs avec recherche académique à tous les niveaux', () => {
+  it('annonce les publications au collège même si Wikipédia et le moteur web sont désactivés', () => {
+    const options = describeResearchOptions(caps({ research: { academicAllLevels: true, academic: true, wikipedia: false, web: false, institutional: false } }), 'local', '4eme');
+    expect(options.find(o => o.value === 'internet')).toMatchObject({ available: true, note: expect.stringContaining('HAL, Crossref et OpenAlex') });
+  });
+  it('ne promet pas cette nouvelle couverture pour une ancienne application connectée', () => {
+    const options = describeResearchOptions(caps({ research: { academic: true, wikipedia: false, web: false, institutional: false } }), 'web', '4eme', 'local-connector');
+    expect(options.find(o => o.value === 'internet')?.available).toBe(false);
+  });
+});

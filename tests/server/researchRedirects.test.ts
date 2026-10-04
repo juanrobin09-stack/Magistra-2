@@ -6,7 +6,10 @@ import { describe, expect, it } from 'vitest';
 import { createSafePageFetcher, type ResolvedAddress, type Transport } from '../../server/safeFetch.js';
 import { NO_OFFICIAL_FOUND_MESSAGE, runResearch, type FetchedPage } from '../../shared/research/index';
 import { jsonResponse } from '../shared/helpers';
-import { CONFIG, deps, NO_SEARX, router, wikiHandler } from '../shared/researchFixtures';
+import { CONFIG as BASE_CONFIG, deps, NO_SEARX as BASE_NO_SEARX, router, wikiHandler } from '../shared/researchFixtures';
+
+const CONFIG = { ...BASE_CONFIG, academic: false };
+const NO_SEARX = { ...BASE_NO_SEARX, academic: false };
 
 const PUBLIC_IP = '93.184.215.14';
 const QUERY = { text: 'la gouvernance des SI', topic: 'gouvernance des SI', mode: 'internet', group: 'college' } as const;

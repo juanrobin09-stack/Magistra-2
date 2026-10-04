@@ -218,6 +218,7 @@ async function status(deps: ServerDeps): Promise<ApiResult> {
       wikipedia: research.wikipedia,
       // Cette version s'appuie sur le catalogue des sites officiels vérifiés (absent d'un serveur plus ancien).
       trustedCatalogue: true,
+      academicAllLevels: true,
     },
     maxDocumentChars,
   };

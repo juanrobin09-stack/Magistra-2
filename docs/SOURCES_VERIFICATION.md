@@ -7,7 +7,7 @@ Vérification du 4 octobre 2026. Base examinée : `2c7c9af89b57acd97b105549e5c14
 - `shared/research/providers.ts` interroge HAL, Crossref et OpenAlex. Les résumés disponibles sont récupérés ; une publication sans résumé est explicitement limitée à une notice bibliographique, jamais présentée au modèle comme un article lu.
 - `shared/research/trusted.ts` reconnaît les domaines institutionnels et scientifiques, notamment Éduscol, les ministères, l’UNESCO et le CNRS. Il distingue les institutions, les plateformes scientifiques et les plateformes ouvertes. Cette classification porte sur l’hôte, pas sur la validation scientifique individuelle de chaque document.
 - `shared/research/index.ts` recherche les pages institutionnelles par un moteur SearXNG configuré, ou par les références externes d’articles Wikipédia. Dans ce dernier cas, c’est la page institutionnelle elle-même qui doit être récupérée pour devenir une source institutionnelle.
-- Le mode « Sources académiques » recherche les publications et les pages institutionnelles pour tous les niveaux ; il n’utilise pas le texte des articles Wikipédia. Les modes Internet incluent automatiquement les publications pour le supérieur et peuvent utiliser Wikipédia comme complément identifié.
+- Le mode « Sources académiques » recherche les publications et les pages institutionnelles pour tous les niveaux ; il n’utilise pas le texte des articles Wikipédia. Le correctif de couverture étend les publications aux modes Internet pour tous les niveaux, si la recherche académique est activée. Wikipédia peut rester un complément identifié.
 - Le mode « Mes documents uniquement » ne déclenche aucune recherche externe. Les réglages désactivés sont respectés.
 - `shared/pipeline.ts` transmet les extraits retenus au modèle avec leurs références. Les consignes donnent priorité aux documents de l’enseignant, puis aux sources officielles et aux publications, devant Wikipédia. La quantité transmise reste bornée par le contexte disponible.
 - Les avertissements existants signalent une absence de source ou une indisponibilité. La recherche, les citations et les protections des requêtes ne sont pas remplacées par ce correctif d’affichage.
@@ -44,6 +44,6 @@ L’accès anonyme OpenAlex a répondu pendant la vérification. Sa documentatio
 - OpenAlex : https://help.openalex.org/api/authentication/
 - Dépréciations OpenAlex : https://help.openalex.org/api/deprecations/
 
-## Publication restante
+## Publication de l’application
 
-Le dépôt privé n’est pas accessible via la connexion GitHub actuelle (404), et le dépôt local ne peut pas s’authentifier pour un `fetch`. Aucun push, aucune fusion ni publication d’installateur n’est annoncé comme effectué. Réautoriser le dépôt, récupérer les nouveaux commits de la branche commune, intégrer ce correctif dans la branche commune, puis utiliser les circuits habituels de déploiement du site et de publication Windows.
+L’accès au dépôt a été rétabli. Les améliorations d’affichage déjà reprises sur la branche commune sont conservées ; le correctif de couverture est décrit dans `SOURCES_COVERAGE_PATCH.md`. La publication d’un nouvel installateur Windows reste nécessaire pour transmettre les changements de recherche aux applications installées.

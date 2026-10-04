@@ -153,13 +153,13 @@ describe('planResearch', () => {
     expect(planResearch('academic', 'doctorat')).toEqual({ academic: true, institutional: true, web: false, wikipedia: false });
     expect(planResearch('internet', 'master')).toEqual({ academic: true, institutional: true, web: true, wikipedia: true });
     expect(planResearch('documents_internet', 'doctorat')).toEqual({ academic: true, institutional: true, web: true, wikipedia: true });
-    expect(planResearch('internet', 'elementaire')).toEqual({ academic: false, institutional: true, web: true, wikipedia: true });
-    expect(planResearch('documents_internet', 'lycee')).toEqual({ academic: false, institutional: true, web: true, wikipedia: true });
+    expect(planResearch('internet', 'elementaire')).toEqual({ academic: true, institutional: true, web: true, wikipedia: true });
+    expect(planResearch('documents_internet', 'lycee')).toEqual({ academic: true, institutional: true, web: true, wikipedia: true });
   });
 });
 
 describe('runResearch', () => {
-  it('université : HAL > Crossref > OpenAlex > sites vérifiés > Wikipédia, dédoublonnage par DOI et URL', async () => {
+  it('sites institutionnels > publications avec résumé > Wikipédia > notices seules ; dédoublonnage par DOI et URL', async () => {
     const fetchImpl = router();
     const outcome = await runResearch(
       { text: 'gouvernance des systèmes d’information', mode: 'internet', group: 'master' },
@@ -168,12 +168,12 @@ describe('runResearch', () => {
     expect(outcome.internetUsed).toBe(true);
     expect(outcome.warnings).toEqual([]);
     const kinds = outcome.sources.map(s => s.kind);
-    expect(kinds.indexOf('hal')).toBe(0);
-    expect(kinds.lastIndexOf('hal')).toBeLessThan(kinds.indexOf('crossref'));
+    expect(kinds.indexOf('institutional')).toBe(0);
+    expect(kinds.indexOf('hal')).toBeLessThan(kinds.indexOf('crossref'));
     expect(kinds.lastIndexOf('crossref')).toBeLessThan(kinds.indexOf('openalex'));
-    expect(kinds.lastIndexOf('openalex')).toBeLessThan(kinds.indexOf('institutional'));
+    expect(kinds.lastIndexOf('institutional')).toBeLessThan(kinds.indexOf('hal'));
     expect(kinds.lastIndexOf('institutional')).toBeLessThan(kinds.indexOf('wikipedia'));
-    expect(kinds[kinds.length - 1]).toBe('wikipedia');
+    expect(outcome.sources.at(-1)?.text).toBe(NO_ABSTRACT_TEXT);
     // L'article présent dans HAL, Crossref et OpenAlex n'apparaît qu'une fois (version HAL, prioritaire).
     expect(outcome.sources.filter(s => s.doi?.toLowerCase() === '10.3917/sim.192.0045')).toHaveLength(1);
     expect(outcome.sources.find(s => s.doi?.toLowerCase() === '10.3917/sim.192.0045')?.kind).toBe('hal');
@@ -187,17 +187,17 @@ describe('runResearch', () => {
     expect(urls).not.toContain('https://blog.example.org/fractions');
   });
 
-  it('université : priorité des connecteurs académiques HAL > Crossref > OpenAlex, résumés d’abord dans chacun', async () => {
+  it('publications : les résumés de tous les connecteurs précèdent les notices seules', async () => {
     const outcome = await runResearch({ text: 'gouvernance', mode: 'academic', group: 'master' }, NO_SEARX, deps(router()), { budgetChars: 50_000 });
-    expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'hal', 'crossref', 'openalex']);
+    expect(outcome.sources.map(s => s.kind)).toEqual(['hal', 'crossref', 'openalex', 'hal']);
     // La référence HAL sans résumé passe après celle qui en a un.
     expect(outcome.sources[0].text).toMatch(/gouvernance des SI/);
-    expect(outcome.sources[1].text).toBe(NO_ABSTRACT_TEXT);
+    expect(outcome.sources.at(-1)?.text).toBe(NO_ABSTRACT_TEXT);
   });
 
   it('scolaire avec SearXNG : requêtes « site: » par lots sur les principaux sites du catalogue, jamais de requête générale, sites vérifiés > Wikipédia', async () => {
     const fetchImpl = router();
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'elementaire' }, CONFIG, deps(fetchImpl), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'elementaire' }, { ...CONFIG, academic: false }, deps(fetchImpl), { budgetChars: 50_000 });
     const queries = fetchImpl.calls.filter(c => c.url.startsWith('https://searx.example.fr/search')).map(c => new URL(c.url).searchParams.get('q'));
     expect(queries).toEqual(trustedSearchGroups().map(group => `les fractions (${group.map(d => `site:${d}`).join(' OR ')})`));
     expect(queries.length).toBeGreaterThan(1);
@@ -225,7 +225,7 @@ describe('runResearch', () => {
   });
 
   it('SearXNG : le blog, l’adresse javascript: et l’adresse http sont écartés même s’ils répondent à une requête « site: »', async () => {
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router()), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false }, deps(router()), { budgetChars: 50_000 });
     const urls = outcome.sources.map(s => s.url);
     expect(urls).not.toContain('https://blog.example.org/fractions');
     expect(urls).not.toContain('http://www.education.gouv.fr/ancien/fractions');
@@ -243,7 +243,7 @@ describe('runResearch', () => {
         : jsonResponse({ results: [] });
     };
     const fetchImpl = router({ searx: oneOfficialPage });
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'elementaire' }, { ...CONFIG, trustedOnly: false }, deps(fetchImpl), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'elementaire' }, { ...CONFIG, academic: false, trustedOnly: false }, deps(fetchImpl), { budgetChars: 50_000 });
     const queries = fetchImpl.calls.filter(c => c.url.startsWith('https://searx.example.fr/search')).map(c => new URL(c.url).searchParams.get('q'));
     expect(queries).toHaveLength(trustedSearchGroups().length + 1);
     expect(queries[queries.length - 1]).toBe('les fractions');
@@ -259,7 +259,7 @@ describe('runResearch', () => {
     const httpOnly = (url: string) => (new URL(url).searchParams.get('q')?.includes('site:education.gouv.fr')
       ? jsonResponse({ results: [{ url: 'http://www.education.gouv.fr/ancien/fractions', title: 'Ancienne adresse en http', content: 'Ancienne page servie en http, que seule une adresse https remplace : fractions et décimaux au cycle 3.' }] })
       : jsonResponse({ results: [] }));
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false, trustedOnly: false }, deps(router({ searx: httpOnly })), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false, wikipedia: false, trustedOnly: false }, deps(router({ searx: httpOnly })), { budgetChars: 50_000 });
     expect(outcome.sources).toHaveLength(1);
     expect(outcome.sources[0]).toMatchObject({ kind: 'web', url: 'http://www.education.gouv.fr/ancien/fractions' });
     expect(outcome.sources[0].venue).toBeUndefined();
@@ -267,7 +267,7 @@ describe('runResearch', () => {
 
   it('trustedOnly vaut vrai par défaut (champ absent) : même comportement que vrai', async () => {
     const fetchImpl = router();
-    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, trustedOnly: undefined }, deps(fetchImpl), { budgetChars: 50_000 });
+    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false, trustedOnly: undefined }, deps(fetchImpl), { budgetChars: 50_000 });
     expect(fetchImpl.calls.filter(c => c.url.startsWith('https://searx.example.fr/search')).every(c => new URL(c.url).searchParams.get('q')?.includes('site:'))).toBe(true);
   });
 
@@ -276,7 +276,7 @@ describe('runResearch', () => {
       'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://pirate.example.net/faux-programme' },
       'https://www.education.gouv.fr/bo/2024/Hebdo1': { url: 'https://www.education.gouv.fr/bo/2024/Hebdo1-final', title: 'BO final' },
     });
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router(), fetchPage), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
     const urls = outcome.sources.map(s => s.url);
     expect(urls).not.toContain('https://eduscol.education.fr/1234/programme-cycle-3');
     expect(outcome.sources.some(s => /pirate/.test(s.text) || /pirate/.test(s.title))).toBe(false);
@@ -295,7 +295,7 @@ describe('runResearch', () => {
       'https://eduscol.education.fr/1234/programme-cycle-3': page,
       'https://www.education.gouv.fr/bo/2024/Hebdo1': page,
     });
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false, wikipedia: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
     const moved = outcome.sources.filter(s => s.url === final);
     expect(moved).toHaveLength(1);
     expect(moved[0]).toMatchObject({ kind: 'institutional', venue: 'Patrimoine mondial (UNESCO)', title: 'Liste du patrimoine mondial' });
@@ -310,14 +310,14 @@ describe('runResearch', () => {
       'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://eduscol.education.fr/' },
       'https://www.education.gouv.fr/bo/2024/Hebdo1': { url: 'https://cas.education.gouv.fr/login?service=x' },
     });
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false, wikipedia: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
     const urls = outcome.sources.map(s => s.url);
     expect(urls).not.toContain('https://eduscol.education.fr/1234/programme-cycle-3');
     expect(urls).not.toContain('https://www.education.gouv.fr/bo/2024/Hebdo1');
     expect(urls.some(u => /cas\.education|login/.test(u ?? ''))).toBe(false);
     expect(outcome.sources.some(s => /Contenu officiel de (cas\.|eduscol\.)/.test(s.text))).toBe(false);
     const cas = fakePages({ 'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://www.education.gouv.fr/cas/' } });
-    const again = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router(), cas), { budgetChars: 50_000 });
+    const again = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false, wikipedia: false }, deps(router(), cas), { budgetChars: 50_000 });
     expect(again.sources.some(s => /Contenu officiel de www\.education/.test(s.text) && s.url?.includes('/cas/'))).toBe(false);
   });
 
@@ -329,7 +329,7 @@ describe('runResearch', () => {
       ] })
       : jsonResponse({ results: [] }));
     const fetchPage = fakePages();
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router({ searx: homes }), fetchPage), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false, wikipedia: false }, deps(router({ searx: homes }), fetchPage), { budgetChars: 50_000 });
     expect(outcome.sources).toEqual([]);
     expect(fetchPage.calls).toEqual([]);
   });
@@ -340,7 +340,7 @@ describe('runResearch', () => {
       seen.push(options?.allowUrl);
       return { url, title: 'Page', text: 'Contenu officiel suffisamment long pour être retenu comme source de la recherche en ligne.' };
     };
-    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router(), fetchPage), { budgetChars: 50_000 });
+    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
     expect(seen.length).toBeGreaterThan(0);
     const allow = seen[0]!;
     expect(seen.every(a => typeof a === 'function')).toBe(true);
@@ -349,7 +349,7 @@ describe('runResearch', () => {
       expect(allow(new URL(url)), url).toBe(false);
 
     seen.length = 0;
-    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, trustedOnly: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false, trustedOnly: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every(a => a === undefined)).toBe(true);
   });
@@ -359,7 +359,7 @@ describe('runResearch', () => {
       'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'http://eduscol.education.fr/1234/programme-cycle-3' },
       'https://www.education.gouv.fr/bo/2024/Hebdo1': { url: 'https://education.gouv.fr.pirate.example.net/bo' },
     });
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router(), fetchPage), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
     expect(outcome.sources.map(s => s.url)).not.toContain('https://eduscol.education.fr/1234/programme-cycle-3');
     expect(outcome.sources.map(s => s.url)).not.toContain('https://www.education.gouv.fr/bo/2024/Hebdo1');
     expect(outcome.sources.some(s => s.kind === 'institutional' && /unesco/.test(s.url ?? ''))).toBe(true);
@@ -367,7 +367,7 @@ describe('runResearch', () => {
 
   it('SearXNG, restriction levée : une redirection hors du catalogue est admise (comportement du web général)', async () => {
     const fetchPage = fakePages({ 'https://eduscol.education.fr/1234/programme-cycle-3': { url: 'https://autre.example.net/x', title: 'Autre page', text: 'Texte de la page finale, bien plus long que l’extrait fourni par le moteur de recherche : les fractions au cycle 3, leurs écritures, leurs comparaisons, les opérations et les problèmes.' } });
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, trustedOnly: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false, trustedOnly: false }, deps(router(), fetchPage), { budgetChars: 50_000 });
     // L'adresse de la source est celle du texte retenu ; hors catalogue, jamais « officielle ».
     const moved = outcome.sources.find(s => s.url === 'https://autre.example.net/x');
     expect(moved?.text).toMatch(/Texte de la page finale/);
@@ -380,20 +380,20 @@ describe('runResearch', () => {
     const onlyBlogs = (url: string) => (new URL(url).searchParams.get('q')?.includes('site:')
       ? jsonResponse({ results: [{ url: 'https://blog.example.org/fractions', title: 'Enseigner les fractions', content: 'Un blog d’enseignant propose des activités de manipulation pour introduire les fractions au CM1.' }] })
       : jsonResponse({ results: [] }));
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, wikipedia: false }, deps(router({ searx: onlyBlogs })), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false, wikipedia: false }, deps(router({ searx: onlyBlogs })), { budgetChars: 50_000 });
     expect(outcome.sources).toEqual([]);
     expect(outcome.warnings).toContainEqual({ code: 'INSTITUTIONAL_UNAVAILABLE', message: NO_OFFICIAL_FOUND_MESSAGE });
   });
 
   it('SearXNG injoignable (Wikipédia répond) : avertissement de recherche, pas de « aucune source officielle » en plus', async () => {
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, CONFIG, deps(router({ searx: () => textResponse('x', 502) })), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...CONFIG, academic: false }, deps(router({ searx: () => textResponse('x', 502) })), { budgetChars: 50_000 });
     expect(outcome.warnings.map(w => w.message)).toEqual(['Recherche Internet indisponible (serveur SearXNG injoignable).']);
     expect(outcome.sources.map(s => s.kind)).toEqual(['wikipedia']);
   });
 
   it('scolaire sans SearXNG ni fetchPage : sites officiels non consultés, Wikipédia utilisée quand même', async () => {
     const fetchImpl = router();
-    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, NO_SEARX, deps(fetchImpl), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'les fractions', mode: 'internet', group: 'college' }, { ...NO_SEARX, academic: false }, deps(fetchImpl), { budgetChars: 50_000 });
     expect(outcome.warnings).toEqual([{ code: 'INSTITUTIONAL_UNAVAILABLE', message: OFFICIAL_UNAVAILABLE_MESSAGE }]);
     expect(OFFICIAL_UNAVAILABLE_MESSAGE).toBe('Sites officiels (Éduscol, UNESCO, ministères…) non consultés. Ajoutez vos documents officiels (programmes, textes) pour les utiliser.');
     expect(outcome.sources.map(s => s.kind)).toEqual(['wikipedia']);
@@ -414,7 +414,7 @@ describe('runResearch', () => {
 
   it('sans Internet, sans chemin vers les sites officiels : l’avertissement « sites officiels » est conservé avec le message unique', async () => {
     const offline = mockFetch(() => { throw networkError('ENOTFOUND'); });
-    const outcome = await runResearch({ text: 'gouvernance', mode: 'internet', group: 'college' }, NO_SEARX, deps(offline), { budgetChars: 50_000 });
+    const outcome = await runResearch({ text: 'gouvernance', mode: 'internet', group: 'college' }, { ...NO_SEARX, academic: false }, deps(offline), { budgetChars: 50_000 });
     expect(outcome.warnings.map(w => w.code)).toEqual(['INSTITUTIONAL_UNAVAILABLE', 'RESEARCH_UNAVAILABLE']);
   });
 
@@ -423,7 +423,7 @@ describe('runResearch', () => {
       { text: 'gouvernance', mode: 'academic', group: 'master' },
       NO_SEARX, deps(router({ hal: () => textResponse('Solr error', 500) }), fakePages()), { budgetChars: 50_000 },
     );
-    expect(outcome.sources.filter(s => ['hal', 'crossref', 'openalex'].includes(s.kind)).map(s => s.kind)).toEqual(['crossref', 'crossref', 'openalex']);
+    expect(outcome.sources.filter(s => ['hal', 'crossref', 'openalex'].includes(s.kind)).map(s => s.kind)).toEqual(['crossref', 'openalex', 'openalex']);
     expect(outcome.warnings.some(w => w.code === 'ACADEMIC_UNAVAILABLE')).toBe(false);
   });
 

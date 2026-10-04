@@ -114,7 +114,7 @@ export function describeResearchOptions(
     if (mode === 'demo') return { ...base, available: false, note: DEMO_RESEARCH_NOTE };
     if (!caps) return base;
 
-    const { academic, institutional, web, wikipedia, trustedCatalogue } = caps.research;
+    const { academic, institutional, web, wikipedia, trustedCatalogue, academicAllLevels } = caps.research;
     // Le catalogue (UNESCO…) n'est annoncé que par un moteur qui l'annonce lui-même : avec un moteur de recherche web,
     // l'absence de `trustedCatalogue` signale une version plus ancienne. Sans moteur web, « institutional » ne peut venir
     // que du chemin par Wikipédia, que seules les versions actuelles ont.
@@ -132,7 +132,7 @@ export function describeResearchOptions(
     const wiki = wikipedia
       ? official === OFFICIAL_VIA_WIKIPEDIA_CONSULTED ? 'ses articles (à recouper)' : WIKIPEDIA_CONSULTED
       : null;
-    const parts = [isSuperieur(niveau) && academic ? PUBLICATIONS_CONSULTED : null, official, wiki];
+    const parts = [(isSuperieur(niveau) || academicAllLevels === true) && academic ? PUBLICATIONS_CONSULTED : null, official, wiki];
     if (!parts.some(Boolean)) return { ...base, available: false, note: notes.noInternet };
     return { ...base, note: consultedNote(parts, missingOfficial) };
   });

@@ -68,7 +68,7 @@ const researchDeps = (fetchImpl: ReturnType<typeof academicFetch>): ResearchDeps
 describe('runGeneration — déroulé nominal', () => {
   it('ordre des évènements, sources numérotées (documents d’abord), citations finalisées, sauvegarde', async () => {
     const provider = new MockProvider({
-      reply: 'La gouvernance aligne SI et stratégie [S1]. Les référentiels [S2, S3] se complètent. Cadre officiel [S4], encyclopédie [S5]. Étude inventée [S9], doi:10.9999/faux.1.\n\n## Bibliographie\n\n- Auteur inventé (2020).',
+      reply: 'La gouvernance aligne SI et stratégie [S1]. Les référentiels [S2, S4] se complètent. Cadre officiel [S3], encyclopédie [S5]. Étude inventée [S9], doi:10.9999/faux.1.\n\n## Bibliographie\n\n- Auteur inventé (2020).',
       chunkSize: 7,
     });
     const saved: NewGenerationRecord[] = [];
@@ -86,9 +86,9 @@ describe('runGeneration — déroulé nominal', () => {
     expect(order).toEqual(['status:context', 'status:research', 'sources', 'status:generating', 'delta', 'status:finalizing', 'done']);
 
     const sources = ofType(events, 'sources')[0];
-    expect(sources.sources.map(s => [s.n, s.kind])).toEqual([[1, 'document'], [2, 'document'], [3, 'hal'], [4, 'institutional'], [5, 'wikipedia']]);
+    expect(sources.sources.map(s => [s.n, s.kind])).toEqual([[1, 'document'], [2, 'document'], [3, 'institutional'], [4, 'hal'], [5, 'wikipedia']]);
     // Source officielle : adresse vérifiée par le catalogue, nom du site cité comme revue.
-    expect(sources.sources[3]).toMatchObject({ title: 'Gouvernance numérique', venue: 'UNESCO', url: OFFICIAL_URL });
+    expect(sources.sources[2]).toMatchObject({ title: 'Gouvernance numérique', venue: 'UNESCO', url: OFFICIAL_URL });
     expect(sources.sources[0]).toMatchObject({ docName: 'Cours gouvernance.pdf', locator: { type: 'pages', start: 14, end: 18 } });
     expect(sources.internetUsed).toBe(true);
 
@@ -104,12 +104,12 @@ describe('runGeneration — déroulé nominal', () => {
 
     const done = last(events) as EventOf<'done'>;
     expect(done.content).toContain('La gouvernance aligne SI et stratégie [S1].');
-    expect(done.content).toContain('Les référentiels [S2, S3] se complètent.');
+    expect(done.content).toContain('Les référentiels [S2, S4] se complètent.');
     expect(done.content).not.toMatch(/\[S9\]|\[9\]|10\.9999|Auteur inventé|## Bibliographie/);
     expect(done.content).toContain('- [S1] Cours gouvernance.pdf — pages 14 à 18');
-    expect(done.content).toContain('- [S3] Anne Martin. Gouvernance des SI et performance (2020) — Publication scientifique · HAL. https://doi.org/10.1000/hal.1');
+    expect(done.content).toContain('- [S4] Anne Martin. Gouvernance des SI et performance (2020) — Publication scientifique · HAL. https://doi.org/10.1000/hal.1');
     // Chaque source citée porte son niveau de fiabilité : officielle, scientifique, encyclopédie à recouper.
-    expect(done.content).toContain(`- [S4] Gouvernance numérique — Source officielle · UNESCO. ${OFFICIAL_URL}`);
+    expect(done.content).toContain(`- [S3] Gouvernance numérique — Source officielle · UNESCO. ${OFFICIAL_URL}`);
     expect(done.content).toContain('- [S5] Gouvernance des systèmes d’information — Encyclopédie collaborative (à recouper) · Wikipédia. https://fr.wikipedia.org/wiki/Gouvernance_des_SI');
     expect(done).toMatchObject({ saved: true, id: 'gen_1', truncated: false, internetUsed: true, model: 'mock-model' });
     expect(done.sources.map(s => s.n)).toEqual([1, 2, 3, 4, 5]);
@@ -220,15 +220,15 @@ describe('runGeneration — génération à enregistrer (includeRecord)', () => 
       return academicFetch()(url);
     });
     const events = await collect(runGeneration(request({ researchMode: 'documents_internet', documents: [] }), {
-      provider: new MockProvider({ reply: 'Gouvernance [S1], [S2]. Cadre officiel [S3]. Encyclopédie [S4].' }),
+      provider: new MockProvider({ reply: 'Gouvernance [S2], [S3]. Cadre officiel [S1]. Encyclopédie [S4].' }),
       research: { config: RESEARCH_CONFIG, deps: { fetch: fetchImpl, fetchPage: officialPages() } },
       includeRecord: true,
     }));
     const done = last(events) as EventOf<'done'>;
-    expect(done.record!.sources.map(s => s.kind)).toEqual(['openalex', 'openalex', 'institutional', 'wikipedia']);
+    expect(done.record!.sources.map(s => s.kind)).toEqual(['institutional', 'openalex', 'openalex', 'wikipedia']);
     const validated = validateGenerationRecordDraft(done.record);
-    expect(validated.sources.map(s => s.kind)).toEqual(['openalex', 'openalex', 'institutional', 'wikipedia']);
-    expect(validated.sources[2]).toMatchObject({ venue: 'UNESCO', url: OFFICIAL_URL });
+    expect(validated.sources.map(s => s.kind)).toEqual(['institutional', 'openalex', 'openalex', 'wikipedia']);
+    expect(validated.sources[0]).toMatchObject({ venue: 'UNESCO', url: OFFICIAL_URL });
   });
 
   it('modèle personnalisé au nom long (jusqu’à 200 caractères, accepté par l’application) : enregistrement accepté ; au-delà, nom borné', async () => {

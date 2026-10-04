@@ -320,9 +320,9 @@ describe('prompts — hiérarchie des sources (règle courte)', () => {
     expect(buildUserPrompt(req({ type: 'cours', niveau: 'licence_2' }), SOURCES)).not.toContain('Hiérarchie');
   });
 
-  it('documents de l’enseignant > sources officielles > publications > Wikipédia ; la source la plus fiable l’emporte, le désaccord est signalé, jamais mélangé', () => {
+  it('documents de l’enseignant > sources officielles > publications > Wikipédia ; pertinence et désaccords explicités', () => {
     expect(SOURCE_PRIORITY_RULE).toContain("documents de l'enseignant > sources officielles > publications > Wikipédia");
-    expect(SOURCE_PRIORITY_RULE).toMatch(/Désaccord : la plus fiable l'emporte et il est signalé, jamais mélangé/);
+    expect(SOURCE_PRIORITY_RULE).toMatch(/Vérifie sujet, période et pays ; signale les désaccords non résolus/);
     expect(SOURCE_PRIORITY_RULE).toMatch(/Faits chiffrés, dates, lois : seulement ceux des sources/);
   });
 
@@ -361,7 +361,7 @@ describe('prompts — hiérarchie des sources (règle courte)', () => {
   it('ne contredit aucune règle existante : citations, connaissances générales, exactitude des calculs et des nombres demandés', () => {
     const sys = SYS('exercices', true);
     // Le point couvert par aucune source se traite sans fait chiffré, date ni loi précis (cohérent avec la hiérarchie).
-    expect(sys).toMatch(/Si les sources ne couvrent pas un point, tu peux le traiter avec tes connaissances générales, sans citation, avec prudence et sans fait chiffré, date ni loi précis\./);
+    expect(sys).toMatch(/Si les sources ne couvrent pas un point, signale-le : connaissances générales non vérifiées, sans citation ni fait chiffré, date ou loi précis\./);
     // La règle vise les faits à citer : les nombres d'un exercice et les calculs restent à la charge du modèle (QUALITY_RULES).
     expect(sys).toMatch(/Respecte exactement les nombres demandés/);
     expect(sys).toMatch(/refais chaque calcul/);

@@ -260,6 +260,7 @@ export class GenerationManager {
         wikipedia: prefs.wikipediaEnabled,
         // Cette version s'appuie sur le catalogue des sites officiels vérifiés (absent d'une application plus ancienne).
         trustedCatalogue: true,
+        academicAllLevels: true,
       },
       privacy: active.privacy,
       engineLabel: active.label,
