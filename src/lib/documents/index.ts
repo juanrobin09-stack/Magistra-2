@@ -4,53 +4,20 @@
 // d'un PDF, avec son worker servi par l'application.
 
 import { MagistraError, isMagistraError } from '@shared/errors';
-import { extractDocument, describeDocument, type PdfJsLike } from '@shared/documents/extract';
+import { extractDocument, describeDocument, type DocumentImportProgress } from '@shared/documents/extract';
 import { selectPassages } from '@shared/documents/retrieve';
 import { DOCUMENT_LIMITS, type ExtractedDocument } from '@shared/documents/types';
+import { loadPdfJs } from './pdf';
+import { createPdfPageRecognizer } from './pdfOcr';
 
 export { selectPassages, describeDocument, DOCUMENT_LIMITS };
 export type { ExtractedDocument };
+export type { DocumentImportProgress };
 
 /** Formats acceptés par le sélecteur de fichiers. */
 export const ACCEPT = '.pdf,.docx,.pptx,.txt,.md';
 
 const SUPPORTED = new Set(['pdf', 'docx', 'pptx', 'txt', 'md', 'markdown', 'text']);
-
-let pdfjsPromise: Promise<PdfJsLike> | null = null;
-
-/**
- * La version moderne de pdf.js utilise des API JavaScript très récentes
- * (Map.prototype.getOrInsertComputed, Math.sumPrecise) : sur un navigateur qui ne les a pas,
- * on charge la version « legacy » (polyfills inclus). L'application Windows utilise la moderne.
- */
-function supportsModernPdfJs(): boolean {
-  const mapProto = Map.prototype as unknown as { getOrInsertComputed?: unknown };
-  const math = Math as unknown as { sumPrecise?: unknown };
-  return typeof mapProto.getOrInsertComputed === 'function' && typeof math.sumPrecise === 'function';
-}
-
-function loadPdfJs(): Promise<PdfJsLike> {
-  pdfjsPromise ??= (async () => {
-    if (supportsModernPdfJs()) {
-      const [lib, worker] = await Promise.all([
-        import('pdfjs-dist'),
-        import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
-      ]);
-      lib.GlobalWorkerOptions.workerSrc = worker.default;
-      return lib as unknown as PdfJsLike;
-    }
-    const [lib, worker] = await Promise.all([
-      import('pdfjs-dist/legacy/build/pdf.mjs'),
-      import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'),
-    ]);
-    lib.GlobalWorkerOptions.workerSrc = worker.default;
-    return lib as unknown as PdfJsLike;
-  })().catch(err => {
-    pdfjsPromise = null;
-    throw new MagistraError('DOCUMENT_UNSUPPORTED', 'Lecture des PDF indisponible. Rechargez la page puis réessayez.', { cause: err });
-  });
-  return pdfjsPromise;
-}
 
 function randomId(): string {
   const c = globalThis.crypto;
@@ -65,7 +32,11 @@ function randomId(): string {
 }
 
 /** Extrait le texte d'un fichier choisi par l'enseignant, entièrement sur cet appareil. */
-export async function extractFile(file: File): Promise<ExtractedDocument> {
+export async function extractFile(file: File, options: {
+  signal?: AbortSignal;
+  onProgress?: (progress: DocumentImportProgress) => void;
+} = {}): Promise<ExtractedDocument> {
+  options.signal?.throwIfAborted();
   const name = file.name || 'document';
   const ext = name.toLowerCase().split('.').pop() ?? '';
   if (!SUPPORTED.has(ext)) throw new MagistraError('DOCUMENT_UNSUPPORTED');
@@ -78,11 +49,16 @@ export async function extractFile(file: File): Promise<ExtractedDocument> {
   } catch (err) {
     throw new MagistraError('DOCUMENT_UNREADABLE', `Document impossible à lire : « ${name} ».`, { cause: err });
   }
+  const recognizer = ext === 'pdf' ? createPdfPageRecognizer(options) : undefined;
   try {
     const pdfjs = ext === 'pdf' ? await loadPdfJs() : undefined;
-    return await extractDocument({ id: randomId(), name, bytes }, { pdfjs });
+    return await extractDocument({ id: randomId(), name, bytes }, {
+      pdfjs, recognizePdfPage: recognizer?.recognize, hasPdfPageImages: recognizer?.hasImages, ...options,
+    });
   } catch (err) {
     if (isMagistraError(err)) throw err;
     throw new MagistraError('DOCUMENT_UNREADABLE', `Document impossible à lire : « ${name} ».`, { cause: err });
+  } finally {
+    await recognizer?.dispose();
   }
 }

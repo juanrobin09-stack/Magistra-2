@@ -38,6 +38,8 @@ export const DOCUMENT_LIMITS = {
   maxCharsPerDocument: 3_000_000,
   maxDocuments: 12,
   maxPdfPages: 2_000,
+  /** Pages nécessitant de l'OCR, bornées séparément du texte natif pour garder l'analyse raisonnable. */
+  maxOcrPages: 100,
   /** DOCX / PPTX : une entrée XML décompressée au-delà de cette taille est refusée (bombe de décompression). */
   maxXmlEntryBytes: 80 * 1024 * 1024,
   /** DOCX / PPTX : total décompressé lu dans un même fichier. */

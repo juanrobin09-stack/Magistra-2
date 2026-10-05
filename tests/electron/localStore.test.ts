@@ -10,7 +10,7 @@ import { DEFAULT_PREFERENCES, type StoredDocument } from '../../shared/ipc.js';
 import type { NewGenerationRecord } from '../../shared/pipeline.js';
 import { writeJsonAtomic } from '../../electron/jsonFile.js';
 import { excerptOf, LocalStore } from '../../electron/localStore.js';
-import { parseStoredPreferences, sanitizePreferencesUpdate } from '../../electron/validate.js';
+import { DOCUMENT_LIMITS, parseStoredPreferences, sanitizePreferencesUpdate, sanitizeStoredDocument } from '../../electron/validate.js';
 
 let dir: string;
 let now: Date;
@@ -322,4 +322,56 @@ describe('documents conservés (texte extrait uniquement)', () => {
     expect(await store.listDocuments()).toEqual([]);
     expect(await makeStore().loadDocument('doc-1')).toBeNull();
   });
+
+  it('conserve les avertissements de lecture et de reconnaissance après un redémarrage', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.setPreferences({ keepDocuments: true });
+    const warnings = ['1 page sans texte a été ignorée.', 'Texte reconnu localement : vérifiez les nombres et le japonais.'];
+    await store.saveDocument({ ...doc, warnings });
+    expect((await store.listDocuments())[0].warnings).toEqual(warnings);
+    const fresh = makeStore();
+    await fresh.init();
+    expect((await fresh.loadDocument(doc.id))?.warnings).toEqual(warnings);
+    expect((await fresh.listDocuments())[0].warnings).toEqual(warnings);
+  });
+
+  it('ne partage pas le tableau des avertissements entre les appelants et l’index', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.setPreferences({ keepDocuments: true });
+    const warnings = ['Lecture partielle.'];
+    await store.saveDocument({ ...doc, warnings });
+    warnings.push('Modification de l’appelant.');
+    const [summary] = await store.listDocuments();
+    expect(summary.warnings).toEqual(['Lecture partielle.']);
+    summary.warnings?.push('Modification du résumé.');
+    expect((await store.listDocuments())[0].warnings).toEqual(['Lecture partielle.']);
+    expect((await store.loadDocument(doc.id))?.warnings).toEqual(['Lecture partielle.']);
+  });
+
+  it('relit les anciens documents sans champ warnings et garde leurs bornes de texte', () => {
+    expect(sanitizeStoredDocument(doc).warnings).toBeUndefined();
+    expect(() => sanitizeStoredDocument({ ...doc, units: [{ locator: doc.units[0].locator, text: 'x'.repeat(DOCUMENT_LIMITS.unitChars + 1) }] }))
+      .toThrow(expect.objectContaining({ code: 'DOCUMENT_TOO_LARGE' }));
+  });
+
+  it('nettoie les avertissements valides sans perdre les accents et les caractères japonais', () => {
+    const raw = ['  Vérifiez 猫 et École.  ', '', '\u0000Lecture partielle.', 'Vérifiez 猫 et École.'];
+    expect(sanitizeStoredDocument({ ...doc, warnings: raw }).warnings).toEqual(['Vérifiez 猫 et École.', 'Lecture partielle.']);
+    expect(raw).toHaveLength(4);
+  });
+
+  for (const [label, warnings] of [
+    ['un tableau manquant', 'Lecture partielle.'],
+    ['un message non textuel', [true]],
+    ['trop de messages', Array.from({ length: DOCUMENT_LIMITS.warnings + 1 }, () => 'Lecture partielle.')],
+    ['un message trop long', ['x'.repeat(DOCUMENT_LIMITS.warningChars + 1)]],
+    ['des caractères de contrôle', ['Lecture\u0001partielle.']],
+  ]) {
+    it(`refuse ${label} dans les avertissements enregistrés`, () => {
+      expect(() => sanitizeStoredDocument({ ...doc, warnings }))
+        .toThrow(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+    });
+  }
 });

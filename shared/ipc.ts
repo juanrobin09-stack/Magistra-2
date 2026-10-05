@@ -229,6 +229,8 @@ export interface StoredDocument {
   /** Texte extrait (unités localisées), jamais le fichier original. */
   units: { locator: { type: 'pages' | 'slides' | 'section' | 'paragraphs' | 'lines'; start: number; end: number; title?: string }; text: string }[];
   chars: number;
+  /** Limites de lecture et de reconnaissance ; absent dans les anciennes copies enregistrées. */
+  warnings?: string[];
 }
 
 export interface AppInfo {

@@ -173,6 +173,56 @@ describe('useSourceDocuments : analyse deux par deux', () => {
   const makeFiles = (from: number, count: number) =>
     Array.from({ length: count }, (_, i) => new File([`contenu ${from + i}`], `cours-${from + i}.txt`, { lastModified: 1_700_000_000_000 + from + i }));
 
+  it('quitter la vue arrête les lectures en cours et ne démarre aucun fichier en attente', async () => {
+    const signals: AbortSignal[] = [];
+    vi.mocked(extractFile).mockImplementation((_file, options) => new Promise((_resolve, reject) => {
+      const signal = options!.signal!;
+      signals.push(signal);
+      signal.addEventListener('abort', () => reject(new DOMException('Lecture arrêtée', 'AbortError')), { once: true });
+    }));
+    const latest = mount();
+    await act(async () => {
+      latest().addFiles(makeFiles(1, 6));
+      await tick();
+    });
+    expect(signals).toHaveLength(2);
+    await act(async () => {
+      root!.unmount();
+      root = null;
+      for (let i = 0; i < 6; i++) await tick();
+    });
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect(extractFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('retirer un fichier en cours annule sa lecture et laisse démarrer le suivant', async () => {
+    const signals = new Map<string, AbortSignal>();
+    const release = new Map<string, () => void>();
+    vi.mocked(extractFile).mockImplementation((file, options) => new Promise((resolve, reject) => {
+      const signal = options!.signal!;
+      signals.set(file.name, signal);
+      release.set(file.name, () => resolve(fakeDoc(file.name)));
+      signal.addEventListener('abort', () => reject(new DOMException('Lecture arrêtée', 'AbortError')), { once: true });
+    }));
+    const latest = mount();
+    await act(async () => {
+      latest().addFiles(makeFiles(1, 3));
+      await tick();
+    });
+    await act(async () => {
+      latest().remove(latest().docs[0].key);
+      for (let i = 0; i < 3; i++) await tick();
+    });
+    expect(signals.get('cours-1.txt')!.aborted).toBe(true);
+    expect([...signals.keys()]).toEqual(['cours-1.txt', 'cours-2.txt', 'cours-3.txt']);
+    await act(async () => {
+      release.get('cours-2.txt')!();
+      release.get('cours-3.txt')!();
+      await tick();
+    });
+    expect(latest().readyDocs.map(doc => doc.name)).toEqual(['cours-2.txt', 'cours-3.txt']);
+  });
+
   it('deux dépôts successifs de 6 fichiers : jamais plus de 2 analyses simultanées, dans l’ordre des dépôts', async () => {
     const { state, drain } = holdExtractions();
     const latest = mount();

@@ -67,7 +67,7 @@ const MESSAGES: Record<ErrorCode, string> = {
   // Avertissement seulement (shared/outputChecks.ts) : jamais levé comme erreur.
   CONTENT_CHECK: 'Le document ne compte pas le nombre d’éléments demandé : vérifiez-le avant de l’utiliser, ou relancez la génération.',
   DOCUMENT_UNREADABLE: 'Document impossible à lire.',
-  DOCUMENT_SCANNED: 'Ce PDF ne contient pas de texte (document scanné) : il ne peut pas être lu sans reconnaissance de caractères.',
+  DOCUMENT_SCANNED: 'Aucun texte exploitable n’a pu être reconnu dans ce PDF. Essayez une copie plus nette ou un export avec texte.',
   DOCUMENT_UNSUPPORTED: 'Format non pris en charge. Formats acceptés : PDF, DOCX, PPTX, TXT, MD.',
   DOCUMENT_TOO_LARGE: 'Document trop volumineux.',
   DOCUMENT_PROTECTED: 'Ce document est protégé par un mot de passe.',

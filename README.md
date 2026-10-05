@@ -126,6 +126,7 @@ Vérification : `npm run ai:check` (serveur autonome : lit `.env`) ou `npm run a
 - **Niveaux** : maternelle, élémentaire, collège, lycée, lycée professionnel, BTS/BUT, CPGE, licence, master, doctorat. Au supérieur, vos documents, objectifs et consignes sont la référence principale.
 - **Sources** :
   - ajoutez des PDF, DOCX, PPTX, TXT ou MD : le texte est extrait **localement**, et le fichier original n'est jamais envoyé ;
+  - les PDF scannés sont lus par reconnaissance de caractères locale (français, anglais et japonais), sans téléchargement de modèle ni service distant. Les PDF japonais, chinois et coréens avec texte utilisent les tables de caractères embarquées. La reconnaissance est limitée à 100 pages par fichier ; les pages illisibles ou ignorées et les résultats incertains sont signalés, y compris après réouverture d'un document conservé. Relisez les nombres et le texte reconnu avant de les utiliser. Les DOCX/PPTX composés uniquement d'images nécessitent un export PDF pour cette reconnaissance ;
   - recherche facultative dans HAL, Crossref, OpenAlex et sur des **sites officiels et académiques vérifiés** (UNESCO, Éduscol, ministères, organisations internationales, recherche publique) : sans moteur de recherche, ceux que Wikipédia cite pour le sujet ; avec SearXNG, les principaux sites par requêtes ciblées. Chaque source affiche son niveau de fiabilité (« Source officielle · UNESCO », « Plateforme ouverte, à recouper »…).
 - **Citations vérifiables** : la liste « Sources utilisées » (document, pages, diapositives, section, ou publication réelle avec son DOI) est construite par le code, jamais inventée par le modèle.
 - **Génération en direct** : le texte apparaît au fur et à mesure, avec les boutons Arrêter, Recommencer et Réessayer.
@@ -533,6 +534,7 @@ Les conditions applicables au logiciel sont conservées dans [LICENSE](LICENSE) 
 |---|---|
 | React, Vite, jsPDF, KaTeX, unified/remark | MIT |
 | pdf.js | Apache-2.0 |
+| Tesseract.js, moteur et modèles OCR français/anglais/japonais | Apache-2.0 |
 | JSZip | MIT/GPL |
 | polices DejaVu | licence libre Bitstream Vera |
 | polices Fontsource | OFL |
