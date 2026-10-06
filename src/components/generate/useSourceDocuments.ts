@@ -19,6 +19,8 @@ export interface SourceDoc {
   status: SourceDocStatus;
   /** « 128 pages », « 36 diapositives »… */
   description?: string;
+  /** Avancement lisible, notamment pendant la reconnaissance des pages scannées. */
+  progress?: string;
   error?: string;
   warnings: string[];
   doc?: ExtractedDocument;
@@ -73,6 +75,7 @@ export function toStoredDocument(doc: ExtractedDocument, description: string, sa
     savedAt: savedAt.toISOString(),
     units: doc.units.map(u => ({ locator: { ...u.locator }, text: u.text })),
     chars: doc.stats.chars,
+    warnings: [...doc.warnings],
   };
 }
 
@@ -83,7 +86,7 @@ export function fromStoredDocument(stored: StoredDocument): ExtractedDocument {
     kind: stored.kind,
     units: stored.units.map(u => ({ locator: { ...u.locator }, text: u.text })),
     stats: { chars: stored.chars },
-    warnings: [],
+    warnings: [...(stored.warnings ?? [])],
   };
 }
 
@@ -118,6 +121,16 @@ export function useSourceDocuments(mode: RuntimeMode, prefs: LocalPreferences | 
   const [storedVersion, setStoredVersion] = useState(0);
   const nextKey = useRef(0);
   const docsRef = useRef<SourceDoc[]>([]);
+  const analyses = useRef(new Map<string, AbortController>());
+  useEffect(() => {
+    const controllers = analyses.current;
+    return () => {
+      // Les fichiers encore en attente ne doivent pas démarrer après avoir quitté la vue.
+      docsRef.current = [];
+      controllers.forEach(controller => controller.abort());
+      controllers.clear();
+    };
+  }, []);
   // Un seul limiteur pour tous les dépôts : des ajouts successifs ne cumulent jamais plus de 2 analyses simultanées.
   const [limiter] = useState(() => createLimiter(EXTRACTION_CONCURRENCY));
   const maxDocuments = DOCUMENT_LIMITS.maxDocuments;
@@ -191,23 +204,34 @@ export function useSourceDocuments(mode: RuntimeMode, prefs: LocalPreferences | 
     added.forEach((entry, i) => {
       void limiter(async () => {
         if (!docsRef.current.some(d => d.key === entry.key)) return;
+        const controller = new AbortController();
+        analyses.current.set(entry.key, controller);
         try {
-          const doc = await extractFile(kept[i]);
+          const doc = await extractFile(kept[i], {
+            signal: controller.signal,
+            onProgress: progress => update(entry.key, { progress: progress.stage === 'recognizing'
+              ? `Reconnaissance du texte · page ${progress.page}/${progress.pages}`
+              : `Lecture · page ${progress.page}/${progress.pages}` }),
+          });
           let description: string;
           try {
             description = describeDocument(doc);
           } catch {
             description = '';
           }
-          update(entry.key, { status: 'ready', doc, description, warnings: doc.warnings ?? [] });
+          update(entry.key, { status: 'ready', doc, description, warnings: doc.warnings ?? [], progress: undefined });
         } catch (err) {
           update(entry.key, { status: 'error', error: toMagistraError(err, 'DOCUMENT_UNREADABLE').message });
+        } finally {
+          analyses.current.delete(entry.key);
         }
       });
     });
   }, [limiter, maxDocuments, update]);
 
   const remove = useCallback((key: string) => {
+    analyses.current.get(key)?.abort();
+    analyses.current.delete(key);
     docsRef.current = docsRef.current.filter(d => d.key !== key);
     setDocs(list => list.filter(d => d.key !== key));
     setNotice(null);
@@ -248,7 +272,7 @@ export function useSourceDocuments(mode: RuntimeMode, prefs: LocalPreferences | 
           update(key, { status: 'error', error: 'Ce document conservé est introuvable.' });
           return;
         }
-        update(key, { status: 'ready', doc: fromStoredDocument(record), description: record.description, name: record.name });
+        update(key, { status: 'ready', doc: fromStoredDocument(record), description: record.description, name: record.name, warnings: [...(record.warnings ?? [])] });
       },
       err => update(key, { status: 'error', error: ipcMessage(err, 'Impossible de rouvrir ce document conservé.') }),
     );

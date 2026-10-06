@@ -393,7 +393,7 @@ export class LocalStore {
 
   async listDocuments(): Promise<Omit<StoredDocument, 'units'>[]> {
     const index = await this.ensureDocIndex();
-    return [...index.values()].sort((a, b) => b.savedAt.localeCompare(a.savedAt)).map(d => ({ ...d }));
+    return [...index.values()].sort((a, b) => b.savedAt.localeCompare(a.savedAt)).map(d => ({ ...d, ...(d.warnings ? { warnings: [...d.warnings] } : {}) }));
   }
 
   async loadDocument(id: string): Promise<StoredDocument | null> {
@@ -440,5 +440,5 @@ export class LocalStore {
 }
 
 function metaOf(doc: StoredDocument): Omit<StoredDocument, 'units'> {
-  return { id: doc.id, name: doc.name, kind: doc.kind, description: doc.description, savedAt: doc.savedAt, chars: doc.chars };
+  return { id: doc.id, name: doc.name, kind: doc.kind, description: doc.description, savedAt: doc.savedAt, chars: doc.chars, ...(doc.warnings ? { warnings: [...doc.warnings] } : {}) };
 }

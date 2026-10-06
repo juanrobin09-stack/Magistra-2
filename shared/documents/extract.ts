@@ -22,11 +22,29 @@ export interface PdfTextItem {
   height?: number;
 }
 
+export interface PdfPageLike {
+  getTextContent(): Promise<{ items: unknown[] }>;
+  cleanup?: () => void;
+}
+
+export interface DocumentImportProgress {
+  stage: 'reading' | 'recognizing';
+  page: number;
+  pages: number;
+}
+
+export interface PdfOcrResult {
+  text: string;
+  confidence?: number;
+}
+
 export interface PdfJsLike {
   getDocument(params: { data: Uint8Array; isEvalSupported?: boolean; useSystemFonts?: boolean; disableFontFace?: boolean; stopAtErrors?: boolean }): {
+    /** pdf.js 6 : le worker appartient à la tâche de chargement, pas au document. */
+    destroy?: () => Promise<void>;
     promise: Promise<{
       numPages: number;
-      getPage(n: number): Promise<{ getTextContent(): Promise<{ items: unknown[] }>; cleanup?: () => void }>;
+      getPage(n: number): Promise<PdfPageLike>;
       /** Numéros de page imprimés définis par le PDF (« i », « ii », « 1 »…), ou null. */
       getPageLabels?: () => Promise<(string | null)[] | null>;
       destroy?: () => Promise<void>;
@@ -42,6 +60,10 @@ export interface ExtractInput {
 
 export interface ExtractDeps {
   pdfjs?: PdfJsLike;
+  recognizePdfPage?: (page: PdfPageLike, progress: DocumentImportProgress) => Promise<PdfOcrResult>;
+  hasPdfPageImages?: (page: PdfPageLike) => Promise<boolean>;
+  onProgress?: (progress: DocumentImportProgress) => void;
+  signal?: AbortSignal;
 }
 
 const EXT_KIND: Record<string, DocKind> = {
@@ -83,7 +105,7 @@ export async function extractDocument(input: ExtractInput, deps: ExtractDeps = {
     switch (kind) {
       case 'pdf':
         if (!deps.pdfjs) throw new MagistraError('DOCUMENT_UNSUPPORTED', 'Lecture des PDF indisponible.');
-        doc = await extractPdf(input, deps.pdfjs);
+        doc = await extractPdf(input, deps.pdfjs, deps);
         break;
       case 'docx':
         doc = await extractDocx(input);
@@ -105,7 +127,7 @@ export async function extractDocument(input: ExtractInput, deps: ExtractDeps = {
   }
 
   if (doc.stats.chars === 0) {
-    if (kind === 'pdf') throw new MagistraError('DOCUMENT_SCANNED', `« ${input.name} » ne contient pas de texte sélectionnable (document scanné).`);
+    if (kind === 'pdf') throw new MagistraError('DOCUMENT_SCANNED', `Aucun texte exploitable n’a pu être reconnu dans « ${input.name} ». Le PDF peut contenir des images, des pages vides ou une police illisible. Essayez une copie plus nette ou un export avec texte.`);
     throw new MagistraError('DOCUMENT_UNREADABLE', `« ${input.name} » ne contient aucun texte.`);
   }
   if (doc.stats.chars > DOCUMENT_LIMITS.maxCharsPerDocument) {
@@ -213,36 +235,158 @@ export function stripRunningLines(pages: string[]): string[] {
   });
 }
 
-export async function extractPdf(input: ExtractInput, pdfjs: PdfJsLike): Promise<ExtractedDocument> {
+/** Une pagination seule n'est pas le contenu du cours ; les mots courts (猫, I…) restent du texte. */
+function onlyPageFurniture(text: string, page: number, label?: string | null): boolean {
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+  return lines.length > 0 && lines.every(line =>
+    line === String(page) || (label != null && line === label)
+    || /^(?:page|p\.)\s*\d+(?:\s*(?:\/|sur)\s*\d+)?$/i.test(line)
+    || /^(?:scanned (?:by|with) camscanner|camscanner)$/i.test(line));
+}
+
+function unreadableGlyphs(text: string): boolean {
+  const damaged = (text.match(/[\uFFFD\uE000-\uF8FF]/g) ?? []).length;
+  return damaged > 0 && damaged / Math.max(1, text.replace(/\s/g, '').length) > 0.2;
+}
+
+/** Rend la place du limiteur même si une opération de pdf.js ne répond plus. */
+function waitForPdfOperation<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', cancel);
+      callback();
+    };
+    const cancel = () => finish(() => reject(signal.reason ?? new Error('Lecture du document arrêtée.')));
+    // Les réponses tardives restent traitées : aucune erreur non capturée après l'annulation.
+    work.then(value => finish(() => resolve(value)), error => finish(() => reject(error)));
+    if (signal.aborted) cancel();
+    else signal.addEventListener('abort', cancel, { once: true });
+  });
+}
+
+export async function extractPdf(input: ExtractInput, pdfjs: PdfJsLike, deps: Omit<ExtractDeps, 'pdfjs'> = {}): Promise<ExtractedDocument> {
+  deps.signal?.throwIfAborted();
   // pdf.js peut transférer (détacher) le tampon : on lui passe une copie.
   const data = new Uint8Array(input.bytes);
-  const pdf = await pdfjs.getDocument({ data, isEvalSupported: false, useSystemFonts: false, disableFontFace: true }).promise;
+  const loading = pdfjs.getDocument({ data, isEvalSupported: false, useSystemFonts: false, disableFontFace: true });
+  let pdf: Awaited<typeof loading.promise> | undefined;
+  let cleanup: Promise<void> | undefined;
+  const destroy = (): Promise<void> => {
+    if (cleanup) return cleanup;
+    try {
+      const work = loading.destroy ? loading.destroy() : pdf?.destroy?.();
+      // Le nettoyage ne doit jamais masquer un document protégé ou une annulation.
+      cleanup = Promise.resolve(work).then(() => {}, () => {});
+    } catch {
+      cleanup = Promise.resolve();
+    }
+    return cleanup;
+  };
+  const cancelLoading = () => { void destroy(); };
+  deps.signal?.addEventListener('abort', cancelLoading, { once: true });
+  if (deps.signal?.aborted) cancelLoading();
+  try {
+    pdf = await waitForPdfOperation(loading.promise, deps.signal);
+  } catch (error) {
+    deps.signal?.removeEventListener('abort', cancelLoading);
+    void destroy();
+    throw error;
+  }
   const pageTexts: { page: number; text: string }[] = [];
   const warnings: string[] = [];
   const pages = Math.min(pdf.numPages, DOCUMENT_LIMITS.maxPdfPages);
   if (pdf.numPages > pages) warnings.push(`Seules les ${pages} premières pages ont été analysées.`);
   let emptyPages = 0;
+  let ocrAttempts = 0;
+  let ocrPages = 0;
+  let ocrFailures = 0;
+  let lowConfidence = false;
+  let skippedOcr = 0;
+  let ocrUnavailable = false;
+  let imageInspectionFailed = false;
+  let failed = false;
+  let chars = 0;
   // Numéros imprimés : une citation « page 47 » doit correspondre à ce que l'enseignant lit sur la page.
-  const labels = await pdf.getPageLabels?.().catch(() => null) ?? null;
+  let labels: (string | null)[] | null = null;
   try {
+    labels = await waitForPdfOperation(pdf.getPageLabels?.().catch(() => null) ?? Promise.resolve(null), deps.signal);
     for (let p = 1; p <= pages; p++) {
-      const page = await pdf.getPage(p);
-      const content = await page.getTextContent();
-      const text = cleanExtractedText(pdfItemsToText(readingOrder(content.items)));
-      page.cleanup?.();
-      if (!text) {
-        emptyPages++;
-        continue;
+      deps.signal?.throwIfAborted();
+      const progress: DocumentImportProgress = { stage: 'reading', page: p, pages };
+      deps.onProgress?.(progress);
+      const page = await waitForPdfOperation(pdf.getPage(p), deps.signal);
+      try {
+        let text = '';
+        try {
+          const content = await waitForPdfOperation(page.getTextContent(), deps.signal);
+          text = cleanExtractedText(pdfItemsToText(readingOrder(content.items)));
+        } catch (err) {
+          deps.signal?.throwIfAborted();
+          if (!deps.recognizePdfPage) throw err;
+        }
+        let sparseImagePage = false;
+        if (text && text.length < 200 && deps.hasPdfPageImages) {
+          try {
+            sparseImagePage = await waitForPdfOperation(deps.hasPdfPageImages(page), deps.signal);
+          } catch {
+            deps.signal?.throwIfAborted();
+            imageInspectionFailed = true;
+          }
+        }
+        const needsOcr = !text || onlyPageFurniture(text, p, labels?.[p - 1]) || unreadableGlyphs(text) || sparseImagePage;
+        if (needsOcr && deps.recognizePdfPage && !ocrUnavailable) {
+          if (ocrAttempts >= DOCUMENT_LIMITS.maxOcrPages) skippedOcr++;
+          else {
+            ocrAttempts++;
+            const recognition = { ...progress, stage: 'recognizing' as const };
+            deps.onProgress?.(recognition);
+            try {
+              const recognized = await deps.recognizePdfPage(page, recognition);
+              deps.signal?.throwIfAborted();
+              const recovered = cleanExtractedText(recognized.text);
+              if (recovered && !onlyPageFurniture(recovered, p, labels?.[p - 1]) && !unreadableGlyphs(recovered)) {
+                text = recovered;
+                ocrPages++;
+                if (recognized.confidence !== undefined && recognized.confidence < 60) lowConfidence = true;
+              } else if (sparseImagePage) ocrFailures++;
+            } catch (error) {
+              deps.signal?.throwIfAborted();
+              ocrFailures++;
+              if ((error as { code?: string })?.code === 'OCR_INITIALIZATION_FAILED') ocrUnavailable = true;
+            }
+          }
+        }
+        if (!text || (needsOcr && deps.recognizePdfPage && (onlyPageFurniture(text, p, labels?.[p - 1]) || unreadableGlyphs(text)))) {
+          emptyPages++;
+          continue;
+        }
+        chars += text.length;
+        if (chars > DOCUMENT_LIMITS.maxCharsPerDocument) {
+          throw new MagistraError('DOCUMENT_TOO_LARGE', `« ${input.name} » contient trop de texte pour être analysé.`);
+        }
+        pageTexts.push({ page: p, text });
+      } finally {
+        try { page.cleanup?.(); } catch { /* La tâche entière est détruite ensuite. */ }
       }
-      pageTexts.push({ page: p, text });
     }
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    await pdf.destroy?.();
+    deps.signal?.removeEventListener('abort', cancelLoading);
+    const closing = destroy();
+    // Une tâche défaillante ou interrompue ne retient pas la file d'attente si son
+    // nettoyage se bloque. Le rejet de closing est déjà traité dans destroy().
+    if (!failed && !deps.signal?.aborted) await waitForPdfOperation(closing, deps.signal);
   }
   const rawChars = pageTexts.reduce((n, t) => n + t.text.length, 0);
   // Une couche de texte réduite à des numéros de page ou à un filigrane n'est pas un document lisible.
-  if (pageTexts.length >= 3 && rawChars / pageTexts.length < 5) {
-    throw new MagistraError('DOCUMENT_SCANNED', `« ${input.name} » ne contient pas de texte sélectionnable (document scanné).`);
+  if (pageTexts.length >= 3 && pageTexts.every(t => onlyPageFurniture(t.text, t.page, labels?.[t.page - 1]) && /^\d+$/.test(t.text))) {
+    throw new MagistraError('DOCUMENT_SCANNED', `Seuls les numéros de page sont lisibles dans « ${input.name} ». Le contenu nécessite une reconnaissance de caractères.`);
   }
   const cleaned = stripRunningLines(pageTexts.map(t => t.text));
   const units: DocumentUnit[] = pageTexts.map(({ page: p }, i) => {
@@ -251,12 +395,22 @@ export async function extractPdf(input: ExtractInput, pdfjs: PdfJsLike): Promise
     return { locator: { type: 'pages' as const, start: p, end: p, ...printed }, text: cleaned[i] };
   });
   if (emptyPages > 0 && units.length > 0) {
-    warnings.push(`${emptyPages} page(s) sans texte sélectionnable (images ou scans) ont été ignorées.`);
+    warnings.push(deps.recognizePdfPage
+      ? `${emptyPages} page(s) sans texte exploitable après reconnaissance ont été ignorées. Vérifiez que les passages utiles figurent dans les pages reconnues.`
+      : `${emptyPages} page(s) sans texte sélectionnable (images ou scans) ont été ignorées.`);
   }
+  if (ocrPages > 0) warnings.push(`${ocrPages} page(s) lues par reconnaissance de caractères locale. Vérifiez le texte reconnu, notamment les nombres et les caractères japonais.`);
+  if (lowConfidence) warnings.push('Certaines pages ont une reconnaissance incertaine : comparez leur texte avec le document original avant de les utiliser.');
+  if (ocrFailures > 0) warnings.push(`La reconnaissance a échoué sur ${ocrFailures} page(s). Les autres pages lisibles ont été conservées ; vous pouvez réessayer avec une copie plus nette.`);
+  if (ocrUnavailable) warnings.push('La reconnaissance locale du texte n’a pas pu démarrer. Les pages nécessitant cette reconnaissance n’ont pas été lues ; réessayez après avoir relancé Magistra.');
+  if (imageInspectionFailed) warnings.push('Les images de certaines pages n’ont pas pu être vérifiées : du texte présent dans ces images peut ne pas avoir été lu. Comparez le résultat avec le document original.');
+  if (skippedOcr > 0) warnings.push(`Reconnaissance limitée à ${DOCUMENT_LIMITS.maxOcrPages} pages par document : ${skippedOcr} page(s) supplémentaires nécessitent un fichier séparé.`);
   if (pageTexts.length >= 3) {
     const sparse = pageTexts.filter(t => t.text.length < 30).length;
     if (rawChars / pageTexts.length < 40 || sparse / pageTexts.length > 0.5) {
-      warnings.push('Ce PDF contient très peu de texte sélectionnable : s’il s’agit d’un scan, utilisez un PDF avec texte ou une reconnaissance de caractères (OCR).');
+      warnings.push(deps.recognizePdfPage
+        ? 'Ce PDF contient peu de texte exploitable. Vérifiez que les pages et les passages utiles ont bien été reconnus.'
+        : 'Ce PDF contient très peu de texte sélectionnable : s’il s’agit d’un scan, utilisez un PDF avec texte ou une reconnaissance de caractères (OCR).');
     }
   }
   return {
@@ -502,7 +656,7 @@ async function readZipText(zip: JSZip, path: string, budget: ZipBudget): Promise
       .resume();
   });
   budget.remaining -= bytes.length;
-  return new TextDecoder('utf-8').decode(bytes);
+  return decodeText(bytes);
 }
 
 /**
@@ -527,12 +681,13 @@ export async function extractDocx(input: ExtractInput): Promise<ExtractedDocumen
   const stylesXml = numberingXml ? await readOptionalZipText(zip, 'word/styles.xml', budget) : undefined;
   const paragraphs = parseDocxParagraphs(xml, numberingXml ? createNumbering(numberingXml, stylesXml) : null);
   const { units, sections } = paragraphsToUnits(paragraphs);
+  const cleanedUnits = units.map(u => ({ ...u, text: cleanExtractedText(u.text) })).filter(u => u.text);
   return {
     id: input.id,
     name: input.name,
     kind: 'docx',
-    units: units.map(u => ({ ...u, text: cleanExtractedText(u.text) })),
-    stats: { sections: sections || undefined, paragraphs: paragraphs.length, chars: countChars(units) },
+    units: cleanedUnits,
+    stats: { sections: sections || undefined, paragraphs: paragraphs.length, chars: countChars(cleanedUnits) },
     warnings: [],
   };
 }
@@ -628,10 +783,11 @@ export async function extractPptx(input: ExtractInput): Promise<ExtractedDocumen
   }
 
   const units: DocumentUnit[] = [];
+  let emptySlides = 0;
   for (let i = 0; i < slidePaths.length; i++) {
     const path = slidePaths[i];
     const xml = await readZipText(zip, path, budget);
-    if (!xml) continue;
+    if (!xml) { emptySlides++; continue; }
     let text = slideText(xml);
     const dir = path.slice(0, path.lastIndexOf('/'));
     const relsPath = `${dir}/_rels/${path.slice(path.lastIndexOf('/') + 1)}.rels`;
@@ -646,7 +802,9 @@ export async function extractPptx(input: ExtractInput): Promise<ExtractedDocumen
     }
     text = cleanExtractedText(text);
     if (text) units.push({ locator: { type: 'slides', start: i + 1, end: i + 1 }, text });
+    else emptySlides++;
   }
+  if (emptySlides > 0 && units.length > 0) warnings.push(`${emptySlides} diapositive(s) sans texte exploitable (images ou pages vides) ont été ignorées.`);
   return {
     id: input.id,
     name: input.name,

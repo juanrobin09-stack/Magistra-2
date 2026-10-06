@@ -33,7 +33,7 @@ function DocStatus({ doc }: { doc: SourceDoc }) {
   if (doc.status === 'analyzing') {
     return (
       <span className="inline-flex items-center gap-1.5 text-mg-200">
-        <Loader2 size={12} className="animate-spin" aria-hidden="true" /> Analyse en cours…
+        <Loader2 size={12} className="animate-spin" aria-hidden="true" /> {doc.progress ?? 'Analyse en cours…'}
       </span>
     );
   }
@@ -108,6 +108,7 @@ export default function SourcesPanel({ sources, mode, keepPreference, aiRecipien
             ? ` à « ${aiRecipient} »`
             : aiRecipientUnknown ? ` au service d'IA ${mode === 'personal' ? 'de votre serveur Magistra' : "configuré par l'administrateur"}` : ''} au
           moment de générer.
+          {' '}Les PDF scannés sont lus par reconnaissance de texte sur cet appareil.
         </p>
       </div>
 

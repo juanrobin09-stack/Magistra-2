@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { magistraDevApi } from './server/viteDevApi';
+import { pdfAssets } from './scripts/pdfAssets';
+import { ocrAssets } from './scripts/ocrAssets';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,7 +15,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, root, '');
   return {
     base: '/',
-    plugins: [react(), tailwindcss(), magistraDevApi(env)],
+    plugins: [react(), tailwindcss(), pdfAssets(), ocrAssets(), magistraDevApi(env)],
     resolve: {
       alias: {
         '@': path.resolve(root, 'src'),

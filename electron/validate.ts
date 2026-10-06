@@ -155,9 +155,27 @@ export function parseStoredPreferences(raw: unknown): LocalPreferences | null {
 
 // ─── Documents (texte extrait uniquement) ───────────────────────────────────
 
-export const DOCUMENT_LIMITS = { name: 200, description: 2_000, units: 20_000, unitChars: 200_000, totalChars: 5_000_000 };
+export const DOCUMENT_LIMITS = { name: 200, description: 2_000, units: 20_000, unitChars: 200_000, totalChars: 5_000_000, warnings: 32, warningChars: 2_000 };
 const DOC_KINDS: StoredDocument['kind'][] = ['pdf', 'docx', 'pptx', 'txt', 'md'];
 const LOCATOR_TYPES: StoredDocument['units'][number]['locator']['type'][] = ['pages', 'slides', 'section', 'paragraphs', 'lines'];
+
+/** Les avertissements sont optionnels pour relire les documents enregistrés avant leur conservation. */
+function storedDocumentWarnings(raw: unknown): string[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length > DOCUMENT_LIMITS.warnings) {
+    throw new MagistraError('INVALID_REQUEST', 'Document invalide : avertissements incorrects.');
+  }
+  const warnings: string[] = [];
+  for (const message of raw) {
+    if (typeof message !== 'string' || message.length > DOCUMENT_LIMITS.warningChars) {
+      throw new MagistraError('INVALID_REQUEST', 'Document invalide : avertissement incorrect ou trop long.');
+    }
+    const warning = stripNul(message).trim();
+    if (hasControlChars(warning)) throw new MagistraError('INVALID_REQUEST', 'Document invalide : avertissement incorrect.');
+    if (warning && !warnings.includes(warning)) warnings.push(warning);
+  }
+  return warnings;
+}
 
 export function sanitizeStoredDocument(raw: unknown): StoredDocument {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new MagistraError('INVALID_REQUEST', 'Document invalide.');
@@ -166,6 +184,7 @@ export function sanitizeStoredDocument(raw: unknown): StoredDocument {
   const name = optString(d.name, DOCUMENT_LIMITS.name, 'nom du document') || 'Document';
   if (!DOC_KINDS.includes(d.kind as StoredDocument['kind'])) throw new MagistraError('DOCUMENT_UNSUPPORTED');
   const description = optString(d.description, DOCUMENT_LIMITS.description, 'description') ?? '';
+  const warnings = storedDocumentWarnings(d.warnings);
   const savedAt = typeof d.savedAt === 'string' && !Number.isNaN(Date.parse(d.savedAt)) ? new Date(d.savedAt).toISOString() : new Date().toISOString();
   if (!Array.isArray(d.units)) throw new MagistraError('INVALID_REQUEST', 'Document invalide : contenu manquant.');
   if (d.units.length > DOCUMENT_LIMITS.units) throw new MagistraError('DOCUMENT_TOO_LARGE');
@@ -188,7 +207,7 @@ export function sanitizeStoredDocument(raw: unknown): StoredDocument {
     const labels = type === 'pages' ? validateLocatorLabels(loc.labels) : undefined;
     units.push({ locator: { type, start, end, ...(title ? { title } : {}), ...(labels ? { labels } : {}) }, text: stripNul(unit.text) });
   }
-  return { id, name, kind: d.kind as StoredDocument['kind'], description, savedAt, units, chars };
+  return { id, name, kind: d.kind as StoredDocument['kind'], description, savedAt, units, chars, ...(warnings !== undefined ? { warnings } : {}) };
 }
 
 // ─── Configuration de l'IA ──────────────────────────────────────────────────

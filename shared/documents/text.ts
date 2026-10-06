@@ -52,11 +52,47 @@ export function stem(word: string): string {
   return word;
 }
 
+const UNICODE_WORD = /[\p{L}\p{N}][\p{L}\p{M}\p{N}]*/gu;
+const LATIN_WORD = /^[a-z0-9]+$/;
+const CJK_WORD = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
+const wordSegmenter = typeof Intl.Segmenter === 'function'
+  ? new Intl.Segmenter('ja', { granularity: 'word' })
+  : null;
+
+/**
+ * Le classement doit aussi retrouver les passages japonais, arabes ou cyrilliques.
+ * Le traitement latin reste identique (apostrophes, mots vides et racinisation).
+ * La segmentation évite de traiter une phrase japonaise sans espaces comme un seul mot ;
+ * sur un ancien navigateur, les bigrammes CJK bornent le travail à la longueur du texte.
+ */
 export function tokenize(text: string): string[] {
-  return normalizeForSearch(text)
-    .split(/[^a-z0-9]+/)
-    .filter(w => w.length > 1 && !STOPWORDS.has(w))
-    .map(stem);
+  const tokens: string[] = [];
+  const addWord = (word: string) => {
+    if (LATIN_WORD.test(word)) {
+      if (word.length > 1 && !STOPWORDS.has(word)) tokens.push(stem(word));
+    } else {
+      tokens.push(word);
+    }
+  };
+  for (const match of normalizeForSearch(text).matchAll(UNICODE_WORD)) {
+    const word = match[0];
+    if (LATIN_WORD.test(word)) {
+      addWord(word);
+    } else if (wordSegmenter) {
+      for (const part of wordSegmenter.segment(word)) {
+        if (part.isWordLike) addWord(part.segment);
+      }
+    } else if (CJK_WORD.test(word)) {
+      const chars = Array.from(word);
+      for (let i = 0; i < chars.length; i++) {
+        tokens.push(chars[i]);
+        if (i + 1 < chars.length) tokens.push(chars[i] + chars[i + 1]);
+      }
+    } else {
+      addWord(word);
+    }
+  }
+  return tokens;
 }
 
 /**
@@ -118,22 +154,27 @@ function trimLineEnd(line: string): string {
   return end === line.length ? line : line.slice(0, end);
 }
 
+/** Octets 0x80 à 0x9f de Windows-1252 ; les cinq positions non définies conservent leur contrôle C1. */
+const WINDOWS_1252_C1 = '\u20ac\u0081\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\u008d\u017d\u008f\u0090\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\u009d\u017e\u0178';
+
 /** Décode du texte brut : UTF-8 par défaut, repli Windows-1252 si le fichier n'est manifestement pas en UTF-8. */
 export function decodeText(bytes: Uint8Array): string {
   // UTF-16 avec BOM (« Unicode » du Bloc-notes de Windows).
   if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes.subarray(2));
   if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes.subarray(2));
   const hasBom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
-  const utf8 = new TextDecoder('utf-8', { fatal: false }).decode(hasBom ? bytes.subarray(3) : bytes);
-  const replacements = (utf8.match(/�/g) ?? []).length;
-  if (replacements > 0 && replacements / Math.max(1, utf8.length) > 0.001) {
-    try {
-      return new TextDecoder('windows-1252').decode(bytes);
-    } catch {
-      return utf8;
-    }
+  const data = hasBom ? bytes.subarray(3) : bytes;
+  try {
+    // U+FFFD peut faire partie d'un UTF-8 valide : seul le décodage strict révèle
+    // des octets invalides, sans corrompre les accents et les autres écritures.
+    return new TextDecoder('utf-8', { fatal: true }).decode(data);
+  } catch {
+    // Certaines distributions Node décodent ce label comme Latin-1 : le remappage
+    // des contrôles C1 restaure œ, €, apostrophes et tirets. Un navigateur conforme
+    // produit déjà ces caractères et reste inchangé ; les UTF-8 valides n'entrent pas ici.
+    return new TextDecoder('windows-1252').decode(data)
+      .replace(/[\u0080-\u009f]/g, c => WINDOWS_1252_C1.charAt(c.charCodeAt(0) - 0x80));
   }
-  return utf8;
 }
 
 export function decodeXmlEntities(text: string): string {
