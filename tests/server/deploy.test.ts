@@ -173,7 +173,7 @@ describe('déploiement', () => {
     }
   });
 
-  it('dépôt entier : aucun fournisseur d’IA commercial, hors documents d’audit', () => {
+  it('les API personnelles restent dans leur intégration optionnelle, sans fournisseur imposé ailleurs', () => {
     let tracked: string[];
     try {
       tracked = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean);
@@ -181,9 +181,20 @@ describe('déploiement', () => {
       return; // archive sans git : les autres tests couvrent les fichiers du serveur
     }
     const AUDIT_DOCS = new Set(['ANALYSE.md', 'CORRECTIONS.md']);
+    // Les API personnelles sont un choix explicite dans l'application Windows. Le serveur, la vitrine,
+    // les prompts et le catalogue des modèles locaux restent indépendants de ces fournisseurs.
+    const PERSONAL_API_FILES = new Set([
+      'README.md', 'e2e/electron-local.spec.ts', 'e2e/electron-personal-api-preload.cjs',
+      'electron/aiConfig.ts', 'electron/validate.ts', 'shared/ipc.ts',
+      'shared/ai/anthropic.ts', 'shared/ai/factory.ts', 'shared/ai/personalProviders.ts',
+      'shared/ai/presets.ts', 'shared/ai/provider.ts',
+      'src/components/ai/AdvancedAIOptions.tsx', 'src/components/ai/PersonalAPISettings.tsx',
+      'tests/electron/aiConfig.test.ts', 'tests/electron/personalAPI.test.ts',
+      'tests/shared/ai.anthropic.test.ts', 'tests/ui/personalAPI.test.tsx', 'tests/server/deploy.test.ts',
+    ]);
     const BINARY = /\.(png|ico|jpe?g|gif|webp|woff2?|ttf|otf|pdf|zip)$/i;
     const offenders = tracked
-      .filter(f => !AUDIT_DOCS.has(f) && !BINARY.test(f) && existsSync(path.join(root, f)))
+      .filter(f => !AUDIT_DOCS.has(f) && !PERSONAL_API_FILES.has(f) && !BINARY.test(f) && existsSync(path.join(root, f)))
       .filter(f => COMMERCIAL_VENDOR.test(read(f)));
     expect(offenders).toEqual([]);
   });

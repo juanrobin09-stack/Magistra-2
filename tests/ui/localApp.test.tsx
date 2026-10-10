@@ -275,14 +275,14 @@ describe('Tout le site dans l’application', () => {
     expect(text(container)).not.toContain('s’active en un clic');
   });
 
-  it('la page de l’IA reste accessible : une action principale « Activer l’IA », le reste replié', async () => {
+  it('la page de l’IA reste accessible : activation locale et API personnelle visibles, détails avancés repliés', async () => {
     installFakeLocalAI({ engine: 'not_installed' }, {}, PROFILE_COLLEGE);
     const { container } = await mountApp({ mode: 'local' }, '/setup');
     await waitFor(() => Boolean(container.querySelector('[data-testid="activate-ai"]')));
     expect(window.location.pathname).toBe('/setup');
     expect(container.querySelector('h1')?.textContent).toBe('L’intelligence artificielle de Magistra');
     const main = Array.from(container.querySelectorAll('button.btn-primary')).map(b => text(b).trim());
-    expect(main).toEqual(['Activer l’IA']);
+    expect(main).toEqual(['Activer l’IA', 'Enregistrer et utiliser l’API']);
     // Détails et options avancées repliés.
     const toggles = Array.from(container.querySelectorAll('button[aria-expanded]'));
     expect(toggles.map(t => t.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
