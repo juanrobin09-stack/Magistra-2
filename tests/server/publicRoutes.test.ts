@@ -295,7 +295,7 @@ describe('erreur inattendue : aucune fuite', () => {
   });
 });
 
-describe('aucun code inutile : seul server/windowsRelease.ts et les erreurs métier sont chargés', () => {
+describe('aucun code inutile : seuls la distribution Windows, ses noms de fichiers et les erreurs métier sont chargés', () => {
   const FILES = ['api/windows-release.ts', 'api/download.ts'];
 
   /** Importations qui subsistent après compilation : tout sauf « import type » (conservateur pour les « type » en ligne). */
@@ -327,7 +327,7 @@ describe('aucun code inutile : seul server/windowsRelease.ts et les erreurs mét
 
   it.each(FILES)('%s : aucun module d’un autre service ni dépendance npm', file => {
     const { files, external } = closure(file);
-    expect(files).toEqual([file, 'server/windowsRelease.ts', 'shared/errors.ts'].sort());
+    expect(files).toEqual([file, 'server/windowsRelease.ts', 'shared/errors.ts', 'shared/updateAssets.ts'].sort());
     expect(external).toEqual([]);
   });
 
