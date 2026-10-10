@@ -45,3 +45,18 @@ it('ancienne version du pont : lien de secours utilisable', async () => {
   await flush();
   expect(container.textContent).toContain('Ouvrir la page de la nouvelle version');
 });
+it('échec d’installation : propose le site officiel et permet une nouvelle tentative', async () => {
+  const { app, bridge } = fixture();
+  app.installUpdate.mockRejectedValueOnce(new Error('NETWORK_ERROR|Téléchargement interrompu'));
+  app.openExternal.mockResolvedValue(undefined);
+  const { container } = await render(<UpdateCheck bridge={bridge} notice />);
+  await flush();
+  const buttons = () => [...container.querySelectorAll('button')];
+  await click(buttons().find(b => b.textContent?.includes('Télécharger et installer'))!);
+  expect(container.textContent).toContain('Téléchargement interrompu');
+  await click(buttons().find(b => b.textContent?.includes('Télécharger depuis le site'))!);
+  expect(app.openExternal).toHaveBeenCalledWith('https://www.mag-istra.fr/telecharger');
+  await click(buttons().find(b => b.textContent?.includes('Télécharger et installer'))!);
+  expect(app.installUpdate).toHaveBeenCalledTimes(2);
+  expect(container.textContent).not.toContain('Téléchargement interrompu');
+});

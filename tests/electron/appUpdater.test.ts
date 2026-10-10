@@ -84,7 +84,17 @@ describe('installation de la mise à jour', () => {
   it('échec de lancement : fichiers temporaires supprimés, erreur exploitable', async () => {
     const { deps } = await fixture();
     deps.launch = vi.fn(async () => { throw new Error('failed'); });
-    await expect(installAppUpdate(deps)).rejects.toThrow('Mise à jour interrompue');
+    await expect(installAppUpdate(deps)).rejects.toThrow('Windows n’a pas pu ouvrir l’installateur');
     expect(await readdir(deps.tempDirectory)).toEqual([]);
+  });
+  it('distingue un disque plein d’un téléchargement interrompu', async () => {
+    const { deps } = await fixture();
+    // Les métadonnées sont déjà nécessaires avant le téléchargement : conserver cet appel valide.
+    const good = await fixture();
+    deps.fetch = async (input, init) => String(input) === RELEASES_API_URL ? good.fetch(input, init) : Promise.reject(Object.assign(new Error('disk'), { code: 'ENOSPC' }));
+    await expect(installAppUpdate(deps)).rejects.toThrow('Le disque est plein');
+    const network = await fixture();
+    network.deps.fetch = async (input, init) => String(input) === RELEASES_API_URL ? network.fetch(input, init) : Promise.reject(new Error('connection closed'));
+    await expect(installAppUpdate(network.deps)).rejects.toThrow('Le téléchargement de la mise à jour a été interrompu');
   });
 });

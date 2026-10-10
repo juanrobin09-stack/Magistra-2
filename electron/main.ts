@@ -42,6 +42,7 @@ import { APP_SCHEME, APP_URL, isSafeExternalUrl, isSafeMailtoUrl, isTrustedUrl, 
 import { SmokeTest } from './smoke.js';
 import { checkForUpdate } from './updateCheck.js';
 import { installAppUpdate } from './appUpdater.js';
+import { createUpdateFetch } from './updateFetch.js';
 import { configureWindowSession, denyAllPermissions, WINDOW_PARTITION } from './windowSession.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -133,6 +134,7 @@ function iconPath(): string | undefined {
 const localFetch: FetchLike = (input, init) => fetch(input, init);
 /** Accès Internet par la pile réseau de Chromium : respecte le proxy de l'établissement. */
 const internetFetch: FetchLike = (input, init) => net.fetch(input, init);
+const updateFetch = createUpdateFetch(options => net.request(options));
 
 // ─── Menu en français ───────────────────────────────────────────────────────
 
@@ -524,14 +526,14 @@ async function start(): Promise<void> {
     openExternal: url => shell.openExternal(url),
     checkForUpdate: () => {
       if (cachedUpdate && Date.now() - checkedAt < 60_000) return Promise.resolve(cachedUpdate);
-      return (updateCheck ??= checkForUpdate({ fetch: internetFetch, currentVersion: app.getVersion() }).then(result => {
+      return (updateCheck ??= checkForUpdate({ fetch: updateFetch, currentVersion: app.getVersion() }).then(result => {
         cachedUpdate = result;
         checkedAt = Date.now();
         return result;
       }).finally(() => { updateCheck = null; }));
     },
     installUpdate: () => (updateInstall ??= installAppUpdate({
-      fetch: internetFetch,
+      fetch: updateFetch,
       currentVersion: app.getVersion(),
       platform: process.platform,
       isPackaged: app.isPackaged,

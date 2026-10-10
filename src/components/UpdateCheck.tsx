@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Download, ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 import type { MagistraBridge, UpdateCheckResult, UpdateProgress } from '@shared/ipc';
+import { siteUrl } from '@shared/site';
 import { ErrorBox, SuccessNote } from '@/components/ai/Notices';
 import { fromIpcError, getBridge } from '@/lib/runtime/local';
 
@@ -112,7 +113,12 @@ export default function UpdateCheck({ bridge, notice = false }: { bridge: Magist
         </button>}
         {notice && <button type="button" className="btn-ghost text-sm" disabled={busy} onClick={() => setDismissed(true)}>Plus tard</button>}
       </div>}
-      {installError && <ErrorBox title="Mise à jour" message={installError} />}
+      {installError && <>
+        <ErrorBox title="Mise à jour" message={installError} />
+        <button type="button" className="btn-secondary text-sm" onClick={() => void bridge.app.openExternal(siteUrl('/telecharger')).catch(() => setInstallError('Ouverture du navigateur impossible.'))}>
+          <ExternalLink size={15} aria-hidden="true" /> Télécharger depuis le site Magistra
+        </button>
+      </>}
       {state.kind === 'error' && <ErrorBox title="Recherche de mise à jour" message={state.message} />}
     </section>
   );

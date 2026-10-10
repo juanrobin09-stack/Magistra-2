@@ -70,6 +70,7 @@ export async function installAppUpdate(deps: InstallUpdateDeps): Promise<boolean
   const signal = AbortSignal.timeout(15 * 60 * 1000);
   let directory: string | undefined;
   let launched = false;
+  let phase: 'download' | 'write' | 'launch' = 'download';
   try {
     deps.progress({ phase: 'downloading', percent: 0 });
     const sumsResponse = await fetchUpdateAsset(deps.fetch, installer.checksumsUrl, signal);
@@ -86,6 +87,7 @@ export async function installAppUpdate(deps: InstallUpdateDeps): Promise<boolean
     if (entries.length !== 1) throw failure('Empreinte officielle introuvable : installation annulée.');
     const expected = entries[0]![1].toLowerCase();
     if (installer.size <= 0 || installer.size > MAX_INSTALLER_BYTES) throw failure('Taille de l’installateur invalide.');
+    phase = 'write';
     directory = await mkdtemp(path.join(deps.tempDirectory, 'magistra-update-'));
     const filePath = path.join(directory, installer.name);
     const file = await open(filePath, 'wx', 0o600);
@@ -93,6 +95,7 @@ export async function installAppUpdate(deps: InstallUpdateDeps): Promise<boolean
     let lastPercent = -1;
     const hash = createHash('sha256');
     try {
+      phase = 'download';
       const response = await fetchUpdateAsset(deps.fetch, installer.url, signal);
       const declared = Number(response.headers.get('content-length'));
       if (declared > MAX_INSTALLER_BYTES || (declared > 0 && declared !== installer.size)) {
@@ -105,11 +108,13 @@ export async function installAppUpdate(deps: InstallUpdateDeps): Promise<boolean
         hash.update(chunk);
         // A file write may be partial; finish the entire chunk before reading more network data.
         let offset = 0;
+        phase = 'write';
         while (offset < chunk.length) {
           const { bytesWritten } = await file.write(chunk, offset, chunk.length - offset);
           if (!bytesWritten) throw failure('Écriture de la mise à jour impossible.');
           offset += bytesWritten;
         }
+        phase = 'download';
         const percent = Math.floor(received * 100 / installer.size);
         if (percent !== lastPercent) {
           lastPercent = percent;
@@ -120,18 +125,27 @@ export async function installAppUpdate(deps: InstallUpdateDeps): Promise<boolean
       if (received !== installer.size || hash.digest('hex') !== expected) {
         throw failure('Fichier incomplet ou empreinte incorrecte : installation annulée. Réessayez.');
       }
+      phase = 'write';
       await file.sync();
     } finally {
+      const previousPhase = phase;
+      phase = 'write';
       await file.close();
+      phase = previousPhase;
     }
     deps.progress({ phase: 'installing', percent: 100 });
+    phase = 'launch';
     await deps.launch(filePath);
     launched = true;
     return true;
   } catch (error) {
     deps.progress({ phase: 'idle', percent: 0 });
     if (error instanceof MagistraError) throw error;
-    throw failure('Mise à jour interrompue. Vérifiez votre connexion et l’espace disque, puis réessayez.');
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    if (code === 'ENOSPC') throw new MagistraError('STORAGE_ERROR', 'Le disque est plein. Libérez de l’espace, puis relancez la mise à jour.');
+    if (phase === 'launch') throw failure('Windows n’a pas pu ouvrir l’installateur. Téléchargez-le depuis le site Magistra et ouvrez-le manuellement.');
+    if (phase === 'write' || code === 'EACCES' || code === 'EPERM') throw new MagistraError('STORAGE_ERROR', 'Windows n’a pas pu enregistrer la mise à jour dans le dossier temporaire. Téléchargez l’installateur depuis le site Magistra.');
+    throw failure('Le téléchargement de la mise à jour a été interrompu. Réessayez, ou téléchargez l’installateur depuis le site Magistra.');
   } finally {
     if (directory && !launched) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
   }
