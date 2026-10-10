@@ -143,7 +143,11 @@ test.beforeEach(async ({ releaseState }) => {
 test.afterEach(async () => {
   const testInfo = test.info();
   // Conserver la preuve avant la suppression du seul dossier créé par mkdtemp.
-  try { await testInfo.attach('updater-main-proof', { body: await readFile(proofFile()), contentType: 'application/json' }); } catch { /* démarrage échoué */ }
+  try {
+    const saved = testInfo.outputPath('updater-main-proof.json');
+    await writeFile(saved, await readFile(proofFile()));
+    await testInfo.attach('updater-main-proof', { path: saved, contentType: 'application/json' });
+  } catch { /* démarrage échoué */ }
   await application?.close().catch(() => undefined);
   application = undefined;
   server?.closeAllConnections();
@@ -162,10 +166,15 @@ test.afterEach(async () => {
 
 function notice() { return page.getByRole('region', { name: 'Mises à jour de Magistra' }).first(); }
 function installButton() { return notice().getByRole('button', { name: 'Télécharger et installer', exact: true }); }
+async function screenshot(name: string) {
+  const file = test.info().outputPath(`${name}.png`);
+  await page.screenshot({ path: file });
+  await test.info().attach(name, { path: file, contentType: 'image/png' });
+}
 
 test('annuler ne télécharge rien ; réessayer lance le fichier vérifié et ferme uniquement le test', async () => {
   await expect(notice()).toContainText(`Magistra ${nextVersion} est disponible. Version installée : ${currentVersion}.`);
-  await test.info().attach('mise-a-jour-disponible', { body: await page.screenshot(), contentType: 'image/png' });
+  await screenshot('mise-a-jour-disponible');
   expect(installerRequests).toBe(0);
   await configure({ confirmation: 0 });
   await installButton().click();
@@ -204,7 +213,7 @@ test('réseau interrompu : erreur lisible, fichier supprimé et nouvelle tentati
   mode = 'truncated';
   await installButton().click();
   await expect(notice()).toContainText('Le téléchargement de la mise à jour a été interrompu.');
-  await test.info().attach('interruption-et-reprise', { body: await page.screenshot(), contentType: 'image/png' });
+  await screenshot('interruption-et-reprise');
   await expect(installButton()).toBeEnabled();
   await expect(notice().getByRole('button', { name: 'Télécharger depuis le site Magistra' })).toBeVisible();
   expect((await probe()).launches).toEqual([]);
