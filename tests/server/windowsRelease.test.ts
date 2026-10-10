@@ -98,6 +98,14 @@ const NONE: WindowsReleaseResponse = { available: false, reason: 'none', release
 const UNAVAILABLE: WindowsReleaseResponse = { available: false, reason: 'unavailable', releasesUrl: RELEASES_PAGE };
 
 describe('fetchLatestWindowsRelease — dernière version stable', () => {
+  it('lit le fichier v2 sans digest, pour le téléchargement des utilisateurs des anciennes versions', async () => {
+    const fetch = fakeGitHub({
+      [API]: () => jsonResponse(release({ assets: [asset(EXE, { digest: null }), asset('SHA256SUMS-v2.txt', { size: 170 })] })),
+      [download('SHA256SUMS-v2.txt')]: () => textResponse(`${HEX}  ${EXE}\n`),
+    });
+    expect(await run(fetch)).toMatchObject({ available: true, sha256: HEX, downloadUrl: download(EXE) });
+    expect(fetch.calls.map(call => call.url)).toEqual([API, download('SHA256SUMS-v2.txt')]);
+  });
   it('renvoie version, fichier, lien direct vérifié, taille, SHA-256, date, page et systèmes', async () => {
     const fetch = fakeGitHub({ [API]: () => jsonResponse(release()) });
     const result = await run(fetch);

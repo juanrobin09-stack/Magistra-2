@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import WindowsDownloadSection from '@/components/localEngine/WindowsDownloadSection';
+import WindowsDownloadPanel from '@/components/localEngine/WindowsDownloadPanel';
 import { readFileSync } from 'node:fs';
 import {
   fetchWindowsRelease, formatDate, formatSize, installerUrl, parseWindowsRelease, resetWindowsReleaseCache, WINDOWS_RELEASE_TIMEOUT_MS,
@@ -39,6 +40,17 @@ afterEach(() => {
   document.removeEventListener('click', blockNavigation);
   vi.unstubAllGlobals();
   resetWindowsReleaseCache();
+});
+
+it('le site guide les utilisateurs des anciennes versions à côté du téléchargement', async () => {
+  stubReleaseFetch(RELEASE);
+  const { container } = await render(<WindowsDownloadPanel variant="landing" mode="showcase" />);
+  await flush(4);
+  const note = container.querySelector('aside[aria-label="Mise à jour des anciennes versions"]');
+  expect(note?.textContent).toContain('2.0.7 à 2.0.9');
+  expect(note?.textContent).toContain('Vos documents, réglages, clés API et modèles sont conservés');
+  expect(note?.textContent).toContain('nécessaire une fois');
+  expect(container.querySelector('a[href="/telecharger"]')).not.toBeNull();
 });
 
 async function mountSection(mode: RuntimeMode, engine: FakeEngine | null, variant: 'landing' | 'settings' = 'settings') {

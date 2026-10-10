@@ -1,6 +1,7 @@
 // Vérification des versions stables au démarrage et à la demande. Aucun document transmis.
 import type { FetchLike } from '../shared/ai/provider.js';
 import { MagistraError } from '../shared/errors.js';
+import { LEGACY_UPDATE_CHECKSUMS_FILE, UPDATE_CHECKSUMS_FILE } from '../shared/updateAssets.js';
 import type { UpdateCheckResult } from '../shared/ipc.js';
 import { isSafeExternalUrl } from './security.js';
 
@@ -181,7 +182,8 @@ export async function checkForUpdate(deps: UpdateCheckDeps): Promise<UpdateCheck
     const name = `Magistra-Setup-${formatVersion(latest)}.exe`;
     const assets = release.assets as { name?: unknown; browser_download_url?: unknown; size?: unknown }[];
     const setup = assets.filter(a => a && a.name === name);
-    const sums = assets.filter(a => a && a.name === 'SHA256SUMS.txt');
+    const checksumName = assets.some(a => a?.name === UPDATE_CHECKSUMS_FILE) ? UPDATE_CHECKSUMS_FILE : LEGACY_UPDATE_CHECKSUMS_FILE;
+    const sums = assets.filter(a => a && a.name === checksumName);
     const safeAsset = (value: unknown, filename: string): value is string => {
       if (typeof value !== 'string') return false;
       try {
@@ -192,7 +194,7 @@ export async function checkForUpdate(deps: UpdateCheckDeps): Promise<UpdateCheck
       } catch { return false; }
     };
     if (setup.length === 1 && sums.length === 1 && safeAsset(setup[0].browser_download_url, name)
-      && safeAsset(sums[0].browser_download_url, 'SHA256SUMS.txt')
+      && safeAsset(sums[0].browser_download_url, checksumName)
       && typeof setup[0].size === 'number' && Number.isSafeInteger(setup[0].size)
       && setup[0].size > 0 && setup[0].size <= 512 * 1024 * 1024) {
       installer = { name, url: setup[0].browser_download_url, checksumsUrl: sums[0].browser_download_url, size: setup[0].size };

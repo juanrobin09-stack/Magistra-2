@@ -45,6 +45,18 @@ it('ancienne version du pont : lien de secours utilisable', async () => {
   await flush();
   expect(container.textContent).toContain('Ouvrir la page de la nouvelle version');
 });
+it('version de transition sans installation intégrée : accès à la page proposé avant toute erreur', async () => {
+  const migration: UpdateCheckResult = { currentVersion: '2.0.7', latestVersion: '2.0.10', upToDate: false, url: 'https://github.com/juanrobin09-stack/Magistra-Downloads/releases/tag/v2.0.10' };
+  const { app, bridge } = fixture(migration);
+  app.openExternal.mockResolvedValue(undefined);
+  const { container } = await render(<UpdateCheck bridge={bridge} notice />);
+  await flush();
+  expect(container.textContent).not.toContain('Télécharger et installer');
+  expect(container.textContent).not.toContain('interrompu');
+  await click([...container.querySelectorAll('button')].find(b => b.textContent?.includes('Ouvrir la page'))!);
+  expect(app.installUpdate).not.toHaveBeenCalled();
+  expect(app.openExternal).toHaveBeenCalledWith(migration.url);
+});
 it('échec d’installation : propose le site officiel et permet une nouvelle tentative', async () => {
   const { app, bridge } = fixture();
   app.installUpdate.mockRejectedValueOnce(new Error('NETWORK_ERROR|Téléchargement interrompu'));

@@ -1,4 +1,4 @@
-# Publication de l'application Windows : installateur NSIS + archive zip + SHA256SUMS.txt, dans une release GitHub
+# Publication de l'application Windows : installateur NSIS + archive zip + SHA256SUMS-v2.txt, dans une release GitHub
 # en BROUILLON. Un mainteneur la relit (notes, fichiers), puis la publie à la main : c'est seulement alors que
 # « Rechercher une mise à jour » (electron/updateCheck.ts, /releases/latest) la propose aux enseignants.
 #
@@ -159,8 +159,8 @@ jobs:
           # dernière version stable (bouton « Télécharger » du site quand la version exacte n'est pas connue).
           cp "Magistra-Setup-$VERSION.exe" "Magistra-Setup.exe"
           files+=("Magistra-Setup.exe")
-          sha256sum "${files[@]}" > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          sha256sum "${files[@]}" > SHA256SUMS-v2.txt
+          cat SHA256SUMS-v2.txt
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -169,7 +169,7 @@ jobs:
             release/Magistra-Setup-${{ steps.version.outputs.version }}.exe
             release/Magistra-Setup.exe
             release/Magistra-${{ steps.version.outputs.version }}-win-x64.zip
-            release/SHA256SUMS.txt
+            release/SHA256SUMS-v2.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -190,7 +190,7 @@ jobs:
 
       - name: Vérification des empreintes
         working-directory: fichiers
-        run: sha256sum --check --strict SHA256SUMS.txt
+        run: sha256sum --check --strict SHA256SUMS-v2.txt
 
       - name: Notes de version
         env:
@@ -200,6 +200,13 @@ jobs:
         run: |
           cat > notes.md <<EOF
           ## Magistra $VERSION pour Windows 10 et 11
+
+          **[Mettre à jour Magistra maintenant]($SERVER/juanrobin09-stack/Magistra-Downloads/releases/download/v$VERSION/Magistra-Setup-$VERSION.exe)**
+
+          Vous arrivez depuis « Ouvrir la page de la nouvelle version » dans Magistra ? Enregistrez votre travail,
+          fermez Magistra, puis ouvrez le fichier téléchargé. Vos documents, réglages, clés API et modèles sont
+          conservés. Ce passage permet aux anciennes versions de récupérer le correctif de leur téléchargement.
+          Les versions corrigées proposent ensuite « Télécharger et installer » directement dans l’application.
 
           **À télécharger :** \`Magistra-Setup-$VERSION.exe\` (installation en un clic, sans droits d'administrateur).
           \`Magistra-Setup.exe\` est le même fichier sous un nom fixe (lien de téléchargement direct du site).
@@ -216,7 +223,7 @@ jobs:
 
           ### Vérifier le fichier téléchargé (facultatif, pour le service informatique)
           L'empreinte SHA-256 de l'installateur est affichée sur le site Magistra (Réglages → « Magistra pour Windows ») :
-          elle doit correspondre à la ligne de \`Magistra-Setup-$VERSION.exe\` dans \`SHA256SUMS.txt\`.
+          elle doit correspondre à la ligne de \`Magistra-Setup-$VERSION.exe\` dans \`SHA256SUMS-v2.txt\`.
 
           Guide complet : $SERVER/$REPO#brancher-une-vraie-ia
           EOF

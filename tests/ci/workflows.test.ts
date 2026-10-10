@@ -17,7 +17,7 @@ import { OFFICIAL_WEB_ORIGINS } from '../../shared/localConnector';
 import { SITE_LEGACY_ORIGIN, SITE_ORIGIN } from '../../shared/site';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const read = (file: string) => readFileSync(path.join(root, file), 'utf8');
+const read = (file: string) => readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n');
 
 const ci = read('.github/workflows/ci.yml');
 const release = read('.github/workflows/release.yml');
@@ -49,7 +49,8 @@ const envOf = (step: string) => Object.fromEntries([...step.matchAll(/^\s+(VITE_
 const fromRepositoryVariables = (names: string[]) => Object.fromEntries(names.map(name => [name, `\${{ vars.${name} }}`]));
 /** Script shell d'une étape « run: | », sans son indentation. */
 const scriptOf = (step: string) => step.slice(step.indexOf('run: |\n') + 'run: |\n'.length).split('\n').map(l => l.slice(10)).join('\n');
-const hasBash = spawnSync('bash', ['--version']).status === 0;
+// Le lanceur WSL « bash.exe » peut exister sans transmettre les variables Windows.
+const hasBash = spawnSync('bash', ['-c', 'test "$MAGISTRA_BASH_ENV_TEST" = ready'], { env: { ...process.env, MAGISTRA_BASH_ENV_TEST: 'ready' } }).status === 0;
 
 /** Texte d'un job : de « <nom>: » (2 espaces) au job suivant. */
 function job(text: string, name: string): string {
@@ -85,6 +86,10 @@ describe.each([
 });
 
 describe('release.yml : application Windows publiée en brouillon', () => {
+  it('publie uniquement les empreintes v2 pour guider les anciennes applications vers la page de version', () => {
+    expect(job(release, 'build')).toContain('release/SHA256SUMS-v2.txt');
+    expect(code(release)).not.toContain('SHA256SUMS.txt');
+  });
   it('déclenché par un tag v*, une release publiée depuis GitHub ou à la main, jamais par une branche', () => {
     expect(release).toMatch(/on:\n {2}push:\n {4}tags: \['v\*'\]\n {2}release:\n {4}types: \[published\]\n {2}workflow_dispatch:/);
     expect(release).not.toMatch(/branches:/);
@@ -109,7 +114,7 @@ describe('release.yml : application Windows publiée en brouillon', () => {
     expect(build).toContain('cp "Magistra-Setup-$VERSION.exe" "Magistra-Setup.exe"');
     expect(build).toContain('files+=("Magistra-Setup.exe")');
     // Le fichier au nom fixe a lui aussi son empreinte, et part dans l'artefact puis dans la release.
-    expect(build.indexOf('files+=("Magistra-Setup.exe")')).toBeLessThan(build.indexOf('sha256sum "${files[@]}" > SHA256SUMS.txt'));
+    expect(build.indexOf('files+=("Magistra-Setup.exe")')).toBeLessThan(build.indexOf('sha256sum "${files[@]}" > SHA256SUMS-v2.txt'));
     expect(build).toContain('release/Magistra-Setup.exe\n');
   });
 
@@ -117,7 +122,7 @@ describe('release.yml : application Windows publiée en brouillon', () => {
     const build = job(release, 'build');
     expect(build).toContain('runs-on: windows-latest');
     for (const step of ['run: npm ci', 'run: npm run build', 'run: node scripts/build-electron.mjs',
-      'npx electron-builder --win nsis zip --x64 --publish never', 'sha256sum "${files[@]}" > SHA256SUMS.txt']) {
+      'npx electron-builder --win nsis zip --x64 --publish never', 'sha256sum "${files[@]}" > SHA256SUMS-v2.txt']) {
       expect(build).toContain(step);
     }
     expect(build).not.toMatch(/^\s+contents: write$/m);
@@ -130,7 +135,7 @@ describe('release.yml : application Windows publiée en brouillon', () => {
     expect(release.match(/^\s+contents: write$/gm)).toHaveLength(1);
     expect(rel).toMatch(/^\s+contents: write$/m);
     expect(rel).toContain('gh release create "$TAG" "${files[@]}" --draft --verify-tag');
-    expect(rel).toContain('sha256sum --check --strict SHA256SUMS.txt');
+    expect(rel).toContain('sha256sum --check --strict SHA256SUMS-v2.txt');
     expect(rel).toContain('GH_TOKEN: ${{ github.token }}');
     expect(rel).not.toMatch(/npm |node /);
     expect(code(release)).not.toMatch(/git (tag|push)\b/);

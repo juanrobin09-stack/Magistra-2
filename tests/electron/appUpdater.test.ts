@@ -19,7 +19,7 @@ async function fixture(options: { corrupt?: boolean; truncated?: boolean; sums?:
     assets: [ { name, browser_download_url: options.target ?? base + name, size: bytes.length }, { name: 'SHA256SUMS.txt', browser_download_url: base + 'SHA256SUMS.txt' } ] };
   const fetch = vi.fn<InstallUpdateDeps['fetch']>(async input => {
     if (String(input) === RELEASES_API_URL) return Response.json(metadata);
-    if (String(input).endsWith('SHA256SUMS.txt')) return new Response(options.sums ?? `${hash}  ${name}\n`);
+    if (/SHA256SUMS(?:-v2)?\.txt$/.test(String(input))) return new Response(options.sums ?? `${hash}  ${name}\n`);
     return new Response(options.truncated ? bytes.subarray(0, 4) : options.corrupt ? Buffer.alloc(bytes.length, 0) : bytes);
   });
   const deps: InstallUpdateDeps = { fetch, tempDirectory, currentVersion: '2.0.6', platform: 'win32', isPackaged: true,
@@ -28,6 +28,13 @@ async function fixture(options: { corrupt?: boolean; truncated?: boolean; sums?:
 }
 
 describe('installation de la mise à jour', () => {
+  it('le nouveau transport vérifie et installe une version utilisant le fichier de migration v2', async () => {
+    const { deps, metadata } = await fixture();
+    metadata.assets[1].name = 'SHA256SUMS-v2.txt';
+    metadata.assets[1].browser_download_url = base + 'SHA256SUMS-v2.txt';
+    await expect(installAppUpdate(deps)).resolves.toBe(true);
+    expect(deps.launch).toHaveBeenCalledOnce();
+  });
   it('vérifie taille et SHA-256 puis lance uniquement le fichier local contrôlé', async () => {
     const { deps, fetch } = await fixture();
     await expect(installAppUpdate(deps)).resolves.toBe(true);

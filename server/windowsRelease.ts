@@ -35,6 +35,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { FetchLike } from '../shared/ai/provider.js';
 import type { WindowsReleaseInfo, WindowsReleaseResponse } from '../shared/apiContract.js';
 import { MagistraError } from '../shared/errors.js';
+import { LEGACY_UPDATE_CHECKSUMS_FILE, UPDATE_CHECKSUMS_FILE } from '../shared/updateAssets.js';
 
 /** Dépôt officiel de Magistra (celui que l'application Windows interroge pour « Rechercher une mise à jour »). */
 export const DEFAULT_RELEASES_REPO = 'juanrobin09-stack/magistra-downloads';
@@ -43,7 +44,7 @@ export const DEFAULT_RELEASES_REPO = 'juanrobin09-stack/magistra-downloads';
 export const WINDOWS_REQUIREMENTS = 'Windows 10 ou 11 (64 bits)';
 
 /** Nom du fichier d'empreintes publié avec chaque version (voir .github/workflows/release.yml). */
-export const CHECKSUMS_FILE_NAME = 'SHA256SUMS.txt';
+export const CHECKSUMS_FILE_NAME = UPDATE_CHECKSUMS_FILE;
 /**
  * Nom FIXE de l'installateur, publié par release.yml à côté de Magistra-Setup-X.Y.Z.exe (même fichier) :
  * https://github.com/<dépôt>/releases/latest/download/Magistra-Setup.exe télécharge toujours la dernière version stable.
@@ -296,9 +297,10 @@ function parseRelease(data: unknown, repo: string): ParsedRelease {
   }
   const installer = assetOf(candidates[0], repo, tag, expected, WINDOWS_RELEASE_LIMITS.maxInstallerBytes);
   if (!installer) return { kind: 'invalid', reason: `installateur ${expected} incomplet ou lien de téléchargement refusé` };
-  const checksumAssets = data.assets.filter(a => isRecord(a) && a.name === CHECKSUMS_FILE_NAME);
+  const checksumName = data.assets.some(a => isRecord(a) && a.name === CHECKSUMS_FILE_NAME) ? CHECKSUMS_FILE_NAME : LEGACY_UPDATE_CHECKSUMS_FILE;
+  const checksumAssets = data.assets.filter(a => isRecord(a) && a.name === checksumName);
   const checksums = checksumAssets.length === 1
-    ? assetOf(checksumAssets[0], repo, tag, CHECKSUMS_FILE_NAME, WINDOWS_RELEASE_LIMITS.maxChecksumBytes) ?? undefined
+    ? assetOf(checksumAssets[0], repo, tag, checksumName, WINDOWS_RELEASE_LIMITS.maxChecksumBytes) ?? undefined
     : undefined;
   return { kind: 'ok', tag, version, publishedAt: new Date(published).toISOString(), installer, ...(checksums ? { checksums } : {}) };
 }
