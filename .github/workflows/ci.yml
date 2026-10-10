@@ -149,6 +149,10 @@ jobs:
       # MAGISTRA_* (electron/devOptions.ts), aucune exception n'est prévue pour elle.
       - name: Test de démarrage sous Windows
         run: node scripts/electron-smoke.mjs
+      # Vrai bouton, preload et IPC, transport Chromium, empreinte et lancement Windows.
+      # Version suivante simulée et copie inoffensive de where.exe : aucune installation.
+      - name: Mises à jour dans l’application sous Windows
+        run: npx playwright test --project=electron e2e/electron-updater.spec.ts e2e/electron-update-flow.spec.ts
       # Mêmes options que release.yml : chaque envoi vérifie que la publication d'une version construira bien
       # l'installateur. Le fichier est gardé 14 jours dans l'exécution (Artifacts), pour l'essayer avant de publier.
       - name: Installateur NSIS et archive zip (mêmes options que release.yml)
@@ -168,13 +172,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Résultats des mises à jour sous Windows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: magistra-tests-mises-a-jour-windows
+          path: test-results/electron
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Préparer les fichiers de distribution vérifiables
         shell: bash
         run: |
           version="$(node -p "require('./package.json').version")"
           cd release
           cp "Magistra-Setup-$version.exe" "Magistra-Setup.exe"
-          sha256sum "Magistra-Setup-$version.exe" "Magistra-Setup.exe" "Magistra-$version-win-x64.zip" > SHA256SUMS.txt
+          sha256sum "Magistra-Setup-$version.exe" "Magistra-Setup.exe" "Magistra-$version-win-x64.zip" > SHA256SUMS-v2.txt
       - name: Distribution Windows complète
         uses: actions/upload-artifact@v4
         with:
@@ -183,6 +196,6 @@ jobs:
             release/Magistra-Setup-*.exe
             release/Magistra-Setup.exe
             release/Magistra-*-win-x64.zip
-            release/SHA256SUMS.txt
+            release/SHA256SUMS-v2.txt
           if-no-files-found: error
           retention-days: 14

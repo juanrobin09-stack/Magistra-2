@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const read = (file: string) => readFileSync(path.join(root, file), 'utf8');
+const read = (file: string) => readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n');
 
 describe('Dependabot', () => {
   const dependabot = read('.github/dependabot.yml');

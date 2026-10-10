@@ -260,6 +260,19 @@ describe('documentation', () => {
 });
 
 describe('ci.yml : installateur Windows construit à chaque envoi', () => {
+  it('le bouton de mise à jour et son transport natif sont testés sous Windows avant l’empaquetage', () => {
+    const win = job(ci, 'windows-package');
+    const command = 'npx playwright test --project=electron e2e/electron-updater.spec.ts e2e/electron-update-flow.spec.ts';
+    expect(win).toContain(command);
+    expect(win.indexOf(command)).toBeLessThan(win.indexOf('npx electron-builder'));
+    expect(win).toContain('name: magistra-tests-mises-a-jour-windows');
+  });
+  it('la distribution de CI garde le protocole v2 de la publication, sans réactiver l’ancien téléchargement défectueux', () => {
+    const win = code(job(ci, 'windows-package'));
+    expect(win).toContain('> SHA256SUMS-v2.txt');
+    expect(win).toContain('release/SHA256SUMS-v2.txt');
+    expect(win).not.toContain('SHA256SUMS.txt');
+  });
   it('mêmes options que release.yml (NSIS + zip, sans publication, sans signature), installateur gardé à essayer', () => {
     const win = job(ci, 'windows-package');
     expect(win).toContain('runs-on: windows-latest');
