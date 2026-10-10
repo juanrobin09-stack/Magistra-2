@@ -171,6 +171,17 @@ async function screenshot(name: string) {
   await page.screenshot({ path: file });
   await test.info().attach(name, { path: file, contentType: 'image/png' });
 }
+async function navigate(label: 'Historique' | 'Réglages') {
+  // Le bureau du serveur Windows peut être plus petit que celui d'un ordinateur
+  // personnel : dans ce cas, la navigation se trouve dans le menu replié.
+  const menu = page.getByRole('button', { name: 'Ouvrir le menu', exact: true });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole('navigation', { name: 'Navigation principale' }).getByRole('link', { name: label, exact: true }).click();
+}
+async function narrowWindow() {
+  await application!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 760));
+  await expect(page.getByRole('button', { name: 'Ouvrir le menu', exact: true })).toBeVisible();
+}
 
 test('annuler ne télécharge rien ; réessayer lance le fichier vérifié et ferme uniquement le test', async () => {
   await expect(notice()).toContainText(`Magistra ${nextVersion} est disponible. Version installée : ${currentVersion}.`);
@@ -234,7 +245,8 @@ test('fichier corrompu de même taille : installation refusée, nettoyage et app
   expect((await probe()).launches).toEqual([]);
   await expect.poll(() => readdir(downloads())).toEqual([]);
   await expect(installButton()).toBeEnabled();
-  await page.getByRole('navigation', { name: 'Navigation principale' }).getByRole('link', { name: 'Historique', exact: true }).click();
+  await narrowWindow();
+  await navigate('Historique');
   await expect(page).toHaveURL(/\/app\/history$/);
   expect(application!.process().exitCode).toBeNull();
   expect(pageErrors).toEqual([]);
@@ -263,7 +275,8 @@ test.describe('version déjà actuelle', () => {
   test.use({ releaseState: 'current' });
   test('la recherche manuelle confirme la version sans proposer ni télécharger un installateur', async () => {
     await expect(notice()).toHaveCount(0);
-    await page.getByRole('navigation', { name: 'Navigation principale' }).getByRole('link', { name: 'Réglages', exact: true }).click();
+    await narrowWindow();
+    await navigate('Réglages');
     await notice().getByRole('button', { name: 'Rechercher une mise à jour' }).click();
     await expect(notice()).toContainText(`Magistra est à jour (version ${currentVersion}).`);
     await expect(installButton()).toHaveCount(0);
