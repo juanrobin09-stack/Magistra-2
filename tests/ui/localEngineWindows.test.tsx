@@ -47,7 +47,8 @@ it('le site guide les utilisateurs des anciennes versions à côté du télécha
   const { container } = await render(<WindowsDownloadPanel variant="landing" mode="showcase" />);
   await flush(4);
   const note = container.querySelector('[role="note"][aria-label="Mise à jour des anciennes versions"]');
-  expect(note?.textContent).toContain('2.0.7 à 2.0.9');
+  expect(note?.textContent).toContain(`Mise à jour vers Magistra ${RELEASE.version}`);
+  expect(note?.textContent).toContain('une ancienne version de 2.0.7 à 2.0.9');
   expect(note?.textContent).toContain('Vos documents, réglages, clés API et modèles sont conservés');
   expect(note?.textContent).toContain('nécessaire une fois');
   expect(container.querySelector('a[href="/telecharger"]')).not.toBeNull();

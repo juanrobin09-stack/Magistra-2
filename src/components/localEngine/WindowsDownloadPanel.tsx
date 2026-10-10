@@ -170,9 +170,9 @@ export default function WindowsDownloadPanel({ variant, mode, afterDownload, int
           <WindowsDownloadLink release={release} className={buttonClass} onClick={() => setDownloaded(true)} />
         </div>
         {showcase && <div role="note" aria-label="Mise à jour des anciennes versions" className="rounded-xl border border-accent/30 bg-accent/10 p-4 space-y-2 text-sm text-mg-100">
-          <p className="font-semibold text-mg-50">Une mise à jour bloque dans Magistra ?</p>
-          <p>Les versions 2.0.7 à 2.0.9 passent par la page de la nouvelle version pour cette mise à jour. Cliquez sur « Télécharger Magistra pour Windows » ci-dessus, puis ouvrez le fichier téléchargé.</p>
-          <p>Enregistrez votre travail et fermez Magistra avant l’installation. Vos documents, réglages, clés API et modèles sont conservés. Cette étape est nécessaire une fois ; la version corrigée permet ensuite de télécharger et installer les mises à jour depuis l’application.</p>
+          <p className="font-semibold text-mg-50">{release.status === 'ready' ? `Mise à jour vers Magistra ${release.release.version}` : 'Mettre à jour votre ancienne version de Magistra'}</p>
+          <p>Si votre application utilise encore une ancienne version de 2.0.7 à 2.0.9, cliquez sur « Télécharger Magistra pour Windows » ci-dessus pour obtenir la nouvelle version corrigée.</p>
+          <p>Enregistrez votre travail, fermez Magistra, puis ouvrez le fichier téléchargé pour l’installer. Vos documents, réglages, clés API et modèles sont conservés. Cette étape est nécessaire une fois ; la version corrigée permet ensuite de télécharger et installer les mises à jour depuis l’application.</p>
         </div>}
         <OpenInstalledApp />
         <ReleaseFacts state={release} queried={queried} />
