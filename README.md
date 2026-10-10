@@ -76,6 +76,10 @@ Hors connexion, Magistra fonctionne avec le modèle local et vos documents. **Mi
 
 Hébergement personnel avancé seulement : l'application peut aussi servir l'IA de l'ordinateur à votre propre interface avec comptes (« [Utiliser l'IA de votre ordinateur depuis le site](#utiliser-lia-de-votre-ordinateur-depuis-le-site-magistra-pour-windows) »).
 
+**Clé API personnelle (Windows, depuis 2.0.8)** : dans Réglages → Intelligence artificielle, choisissez OpenAI, Mistral, Gemini ou Anthropic, puis ajoutez votre clé API. Aucun moteur ni modèle local n’est nécessaire pour cette option. Le modèle proposé peut être modifié selon ceux disponibles sur votre compte. Une seule configuration en ligne est conservée ; changer de fournisseur remplace la précédente. La clé est chiffrée avec le stockage sécurisé de Windows, n’est jamais réaffichée et peut être supprimée. Le bouton **Utiliser l’IA locale** conserve la clé pour plus tard. En mode API, les consignes et les extraits de documents utilisés pour générer sont envoyés au fournisseur indiqué ; Internet est nécessaire et les frais et quotas sont ceux de votre compte API. Un abonnement à l’application de discussion du fournisseur ne remplace pas nécessairement un compte API.
+
+Formats d’API : [OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create), [Mistral](https://docs.mistral.ai/api/), [Gemini compatible OpenAI](https://ai.google.dev/gemini-api/docs/openai), [Anthropic Messages et streaming](https://platform.claude.com/docs/en/build-with-claude/streaming). La vérification de la connexion lit la liste des modèles sans générer de contenu.
+
 Les versions sont produites par le workflow [`release.yml`](.github/workflows/release.yml) : un tag `vX.Y.Z` (égal à la version de `package.json`) construit l'installateur et l'archive sous Windows, calcule les empreintes et crée une **release en brouillon**, qu'un mainteneur relit puis publie.
 
 ### 2. En local, sur votre ordinateur (`npm run dev`)

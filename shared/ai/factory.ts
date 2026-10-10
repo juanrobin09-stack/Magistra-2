@@ -4,6 +4,7 @@ import { MagistraError } from '../errors.js';
 import type { ErrorRecipient } from './errorMapping.js';
 import { OllamaProvider, DEFAULT_OLLAMA_URL } from './ollama.js';
 import { OpenAICompatibleProvider } from './openaiCompatible.js';
+import { AnthropicProvider } from './anthropic.js';
 import type { AIProvider, FetchLike } from './provider.js';
 
 export type ProviderConfig =
@@ -27,7 +28,7 @@ export type ProviderConfig =
       timeZone?: string;
     }
   | {
-      kind: 'openai-compatible';
+      kind: 'openai-compatible' | 'anthropic';
       baseUrl: string;
       model: string;
       apiKey?: string;
@@ -58,7 +59,8 @@ export function createProvider(config: ProviderConfig, fetchImpl?: FetchLike): A
     });
   }
   if (!config.baseUrl) throw new MagistraError('AI_NOT_CONFIGURED');
-  return new OpenAICompatibleProvider({
+  const Provider = config.kind === 'anthropic' ? AnthropicProvider : OpenAICompatibleProvider;
+  return new Provider({
     baseUrl: config.baseUrl,
     model: config.model,
     apiKey: config.apiKey,

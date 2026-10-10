@@ -276,6 +276,7 @@ const KNOWN_HOSTS: { hosts: string[]; label: string; country: string; url?: stri
   { hosts: ['api.groq.com'], label: 'Groq', country: 'États-Unis', url: 'https://console.groq.com/docs/rate-limits' },
   { hosts: ['api.cloudflare.com'], label: 'Cloudflare Workers AI', country: 'Réseau mondial de Cloudflare', url: 'https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility' },
   { hosts: ['api.openai.com'], label: 'OpenAI', country: 'États-Unis' },
+  { hosts: ['api.anthropic.com'], label: 'Anthropic (Claude)', country: 'Selon la région de votre compte', url: 'https://privacy.claude.com/' },
   { hosts: ['generativelanguage.googleapis.com'], label: 'Google Gemini', country: 'États-Unis' },
   { hosts: ['ollama.com'], label: 'Ollama Cloud', country: 'Non précisé', url: 'https://docs.ollama.com/cloud' },
 ];

@@ -1520,7 +1520,7 @@ export class AIManager {
       return createProvider({ kind: 'ollama', baseUrl: remote.baseUrl, model: remote.model, label }, apiKey ? withBearer(base, apiKey) : base);
     }
     return createProvider(
-      { kind: 'openai-compatible', baseUrl: remote.baseUrl, model: remote.model, apiKey, label, local: isLoopbackUrl(remote.baseUrl) },
+      { kind: remote.kind, baseUrl: remote.baseUrl, model: remote.model, apiKey, label, local: isLoopbackUrl(remote.baseUrl) },
       base,
     );
   }

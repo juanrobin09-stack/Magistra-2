@@ -10,6 +10,7 @@ import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowRight, CheckCircle2, ChevronRight, ExternalLink, GraduationCap, Loader2, RefreshCw, Server } from 'lucide-react';
 import ActivateAICard from '@/components/ai/ActivateAICard';
 import AdvancedAIOptions from '@/components/ai/AdvancedAIOptions';
+import PersonalAPISettings from '@/components/ai/PersonalAPISettings';
 import EngineWindowNote from '@/components/ai/EngineWindowNote';
 import HardwareSummary from '@/components/ai/HardwareSummary';
 import ModelSetupPanel from '@/components/ai/ModelSetupPanel';
@@ -75,6 +76,7 @@ export default function SetupPage() {
           </div>
         )}
 
+        {status && <PersonalAPISettings ai={ai} status={status} />}
         {status && <MoreOptions ai={ai} status={status} />}
         {status && <AdvancedAIOptions ai={ai} status={status} />}
 

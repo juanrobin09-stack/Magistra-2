@@ -218,7 +218,7 @@ function RemoteServerForm({ ai, status }: AdvancedAIOptionsProps) {
   const remote = status.config.remote;
   const isRemote = status.config.mode === 'remote';
   const [show, setShow] = useState(isRemote);
-  const [kind, setKind] = useState<'openai-compatible' | 'ollama'>(remote?.kind ?? 'openai-compatible');
+  const [kind, setKind] = useState<'openai-compatible' | 'ollama' | 'anthropic'>(remote?.kind ?? 'openai-compatible');
   const [baseUrl, setBaseUrl] = useState(remote?.baseUrl ?? '');
   const [model, setModel] = useState(remote?.model ?? '');
   const [apiKey, setApiKey] = useState('');
@@ -303,6 +303,10 @@ function RemoteServerForm({ ai, status }: AdvancedAIOptionsProps) {
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="radio" name="remote-kind" checked={kind === 'ollama'} onChange={() => setKind('ollama')} className="accent-[var(--color-accent)]" />
                 Ollama distant
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="remote-kind" checked={kind === 'anthropic'} onChange={() => setKind('anthropic')} className="accent-[var(--color-accent)]" />
+                Anthropic (API Messages)
               </label>
             </div>
           </fieldset>

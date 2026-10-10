@@ -30,6 +30,17 @@ afterEach(() => {
 });
 
 describe('clé API d’un serveur distant', () => {
+  it('relit une clé Anthropic chiffrée et l’oublie si le protocole d’API change', async () => {
+    const store = new AIConfigStore(file, fakeCipher());
+    await store.load();
+    await store.update({ mode: 'remote', remote: { kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-5-5', apiKey: SECRET } });
+    const reloaded = new AIConfigStore(file, fakeCipher());
+    await reloaded.load();
+    expect(reloaded.getApiKey()).toBe(SECRET);
+    expect(reloaded.publicConfig().remote?.kind).toBe('anthropic');
+    await reloaded.update({ remote: { kind: 'openai-compatible', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-5-5' } });
+    expect(reloaded.getApiKey()).toBeUndefined();
+  });
   it('est chiffrée sur le disque et jamais renvoyée (seulement hasApiKey)', async () => {
     const store = new AIConfigStore(file, fakeCipher());
     await store.load();

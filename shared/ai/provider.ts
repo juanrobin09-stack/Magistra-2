@@ -77,7 +77,7 @@ export interface PreloadOptions {
   timeoutMs?: number;
 }
 
-export type ProviderKind = 'ollama' | 'openai-compatible' | 'mock';
+export type ProviderKind = 'ollama' | 'openai-compatible' | 'anthropic' | 'mock';
 
 export interface AIProvider {
   readonly kind: ProviderKind;

@@ -280,8 +280,10 @@ function PrivacyLocal({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
       {mode === 'local' && (
         <p>
           L'application Windows fonctionne sans compte. Votre profil, votre historique, vos favoris et vos documents sont
-          conservés sur cet ordinateur, et l'intelligence artificielle (Ollama) y tourne en local : vos demandes ne sont
-          envoyées à aucun service d'IA en ligne.
+          conservés sur cet ordinateur. Avec l’IA locale (Ollama), vos demandes ne sont envoyées à aucun service d’IA en ligne.
+          Si vous choisissez un fournisseur avec votre clé API personnelle ou un serveur distant, vos consignes et les
+          extraits de documents utilisés pour générer lui sont transmis. Le fournisseur actif est indiqué avant la génération.
+          La clé API est chiffrée par le système sur cet ordinateur ; vous pouvez la supprimer dans les réglages.
         </p>
       )}
       {mode === 'personal' && (

@@ -31,6 +31,13 @@ function endOf(events: StreamEvent[]) {
 }
 
 describe('OpenAICompatibleProvider — flux SSE', () => {
+  it('utilise max_completion_tokens pour OpenAI et évite temperature pour ses modèles de raisonnement', async () => {
+    const fetch = mockFetch(() => streamResponse(streamBody([sseChunk('Bonjour', 'stop') + 'data: [DONE]\n\n'])));
+    await provider(fetch, { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.6' }).generate({ messages: MESSAGES, maxTokens: 800 });
+    expect(fetch.calls[0].body).toEqual({ model: 'gpt-5.6', messages: MESSAGES, stream: true, max_completion_tokens: 800 });
+    await provider(fetch, { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' }).generate({ messages: MESSAGES, maxTokens: 800 });
+    expect(fetch.calls[1].body).toMatchObject({ max_completion_tokens: 800, temperature: 0.4 });
+  });
   it('reconstitue un flux coupé au milieu des lignes et des caractères accentués, ignore les commentaires et s’arrête à [DONE]', async () => {
     const sse = [
       ': ping\n\n',

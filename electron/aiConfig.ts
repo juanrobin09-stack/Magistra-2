@@ -54,7 +54,7 @@ export function safeStorageCipher(safeStorage: SafeStorageLike, platform: NodeJS
 }
 
 export interface StoredRemote {
-  kind: 'openai-compatible' | 'ollama';
+  kind: 'openai-compatible' | 'ollama' | 'anthropic';
   baseUrl: string;
   model: string;
   label?: string;
@@ -83,7 +83,7 @@ function parseStored(raw: unknown, defaults: StoredAIConfig): StoredAIConfig | n
   if (isValidModelName(r.customModel)) cfg.customModel = r.customModel;
   if (typeof r.ollamaUrl === 'string' && isHttpUrl(r.ollamaUrl)) cfg.ollamaUrl = r.ollamaUrl;
   const rem = r.remote as Record<string, unknown> | undefined;
-  if (rem && typeof rem === 'object' && (rem.kind === 'openai-compatible' || rem.kind === 'ollama')
+  if (rem && typeof rem === 'object' && (rem.kind === 'openai-compatible' || rem.kind === 'ollama' || rem.kind === 'anthropic')
     && typeof rem.baseUrl === 'string' && isHttpUrl(rem.baseUrl) && isValidModelName(rem.model)) {
     cfg.remote = {
       kind: rem.kind,
@@ -269,7 +269,7 @@ export class AIConfigStore {
     } else if (update.remote) {
       const r = update.remote;
       const previous = this.config.remote;
-      const sameServer = !!previous && originOf(previous.baseUrl) === originOf(r.baseUrl);
+      const sameServer = !!previous && previous.kind === r.kind && originOf(previous.baseUrl) === originOf(r.baseUrl);
       let apiKeyEnc: string | undefined;
       if (r.apiKey === undefined) {
         apiKeyEnc = sameServer ? previous?.apiKeyEnc : undefined;

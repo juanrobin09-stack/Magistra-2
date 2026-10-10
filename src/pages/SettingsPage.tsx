@@ -1,6 +1,6 @@
 // Réglages — mêmes sections dans les trois modes (Windows, site web, démonstration),
 // avec un contenu honnête adapté à chacun. Aucun secret n'est affiché ni demandé ici,
-// sauf la clé facultative d'un serveur IA distant (options avancées, en écriture seule).
+// sauf la clé personnelle d'un fournisseur IA ou d'un serveur distant (en écriture seule).
 //
 // Site web : moteur des générations (Magistra locale ou serveur en ligne, passage au distant confirmé) et
 // « Magistra pour Windows ». Application Windows : « Site web Magistra » (navigateurs autorisés à utiliser l'IA de
@@ -22,6 +22,7 @@ import { RESEARCH_MODES, type Capabilities, type ResearchMode } from '@shared/ty
 import ActivateAICard from '@/components/ai/ActivateAICard';
 import AdminContactLine from '@/components/ai/AdminContactLine';
 import AdvancedAIOptions from '@/components/ai/AdvancedAIOptions';
+import PersonalAPISettings from '@/components/ai/PersonalAPISettings';
 import ConnectRealAICard from '@/components/ai/ConnectRealAICard';
 import EngineSetupPanel from '@/components/ai/EngineSetupPanel';
 import ModelSetupPanel from '@/components/ai/ModelSetupPanel';
@@ -302,13 +303,15 @@ function LocalAISettings({ ai }: { ai: AIController }) {
         </button>
       </div>
 
+      <PersonalAPISettings ai={ai} status={status} />
+
       {oneClick ? (
         <ActivateAICard variant="setup" />
       ) : (engineStep || (!remote && status.engine.state === 'running' && status.engine.outdated)) && <EngineSetupPanel ai={ai} status={status} />}
 
       {phase === 'remote_unavailable' && (
         <WarningNote>
-          Le serveur IA distant ne répond pas. Vérifiez votre connexion, ou revenez à l'IA de cet ordinateur dans les options avancées ci-dessous.
+          Le fournisseur IA ne répond pas. Vérifiez votre connexion et votre clé, ou utilisez le bouton « Utiliser l’IA locale » ci-dessus.
         </WarningNote>
       )}
 

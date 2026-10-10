@@ -1,6 +1,6 @@
 // Contrat du pont sécurisé entre la fenêtre (renderer) et le processus principal Electron.
-// Exposé par electron/preload.ts sous window.magistra. Aucun secret ne transite par ce pont :
-// les clés éventuelles restent dans le processus principal (chiffrées sur le disque).
+// Exposé par electron/preload.ts sous window.magistra. Les clés API sont transmises uniquement à l'enregistrement ;
+// elles ne sont jamais renvoyées à la fenêtre et restent chiffrées sur le disque.
 
 import type { HardwareInfo, Recommendation, TierId } from './ai/models.js';
 import type { ConnectorAppStatus } from './localConnector.js';
@@ -82,7 +82,7 @@ export interface AIConfigPublic {
   customModel?: string;
   ollamaUrl: string;
   remote?: {
-    kind: 'openai-compatible' | 'ollama';
+    kind: 'openai-compatible' | 'ollama' | 'anthropic';
     baseUrl: string;
     model: string;
     /** Indique seulement qu'une clé est enregistrée ; la clé elle-même n'est jamais renvoyée. */
@@ -188,7 +188,7 @@ export interface AIConfigUpdate {
   customModel?: string | null;
   ollamaUrl?: string;
   remote?: {
-    kind: 'openai-compatible' | 'ollama';
+    kind: 'openai-compatible' | 'ollama' | 'anthropic';
     baseUrl: string;
     model: string;
     /** Nouvelle clé (facultative). Chaîne vide = supprimer la clé enregistrée. */

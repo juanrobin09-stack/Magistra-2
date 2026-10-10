@@ -24,6 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { E2E_SCREENSHOT_DIRS, fromRoot } from './outputDirs';
+import { PERSONAL_PROVIDERS } from '../shared/ai/personalProviders';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOTS = path.resolve(process.env.MAGISTRA_E2E_SCREENSHOTS ?? fromRoot(E2E_SCREENSHOT_DIRS.electron));
@@ -105,6 +106,17 @@ function appEnv(userDataDir: string, ollamaUrl: string, extraEnv: Record<string,
   delete env.MAGISTRA_SMOKE_TEST;
   env.MAGISTRA_USER_DATA_DIR = userDataDir;
   env.MAGISTRA_OLLAMA_URL = ollamaUrl;
+  // La présence d'Ollama sur le poste de test ne doit ni changer les cas « moteur absent », ni lancer le vrai moteur.
+  // Les tests qui simulent une installation fournissent ensuite leurs propres chemins dans extraEnv.
+  if (process.platform === 'win32') {
+    env.LOCALAPPDATA = path.join(userDataDir, 'local-app-data');
+    env.ProgramFiles = path.join(userDataDir, 'program-files');
+    env.ProgramW6432 = env.ProgramFiles;
+    env['ProgramFiles(x86)'] = path.join(userDataDir, 'program-files-x86');
+    for (const key of Object.keys(env).filter(k => k.toUpperCase() === 'PATH')) {
+      env[key] = env[key].split(path.delimiter).filter(p => !/(?:^|[\\/])Ollama(?:[\\/]|$)/i.test(p.trim().replace(/^"|"$/g, ''))).join(path.delimiter);
+    }
+  }
   // Linux sans locale UTF-8 (conteneurs) : Chromium ne peut pas écrire de nom de fichier accentué et
   // remplace le nom proposé par « download ». Un poste réel (Windows, bureau Linux) est en UTF-8.
   if (process.platform === 'linux' && !/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || '')) {
@@ -124,12 +136,12 @@ function appArgs(): string[] {
   return args;
 }
 
-async function launchApp(userDataDir: string, ollamaUrl: string, extraEnv: Record<string, string> = {}): Promise<Session> {
+async function launchApp(userDataDir: string, ollamaUrl: string, extraEnv: Record<string, string> = {}, mainPreload?: string): Promise<Session> {
   const distDir = process.env.MAGISTRA_DIST_DIR ? path.resolve(process.env.MAGISTRA_DIST_DIR) : path.join(root, 'dist');
   for (const full of [path.join(distDir, 'index.html'), path.join(root, 'dist-electron/main.js'), path.join(root, 'dist-electron/preload.cjs')]) {
     if (!existsSync(full)) throw new Error(`${full} introuvable : lancez « npx vite build » puis « node scripts/build-electron.mjs ».`);
   }
-  const app = await electron.launch({ args: appArgs(), cwd: root, env: appEnv(userDataDir, ollamaUrl, extraEnv), timeout: 60_000 });
+  const app = await electron.launch({ args: mainPreload ? ['-r', mainPreload, ...appArgs()] : appArgs(), cwd: root, env: appEnv(userDataDir, ollamaUrl, extraEnv), timeout: 60_000 });
   const mainLog: string[] = [];
   const collect = (chunk: Buffer | string) => {
     for (const line of String(chunk).split('\n')) if (line.trim()) mainLog.push(line);
@@ -396,6 +408,53 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     userData = null;
   });
 
+  test('API personnelles : quatre fournisseurs → génération sans modèle local → clé DPAPI → relance → suppression', async () => {
+    test.skip(process.platform !== 'win32', 'Vérification du chiffrement DPAPI dans l’application Windows réelle.');
+    mock = await startMock({ models: [] });
+    userData = newUserDataDir();
+    const preload = path.join(root, 'e2e/electron-personal-api-preload.cjs');
+    session = await launchApp(userData, mock.url, {}, preload);
+    expect(await session.app.evaluate(() => Array.isArray((globalThis as unknown as { __personalAPIRequests?: unknown }).__personalAPIRequests))).toBe(true);
+    await firstLaunchToDashboard(session.page, 'click');
+    for (const preset of PERSONAL_PROVIDERS) {
+      const { page } = session;
+      await openNav(page, 'Réglages');
+      const form = page.getByRole('region', { name: 'IA avec une clé API personnelle' });
+      await form.getByLabel('Fournisseur', { exact: true }).selectOption(preset.id);
+      await form.getByLabel('Clé API personnelle', { exact: true }).fill('e2e-test-personal-key');
+      await form.getByRole('button', { name: 'Enregistrer et utiliser l’API' }).click();
+      await expect(form.getByText(`${preset.label} est activé. Vous pouvez lancer une génération.`)).toBeVisible();
+      await expect(form.getByLabel('Clé API personnelle', { exact: true })).toHaveValue('');
+      expect(readFileSync(path.join(userData, 'ai-config.json'), 'utf8')).not.toContain('e2e-test-personal-key');
+      const status = await aiStatus(page);
+      expect(status.config.remote?.hasApiKey).toBe(true);
+      expect(status.installedModels).toEqual([]);
+      await openNav(page, 'Générer');
+      await submitCours(page, 'Les fractions avec une API');
+      await expect(resultSection(page).getByText("Enregistré dans l'historique")).toBeVisible({ timeout: 30_000 });
+      await expect(resultSection(page)).toContainText('Cours API');
+    }
+    await shot(session.page, 'api-personnelle-generation');
+    const requests = await session.app.evaluate(() => (globalThis as unknown as { __personalAPIRequests: { method: string; authenticated: boolean; redirect: string }[] }).__personalAPIRequests);
+    expect(requests.filter(r => r.method === 'POST')).toHaveLength(4);
+    expect(requests.every(r => r.authenticated && r.redirect === 'manual')).toBe(true);
+    expect(mock.state.requests).not.toContain('POST /api/chat');
+    expect(mock.state.requests).not.toContain('POST /api/pull');
+    await closeApp(session);
+    session = await launchApp(userData, mock.url, {}, preload);
+    await passIntro(session.page, 'click');
+    await openNav(session.page, 'Réglages');
+    const form = session.page.getByRole('region', { name: 'IA avec une clé API personnelle' });
+    await expect(form.getByLabel('Fournisseur', { exact: true })).toHaveValue('anthropic');
+    await expect(form.getByText('Une clé chiffrée est enregistrée pour ce fournisseur.', { exact: false })).toBeVisible();
+    await shot(session.page, 'api-personnelle-reglages');
+    await form.getByRole('button', { name: 'Utiliser l’IA locale', exact: true }).click();
+    expect((await aiStatus(session.page)).config.mode).toBe('local');
+    await form.getByRole('button', { name: 'Supprimer la clé API' }).click();
+    await expect(form.getByText('La clé API et sa configuration ont été supprimées. L’IA locale est sélectionnée.')).toBeVisible();
+    expect((await aiStatus(session.page)).config.remote).toBeUndefined();
+  });
+
   test('1. premier lancement : animation → accueil de Magistra (sans téléchargement) → profil → tableau de bord ; IA prête ; vérifications, présentation ; isolation', async () => {
     mock = await startMock({ models: ALL_TIER_MODELS });
     userData = newUserDataDir();
@@ -512,6 +571,8 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
       // Linux sans trousseau : chiffrement indisponible → refus explicite, en français, sans détail technique.
       expect(exposed.remote.error).toMatch(/STORAGE_ERROR\|.*clé API ne peut pas être enregistrée/);
     }
+    // Après fermeture et vidage des caches Chromium, tous les fichiers sont lisibles aussi sous Windows (EBUSY sinon).
+    await closeApp(session);
     // La clé n'a été écrite en clair nulle part dans les données de l'application (configuration, stockage Chromium…).
     const withKey = filesContaining(userData, 'sk-SECRET-E2E-123');
     expect(withKey).toEqual([]);
@@ -663,8 +724,10 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     const tier = status.tiers.find(t => t.id === status.recommendation.tier)!;
     const card = activateCard(page);
     const size = card.getByTestId('activate-ai-size');
-    await expect(size).toContainText(/^Environ \d+(,\d)?\sGo à télécharger en tout, une seule fois\./);
-    await expect(size).toContainText(new RegExp(`\\(moteur IA : environ 1,7\\sGo · ${tier.label} : ${gbPattern(tier.downloadGB)}\\)`));
+    const engineGB = (status.engineDownload.sizeMB ?? status.engineDownload.approxSizeMB) / 1024;
+    const approximate = status.engineDownload.sizeMB === undefined ? 'environ ' : '';
+    await expect(size).toContainText(new RegExp(`^${approximate ? 'Environ ' : ''}${gbPattern(engineGB + tier.downloadGB)} à télécharger en tout, une seule fois\\.`));
+    await expect(size).toContainText(new RegExp(`\\(moteur IA : ${approximate}${gbPattern(engineGB)} · ${tier.label} : ${gbPattern(tier.downloadGB)}\\)`));
     await expect(card.getByText(/Rien n’est téléchargé avant votre clic\./)).toBeVisible();
     if (!status.engineDownload.platformSupported) {
       await expect(card.getByText(/le moteur IA s’installe depuis sa page officielle/)).toBeVisible();
@@ -672,13 +735,14 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     // Windows : « une fenêtre Ollama peut s'ouvrir » annoncé avant le clic ; ailleurs, rien.
     await expectEngineWindowNote(card);
     await shot(page, '03a-moteur-absent-activer-ia');
+    const dashboardSize = await size.innerText();
 
     // Réglages : la même activation en un clic que le tableau de bord (taille annoncée, rien avant le clic, reprise au
     // lancement suivant) — plus l'ancienne installation du moteur seul, sans suite ni reprise.
     await openNav(page, 'Réglages');
     const settingsCard = activateCard(page);
     await expect(settingsCard.getByRole('heading', { name: 'Activez l’IA de Magistra sur cet ordinateur' })).toBeVisible();
-    await expect(settingsCard.getByTestId('activate-ai-size')).toContainText(/^Environ \d+(,\d)?\sGo à télécharger en tout, une seule fois\./);
+    await expect(settingsCard.getByTestId('activate-ai-size')).toHaveText(dashboardSize);
     await expect(settingsCard.getByText(/Rien n’est téléchargé avant votre clic\./)).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Installer le moteur IA' })).toHaveCount(0);
     await expectEngineWindowNote(settingsCard);
@@ -828,14 +892,20 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
   test('3d. moteur trop ancien → « Activer l’IA » compte sa mise à jour, au tableau de bord comme dans les réglages (cause précise) → moteur à jour → « Activer l’IA » → modèle installé', async () => {
     mock = await startMock({ models: [], version: '0.12.0', pullMs: 1_500 });
     userData = newUserDataDir();
+    if (process.platform === 'win32') {
+      // Installation utilisateur simulée : le serveur répond déjà, ces fichiers ne sont jamais exécutés.
+      const engineDir = path.join(userData, 'local-app-data', 'Programs', 'Ollama');
+      mkdirSync(engineDir, { recursive: true });
+      for (const name of ['ollama.exe', 'ollama app.exe']) writeFileSync(path.join(engineDir, name), 'e2e-installation-marker');
+    }
     session = await launchApp(userData, mock.url);
     const { page } = session;
     await firstLaunchToDashboard(page);
 
     // Tableau de bord : la mise à jour du moteur fait partie du total annoncé.
     const size = activateCard(page).getByTestId('activate-ai-size');
-    await expect(size).toContainText(/^Environ \d+(,\d)?\sGo à télécharger en tout/);
-    await expect(size).toContainText('moteur IA : environ');
+    await expect(size).toContainText(/^(Environ )?\d+(,\d)?\sGo à télécharger en tout/);
+    await expect(size).toContainText(/moteur IA : (environ )?\d+(,\d)?\sGo/);
     await expectEngineWindowNote(activateCard(page));
     await shot(page, '03k-moteur-trop-ancien-activer-ia');
 
@@ -844,7 +914,7 @@ test.describe('Application Windows (Electron) — IA locale simulée', () => {
     await expect(page.getByText(/Le moteur IA installé \(version 0\.12\.0\) est trop ancien.*0\.13\.1 minimum/)).toBeVisible();
     const settingsCard = activateCard(page);
     await expect(settingsCard.getByRole('button', { name: 'Activer l’IA' })).toBeVisible();
-    await expect(settingsCard.getByTestId('activate-ai-size')).toContainText('moteur IA : environ');
+    await expect(settingsCard.getByTestId('activate-ai-size')).toContainText(/moteur IA : (environ )?\d+(,\d)?\sGo/);
     await expect(settingsCard.getByText(/Rien n’est téléchargé avant votre clic\./)).toBeVisible();
     if (process.platform !== 'win32') {
       // Hors Windows, la mise à jour se fait depuis la page officielle : dit avant le clic.

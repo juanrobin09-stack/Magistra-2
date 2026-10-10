@@ -165,8 +165,12 @@ export class OpenAICompatibleProvider implements AIProvider {
             model: this.model,
             messages: options.messages,
             stream: true,
-            max_tokens: options.maxTokens,
-            temperature: options.temperature ?? 0.4,
+            ...(new URL(this.baseUrl).hostname === 'api.openai.com'
+              ? { max_completion_tokens: options.maxTokens }
+              : { max_tokens: options.maxTokens }),
+            // Les modèles de raisonnement OpenAI n'acceptent pas tous une température personnalisée.
+            ...((new URL(this.baseUrl).hostname === 'api.openai.com' && /^(o\d|gpt-[5-9])/.test(this.model))
+              ? {} : { temperature: options.temperature ?? 0.4 }),
           }),
         }, controller, this.timeouts.firstChunkMs);
       } catch (err) {

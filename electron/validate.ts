@@ -249,7 +249,7 @@ export function sanitizeAIConfigUpdate(raw: unknown): AIConfigUpdate {
     } else {
       if (typeof u.remote !== 'object' || Array.isArray(u.remote)) throw new MagistraError('INVALID_REQUEST', 'Serveur distant invalide.');
       const r = u.remote as Record<string, unknown>;
-      if (r.kind !== 'openai-compatible' && r.kind !== 'ollama') throw new MagistraError('INVALID_REQUEST', 'Type de serveur distant inconnu.');
+      if (r.kind !== 'openai-compatible' && r.kind !== 'ollama' && r.kind !== 'anthropic') throw new MagistraError('INVALID_REQUEST', 'Type de serveur distant inconnu.');
       const baseUrl = requireHttpUrl(r.baseUrl, 'adresse du serveur');
       if (!isValidModelName(r.model)) throw new MagistraError('INVALID_REQUEST', 'Nom de modèle invalide.');
       const apiKey = r.apiKey === undefined || r.apiKey === null ? undefined : r.apiKey;
