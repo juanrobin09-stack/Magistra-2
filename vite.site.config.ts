@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildRobotsTxt, buildSitemapXml } from './shared/site';
+import { INDEXNOW_KEY, INDEXNOW_PATH } from './shared/siteIndexing';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,8 +26,8 @@ function publishEntryAtRoot(): Plugin {
 }
 
 /**
- * robots.txt et sitemap.xml, produits à partir de l'adresse officielle (shared/site.ts : SITE_ORIGIN et SITE_PATHS, soit
- * l'accueil seul : les pages légales portent le lien canonique de l'accueil) et publiés à la racine de dist-site/ seulement. Ce plugin n'appartient qu'à cette configuration : le build de
+ * robots.txt, sitemap.xml et clé publique IndexNow, produits à partir des sources partagées et publiés
+ * à la racine de dist-site/ seulement. Ce plugin n'appartient qu'à cette configuration : le build de
  * l'application (vite.config.ts, dist/, embarqué dans Electron) n'a ni robots.txt ni plan du site.
  */
 function publishSearchFiles(): Plugin {
@@ -35,6 +36,7 @@ function publishSearchFiles(): Plugin {
     generateBundle() {
       this.emitFile({ type: 'asset', fileName: 'robots.txt', source: buildRobotsTxt() });
       this.emitFile({ type: 'asset', fileName: 'sitemap.xml', source: buildSitemapXml() });
+      this.emitFile({ type: 'asset', fileName: INDEXNOW_PATH.slice(1), source: INDEXNOW_KEY });
     },
   };
 }

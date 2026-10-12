@@ -3,6 +3,7 @@
 import { JSDOM } from 'jsdom';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { siteSeoSource } from './site-seo-source.mjs';
 
 const ASSET = /^\/assets\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/;
 const TAGS = new Set('html head body title meta link script noscript main nav header footer section article div span h1 h2 h3 h4 p strong em br a ol ul li code small details summary button svg path rect circle ellipse line polygon polyline g'.split(' '));
@@ -15,7 +16,10 @@ export function checkPrerenderedPage(html, { siteOrigin, pagePath = '/' } = {}) 
   const dom = new JSDOM(html); // pas de runScripts, ni de resources: usable
   const doc = dom.window.document;
   const fail = message => errors.push(`${pagePath} : ${message}`);
-  const canonical = `${siteOrigin}${pagePath}`;
+  const canonicalPath = Object.hasOwn(siteSeoSource.SITE_SEO, pagePath) ? pagePath : '/404';
+  const page = siteSeoSource.SITE_SEO[canonicalPath];
+  const canonical = `${siteOrigin}${canonicalPath}`;
+  const expectedJson = siteSeoSource.siteStructuredDataJson(canonicalPath);
   const csp = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8')).headers
     .flatMap(rule => rule.headers).find(header => header.key.toLowerCase() === 'content-security-policy')?.value ?? '';
   try {
@@ -27,8 +31,21 @@ export function checkPrerenderedPage(html, { siteOrigin, pagePath = '/' } = {}) 
     }
     if (doc.querySelector('link[rel="canonical"]')?.getAttribute('href') !== canonical) fail('URL canonique incorrecte');
     if (doc.querySelector('meta[property="og:url"]')?.getAttribute('content') !== canonical) fail('og:url incorrect');
+    if (doc.title !== page.title || doc.querySelector('meta[name="description"]')?.content !== page.description) fail('titre ou description différent des sources SEO');
+    for (const [selector, expected] of [
+      ['meta[property="og:title"]', page.title], ['meta[property="og:description"]', page.description],
+      ['meta[property="og:type"]', page.type], ['meta[name="twitter:title"]', page.title],
+      ['meta[name="twitter:description"]', page.description], ['meta[name="twitter:card"]', 'summary_large_image'],
+      ['meta[property="og:image"]', `${siteOrigin}${siteSeoSource.SITE_IMAGE_PATH}`],
+      ['meta[name="twitter:image"]', `${siteOrigin}${siteSeoSource.SITE_IMAGE_PATH}`],
+      ['meta[property="og:image:alt"]', siteSeoSource.SITE_IMAGE_ALT], ['meta[name="twitter:image:alt"]', siteSeoSource.SITE_IMAGE_ALT],
+      ['meta[property="og:image:width"]', '1200'], ['meta[property="og:image:height"]', '630'],
+    ]) {
+      if (doc.querySelectorAll(selector).length !== 1 || doc.querySelector(selector)?.content !== expected) fail(`métadonnée incorrecte : ${selector}`);
+    }
+    if (doc.querySelectorAll('link[rel="icon"]').length !== 1 || doc.querySelector('link[rel="icon"]')?.getAttribute('href') !== siteSeoSource.SITE_ICON_PATH) fail('favicon incorrect');
     const robots = doc.querySelector('meta[name="robots"]')?.getAttribute('content');
-    if (robots !== (pagePath === '/' ? 'index, follow, max-image-preview:large' : 'noindex, follow')) fail('directive robots incorrecte');
+    if (robots !== (page.index ? siteSeoSource.SITE_ROBOTS : 'noindex, follow')) fail('directive robots incorrecte');
     if ((doc.querySelector('main')?.textContent?.trim().length ?? 0) < 60) fail('contenu principal absent');
     if (!doc.querySelector('script[type="module"][src]')) fail('module du site absent');
     const root = doc.querySelector('#root');
@@ -61,7 +78,7 @@ export function checkPrerenderedPage(html, { siteOrigin, pagePath = '/' } = {}) 
         else {
           const name = el.getAttribute('name'); const property = el.getAttribute('property');
           if (!(name && META.has(name)) && !(property && OG.has(property))) fail('meta non autorisée');
-          if (['og:image', 'twitter:image'].includes(name ?? property) && el.content !== `${siteOrigin}/assets/magistra-icon.png`) fail('image sociale externe ou incorrecte');
+          if (['og:image', 'twitter:image'].includes(name ?? property) && el.content !== `${siteOrigin}${siteSeoSource.SITE_IMAGE_PATH}`) fail('image sociale externe ou incorrecte');
           if (name === 'google-site-verification' && !/^[A-Za-z0-9_-]{20,200}$/.test(el.content)) fail('jeton de validation Google incorrect');
         }
       }
@@ -76,16 +93,16 @@ export function checkPrerenderedPage(html, { siteOrigin, pagePath = '/' } = {}) 
         if ([...el.attributes].some(attr => !['type', 'src', 'crossorigin'].includes(attr.name))) fail('attribut script non autorisé');
         if (src) {
           if (type !== 'module' || !ASSET.test(src) || !/\.m?js$/.test(src) || el.textContent.trim()) fail('script externe invalide');
-        } else if (type === 'application/ld+json' && pagePath === '/' && el.parentElement === doc.head) {
+        } else if (type === 'application/ld+json' && expectedJson && el.parentElement === doc.head) {
           try {
             const data = JSON.parse(el.textContent);
             const hash = `sha256-${createHash('sha256').update(el.textContent).digest('base64')}`;
-            if (data['@context'] !== 'https://schema.org' || !csp.includes(`'${hash}'`)) fail('JSON-LD différent du contenu autorisé par la CSP');
+            if (data['@context'] !== 'https://schema.org' || el.textContent !== expectedJson || !csp.includes(`'${hash}'`)) fail('JSON-LD différent du contenu de cette page autorisé par la CSP');
           } catch { fail('JSON-LD invalide'); }
         } else fail('script en ligne exécutable interdit');
       }
     }
-    if (doc.querySelectorAll('script[type="application/ld+json"]').length !== (pagePath === '/' ? 1 : 0)) fail('nombre de blocs JSON-LD incorrect');
+    if (doc.querySelectorAll('script[type="application/ld+json"]').length !== (expectedJson ? 1 : 0)) fail('nombre de blocs JSON-LD incorrect');
   } finally { dom.window.close(); }
   return errors;
 }

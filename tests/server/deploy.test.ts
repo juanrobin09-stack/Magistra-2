@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CONNECTOR_HOST, CONNECTOR_PORTS } from '../../shared/localConnector.js';
 import { SITE_ORIGIN } from '../../shared/site.js';
-import { SITE_STRUCTURED_DATA } from '../../shared/siteSeo.js';
+import { SITE_SEO, SITE_STRUCTURED_DATA, siteStructuredDataJson } from '../../shared/siteSeo.js';
 import { ROUTE_METHODS } from '../../server/handlers.js';
 import { securityHeaders } from '../../server/standalone.js';
 import { COMMERCIAL_VENDOR } from '../vendor';
@@ -16,6 +16,8 @@ import { COMMERCIAL_VENDOR } from '../vendor';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (p: string) => readFileSync(path.join(root, p), 'utf8');
 const JSON_LD_HASH = `'sha256-${createHash('sha256').update(JSON.stringify(SITE_STRUCTURED_DATA).replace(/</g, '\\u003c')).digest('base64')}'`;
+const JSON_LD_HASHES = [...new Set(Object.keys(SITE_SEO).map(route => siteStructuredDataJson(route)).filter((json): json is string => json !== null)
+  .map(json => `'sha256-${createHash('sha256').update(json).digest('base64')}'`))];
 
 interface VercelConfig {
   buildCommand: string;
@@ -76,7 +78,7 @@ describe('déploiement', () => {
       'Cross-Origin-Opener-Policy': 'same-origin',
       // Sans « preload » : l'inscription à la liste des navigateurs est irréversible, elle reste une décision du propriétaire.
       'Strict-Transport-Security': 'max-age=63072000; includeSubDomains',
-      'Content-Security-Policy': `default-src 'self'; script-src 'self' ${JSON_LD_HASH}; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; `
+      'Content-Security-Policy': `default-src 'self'; script-src 'self' ${JSON_LD_HASHES.join(' ')}; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; `
         + "font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'",
     });
     expect(globalHeaders()['Strict-Transport-Security']).not.toMatch(/preload/i);
@@ -100,12 +102,12 @@ describe('déploiement', () => {
     ]);
     for (const [directive, values] of Object.entries(csp)) {
       for (const value of values) {
-        if (directive === 'script-src' && value === JSON_LD_HASH) continue;
+        if (directive === 'script-src' && JSON_LD_HASHES.includes(value)) continue;
         expect(value, directive).toMatch(/^(?:'self'|'none'|'unsafe-inline'|data:)$/);
       }
     }
     expect(globalHeaders()['Content-Security-Policy']).not.toMatch(/https?:|\*|mag-istra/);
-    expect(csp['script-src']).toEqual(["'self'", JSON_LD_HASH]);
+    expect(csp['script-src']).toEqual(["'self'", ...JSON_LD_HASHES]);
     expect(csp['img-src']).toEqual(["'self'", 'data:']);
   });
 
@@ -181,8 +183,8 @@ describe('déploiement', () => {
       return; // archive sans git : les autres tests couvrent les fichiers du serveur
     }
     const AUDIT_DOCS = new Set(['ANALYSE.md', 'CORRECTIONS.md']);
-    // Les API personnelles sont un choix explicite dans l'application Windows. Le serveur, la vitrine,
-    // les prompts et le catalogue des modèles locaux restent indépendants de ces fournisseurs.
+    // Les API personnelles sont un choix explicite dans l'application Windows. Le site peut présenter cette option,
+    // mais le serveur, les prompts et le catalogue des modèles locaux restent indépendants de ces fournisseurs.
     const PERSONAL_API_FILES = new Set([
       'README.md', 'e2e/electron-local.spec.ts', 'e2e/electron-personal-api-preload.cjs',
       'electron/aiConfig.ts', 'electron/validate.ts', 'shared/ipc.ts',
@@ -191,12 +193,16 @@ describe('déploiement', () => {
       'src/components/ai/AdvancedAIOptions.tsx', 'src/components/ai/PersonalAPISettings.tsx',
       'tests/electron/aiConfig.test.ts', 'tests/electron/personalAPI.test.ts',
       'tests/shared/ai.anthropic.test.ts', 'tests/ui/personalAPI.test.tsx', 'tests/server/deploy.test.ts',
+      'src/site/SiteLanding.tsx', 'src/site/SiteGuide.tsx', 'src/site/SiteResources.tsx', 'shared/siteGuides.ts',
     ]);
     const BINARY = /\.(png|ico|jpe?g|gif|webp|woff2?|ttf|otf|pdf|zip)$/i;
     const offenders = tracked
       .filter(f => !AUDIT_DOCS.has(f) && !PERSONAL_API_FILES.has(f) && !BINARY.test(f) && existsSync(path.join(root, f)))
       .filter(f => COMMERCIAL_VENDOR.test(read(f)));
     expect(offenders).toEqual([]);
+    for (const file of ['src/site/SiteLanding.tsx', 'src/site/SiteGuide.tsx', 'src/site/SiteResources.tsx']) {
+      expect(read(file), file).not.toMatch(/(?:from\s*|import\s*\()\s*['"][^'"]*(?:shared\/ai|@shared\/ai|api\/generate)/);
+    }
   });
 
   it('.env.example : deux parties, le site vitrine (variables de build, jeton GitHub facultatif) puis l’hébergement personnel, aucune valeur secrète', () => {
@@ -303,7 +309,7 @@ describe('CSP du site vitrine (vercel.json)', () => {
   const directives = parseCsp(csp);
 
   it('script-src : ressources du site et empreinte JSON-LD précise, jamais de script inline générique ni d’eval', () => {
-    expect(directives['script-src']).toEqual(["'self'", JSON_LD_HASH]);
+    expect(directives['script-src']).toEqual(["'self'", ...JSON_LD_HASHES]);
     expect(csp).not.toMatch(/unsafe-eval|wasm-unsafe-eval|strict-dynamic|unsafe-hashes/);
     // « unsafe-inline » n'est toléré que pour les styles (attribut « style » du squelette de chargement).
     for (const [name, values] of Object.entries(directives)) {
@@ -316,7 +322,7 @@ describe('CSP du site vitrine (vercel.json)', () => {
     for (const [name, values] of Object.entries(directives)) {
       for (const value of values) {
         if (value === "'unsafe-inline'" && name === 'style-src') continue;
-        if (value === JSON_LD_HASH && name === 'script-src') continue;
+        if (JSON_LD_HASHES.includes(value) && name === 'script-src') continue;
         expect(allowed.has(value), `${name} ${value}`).toBe(true);
       }
     }
@@ -327,7 +333,7 @@ describe('CSP du site vitrine (vercel.json)', () => {
   it('directives exactes : défaut, connexions et images du site, objets et formulaires fermés, jamais intégré dans un cadre', () => {
     expect(directives).toEqual({
       'default-src': ["'self'"],
-      'script-src': ["'self'", JSON_LD_HASH],
+      'script-src': ["'self'", ...JSON_LD_HASHES],
       'connect-src': ["'self'"],
       'img-src': ["'self'", 'data:'],
       'style-src': ["'self'", "'unsafe-inline'"],

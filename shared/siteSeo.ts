@@ -1,32 +1,41 @@
 import { AUTHOR_DEFAULT_PROFILE_URL, AUTHOR_NAME } from './author';
 import { SITE_ORIGIN, siteUrl } from './site';
+import { SITE_GUIDES, SITE_GUIDES_DESCRIPTION, SITE_GUIDES_TITLE, getSiteGuide } from './siteGuides';
 
 export const SITE_TITLE = 'Magistra — IA gratuite pour enseignants, cours et examens';
 export const SITE_DESCRIPTION = 'Préparez vos cours, exercices et examens avec Magistra, l’assistant IA gratuit pour enseignants. Application Windows, sans compte, avec une IA locale.';
-export const SITE_IMAGE_PATH = '/assets/magistra-icon.png';
+export const SITE_IMAGE_PATH = '/assets/magistra-social.png';
+export const SITE_ICON_PATH = '/assets/magistra-icon.png';
+export const SITE_IMAGE_ALT = 'Magistra, assistant IA gratuit pour enseignants : cours, TD, examens et corrigés';
 export const SITE_ROBOTS = 'index, follow, max-image-preview:large';
 
-export const SITE_SEO: Record<string, { title: string; description: string; index: boolean }> = {
-  '/': { title: SITE_TITLE, description: SITE_DESCRIPTION, index: true },
+export interface SiteSeoPage { title: string; description: string; index: boolean; type: 'website' | 'article' }
+
+export const SITE_SEO: Record<string, SiteSeoPage> = {
+  '/': { title: SITE_TITLE, description: SITE_DESCRIPTION, index: true, type: 'website' },
+  '/guides': { title: SITE_GUIDES_TITLE, description: SITE_GUIDES_DESCRIPTION, index: true, type: 'website' },
+  ...Object.fromEntries(SITE_GUIDES.map(guide => [guide.path, {
+    title: guide.title, description: guide.description, index: true, type: 'article' as const,
+  }])),
   '/mentions-legales': {
     title: 'Mentions légales — Magistra',
     description: 'Éditeur, contact, hébergement et mentions légales du site officiel de Magistra, l’assistant pédagogique gratuit pour Windows.',
-    index: false,
+    index: false, type: 'website',
   },
   '/confidentialite': {
     title: 'Politique de confidentialité — Magistra',
     description: 'Découvrez comment le site Magistra traite les données techniques et les téléchargements, sans compte ni cookie de suivi.',
-    index: false,
+    index: false, type: 'website',
   },
   '/cgu': {
     title: "Conditions générales d'utilisation — Magistra",
     description: 'Conditions d’utilisation du site Magistra : accès gratuit, téléchargement de l’application Windows et responsabilités de l’utilisateur.',
-    index: false,
+    index: false, type: 'website',
   },
   '/404': {
     title: 'Page introuvable — Magistra',
     description: 'Cette page n’existe pas. Retrouvez Magistra et son application pédagogique gratuite sur le site officiel.',
-    index: false,
+    index: false, type: 'website',
   },
 };
 
@@ -45,6 +54,54 @@ export const SITE_STRUCTURED_DATA = {
     },
   ],
 };
+
+const author = { '@type': 'Person', name: AUTHOR_NAME, url: AUTHOR_DEFAULT_PROFILE_URL };
+
+/** Schéma factuel correspondant au contenu visible de chaque page ; aucun avis ni résultat enrichi garanti. */
+export function siteStructuredData(pagePath: string): Record<string, unknown> | null {
+  if (pagePath === '/') return SITE_STRUCTURED_DATA;
+  if (pagePath === '/guides') return {
+    '@context': 'https://schema.org',
+    '@graph': [{
+      '@type': 'CollectionPage', '@id': siteUrl('/guides#resources'), url: siteUrl('/guides'),
+      name: SITE_GUIDES_TITLE, description: SITE_GUIDES_DESCRIPTION, inLanguage: 'fr-FR',
+      isPartOf: { '@id': siteUrl('/#website') },
+      mainEntity: { '@type': 'ItemList', itemListElement: SITE_GUIDES.map((guide, index) => ({
+        '@type': 'ListItem', position: index + 1, name: guide.heading, url: siteUrl(guide.path),
+      })) },
+    }, {
+      '@type': 'BreadcrumbList', itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Magistra', item: siteUrl('/') },
+        { '@type': 'ListItem', position: 2, name: 'Guides pour enseignants', item: siteUrl('/guides') },
+      ],
+    }],
+  };
+  const guide = getSiteGuide(pagePath);
+  if (!guide) return null;
+  return {
+    '@context': 'https://schema.org',
+    '@graph': [{
+      '@type': 'Article', '@id': siteUrl(`${pagePath}#article`), url: siteUrl(pagePath),
+      headline: guide.heading, description: guide.description, inLanguage: 'fr-FR',
+      mainEntityOfPage: { '@type': 'WebPage', '@id': siteUrl(pagePath) },
+      author, publisher: author, image: siteUrl(SITE_IMAGE_PATH),
+      isPartOf: { '@id': siteUrl('/#website') },
+      about: { '@id': siteUrl('/#application') },
+    }, {
+      '@type': 'BreadcrumbList', itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Magistra', item: siteUrl('/') },
+        { '@type': 'ListItem', position: 2, name: 'Guides pour enseignants', item: siteUrl('/guides') },
+        { '@type': 'ListItem', position: 3, name: guide.heading, item: siteUrl(pagePath) },
+      ],
+    }],
+  };
+}
+
+/** Même sérialisation pour le pré-rendu, la navigation, la CSP et les contrôles. */
+export function siteStructuredDataJson(pagePath: string): string | null {
+  const data = siteStructuredData(pagePath);
+  return data ? JSON.stringify(data).replace(/</g, '\\u003c') : null;
+}
 
 export const SITE_FAQ = [
   { question: 'Magistra est-il vraiment gratuit ?', answer: 'Oui. L’application Magistra est gratuite, sans abonnement et sans création de compte. Vous pouvez préparer vos supports pédagogiques avec une IA installée sur votre ordinateur.' },

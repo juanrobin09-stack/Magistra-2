@@ -29,10 +29,12 @@ interface LandingContentProps {
   windowsLinks?: boolean;
   /** Questions propres au site public ; aucun ajout à l’application installée. */
   questions?: ReactNode;
+  /** Guides publics liés aux usages présentés, absents de l'application installée. */
+  resources?: ReactNode;
 }
 
 export default function LandingContent({
-  navAction, heroAction, heroNote, windowsSection, finalAction, windowsLinks = true, questions,
+  navAction, heroAction, heroNote, windowsSection, finalAction, windowsLinks = true, questions, resources,
 }: LandingContentProps) {
   useDocumentTitle(null);
 
@@ -40,7 +42,7 @@ export default function LandingContent({
     <div className="min-h-screen bg-mg-900 overflow-x-hidden">
       {/* Navigation */}
       <nav aria-label="Navigation du site" className="fixed top-0 w-full z-50 bg-mg-900/80 backdrop-blur-xl border-b border-white/5">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-dim to-accent flex items-center justify-center">
               <GraduationCap size={18} className="text-mg-900" aria-hidden="true" />
@@ -226,6 +228,8 @@ export default function LandingContent({
         </section>
 
         <div className="glow-line max-w-xl mx-auto" aria-hidden="true" />
+
+        {resources}
 
         {questions}
 

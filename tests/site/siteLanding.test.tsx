@@ -102,7 +102,7 @@ describe('Site vitrine : aucun accès à l’application', () => {
     const { container } = await mountSite();
     expect(container.querySelectorAll('h1')).toHaveLength(1);
     const nav = container.querySelector('nav[aria-label="Navigation du site"]')!;
-    expect(Array.from(nav.querySelectorAll('a')).map(a => [a.textContent?.trim(), a.getAttribute('href')])).toEqual([['Télécharger', '#magistra-windows']]);
+    expect(Array.from(nav.querySelectorAll('a')).map(a => [a.textContent?.trim(), a.getAttribute('href')])).toEqual([['Guides', '/guides'], ['Télécharger', '#magistra-windows']]);
     const hero = container.querySelector('main section')!;
     const heroLinks = Array.from(hero.querySelectorAll('a')).map(a => a.textContent?.trim());
     expect(heroLinks).toEqual(expect.arrayContaining(['Télécharger pour Windows', 'Découvrir FutureAI']));

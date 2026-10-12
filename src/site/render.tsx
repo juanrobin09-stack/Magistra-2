@@ -2,7 +2,7 @@
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import SiteRoutes from './SiteRoutes';
-export { SITE_SEO, SITE_STRUCTURED_DATA, SITE_IMAGE_PATH, SITE_ROBOTS } from '../../shared/siteSeo';
+export { SITE_SEO, SITE_STRUCTURED_DATA, SITE_IMAGE_PATH, SITE_ICON_PATH, SITE_IMAGE_ALT, SITE_ROBOTS, siteStructuredDataJson } from '../../shared/siteSeo';
 export { SITE_ORIGIN } from '../../shared/site';
 
 export function renderPage(path: string): string {

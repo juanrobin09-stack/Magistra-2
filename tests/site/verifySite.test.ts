@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { buildRobotsTxt, buildSitemapXml, SITE_ORIGIN } from '../../shared/site';
+import { buildRobotsTxt, buildSitemapXml, SITE_ORIGIN, SITE_PATHS } from '../../shared/site';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const script = path.join(root, 'scripts', 'verify-site.mjs');
@@ -920,36 +920,40 @@ describe('verify-site : robots.txt et sitemap.xml', () => {
 
   it('sitemap.xml : adresse d’un autre domaine, vide ou sans <loc> : échec', () => {
     const sitemap = (text: string) => mod.verifySite(site({ ...GOOD, 'sitemap.xml': text })).join('\n');
-    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'https://evil.example/'))).toContain('n\'est pas l\'accueil https://www.mag-istra.fr/');
-    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'http://www.mag-istra.fr/'))).toContain('n\'est pas l\'accueil');
-    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'https://www.mag-istra.fr.evil.example/'))).toContain('n\'est pas l\'accueil');
+    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'https://evil.example/'))).toContain('n\'est pas une page canonique indexable');
+    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'http://www.mag-istra.fr/'))).toContain('n\'est pas une page canonique indexable');
+    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'https://www.mag-istra.fr.evil.example/'))).toContain('n\'est pas une page canonique indexable');
     // <loc> écrit autrement, commentaire, CDATA, adresse ajoutée : jamais lu comme « l'accueil seul ».
     expect(sitemap(buildSitemapXml().replace('<loc>', '<loc xml:space="preserve">'))).not.toBe('');
     expect(sitemap(buildSitemapXml().replace('</urlset>', '<url><s:loc>https://www.mag-istra.fr/cgu</s:loc></url></urlset>'))).not.toBe('');
     expect(sitemap(buildSitemapXml().replace('</urlset>', '<!-- <loc>https://www.mag-istra.fr/cgu</loc> --></urlset>'))).not.toBe('');
-    expect(sitemap(buildSitemapXml().replace('</urlset>', `<url><loc>${SITE_ORIGIN}/cgu</loc></url></urlset>`))).toContain('n\'est pas l\'accueil');
+    expect(sitemap(buildSitemapXml().replace('</urlset>', `<url><loc>${SITE_ORIGIN}/cgu</loc></url></urlset>`))).toContain('n\'est pas une page canonique indexable');
     // Lecture linéaire : un <loc> suivi de milliers d'espaces sans fermeture ne bloque pas le contrôle.
     const started = Date.now();
     expect(sitemap(`<loc>${' '.repeat(60_000)}`)).not.toBe('');
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'https://mag-istra.fr/'))).toContain('n\'est pas l\'accueil');
-    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, SITE_ORIGIN))).toContain('n\'est pas l\'accueil');
+    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, 'https://mag-istra.fr/'))).toContain('n\'est pas une page canonique indexable');
+    expect(sitemap(buildSitemapXml().replace(`${SITE_ORIGIN}/`, SITE_ORIGIN))).toContain('n\'est pas une page canonique indexable');
     expect(sitemap('<urlset></urlset>')).toContain('aucune adresse <loc>');
     expect(sitemap('')).toContain('aucune adresse <loc>');
   });
 
-  it('sitemap.xml : l’accueil seul (V4) ; une page légale ou toute autre page est refusée, son lien canonique étant celui de l’accueil', () => {
-    expect(buildSitemapXml().match(/<loc>/g)).toHaveLength(1);
+  it('sitemap.xml : accueil, hub et guides indexables ; pages légales, téléchargements et doublons refusés', () => {
+    expect(buildSitemapXml().match(/<loc>/g)).toHaveLength(SITE_PATHS.length);
     const sitemap = (text: string) => mod.verifySite(site({ ...GOOD, 'sitemap.xml': text })).join('\n');
     const addLocation = (page: string) => buildSitemapXml().replace('</urlset>', `  <url>\n    <loc>${SITE_ORIGIN}${page}</loc>\n  </url>\n</urlset>`);
     for (const page of ['/mentions-legales', '/confidentialite', '/cgu', '/telecharger', '/index.html']) {
-      expect(sitemap(addLocation(page)), page).toContain(`« ${SITE_ORIGIN}${page} » n'est pas l'accueil`);
+      expect(sitemap(addLocation(page)), page).toContain(`« ${SITE_ORIGIN}${page} » n'est pas une page canonique indexable`);
     }
     // Les trois pages légales de l'ancien plan du site.
     const legacy = buildSitemapXml().replace('</urlset>', ['/mentions-legales', '/confidentialite', '/cgu'].map(page => `  <url>\n    <loc>${SITE_ORIGIN}${page}</loc>\n  </url>\n`).join('') + '</urlset>');
     expect(mod.verifySite(site({ ...GOOD, 'sitemap.xml': legacy })).filter(error => error.startsWith('sitemap.xml'))).toHaveLength(3);
     // Une entrée en double n'est pas une page de plus : un seul « <loc> » est attendu.
     expect(sitemap(addLocation('/'))).toContain('listé 2 fois');
+    for (const page of ['/guides', SITE_PATHS[2]]) {
+      const missing = buildSitemapXml().replace(`  <url>\n    <loc>${SITE_ORIGIN}${page}</loc>\n  </url>\n`, '');
+      expect(sitemap(missing)).toContain(`page indexable absente : ${SITE_ORIGIN}${page}`);
+    }
   });
 
   it('robots.txt et sitemap.xml sont lus comme du texte : un mot interdit y est aussi signalé', () => {

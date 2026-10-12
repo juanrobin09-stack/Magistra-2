@@ -8,10 +8,12 @@
 
 import { useEffect } from 'react';
 import { Download } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import WindowsDownloadPanel from '@/components/localEngine/WindowsDownloadPanel';
 import { CTA_CLASS, WINDOWS_SECTION_HREF } from '@/pages/landing/content';
 import LandingContent from '@/pages/landing/LandingContent';
 import SiteFaq from './SiteFaq';
+import { SiteResourcesPreview } from './SiteResources';
 
 /** Ouverture directe d'une ancre (« /#magistra-windows ») : la page n'existe qu'après son rendu, le navigateur ne peut pas y défiler seul. */
 function scrollToHash(): void {
@@ -29,9 +31,12 @@ export default function SiteLanding() {
   return (
     <LandingContent
       navAction={
-        <a href={WINDOWS_SECTION_HREF} className={CTA_CLASS.nav}>
-          <Download size={14} aria-hidden="true" /> Télécharger
-        </a>
+        <>
+          <Link to="/guides" className="text-sm text-accent hover:underline underline-offset-4">Guides</Link>
+          <a href={WINDOWS_SECTION_HREF} className={CTA_CLASS.nav}>
+            <Download size={14} aria-hidden="true" /> Télécharger
+          </a>
+        </>
       }
       heroAction={
         <a href={WINDOWS_SECTION_HREF} className={CTA_CLASS.hero}>
@@ -40,11 +45,13 @@ export default function SiteLanding() {
       }
       heroNote={
         <p className="mt-4 text-sm text-mg-200 max-w-md mx-auto">
-          Application gratuite pour Windows 10 et 11, sans compte : l’IA fonctionne sur votre ordinateur, même sans Internet une fois activée.
+          Application gratuite pour Windows 10 et 11, sans compte. Utilisez l’IA locale hors ligne après activation,
+          ou votre clé API OpenAI, Mistral, Gemini ou Anthropic avec une connexion Internet.
         </p>
       }
       windowsSection={<WindowsDownloadPanel variant="landing" mode="showcase" />}
       windowsLinks={false}
+      resources={<SiteResourcesPreview />}
       questions={<SiteFaq />}
     />
   );

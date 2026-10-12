@@ -6,8 +6,8 @@
 
 import { expect, test as base, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { SITE_TITLE, SITE_IMAGE_PATH } from '../shared/siteSeo';
-import { buildRobotsTxt, buildSitemapXml, SITE_ORIGIN } from '../shared/site';
+import { SITE_TITLE, SITE_IMAGE_PATH, SITE_IMAGE_ALT } from '../shared/siteSeo';
+import { buildRobotsTxt, buildSitemapXml, SITE_ORIGIN, SITE_PATHS } from '../shared/site';
 
 const SITE_HOST = '127.0.0.1:4174';
 
@@ -76,7 +76,7 @@ const test = base.extend<{ monitor: Monitor }>({
 });
 
 /** Pages du site, et adresses de l'application qui y reviennent à l'accueil : chargées comme page HTML (aucune API). */
-const LEGAL_OR_APP_PATH = /^\/(?:mentions-legales|confidentialite|cgu|app(?:\/.*)?|onboarding|setup|presentation|inconnu)$/;
+const LEGAL_OR_APP_PATH = /^\/(?:guides(?:\/[a-z-]+)?|mentions-legales|confidentialite|cgu|app(?:\/.*)?|onboarding|setup|presentation|inconnu)$/;
 
 const FORBIDDEN_API = /\/api\/(?:mode|status|generate|generation|history|profile|account|stats)|clerk|supabase|127\.0\.0\.1:478\d\d/i;
 
@@ -183,10 +183,10 @@ test('référencement : lien canonique et Open Graph à l’adresse officielle, 
     'og:url': `${SITE_ORIGIN}/`,
     'og:locale': 'fr_FR',
     'og:image': `${SITE_ORIGIN}${SITE_IMAGE_PATH}`,
-    'og:image:width': '512',
-    'og:image:height': '512',
+    'og:image:width': '1200',
+    'og:image:height': '630',
     'og:image:type': 'image/png',
-    'og:image:alt': 'Logo Magistra',
+    'og:image:alt': SITE_IMAGE_ALT,
   });
   expect(Object.keys(og)).toContain('og:image');
 
@@ -202,8 +202,8 @@ test('référencement : lien canonique et Open Graph à l’adresse officielle, 
   const xml = await sitemap.text();
   expect(xml).toBe(buildSitemapXml());
   expect(xml).not.toContain('<html');
-  // L'accueil seul : les pages légales sont servies avec le lien canonique de l'accueil, elles ne sont pas à indexer.
-  expect([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(location => location[1])).toEqual([`${SITE_ORIGIN}/`]);
+  // Toutes les pages éditoriales indexables ; les pages légales restent accessibles et noindex.
+  expect([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(location => location[1])).toEqual(SITE_PATHS.map(path => `${SITE_ORIGIN}${path}`));
   await page.goto('/mentions-legales');
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `${SITE_ORIGIN}/mentions-legales`);
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex, follow');

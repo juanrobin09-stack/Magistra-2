@@ -11,6 +11,8 @@ import {
   buildPairingUrl, isWellFormedOrigin, OFFICIAL_WEB_ORIGINS, originLabel, parseAppUrl,
 } from '../../shared/localConnector';
 import { buildRobotsTxt, buildSitemapXml, SITE_LEGACY_ORIGIN, SITE_ORIGIN, SITE_PATHS, siteUrl } from '../../shared/site';
+import { SITE_SEO } from '../../shared/siteSeo';
+import { SITE_GUIDES } from '../../shared/siteGuides';
 import { originTraps, SITE_APEX_ORIGIN, unicodeTraps } from '../electron/officialOrigins';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -34,11 +36,9 @@ describe('adresse officielle du site', () => {
     expect(SITE_APEX_ORIGIN).toBe('https://mag-istra.fr');
   });
 
-  it('plan du site : l’accueil seul ; les pages légales (noindex et lien canonique propre) n’y sont pas', () => {
-    expect([...SITE_PATHS]).toEqual(['/']);
-    const routes = [...read('src/site/SiteRoutes.tsx').matchAll(/<Route path="([^"]+)"/g)].map(m => m[1]).filter(route => route !== '*');
-    // Le site a quatre routes ; une seule est à indexer.
-    expect([...routes].sort()).toEqual(['/', ...Object.values(LEGAL_PATHS)].sort());
+  it('plan du site : accueil, ressources et guides ; les pages légales et erreurs ne sont pas indexées', () => {
+    expect([...SITE_PATHS]).toEqual(['/', '/guides', ...SITE_GUIDES.map(guide => guide.path)]);
+    expect([...SITE_PATHS].sort()).toEqual(Object.keys(SITE_SEO).filter(route => SITE_SEO[route].index).sort());
     for (const page of Object.values(LEGAL_PATHS)) expect(SITE_PATHS, page).not.toContain(page);
     expect(new Set(SITE_PATHS).size).toBe(SITE_PATHS.length);
     for (const page of SITE_PATHS) expect(page.startsWith('/')).toBe(true);
@@ -53,14 +53,10 @@ describe('adresse officielle du site', () => {
     expect(buildRobotsTxt()).not.toMatch(/disallow/i);
   });
 
-  it('sitemap.xml : une seule adresse (l’accueil), sous https://www.mag-istra.fr, sans date', () => {
+  it('sitemap.xml : toutes les pages indexables sous l’origine canonique, sans date artificielle', () => {
     const xml = buildSitemapXml();
-    expect(xml).toBe(
-      '<?xml version="1.0" encoding="UTF-8"?>\n'
-      + '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-      + '  <url>\n    <loc>https://www.mag-istra.fr/</loc>\n  </url>\n'
-      + '</urlset>\n',
-    );
+    expect(xml).toMatch(/^<\?xml version="1.0" encoding="UTF-8"\?>\n<urlset xmlns="http:\/\/www.sitemaps.org\/schemas\/sitemap\/0.9">/);
+    expect(xml.match(/<loc>/g)).toHaveLength(14);
     expect([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m => m[1])).toEqual(SITE_PATHS.map(siteUrl));
     for (const page of Object.values(LEGAL_PATHS)) expect(xml).not.toContain(page);
     expect(xml).not.toContain('lastmod');

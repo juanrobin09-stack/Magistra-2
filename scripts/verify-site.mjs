@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Inspecte le build du SITE VITRINE (npm run build:site → dist-site/) : le site ne présente Magistra et ne propose le
 // téléchargement de l'application Windows que par un code qui n'embarque rien de l'application. Ce script ne lance
 // rien : il lit seulement les fichiers produits.
@@ -38,6 +37,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMainModule } from './mainModule.mjs';
 import { checkPrerenderedPage } from './verify-prerender.mjs';
+import { siteSeoSource } from './site-seo-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -671,8 +671,8 @@ export function checkSearchTags(html) {
 
 /** robots.txt tel que le produit shared/site.ts (buildRobotsTxt). */
 const expectedRobotsTxt = siteOrigin => `User-agent: *\nAllow: /\n\nSitemap: ${siteOrigin}/sitemap.xml\n`;
-/** sitemap.xml tel que le produit shared/site.ts (buildSitemapXml) : l'accueil seul. */
-const expectedSitemapXml = siteOrigin => `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url>\n    <loc>${siteOrigin}/</loc>\n  </url>\n</urlset>\n`;
+/** Sitemap issu des mêmes routes indexables que le pré-rendu ; aucune duplication des chemins. */
+const expectedSitemapXml = siteOrigin => siteSeoSource.buildSitemapXml().replaceAll(siteSeoSource.SITE_ORIGIN, siteOrigin);
 
 /** robots.txt et sitemap.xml (fichiers texte du build, `files` : [{ name, text }]) : présents et conformes à l'adresse officielle. */
 export function checkSearchFiles(files, { siteOrigin = readSiteOrigin() } = {}) {
@@ -693,14 +693,17 @@ export function checkSearchFiles(files, { siteOrigin = readSiteOrigin() } = {}) 
   if (!sitemap) {
     errors.push('sitemap.xml absent (plan du site déclaré par robots.txt)');
   } else {
-    // Le plan du site ne liste que l'accueil : c'est la seule page que le lien canonique (statique, celui de l'accueil)
-    // désigne ; les pages légales ne sont pas à indexer, les lister contredirait leur lien canonique.
+    const expectedLocations = siteSeoSource.SITE_PATHS.map(route => `${siteOrigin}${route}`);
     const locations = [...sitemap.text.matchAll(/<loc>([^<]*)<\/loc>/gi)].map(m => m[1].trim());
     if (locations.length === 0) errors.push('sitemap.xml : aucune adresse <loc>');
     for (const location of locations) {
-      if (location !== `${siteOrigin}/`) errors.push(`sitemap.xml : « ${location.slice(0, 80)} » n'est pas l'accueil ${siteOrigin}/ (le plan du site ne liste que l'accueil : le lien canonique des autres pages est celui de l'accueil)`);
+      if (!expectedLocations.includes(location)) errors.push(`sitemap.xml : « ${location.slice(0, 80)} » n'est pas une page canonique indexable de ${siteOrigin}/`);
     }
-    if (locations.length > 1 && new Set(locations).size === 1) errors.push(`sitemap.xml : l'accueil ${siteOrigin}/ est listé ${locations.length} fois (une seule entrée est attendue)`);
+    for (const location of new Set(locations)) {
+      const count = locations.filter(url => url === location).length;
+      if (count > 1) errors.push(`sitemap.xml : ${location} est listé ${count} fois (une seule entrée est attendue)`);
+    }
+    for (const location of expectedLocations) if (!locations.includes(location)) errors.push(`sitemap.xml : page indexable absente : ${location}`);
     // Fichier exactement tel que le produit le build : une balise <loc> écrite autrement (espace de noms, commentaire, CDATA)
     // ou un contenu ajouté ne passe pas pour « l'accueil seul ».
     if (errors.length === 0 && sitemap.text.replace(/\r\n/g, '\n') !== expectedSitemapXml(siteOrigin)) errors.push('sitemap.xml : différent du fichier produit par le build (buildSitemapXml, shared/site.ts)');
@@ -732,10 +735,26 @@ export function verifySite(dir, { siteOrigin = readSiteOrigin() } = {}) {
   if (index) errors.push(...checkIndexHtml(index.text, { siteOrigin }), ...checkSearchTags(index.text));
   for (const file of files.filter(f => /\.html$/.test(f.name) && f.name !== 'index.html')) {
     const pagePath = `/${file.name.replace(/\.html$/, '')}`;
-    if (!['/mentions-legales', '/confidentialite', '/cgu', '/404'].includes(pagePath)) errors.push(`${file.name} : page inattendue`);
+    if (!Object.hasOwn(siteSeoSource.SITE_SEO, pagePath)) errors.push(`${file.name} : page inattendue`);
     else errors.push(...checkPrerenderedPage(file.text, { siteOrigin, pagePath }));
   }
   errors.push(...checkSearchFiles(files, { siteOrigin }));
+  // Les fixtures du gabarit minimal restent prises en charge ; un vrai build pré-rendu doit livrer toutes les routes.
+  if (index && /<main(?:\s|>)/.test(index.text)) {
+    for (const route of Object.keys(siteSeoSource.SITE_SEO).filter(route => route !== '/')) {
+      const file = `${route.slice(1)}.html`;
+      if (!names.includes(file)) errors.push(`${file} : page pré-rendue absente`);
+    }
+    const key = files.find(file => file.name === siteSeoSource.INDEXNOW_PATH.slice(1));
+    if (key?.text !== siteSeoSource.INDEXNOW_KEY) errors.push('IndexNow : fichier de validation publique absent ou incorrect');
+    for (const [asset, width, height] of [[siteSeoSource.SITE_IMAGE_PATH, 1200, 630], [siteSeoSource.SITE_ICON_PATH, 512, 512]]) {
+      try {
+        const data = readFileSync(path.join(dir, asset.slice(1)));
+        if (data.length < 24 || data.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a'
+          || data.readUInt32BE(16) !== width || data.readUInt32BE(20) !== height) errors.push(`${asset} : PNG ${width} × ${height} requis`);
+      } catch { errors.push(`${asset} : image publiée absente ou illisible`); }
+    }
+  }
   return errors;
 }
 
