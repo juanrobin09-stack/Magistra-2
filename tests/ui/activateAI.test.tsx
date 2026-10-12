@@ -1014,6 +1014,12 @@ describe('Fenêtre d’Ollama : réglages et page de l’IA', () => {
   it('page de l’IA, modèle seul : « prête » sans note', async () => {
     installFakeLocalAI({ engine: 'running', installed: [] });
     const { container } = await mountPage('SetupPage');
+    // L'absence de note est aussi vraie pendant le chargement initial de la page.
+    // Attendre le bouton réel avant de vérifier l'état puis de lancer l'activation.
+    await vi.waitFor(async () => {
+      await flush(1);
+      expect(button(container, /Activer l’IA/)).not.toBeNull();
+    }, { timeout: 2_000, interval: 10 });
     expect(notes(container)).toHaveLength(0);
     await click(button(container, /Activer l’IA/));
     await settle();
