@@ -22,7 +22,13 @@ describe('Dependabot', () => {
     expect(dependabot).toMatch(/minor-and-patch:\n {8}patterns: \['\*'\]\n {8}exclude-patterns: \['electron'\]\n {8}update-types: \[minor, patch\]/);
     // Aucun groupe ne porte sur electron, et les versions majeures de l'interface ne sont pas proposées.
     expect(dependabot).not.toMatch(/\n\s+patterns: \['electron/);
-    for (const name of ['react', 'vite', 'tailwindcss']) expect(dependabot).toContain(`dependency-name: ${name}`);
+    // Éviter une montée du plugin React sans Vite, ou du compilateur sans son lint :
+    // leur présence seule ne suffit pas, la règle doit exclure uniquement les versions majeures.
+    const ignore = dependabot.slice(dependabot.indexOf('\n    ignore:'), dependabot.indexOf('\n  # Actions GitHub'));
+    for (const name of ['react', 'react-dom', 'vite', '@vitejs/plugin-react', 'typescript', 'tailwindcss', '@tailwindcss/vite']) {
+      const quotedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      expect(ignore, name).toMatch(new RegExp(`dependency-name: '?${quotedName}'?\\n {8}update-types: \\['version-update:semver-major'\\]`));
+    }
   });
 
   it('les montées majeures (hors Electron) forment une seule demande : elles ne saturent pas la limite des demandes ouvertes', () => {
