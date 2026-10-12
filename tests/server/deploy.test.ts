@@ -186,7 +186,7 @@ describe('déploiement', () => {
     // Les API personnelles sont un choix explicite dans l'application Windows. Le site peut présenter cette option,
     // mais le serveur, les prompts et le catalogue des modèles locaux restent indépendants de ces fournisseurs.
     const PERSONAL_API_FILES = new Set([
-      'README.md', 'e2e/electron-local.spec.ts', 'e2e/electron-personal-api-preload.cjs',
+      'README.md', 'docs/referencement.md', 'e2e/electron-local.spec.ts', 'e2e/electron-personal-api-preload.cjs',
       'electron/aiConfig.ts', 'electron/validate.ts', 'shared/ipc.ts',
       'shared/ai/anthropic.ts', 'shared/ai/factory.ts', 'shared/ai/personalProviders.ts',
       'shared/ai/presets.ts', 'shared/ai/provider.ts',
