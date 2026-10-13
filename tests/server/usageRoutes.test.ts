@@ -106,6 +106,16 @@ describe('définitions et minimisation des statistiques', () => {
     const html = renderUsageDashboard(SNAPSHOT, { total: 5, complete: true, releases: [{ version: '<script>bad</script>', downloads: 5 }] }, NOW, '<script>bad</script>');
     expect(html).not.toContain('<script>'); expect(html).toContain('&lt;script&gt;'); expect(html).not.toContain(' src='); expect(html).toContain('noindex,nofollow');
   });
+  it('reprend le total demandé et continue de compter les nouveaux téléchargements sans modifier les versions', () => {
+    for (const [total, displayed] of [[42, 56], [43, 57]]) {
+      const html = renderUsageDashboard(SNAPSHOT, { total, complete: true, releases: [{ version: 'v2.0.11', downloads: total }] }, NOW);
+      expect(html).toContain(`<h2>Téléchargements</h2><strong>${displayed}</strong>`);
+      expect(html).toContain(`<td>v2.0.11</td><td>${total}</td>`);
+      expect(html).toContain('<td>Reprise manuelle (version non attribuée)</td><td>14</td>');
+    }
+    expect(renderUsageDashboard(SNAPSHOT, null, NOW)).toContain('<h2>Téléchargements</h2><strong>Indisponible</strong>');
+    expect(renderUsageDashboard(SNAPSHOT, { total: 42, complete: false, releases: [] }, NOW)).toContain('Historique GitHub partiel.');
+  });
   it('additionne les installateurs et exclut licences, contrôles et préversions', async () => {
     const fixture = [{ tag_name: 'v2.0.10', draft: false, prerelease: false, assets: [
       { name: 'Magistra-Setup-2.0.10.exe', state: 'uploaded', download_count: 5 },

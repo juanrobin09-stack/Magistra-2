@@ -38,6 +38,8 @@ La date du premier usage et les drapeaux de retour sont calculés localement. Un
 
 Ces chiffres représentent des installations et profils locaux participants, pas des personnes uniques. Plusieurs ordinateurs, une réinstallation, un retrait puis un nouvel accord peuvent créer une nouvelle participation. Le compteur public de réception ne peut pas certifier qu'un rapport provient d'une personne : un client modifié peut fabriquer des jetons. Les contrôles de taille, format, périodes et déduplication limitent les erreurs ; ils ne promettent pas une mesure antifraude. Les téléchargements GitHub sont affichés séparément et comprennent les téléchargements répétés et mises à jour.
 
+Le 13 octobre 2026, le propriétaire a demandé un total de départ de 56 téléchargements alors que GitHub en comptait 42. Le tableau privé ajoute donc une reprise manuelle de 14 au total EXE et ZIP, en l'identifiant dans la carte et dans une ligne distincte du détail par version. Les téléchargements suivants continuent d'incrémenter automatiquement le total ; les comptes GitHub par version restent inchangés. Cette reprise est un ajustement demandé, pas une mesure GitHub reconstituée. En cas de panne GitHub, la carte reste indisponible.
+
 ## Participation et conservation
 
 La participation est désactivée par défaut. La proposition de l'application et le réglage de confidentialité permettent d'accepter, refuser ou retirer l'accord. Aucun événement de travail ni contenu de frappe n'est envoyé. Les interactions réelles servent uniquement à signaler une activité, sans leur contenu. Un test, un environnement de développement et les plateformes autres que Windows n'envoient rien.
