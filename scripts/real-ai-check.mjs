@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Validation de Magistra avec une VRAIE IA (Ollama), sur un poste ou en CI (.github/workflows/real-ai.yml).
 //
 // Le cœur de Magistra (shared/) est compilé à la volée par esbuild, comme pour « npm run ai:check » : ce sont les

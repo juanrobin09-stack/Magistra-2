@@ -55,12 +55,14 @@ describe('hôte d’écoute de Vite', () => {
 
 describe('npm run dev sans Clerk', () => {
   it('mode personnel : adresse d’accès affichée, jeton exigé, historique dans le dossier du projet', async () => {
-    // Aucun MAGISTRA_DATA_DIR : dossier par défaut <racine du projet>/.magistra-data.
+    // Dossier du projet déjà présent : conservé aussi sur Windows, sans écrire dans le vrai profil du testeur.
+    const dataDir = path.join(dir, DEFAULT_DATA_DIR_NAME);
+    mkdirSync(dataDir);
     const env = { AI_AUTODETECT: 'false' };
     const { api, info } = await startDev(env, 'localhost');
     server = api;
     expect(await (await fetch(`${api.url}/api/mode`)).json() as ModeInfo).toEqual({ auth: 'personal' });
-    const token = readFileSync(path.join(dir, '.magistra-data', ACCESS_TOKEN_FILE), 'utf8').trim();
+    const token = readFileSync(path.join(dataDir, ACCESS_TOKEN_FILE), 'utf8').trim();
     const lines = (await devStartupLines(env, info)).join('\n');
     expect(lines).toContain('Mode personnel');
     expect(lines).toContain(`http://localhost:${info.port}/#acces=${token}`);
@@ -101,6 +103,11 @@ describe('npm run dev sans Clerk', () => {
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SECRET = 'JETON-SECRET-0123456789abcdefghijklmnopqrstuvwxyz';
+
+/** Préfixe Vite /@fs/ valide aussi pour un chemin Windows C:/… (jamais /@fsC:/…). */
+function viteFilePath(file: string): string {
+  return `/@fs/${file.replace(/\\/g, '/').replace(/^\/+/, '')}`;
+}
 
 /** Vrai serveur Vite (racine temporaire, port libre). */
 async function startVite(config: InlineConfig): Promise<{ vite: ViteDevServer; url: string }> {
@@ -179,6 +186,9 @@ describe('npm run dev : dossier de données jamais servi par Vite', () => {
     vite = started.vite;
     const url = started.url;
     expect((await rawGet(url, '/note.txt')).status).toBe(200);
+    const publicFile = await rawGet(url, `${viteFilePath(path.join(dir, 'note.txt'))}?raw`);
+    expect(publicFile.status).toBe(200);
+    expect(publicFile.body).toContain('contenu public');
     await expectRefused(url, [
       '/.magistra-data/access-token',
       '/.magistra-data/access-token?raw',
@@ -189,7 +199,7 @@ describe('npm run dev : dossier de données jamais servi par Vite', () => {
       '/.MAGISTRA-DATA/access-token',
       '/src/../.magistra-data/access-token',
       '//.magistra-data/access-token',
-      `/@fs${dir.split(path.sep).join('/')}/.magistra-data/access-token?raw`,
+      `${viteFilePath(path.join(dir, '.magistra-data', ACCESS_TOKEN_FILE))}?raw`,
       '/.magistra-data/users/abc/profile.json',
       '/.magistra-data/users/abc/profile.json?raw',
       // Protections par défaut de Vite conservées.
@@ -204,11 +214,16 @@ describe('npm run dev : dossier de données jamais servi par Vite', () => {
     const started = await startVite({ configFile: false, plugins: [magistraDevApi({ MAGISTRA_DATA_DIR: dataDir, AI_AUTODETECT: 'false' })] });
     vite = started.vite;
     expect((await rawGet(started.url, '/note.txt')).status).toBe(200);
+    const publicFile = await rawGet(started.url, `${viteFilePath(path.join(dir, 'note.txt'))}?raw`);
+    expect(publicFile.status).toBe(200);
+    expect(publicFile.body).toContain('contenu public');
     await expectRefused(started.url, [
       '/donnees/access-token',
       '/donnees/access-token?raw',
       '/donnees/users/abc/profile.json',
-      `/@fs${dataDir.split(path.sep).join('/')}/access-token?raw`,
+      `${viteFilePath(path.join(dataDir, ACCESS_TOKEN_FILE))}?raw`,
+      `${viteFilePath(path.join(dataDir, ACCESS_TOKEN_FILE))}?import`,
+      `${viteFilePath(path.join(dataDir, ACCESS_TOKEN_FILE))}?url`,
       '/.env.local',
     ]);
   });

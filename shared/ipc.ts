@@ -44,6 +44,7 @@ export const IPC = {
   openExternal: 'shell:open-external',
   appInfo: 'app:info',
   appReady: 'app:ready',
+  appActivity: 'app:activity',
   appCheckUpdate: 'app:check-update',
   appInstallUpdate: 'app:install-update',
   appUpdateProgress: 'app:update-progress',
@@ -200,6 +201,9 @@ export interface AIConfigUpdate {
 // ─── Préférences locales ────────────────────────────────────────────────────
 
 export interface LocalPreferences {
+  /** Statistiques d'usage facultatives, seulement après un choix explicite. */
+  usageStatsEnabled?: boolean;
+  usageStatsChoiceMade?: boolean;
   defaultResearchMode: ResearchMode;
   /** URL SearXNG facultative (recherche web). */
   searxngUrl?: string;
@@ -267,6 +271,8 @@ export interface MagistraBridge {
     info(): Promise<AppInfo>;
     /** Signale que l'interface est chargée (test de démarrage automatisé). */
     ready(): void;
+    /** Signale une activité sans transmettre l'action, son contenu ou sa cible. */
+    activity?(): void;
     openExternal(url: string): Promise<boolean>;
     /** Vérifie la version sur GitHub ; ne transmet aucun document. */
     checkForUpdate(): Promise<UpdateCheckResult>;
@@ -330,6 +336,8 @@ export interface MagistraBridge {
 }
 
 export const DEFAULT_PREFERENCES: LocalPreferences = {
+  usageStatsEnabled: false,
+  usageStatsChoiceMade: false,
   defaultResearchMode: 'documents',
   academicEnabled: true,
   wikipediaEnabled: true,

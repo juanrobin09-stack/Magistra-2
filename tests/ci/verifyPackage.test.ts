@@ -102,6 +102,21 @@ describe('verify-package : contenu de l’asar', () => {
     expect(errors).toHaveLength(3);
   });
 
+  it.each([
+    '/server/usageRoutes.ts', '/api/usage.ts', '/dist-server/standalone.js',
+    '/dist-electron/usageStore.js', '/dist/assets/usageDashboard-abc123.js', '/dist/usage-schema.sql',
+    '\\dist-electron\\usageRoutes.cjs',
+  ])('module backend livré dans %s : échec même sans valeur secrète', entry => {
+    const errors = mod.checkAsarEntries([...GOOD_ENTRIES, entry]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('module backend');
+  });
+
+  it('les modules de participation Windows et les contrats publics de rapport restent autorisés', () => {
+    expect(mod.checkAsarEntries([...GOOD_ENTRIES, '/dist-electron/usageStats.js', '/dist/assets/UsageParticipation.js', '/shared/usageTelemetry.js'])).toEqual([]);
+    expect(mod.checkNoSecrets([{ name: 'dist-electron/main.js', text: 'const endpoint="https://www.mag-istra.fr/api/usage"; const usageStatsEnabled=false;' }])).toEqual([]);
+  });
+
   it('secrets serveur dans un fichier livré : échec (et rien à signaler sinon)', () => {
     expect(mod.checkNoSecrets([{ name: 'dist-electron/main.js', text: 'const AI_API_KEY = process.env.AI_API_KEY' }])).toEqual([]);
     const errors = mod.checkNoSecrets([
@@ -111,6 +126,50 @@ describe('verify-package : contenu de l’asar', () => {
     ]);
     // « service_role » apparaît aussi dans SUPABASE_SERVICE_ROLE_KEY (insensible à la casse) : 4 signalements.
     expect(errors).toHaveLength(4);
+  });
+
+  it.each([
+    'MAGISTRA_STATS_DATABASE_URL', 'MAGISTRA_STATS_HASH_SECRET', 'MAGISTRA_STATS_OWNER_LOGIN',
+    'MAGISTRA_STATS_OWNER_PASSWORD_HASH', 'CRON_SECRET',
+  ])('la configuration serveur %s ne doit pas apparaître dans du code livré, même sans sa valeur', variable => {
+    const errors = mod.checkNoSecrets([{ name: 'dist/assets/app.js', text: `const value = process.env.${variable};` }]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('dist/assets/app.js');
+    expect(errors[0]).toMatch(/MAGISTRA_STATS|CRON_SECRET/);
+    expect(mod.checkNoSecrets([{ name: 'dist/assets/app.js', text: `const value = import.meta.env.VITE_${variable};` }])).toHaveLength(1);
+  });
+
+  it.each([
+    'postgres://stats_user:NeverPrintThis@db.example.test/stats',
+    'postgresql://stats_user:NeverPrintThis@db.example.test:5432/stats?sslmode=require',
+    'POSTGRESQL://stats_user:p%40ssword@db.example.test/stats',
+    'postgresql://stats_user@db.example.test/stats',
+    'postgresql:\\/\\/stats_user:NeverPrintThis@db.example.test/stats',
+    'postgresql://db.example.test/stats?user=stats_user&password=NeverPrintThis',
+    'postgres://db.example.test/stats?%70assword=NeverPrintThis',
+  ])('URI PostgreSQL avec identifiants interdite : %s ; diagnostic sans valeur sensible', uri => {
+    const errors = mod.checkNoSecrets([{ name: 'dist/assets/app.js', text: `const url = "${uri}";` }]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('PostgreSQL');
+    expect(errors[0]).toContain('dist/assets/app.js');
+    expect(errors.join('\n')).not.toContain(uri);
+    expect(errors.join('\n')).not.toContain('NeverPrintThis');
+    expect(errors.join('\n')).not.toContain('stats_user');
+  });
+
+  it('les URI sans identifiants et les préfixes de documentation seuls ne sont pas des secrets PostgreSQL', () => {
+    expect(mod.checkNoSecrets([{ name: 'dist/assets/app.js', text: 'postgresql://db.example.test/stats postgres://db.example.test:5432/stats postgres:// https://www.mag-istra.fr/api/usage' }])).toEqual([]);
+  });
+
+  it.each([
+    'const sql = "SELECT public.magistra_record_usage($1)";',
+    'const sql = "SELECT public.magistra_usage_snapshot()";',
+    'const sql = "SELECT public.magistra_usage_purge()";',
+    '// server/usageDashboard.ts\nfunction renderDashboard() {}',
+  ])('détecte du code backend de statistiques regroupé dans un bundle même sans variable serveur', text => {
+    const errors = mod.checkNoSecrets([{ name: 'dist-electron/main.js', text }]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('code serveur de statistiques');
   });
 
   const b64url = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -247,6 +306,32 @@ describe('verify-package : paquet complet (ligne de commande)', () => {
     const res = run(await makePackage('secret', { files: { 'dist-electron/main.js': 'const k = "SUPABASE_SERVICE_ROLE_KEY"' } }));
     expect(res.status).toBe(1);
     expect(res.stderr).toContain('SUPABASE_SERVICE_*');
+  });
+
+  it('configuration serveur stats livrée dans le vrai asar artificiel : code 1 sans exposer sa valeur', async () => {
+    const secret = 'NeverPrintThisDatabasePassword';
+    const res = run(await makePackage('stats-secret', { files: {
+      'dist/assets/app.js': `const MAGISTRA_STATS_DATABASE_URL = "postgresql://stats_user:${secret}@db.example.test/stats";`,
+    } }));
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('MAGISTRA_STATS_*');
+    expect(res.stderr).toContain('PostgreSQL');
+    expect(res.stderr).toContain('dist/assets/app.js');
+    expect(res.stderr).not.toContain(secret);
+  });
+
+  it('module backend sans secret livré dans le vrai asar artificiel : code 1', async () => {
+    const res = run(await makePackage('stats-backend', { files: { 'server/usageDashboard.ts': 'export const dashboard = "private";' } }));
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('module backend');
+    expect(res.stderr).toContain('server/usageDashboard.ts');
+  });
+
+  it('secret de maintenance dans une source TypeScript livrée : code 1', async () => {
+    const res = run(await makePackage('stats-cron', { files: { 'dist/maintenance.ts': 'export const key = process.env.CRON_SECRET;' } }));
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('CRON_SECRET');
+    expect(res.stderr).toContain('dist/maintenance.ts');
   });
 
   it('empreinte d’intégrité périmée, icône absente : code 1', async () => {

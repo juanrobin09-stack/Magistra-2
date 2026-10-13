@@ -118,7 +118,7 @@ export function parseStoredProfile(raw: unknown): TeacherProfile | null {
 // ─── Préférences ────────────────────────────────────────────────────────────
 
 /** Préférences booléennes (aiSetupRequested : activation de l'IA lancée par l'enseignant, à reprendre au lancement). */
-const PREFERENCE_FLAGS = ['academicEnabled', 'wikipediaEnabled', 'keepDocuments', 'setupCompleted', 'aiSetupRequested'] as const;
+const PREFERENCE_FLAGS = ['academicEnabled', 'wikipediaEnabled', 'keepDocuments', 'setupCompleted', 'aiSetupRequested', 'usageStatsEnabled', 'usageStatsChoiceMade'] as const;
 
 /** Mise à jour partielle des préférences (champ par champ, types stricts). */
 export function sanitizePreferencesUpdate(raw: unknown): Partial<LocalPreferences> {

@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Vérification RÉELLE des services de recherche de Magistra, sur un poste (outil du mainteneur : jamais lancé en CI).
 //
 // Chaque service est interrogé UNE fois avec le VRAI code de Magistra : shared/research (connecteurs, catalogue des sites

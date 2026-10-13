@@ -6,6 +6,7 @@ import ErrorBoundary from '@/components/AppErrorBoundary';
 import { AuthUnavailable, FullPageSpinner, ProfileGuard } from '@/components/guards';
 import { PersonalAccessGate } from '@/components/PersonalAccess';
 import ProfileCacheCleaner from '@/components/ProfileCacheCleaner';
+import UsageParticipation from '@/components/UsageParticipation';
 import { useAIStatus } from '@/hooks/useAIStatus';
 import { useRuntime } from '@/lib/runtime/context';
 import { getRuntimeConfig, type RuntimeConfig } from '@/lib/runtime/mode';
@@ -126,6 +127,7 @@ export default function App({ config = getRuntimeConfig() }: { config?: RuntimeC
   const routes = (
     <BrowserRouter>
       <AppRoutes mode={mode} />
+      {mode === 'local' && <UsageParticipation />}
     </BrowserRouter>
   );
 

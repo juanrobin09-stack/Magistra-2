@@ -8,7 +8,7 @@
 
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import { MagistraError, toMagistraError } from '../shared/errors.js';
-import { IPC, type AppInfo, type UpdateCheckResult } from '../shared/ipc.js';
+import { IPC, type AppInfo, type UpdateCheckResult, type LocalPreferences } from '../shared/ipc.js';
 import type { ConnectorAppStatus } from '../shared/localConnector.js';
 import type { GenerationManager } from './generation.js';
 import type { LocalStore } from './localStore.js';
@@ -33,6 +33,10 @@ export interface IpcContext {
   checkForUpdate?: () => Promise<UpdateCheckResult>;
   installUpdate?: () => Promise<boolean>;
   onAppReady: () => void;
+  onAppActivity?: () => void;
+  onPreferencesUpdated?: (prefs: LocalPreferences, update: Partial<LocalPreferences>) => Promise<void>;
+  onDisableUsage?: () => Promise<void>;
+  onClearUsage?: () => Promise<void>;
   /** Connecteur local (site web Magistra → IA de cet ordinateur) : réglages « Site web Magistra ». */
   connector: {
     status(): ConnectorAppStatus | Promise<ConnectorAppStatus>;
@@ -104,6 +108,13 @@ export function registerIpcHandlers(ctx: IpcContext): () => void {
     if (trusted(event)) ctx.onAppReady();
   };
   ipcMain.on(IPC.appReady, onReady);
+  let lastActivity = 0;
+  const onActivity = (event: IpcMainEvent, ...args: unknown[]) => {
+    if (args.length || !trusted(event) || Date.now() - lastActivity < 30_000) return;
+    lastActivity = Date.now();
+    ctx.onAppActivity?.();
+  };
+  ipcMain.on(IPC.appActivity, onActivity);
 
   // ─── IA locale ────────────────────────────────────────────────────────────
   handle(IPC.aiStatus, () => ctx.ai.status());
@@ -127,18 +138,33 @@ export function registerIpcHandlers(ctx: IpcContext): () => void {
   handle(IPC.genCancel, (_e, jobId) => ctx.generation.cancel(requireId(jobId, 'génération')));
 
   // ─── Historique ───────────────────────────────────────────────────────────
+  let usagePreferenceRevision = 0;
   handle(IPC.dataList, (_e, query) => ctx.store.list(sanitizeListQuery(query)));
   handle(IPC.dataGet, (_e, id) => ctx.store.get(requireId(id)));
   handle(IPC.dataSetFavorite, (_e, id, value) => ctx.store.setFavorite(requireId(id), requireBoolean(value, 'favori')));
   handle(IPC.dataDelete, (_e, id) => ctx.store.delete(requireId(id)));
   handle(IPC.dataStats, () => ctx.store.stats());
-  handle(IPC.dataClearAll, () => ctx.store.clearAll());
+  handle(IPC.dataClearAll, async () => {
+    ++usagePreferenceRevision;
+    await ctx.onClearUsage?.();
+    await ctx.store.clearAll();
+  });
 
   // ─── Profil et préférences ────────────────────────────────────────────────
   handle(IPC.profileGet, () => ctx.store.getProfile());
   handle(IPC.profileSet, (_e, profile) => ctx.store.setProfile(sanitizeProfile(profile)));
   handle(IPC.prefsGet, () => ctx.store.getPreferences());
-  handle(IPC.prefsSet, (_e, update) => ctx.store.setPreferences(sanitizePreferencesUpdate(update)));
+  handle(IPC.prefsSet, async (_e, update) => {
+    const patch = sanitizePreferencesUpdate(update);
+    const usageChange = patch.usageStatsEnabled !== undefined || patch.usageStatsChoiceMade !== undefined;
+    const revision = usageChange ? ++usagePreferenceRevision : usagePreferenceRevision;
+    // Le retrait s'applique à la session immédiatement, même si le disque refuse l'écriture.
+    if (patch.usageStatsEnabled === false || patch.usageStatsChoiceMade === false) await ctx.onDisableUsage?.();
+    const prefs = await ctx.store.setPreferences(patch);
+    // Un ancien accord en cours ne doit pas réactiver une participation retirée entre-temps.
+    if (!usageChange || revision === usagePreferenceRevision) await ctx.onPreferencesUpdated?.(prefs, patch);
+    return prefs;
+  });
 
   // ─── Documents (texte extrait) ────────────────────────────────────────────
   handle(IPC.docsList, () => ctx.store.listDocuments());
@@ -158,5 +184,6 @@ export function registerIpcHandlers(ctx: IpcContext): () => void {
   return () => {
     for (const channel of channels) ipcMain.removeHandler(channel);
     ipcMain.removeListener(IPC.appReady, onReady);
+    ipcMain.removeListener(IPC.appActivity, onActivity);
   };
 }

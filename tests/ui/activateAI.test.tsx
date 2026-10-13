@@ -17,12 +17,15 @@ import { ENGINE_WINDOW_DONE_NOTE, ENGINE_WINDOW_MANUAL_NOTE, ENGINE_WINDOW_NOTE 
 import { hold, installFakeLocalAI, ipcError, removeFakeLocalAI, type FakeLocalAI } from './localAIHelpers';
 
 beforeEach(() => {
+  // A renderer reload also destroys its old polling timers; resetModules alone leaves them running in jsdom.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.resetModules();
 });
 
 afterEach(() => {
   cleanup();
   removeFakeLocalAI();
+  vi.clearAllTimers();
   vi.useRealTimers();
 });
 

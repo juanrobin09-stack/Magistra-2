@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Faux serveur Ollama (API native) pour les tests automatiques et la validation de l'application.
 // Formats calqués sur Ollama v0.34.4 (server/routes.go, server/images.go, llm/llama_server.go).
 //

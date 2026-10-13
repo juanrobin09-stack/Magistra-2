@@ -44,6 +44,7 @@ import { checkForUpdate } from './updateCheck.js';
 import { installAppUpdate } from './appUpdater.js';
 import { createUpdateFetch } from './updateFetch.js';
 import { configureWindowSession, denyAllPermissions, WINDOW_PARTITION } from './windowSession.js';
+import { readUsageConsent, UsageStats } from './usageStats.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -383,6 +384,14 @@ async function start(): Promise<void> {
   const userData = app.getPath('userData');
   const store = new LocalStore(userData);
   await store.init();
+  const usageStats = new UsageStats({
+    file: path.join(userData, 'usage-statistics.json'),
+    platform: process.platform, isPackaged: app.isPackaged, smoke: Boolean(smokeOptions),
+    fetch: (url, init) => net.fetch(url, { ...init, credentials: 'omit', redirect: 'error' }),
+  });
+  const usageConsent = await readUsageConsent(() => store.getPreferences());
+  await usageStats.init(usageConsent).catch(() => undefined);
+  let usageReady = false;
 
   const cipher = safeStorageCipher(safeStorage);
   const config = new AIConfigStore(path.join(userData, 'ai-config.json'), cipher, { ollamaUrl: devOptions.ollamaUrl });
@@ -500,6 +509,10 @@ async function start(): Promise<void> {
   services = {
     onAppReady: () => {
       if (smoke) void smoke.onAppReady();
+      if (!usageReady) {
+        usageReady = true;
+        void usageStats.recordOpen().catch(() => undefined);
+      }
     },
   };
   // Seules les générations de la fenêtre sont concernées : celles du site continuent (leur page n'a pas changé).
@@ -517,6 +530,19 @@ async function start(): Promise<void> {
     store,
     ai,
     generation,
+    onAppActivity: () => { void usageStats.recordActivity().catch(() => undefined); },
+    onDisableUsage: () => usageStats.setEnabled(false),
+    onPreferencesUpdated: async (prefs, update) => {
+      if (update.usageStatsEnabled === undefined && update.usageStatsChoiceMade === undefined) return;
+      // Une panne des statistiques ne doit jamais bloquer un réglage ni l'application.
+      const enabled = prefs.usageStatsEnabled === true && prefs.usageStatsChoiceMade === true;
+      await usageStats.setEnabled(enabled).catch(() => undefined);
+      if (usageReady && enabled) await usageStats.recordOpen().catch(() => undefined);
+    },
+    onClearUsage: async () => {
+      await usageStats.setEnabled(false);
+      await store.setPreferences({ usageStatsEnabled: false, usageStatsChoiceMade: true });
+    },
     appInfo: () => ({
       version: app.getVersion(),
       platform: process.platform,
@@ -565,6 +591,7 @@ async function start(): Promise<void> {
 
   app.on('before-quit', () => {
     quitting = true;
+    usageStats.dispose();
     generation.cancelAll();
     void localConnector.stop();
     ai.dispose();

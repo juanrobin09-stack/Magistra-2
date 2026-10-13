@@ -276,7 +276,7 @@ function PrivacyLocal({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
         Magistra est publié par <strong>{info.publisher}</strong>. Contact : <ContactField info={info} />.
       </p>
 
-      <h2>2. Vos données restent chez vous</h2>
+      <h2>2. Vos données de travail restent chez vous</h2>
       {mode === 'local' && (
         <p>
           L'application Windows fonctionne sans compte. Votre profil, votre historique, vos favoris et vos documents sont
@@ -315,8 +315,49 @@ function PrivacyLocal({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
         )}
       </ul>
 
-      <h2>4. Cookies</h2>
-      <p>Aucun cookie publicitaire, aucune mesure d'audience, aucun pistage.</p>
+      <h2>{mode === 'local' ? '4. Statistiques d’utilisation facultatives' : '4. Cookies'}</h2>
+      {mode === 'local' ? (
+        <>
+          <p>
+            Vous pouvez aider l’éditeur à comprendre l’utilisation de Magistra en acceptant l’envoi de statistiques
+            limitées. Cette option est <strong>désactivée par défaut</strong> : aucune mesure n’est enregistrée ni envoyée
+            avant votre accord. Vous pouvez refuser ou retirer cet accord dans <strong>Réglages → Confidentialité</strong>.
+            L’application fonctionne de la même manière avec ou sans cette option. Le retrait arrête la mesure et efface
+            son fichier local, y compris les contributions en attente d’envoi.
+          </p>
+          <p>La mesure porte uniquement sur :</p>
+          <ul>
+            <li>le nombre d’installations actives par jour et par mois calendaires, selon le temps universel (UTC) ;</li>
+            <li>le nombre d’ouvertures de l’application et la moyenne par installation active ;</li>
+            <li>les retours du lendemain au 7e jour, puis du lendemain au 30e jour après le premier usage mesuré.</li>
+          </ul>
+          <p>
+            Ces statistiques concernent uniquement les profils locaux qui participent. Un profil local est compté comme
+            une installation : il ne représente pas nécessairement une personne. Les indicateurs de retour sont calculés
+            sur votre ordinateur ; les utilisations antérieures à votre accord ne sont pas reprises. Hors ligne, les
+            contributions restent sur l’ordinateur jusqu’à un envoi ultérieur, ce qui peut retarder les chiffres.
+          </p>
+          <p>
+            Pour éviter les doublons, l’application utilise deux codes aléatoires indépendants : l’un change chaque jour,
+            l’autre chaque mois. Ils sont envoyés séparément au service de statistiques de Magistra et transformés à la
+            réception. Aucun identifiant permanent, empreinte de l’appareil, nom, adresse e-mail, document, consigne ou
+            clé API n’est envoyé dans cette mesure. Il n’y a ni publicité ni suivi de votre navigation.
+          </p>
+          <p>
+            L’éditeur reçoit uniquement des totaux dans un tableau privé protégé ; aucun profil individuel n’y est
+            consultable. Le service est hébergé par Vercel à Paris et les données statistiques par Neon à Francfort, dans
+            l’Union européenne. Les données techniques d’une requête, dont l’adresse IP, restent visibles pour les
+            hébergeurs et peuvent figurer dans leurs journaux de fonctionnement et de sécurité. L’adresse IP n’est pas
+            utilisée ni enregistrée dans la base de statistiques.
+          </p>
+          <p>
+            La mesure repose sur votre consentement (art. 6.1.a du RGPD). Les données temporaires servant à éviter les
+            doublons sont supprimées au plus tard après 77 jours. Les totaux globaux sont conservés pendant 400 jours,
+            soit environ 13 mois, puis supprimés. Le retrait de votre accord ne retire pas les contributions déjà
+            additionnées à ces totaux.
+          </p>
+        </>
+      ) : <p>Aucun cookie publicitaire, aucune mesure d’audience, aucun pistage.</p>}
 
       <h2>5. Données d'élèves</h2>
       <p>
@@ -325,7 +366,7 @@ function PrivacyLocal({ info, mode }: { info: LegalInfo; mode: RuntimeMode }) {
 
       <h2>6. Vos droits</h2>
       <p>
-        Vos données étant sur votre ordinateur, vous les consultez, les exportez (Réglages → « Télécharger toutes mes
+        Vos données de travail étant sur votre ordinateur, vous les consultez, les exportez (Réglages → « Télécharger toutes mes
         données (JSON) ») et les effacez directement dans Réglages. Pour toute question ou pour exercer vos droits : <ContactField info={info} />.
         Vous pouvez saisir la CNIL : <Ext href="https://www.cnil.fr/fr/plaintes">www.cnil.fr/fr/plaintes</Ext>.
       </p>

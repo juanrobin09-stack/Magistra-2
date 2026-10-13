@@ -2,10 +2,10 @@
 // sur le disque ; mémoire seule si le chiffrement est indisponible ; limite de navigateurs ; retrait ; réglage
 // « activé » ; fichier corrompu ; échec d'écriture.
 
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, promises as fsp, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SecretCipher } from '../../electron/aiConfig.js';
 import { canonicalRevoked, OFFICIAL_WEB_ORIGINS } from '../../shared/localConnector.js';
 import { SITE_ORIGIN } from '../../shared/site.js';
@@ -71,7 +71,12 @@ beforeEach(() => {
   clock = Date.parse('2026-09-01T08:00:00.000Z');
   warnings.length = 0;
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  const target = path.resolve(dir);
+  if (path.dirname(target) !== path.resolve(os.tmpdir()) || !path.basename(target).startsWith('magistra-connector-')) throw new Error('Dossier de test inattendu');
+  rmSync(target, { recursive: true, force: true });
+});
 
 describe('autorisations enregistrées', () => {
   it('clé chiffrée sur le disque (jamais en clair), relue à l’identique au démarrage suivant', async () => {
@@ -330,8 +335,12 @@ describe('fichier et erreurs', () => {
     writeFileSync(path.join(dir, 'bloque'), 'fichier à la place d’un dossier');
     file = path.join(dir, 'bloque', 'local-connector.json');
     const s = store();
+    // Le code d'un chemin traversant un fichier varie selon l'OS (absent sur Windows).
+    // Simuler le refus de lecture lui-même ; conserver le vrai obstacle disque pour les écritures.
+    const deniedRead = vi.spyOn(fsp, 'readFile').mockRejectedValueOnce(Object.assign(new Error('lecture refusée'), { code: 'EACCES' }));
     // Fichier impossible à lire : jamais d'erreur au démarrage de l'application, réglages par défaut.
     await s.load();
+    deniedRead.mockRestore();
     expect(s.enabled).toBe(true);
     expect(warnings.some(w => w.includes('impossibles à lire'))).toBe(true);
     await expect(s.add({ origin: ORIGIN, browser: 'Google Chrome', key: key(50) })).rejects.toMatchObject({ code: 'STORAGE_ERROR' });

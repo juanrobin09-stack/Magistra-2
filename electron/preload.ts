@@ -29,6 +29,7 @@ const bridge: MagistraBridge = {
     ready: () => {
       ipcRenderer.send(IPC.appReady);
     },
+    activity: () => { ipcRenderer.send(IPC.appActivity); },
     openExternal: url => ipcRenderer.invoke(IPC.openExternal, url),
     checkForUpdate: () => ipcRenderer.invoke(IPC.appCheckUpdate),
     installUpdate: () => ipcRenderer.invoke(IPC.appInstallUpdate),

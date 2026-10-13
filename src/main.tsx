@@ -39,6 +39,19 @@ const observer = new MutationObserver(() => {
 });
 observer.observe(container, { childList: true });
 
+// Une action réelle suffit pour marquer le jour actif. Aucune cible, touche ou donnée saisie n'est transmise.
+// Le processus principal applique le choix de participation et borne aussi les appels IPC.
+let lastUsageActivity = 0;
+function signalUsageActivity(event: Event): void {
+  if (!event.isTrusted || document.visibilityState !== 'visible') return;
+  const bridge = getBridge();
+  if (!bridge?.app.activity || Date.now() - lastUsageActivity < 60_000) return;
+  lastUsageActivity = Date.now();
+  bridge.app.activity();
+}
+document.addEventListener('pointerdown', signalUsageActivity, { passive: true });
+document.addEventListener('keydown', signalUsageActivity, { passive: true });
+
 /**
  * Démarrage : le mode (Windows, site avec comptes, mode personnel, démonstration) est découvert à
  * l'exécution (GET /api/mode, 3 s au plus) et non figé au build.

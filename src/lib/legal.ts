@@ -127,8 +127,9 @@ export const LEGAL_TITLES: Record<LegalPageKind, string> = {
 };
 
 /**
- * Hébergeur et base de données : seuls le site web (avec comptes) et le site vitrine ont un hébergeur ; seul le site web a
- * une base de données. En mode personnel les données sont dans le stockage fichier du serveur local, en démonstration
+ * Hébergement et base des données de travail : seuls les modes web et vitrine ont un hébergeur ; seul le mode web stocke
+ * les profils et documents dans une base distante. Les compteurs Windows facultatifs sont décrits séparément.
+ * En mode personnel les données sont dans le stockage fichier du serveur local, en démonstration
  * dans le navigateur, dans l'application Windows sur l'ordinateur. Une seule règle pour tous les textes : ils ne peuvent
  * pas diverger.
  */

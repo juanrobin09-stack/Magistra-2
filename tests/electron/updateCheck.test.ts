@@ -260,7 +260,7 @@ describe('canal IPC app:check-update et pont', () => {
     });
 
     it('window.magistra.app.checkForUpdate appelle le canal app:check-update, sans argument', async () => {
-      expect(Object.keys(bridge.app).sort()).toEqual(['checkForUpdate', 'info', 'installUpdate', 'onUpdateProgress', 'openExternal', 'ready']);
+      expect(Object.keys(bridge.app).sort()).toEqual(['activity', 'checkForUpdate', 'info', 'installUpdate', 'onUpdateProgress', 'openExternal', 'ready']);
       invoke.mockClear();
       await bridge.app.checkForUpdate();
       expect(invoke).toHaveBeenCalledWith(IPC.appCheckUpdate);

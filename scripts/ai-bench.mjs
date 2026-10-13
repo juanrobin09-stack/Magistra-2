@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Mesure précise de la lenteur d'un Ollama (outil du mainteneur, aucune dépendance) : chargement du modèle, lecture de
 // la demande, rédaction, premier mot, placement (carte graphique, processeur), empreinte du texte produit et
 // rechargement du modèle, pour chaque taille de contexte (num_ctx) et chaque taille de demande.

@@ -296,7 +296,9 @@ describe('Windows : dossier de données dans le profil et droits réservés à l
     expect(defaultDataDir({ LOCALAPPDATA: 'C:\\Users\\prof\\AppData\\Local' }, { platform: 'win32', projectRoot: root, exists: d => d === 'C:\\Magistra\\.magistra-data' }))
       .toBe('C:\\Magistra\\.magistra-data');
     expect(loadConfig({ LOCALAPPDATA: 'C:\\L' }, { platform: 'win32', projectRoot: root, exists: none }).dataDir).toBe('C:\\L\\Magistra\\serveur');
-    expect(loadConfig({ LOCALAPPDATA: 'C:\\L' }, { platform: 'linux', projectRoot: '/srv/magistra' }).dataDir).toBe('/srv/magistra/.magistra-data');
+    // `platform` sélectionne le dossier ; path.join garde les séparateurs du système qui exécute le test.
+    const nonWindows = loadConfig({ LOCALAPPDATA: 'C:\\L' }, { platform: 'linux', projectRoot: '/srv/magistra' }).dataDir;
+    expect(nonWindows.replace(/\\/g, '/')).toBe('/srv/magistra/.magistra-data');
   });
 
   it('SID lu dans la sortie de whoami (compte local, domaine, Entra ID) ; sortie illisible rejetée', () => {

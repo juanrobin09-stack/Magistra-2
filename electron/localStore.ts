@@ -344,6 +344,11 @@ export class LocalStore {
   // ─── Préférences ──────────────────────────────────────────────────────────
 
   async getPreferences(): Promise<LocalPreferences> {
+    return withFileLock(`preferences:${this.file('preferences.json')}`, () => this.loadPreferences());
+  }
+
+  /** Appelé sous le verrou des préférences : aucun chargement ancien ne peut remplacer un cache plus récent. */
+  private async loadPreferences(): Promise<LocalPreferences> {
     if (this.prefs) return { ...this.prefs };
     const result = await readJsonFile(this.file('preferences.json'), parseStoredPreferences);
     if (result.status === 'corrupt') this.warn(`Préférences illisibles mises de côté : ${result.movedTo ?? 'preferences.json'}`);
@@ -352,18 +357,23 @@ export class LocalStore {
   }
 
   async setPreferences(update: Partial<LocalPreferences>): Promise<LocalPreferences> {
-    const current = await this.getPreferences();
-    const next: LocalPreferences = { ...current, ...update };
-    if (next.searxngUrl === undefined) delete next.searxngUrl;
-    try {
-      await writeJsonAtomic(this.file('preferences.json'), next);
-    } catch (err) {
-      throw new MagistraError('STORAGE_ERROR', "Impossible d'enregistrer les préférences.", { cause: err });
-    }
-    this.prefs = next;
-    // Désactiver la conservation des documents efface ceux déjà conservés (respect du choix de l'enseignant).
-    if (current.keepDocuments && !next.keepDocuments) await this.clearDocuments().catch(() => undefined);
-    return { ...next };
+    const changes = { ...update };
+    // Le verrou de writeJsonAtomic ne protège que l'écriture : il faut aussi sérialiser la lecture et la fusion.
+    // Clé distincte du fichier pour ne pas réentrer dans le verrou de l'écriture atomique.
+    return withFileLock(`preferences:${this.file('preferences.json')}`, async () => {
+      const current = await this.loadPreferences();
+      const next: LocalPreferences = { ...current, ...changes };
+      if (next.searxngUrl === undefined) delete next.searxngUrl;
+      try {
+        await writeJsonAtomic(this.file('preferences.json'), next);
+      } catch (err) {
+        throw new MagistraError('STORAGE_ERROR', "Impossible d'enregistrer les préférences.", { cause: err });
+      }
+      this.prefs = next;
+      // Désactiver la conservation des documents efface ceux déjà conservés (respect du choix de l'enseignant).
+      if (current.keepDocuments && !next.keepDocuments) await this.clearDocuments().catch(() => undefined);
+      return { ...next };
+    });
   }
 
   // ─── Documents (texte extrait uniquement) ─────────────────────────────────

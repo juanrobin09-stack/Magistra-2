@@ -1,10 +1,10 @@
 // Pages légales du SITE VITRINE (mode « showcase ») : mentions légales, politique de confidentialité et conditions
-// d'utilisation d'un site qui présente Magistra et propose le téléchargement de l'application Windows — rien d'autre.
+// d'utilisation d'un site qui présente Magistra et propose le téléchargement de l'application Windows.
 //
-// Les textes décrivent ce que le site fait réellement : ni compte, ni cookie de suivi, ni formulaire, ni statistiques
-// d'audience ; ses polices viennent de lui-même ; le serveur d'hébergement garde des journaux techniques ; la recherche
-// de la dernière version appelle GitHub depuis le serveur du site ; le téléchargement est servi par GitHub. Aucune
-// affirmation sur l'application elle-même au-delà de renvoyer à sa propre politique, affichée dans l'application.
+// Les pages publiques n'ont ni compte, ni cookie de suivi, ni formulaire, ni mesure de leur fréquentation. Les compteurs
+// de téléchargements viennent de GitHub. Le service distinct de statistiques de l'application Windows reçoit uniquement
+// les contributions facultatives décrites dans sa politique ; son tableau est réservé à l'éditeur. Les hébergeurs
+// gardent leurs journaux techniques ; les polices sont locales et le téléchargement est servi par GitHub.
 // L'éditeur, son contact et l'hébergeur ont des valeurs par défaut (src/lib/legal.ts) que les variables VITE_LEGAL_*
 // remplacent ; une information sans valeur (l'adresse) n'est simplement pas affichée.
 
@@ -101,8 +101,8 @@ function Privacy({ info }: { info: LegalInfo }) {
 
       <h2>2. Ce que ce site ne fait pas</h2>
       <ul>
-        <li>il n'a ni compte, ni connexion, ni formulaire : il ne vous demande aucune information ;</li>
-        <li>il ne contient aucune publicité et ne mesure pas son audience (aucune statistique de fréquentation) ;</li>
+        <li>ses pages publiques ne proposent ni compte, ni connexion, ni formulaire : elles ne vous demandent aucune information ;</li>
+        <li>il ne contient aucune publicité et ne mesure pas la fréquentation de ses pages publiques ;</li>
         <li>il charge ses polices depuis lui-même : aucune requête vers un service de polices tiers.</li>
       </ul>
 
@@ -114,14 +114,15 @@ function Privacy({ info }: { info: LegalInfo }) {
           au fonctionnement et à la sécurité du site.
         </li>
         <li>
-          <strong>Recherche de la dernière version</strong> : pour afficher la version, la taille et l'empreinte de
-          l'installateur, la page de téléchargement interroge le serveur du site, et c'est ce serveur, non votre navigateur,
-          qui appelle GitHub. Il ne lui transmet aucune information vous concernant.
+          <strong>Informations de téléchargement</strong> : pour afficher la version, la taille, l’empreinte de
+          l’installateur et le nombre de téléchargements, la page interroge le serveur du site. C’est ce serveur, non votre
+          navigateur, qui appelle GitHub. Il ne lui transmet aucune information vous concernant.
         </li>
         <li>
           <strong>Téléchargement de l'application</strong> : le fichier d'installation est servi par GitHub. En cliquant sur
           « Télécharger », votre navigateur contacte GitHub, qui traite alors les données de cette requête (dont votre
-          adresse IP) selon sa propre politique de confidentialité.
+          adresse IP) selon sa propre politique de confidentialité. GitHub compte déjà les téléchargements de ses fichiers ;
+          le site reprend ces compteurs, qui ne représentent ni des personnes uniques ni des installations réussies.
         </li>
         <li>
           <strong>Liens externes</strong> : les liens vers <Ext href={FUTUREAI_URL}>FutureAI</Ext>, vers le profil
@@ -133,7 +134,8 @@ function Privacy({ info }: { info: LegalInfo }) {
       <h2>4. Pourquoi, et sur quel fondement ?</h2>
       <p>
         Les journaux techniques répondent à l'intérêt légitime de l'éditeur : assurer le fonctionnement et la sécurité du
-        site (art. 6.1.f du RGPD). Le site ne demande ni ne conserve aucune autre donnée vous concernant.
+        site (art. 6.1.f du RGPD). Les compteurs de téléchargements sont des totaux publics fournis par GitHub. La visite
+        d’une page ne déclenche pas les statistiques facultatives de l’application décrites plus bas.
       </p>
 
       <h2>5. Qui reçoit ces données ?</h2>
@@ -148,7 +150,9 @@ function Privacy({ info }: { info: LegalInfo }) {
 
       <h2>6. Combien de temps ?</h2>
       <p>
-        Journaux techniques : la durée de conservation est fixée par l'hébergeur. Le site lui-même ne conserve rien d'autre.
+        Journaux techniques : la durée de conservation est fixée par l’hébergeur. Les compteurs publics de GitHub ne
+        contiennent pas de profil de visiteur. Les durées propres aux statistiques facultatives de l’application sont
+        indiquées ci-dessous.
       </p>
 
       <h2>7. Vos droits</h2>
@@ -163,14 +167,42 @@ function Privacy({ info }: { info: LegalInfo }) {
 
       <h2>8. Cookies et stockage dans votre navigateur</h2>
       <p>
-        Ce site ne dépose aucun cookie, de suivi ou autre, et n'enregistre rien dans le stockage de votre navigateur.
+        Les pages publiques ne déposent aucun cookie, de suivi ou autre, et n’enregistrent rien dans le stockage de votre
+        navigateur. Le tableau de statistiques de l’éditeur est un espace privé protégé, distinct de ces pages.
       </p>
 
       <h2>9. Magistra pour Windows</h2>
       <p>
-        L'application fonctionne sur l'ordinateur de l'enseignant, sans compte, et garde ses données sur cet ordinateur. Sa
-        politique de confidentialité, qui précise ce qui peut en sortir et dans quels cas, est affichée dans l'application
-        (Réglages, rubrique « Confidentialité »).
+        L’application fonctionne sur l’ordinateur de l’enseignant, sans compte, et y garde son profil, son historique et
+        ses documents. Sa politique de confidentialité, qui précise ce qui peut en sortir et dans quels cas, est affichée
+        dans l’application (Réglages, rubrique « Confidentialité »).
+      </p>
+      <p>
+        L’application Windows propose une mesure d’utilisation <strong>facultative, désactivée par défaut</strong>. Aucune
+        mesure n’est enregistrée ni envoyée avant votre accord. Le refus n’affecte pas son fonctionnement. Vous pouvez
+        retirer cet accord dans <strong>Réglages → Confidentialité</strong> : la mesure s’arrête et son fichier local,
+        contributions en attente comprises, est effacé.
+      </p>
+      <p>
+        Elle mesure les installations actives par jour et par mois calendaires en temps universel (UTC), le nombre
+        d’ouvertures et leur moyenne par installation active, ainsi que les retours du lendemain au 7e et au 30e jour
+        après le premier usage mesuré. Les retours sont calculés sur l’ordinateur, sans reprendre les usages antérieurs
+        à l’accord. Hors ligne, les contributions attendent une connexion. Seuls les profils locaux participants sont
+        comptés : une installation ne correspond pas nécessairement à une personne.
+      </p>
+      <p>
+        Deux codes aléatoires indépendants, renouvelés chaque jour et chaque mois, sont transmis séparément au service
+        de statistiques de Magistra et transformés à réception pour éviter les doublons. Aucun identifiant permanent,
+        empreinte de l’appareil, nom, e-mail, document, consigne ou clé API n’est envoyé dans cette mesure. Aucun profil
+        individuel n’est consultable : l’éditeur voit uniquement des totaux dans son tableau privé protégé.
+      </p>
+      <p>
+        Cette mesure repose sur votre consentement (art. 6.1.a du RGPD). Vercel héberge le service à Paris et Neon héberge
+        les données statistiques à Francfort, dans l’Union européenne. Les hébergeurs voient les données techniques
+        des requêtes, dont l’adresse IP, et peuvent les conserver dans leurs journaux de fonctionnement et de sécurité.
+        L’IP n’est pas utilisée ni enregistrée dans la base de statistiques. Les données temporaires de déduplication sont
+        supprimées sous 77 jours au plus ; les totaux globaux sous 400 jours, soit environ 13 mois. Un retrait d’accord ne
+        retire pas les contributions déjà additionnées à ces totaux.
       </p>
     </>
   );
@@ -188,7 +220,7 @@ function Terms({ info }: { info: LegalInfo }) {
       </p>
 
       <h2>2. Accès au site</h2>
-      <p>Le site est gratuit, sans compte ni connexion.</p>
+      <p>Les pages publiques du site sont gratuites, sans compte ni connexion.</p>
 
       <h2>3. Usage du site</h2>
       <p>Vous vous engagez à ne pas :</p>

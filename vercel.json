@@ -7,6 +7,15 @@
     "cdg1"
   ],
   "functions": {
+    "api/usage-maintenance.ts": {
+      "maxDuration": 15
+    },
+    "api/usage.ts": {
+      "maxDuration": 15
+    },
+    "api/usage-dashboard.ts": {
+      "maxDuration": 15
+    },
     "api/windows-release.ts": {
       "maxDuration": 15
     },
@@ -16,11 +25,25 @@
   },
   "rewrites": [
     {
+      "source": "/tableau-prive",
+      "destination": "/api/usage-dashboard"
+    },
+    {
       "source": "/telecharger",
       "destination": "/api/download"
     }
   ],
+  "crons": [
+    { "path": "/api/usage-maintenance", "schedule": "17 3 * * *" }
+  ],
   "headers": [
+    {
+      "source": "/tableau-prive",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow, noarchive, nosnippet" },
+        { "key": "Cache-Control", "value": "private, no-store, max-age=0" }
+      ]
+    },
     {
       "source": "/(.*)",
       "headers": [

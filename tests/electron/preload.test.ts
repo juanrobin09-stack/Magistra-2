@@ -82,6 +82,9 @@ describe('pont window.magistra', () => {
     }
     bridge.app.ready();
     expect(send).toHaveBeenCalledWith(IPC.appReady);
+    send.mockClear();
+    bridge.app.activity?.();
+    expect(send.mock.calls).toEqual([[IPC.appActivity]]);
   });
 
   it('les écouteurs reçoivent la charge utile seule et se désabonnent', () => {

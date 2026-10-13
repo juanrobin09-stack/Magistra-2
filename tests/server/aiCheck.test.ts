@@ -1,6 +1,6 @@
 // npm run ai:check : diagnostic en français, clé jamais affichée, code de sortie ≠ 0 en cas d'échec.
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -206,8 +206,10 @@ describe('diagnostic', () => {
     expect(code).toBe(1);
   });
 
-  it('dossier de données : <racine du projet>/.magistra-data, même quand l’outil est compilé ailleurs', async () => {
+  it('ancien dossier de données du projet préservé, même quand l’outil est compilé ailleurs', async () => {
     const root = path.join(cwd, 'projet');
+    // La présence de l'ancien dossier conserve ce choix sur Windows, au lieu du dossier du profil.
+    mkdirSync(path.join(root, '.magistra-data'), { recursive: true });
     const { text } = await check(['--dev', '--no-generate'], { MAGISTRA_DATA_DIR: '' }, { projectRoot: root });
     expect(text).toContain(`Fichiers sur ce serveur : ${path.join(root, '.magistra-data')}`);
   });

@@ -75,6 +75,111 @@ describe('écriture atomique', () => {
   });
 });
 
+describe('préférences concurrentes sur de vrais fichiers temporaires', () => {
+  it.each(['retrait en premier', 'retrait en dernier'])('%s : un réglage indépendant ne réactive jamais les statistiques', async order => {
+    const store = makeStore();
+    await store.init();
+    await store.setPreferences({ usageStatsEnabled: true, usageStatsChoiceMade: true, searxngUrl: 'https://searx.univ.fr' });
+    const updates = [{ usageStatsEnabled: false, usageStatsChoiceMade: true }, { aiSetupRequested: true }];
+    if (order === 'retrait en dernier') updates.reverse();
+    await Promise.all(updates.map(update => store.setPreferences(update)));
+    const expected = { usageStatsEnabled: false, usageStatsChoiceMade: true, aiSetupRequested: true, searxngUrl: 'https://searx.univ.fr' };
+    expect(await store.getPreferences()).toMatchObject(expected);
+    expect(JSON.parse(readFileSync(path.join(dir, 'preferences.json'), 'utf8'))).toMatchObject(expected);
+    expect(await makeStore().getPreferences()).toMatchObject(expected);
+  });
+
+  it('une lecture demandée après le retrait attend l’écriture et son cache, même si le disque est lent', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.setPreferences({ usageStatsEnabled: true, usageStatsChoiceMade: true });
+    let release!: () => void;
+    let reached!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { reached = resolve; });
+    const originalOpen = fsp.open;
+    let blocked = false;
+    const openSpy = vi.spyOn(fsp, 'open').mockImplementation(async (...args) => {
+      if (!blocked && String(args[0]).startsWith(path.join(dir, 'preferences.json.'))) {
+        blocked = true;
+        reached();
+        await held;
+      }
+      return originalOpen(...args);
+    });
+    try {
+      const withdrawal = store.setPreferences({ usageStatsEnabled: false, usageStatsChoiceMade: true });
+      await entered;
+      const reading = store.getPreferences();
+      const unrelated = store.setPreferences({ aiSetupRequested: true });
+      release();
+      const [, read] = await Promise.all([withdrawal, reading, unrelated]);
+      expect(read.usageStatsEnabled).toBe(false);
+      expect(await store.getPreferences()).toMatchObject({ usageStatsEnabled: false, aiSetupRequested: true });
+      expect(await makeStore().getPreferences()).toMatchObject({ usageStatsEnabled: false, aiSetupRequested: true });
+    } finally {
+      release();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('un échec ne publie pas un faux succès et ne bloque pas le retrait réessayé ni la mise à jour suivante', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.setPreferences({ usageStatsEnabled: true, usageStatsChoiceMade: true });
+    const renameSpy = vi.spyOn(fsp, 'rename').mockRejectedValueOnce(Object.assign(new Error('disque indisponible'), { code: 'EIO' }));
+    try {
+      const results = await Promise.allSettled([
+        store.setPreferences({ usageStatsEnabled: false, usageStatsChoiceMade: true }),
+        store.setPreferences({ usageStatsEnabled: false, usageStatsChoiceMade: true }),
+        store.setPreferences({ aiSetupRequested: true }),
+      ]);
+      expect(results[0]).toMatchObject({ status: 'rejected', reason: { code: 'STORAGE_ERROR' } });
+      expect(results.slice(1).map(result => result.status)).toEqual(['fulfilled', 'fulfilled']);
+      expect(await store.getPreferences()).toMatchObject({ usageStatsEnabled: false, usageStatsChoiceMade: true, aiSetupRequested: true });
+      expect(await makeStore().getPreferences()).toMatchObject({ usageStatsEnabled: false, usageStatsChoiceMade: true, aiSetupRequested: true });
+      expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    } finally { renameSpy.mockRestore(); }
+  });
+
+  it('conserve les champs indépendants et capture la mise à jour au moment de son appel', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.setPreferences({ usageStatsEnabled: true, usageStatsChoiceMade: true });
+    const withdrawal = { usageStatsEnabled: false };
+    const pending = store.setPreferences(withdrawal);
+    withdrawal.usageStatsEnabled = true;
+    await Promise.all([pending,
+      store.setPreferences({ aiSetupRequested: true }),
+      store.setPreferences({ academicEnabled: false }),
+      store.setPreferences({ wikipediaEnabled: false }),
+      store.setPreferences({ defaultResearchMode: 'documents' }),
+    ]);
+    expect(await makeStore().getPreferences()).toMatchObject({ usageStatsEnabled: false, usageStatsChoiceMade: true,
+      aiSetupRequested: true, academicEnabled: false, wikipediaEnabled: false, defaultResearchMode: 'documents' });
+  });
+
+  it('effacement total : le retrait préalable reste persisté malgré un ancien accord et un réglage indépendant', async () => {
+    const store = makeStore();
+    await store.init();
+    await store.saveGeneration(record(1));
+    await store.setPreferences({ setupCompleted: true, usageStatsEnabled: true, usageStatsChoiceMade: true });
+    const olderAgreement = store.setPreferences({ usageStatsEnabled: true, usageStatsChoiceMade: true });
+    // Même ordre que onClearUsage puis dataClearAll : retrait enregistré avant l'effacement des données.
+    const clearing = (async () => {
+      await store.setPreferences({ usageStatsEnabled: false, usageStatsChoiceMade: true });
+      await store.clearAll();
+    })();
+    const unrelated = store.setPreferences({ aiSetupRequested: true });
+    await Promise.all([olderAgreement, clearing, unrelated]);
+    expect((await store.stats()).total).toBe(0);
+    expect(await store.getPreferences()).toMatchObject({ usageStatsEnabled: false, usageStatsChoiceMade: true,
+      setupCompleted: true, aiSetupRequested: true });
+    expect(await makeStore().getPreferences()).toMatchObject({ usageStatsEnabled: false, usageStatsChoiceMade: true,
+      setupCompleted: true, aiSetupRequested: true });
+  });
+});
+
 describe('fichiers corrompus', () => {
   it('préférences illisibles : mises de côté, valeurs par défaut, autres réglages intacts', async () => {
     const store = makeStore();

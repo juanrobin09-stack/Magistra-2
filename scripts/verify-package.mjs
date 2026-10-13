@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Inspecte l'application Windows EMPAQUETÉE (release/win-unpacked, produite par electron-builder) : le test de
 // démarrage de la CI tourne depuis les sources (`electron .`), car l'application empaquetée ignore --smoke-test
 // (electron/devOptions.ts) ; rien d'autre ne regardait donc le résultat final. Ce script ne lance PAS l'exécutable :
@@ -14,7 +13,8 @@
 // 3. le contenu de app.asar : processus principal, preload, page d'accueil et package.json présents ; ni node_modules,
 //    ni sourcemap, ni fichier .env ; aucun secret côté serveur : noms (service_role, SUPABASE_SERVICE_*) et valeurs
 //    (clé Supabase sb_secret_… ou jeton JWT dont la charge utile décodée porte le rôle « service_role », clés
-//    secrètes Clerk sk_live_/sk_test_, secrets de webhook whsec_) ;
+//    secrètes Clerk sk_live_/sk_test_, secrets de webhook whsec_, configuration serveur des statistiques,
+//    CRON_SECRET et URI PostgreSQL avec identifiants). Aucun module du backend des statistiques ;
 // 4. resources/icon.png (extraResources).
 //
 // Dépendances : @electron/fuses et @electron/asar, déjà installés par electron-builder (aucune dépendance ajoutée).
@@ -65,7 +65,28 @@ export const SECRET_PATTERNS = [
   [/\bsb_secret_[A-Za-z0-9_-]{20,}/, 'clé secrète Supabase (sb_secret_…)'],
   [/\bsk_(?:live|test)_[A-Za-z0-9]{16,}/, 'clé secrète Clerk'],
   [/\bwhsec_[A-Za-z0-9+/=]{16,}/, 'secret de webhook'],
+  [/MAGISTRA_STATS_(?:DATABASE_URL|HASH_SECRET|OWNER_LOGIN|OWNER_PASSWORD_HASH)\b/, 'configuration serveur MAGISTRA_STATS_*'],
+  [/CRON_SECRET\b/, 'variable serveur CRON_SECRET'],
+  [/\bpostgres(?:ql)?:(?:\\?\/){2}[^/?#\s"'`<>\\]+@/i, 'URI PostgreSQL avec identifiants'],
 ];
+
+/** Server-only SQL calls and source markers also identify accidentally bundled backend code. */
+const STATISTICS_BACKEND = /\bmagistra_(?:record_usage|usage_snapshot|usage_purge)\b|(?:^|[/\\])usage(?:Routes|Store|Dashboard)(?:[-.][^/\\\s"'`]+)?\.(?:[cm]?[jt]s|tsx)\b/i;
+const POSTGRES_URL = /\bpostgres(?:ql)?:(?:\\?\/){2}[^\s"'`<>]+/gi;
+
+/** PostgreSQL also accepts credentials in query parameters; scanning candidates once avoids nested regex backtracking. */
+function hasPostgresQueryCredentials(text) {
+  for (const [candidate] of text.matchAll(POSTGRES_URL)) {
+    try {
+      const url = new URL(candidate.replace(/\\\//g, '/'));
+      // Userinfo has its own pattern; do not report the same URI twice.
+      if (!url.username && !url.password && (url.searchParams.get('user') || url.searchParams.get('password'))) return true;
+    } catch {
+      // A plain prefix or malformed non-credential URL is not sufficient evidence of a secret.
+    }
+  }
+  return false;
+}
 
 /**
  * Jeton JWT (« eyJ….eyJ….… » : « ey » est « { » en base64url) ; seule la charge utile (groupe 1) est décodée.
@@ -82,7 +103,7 @@ function hasServiceRoleJwt(text) {
   return false;
 }
 
-const TEXT_EXTENSIONS = /\.(?:js|cjs|mjs|html|css|json|svg|txt)$/i;
+const TEXT_EXTENSIONS = /\.(?:js|cjs|mjs|jsx|ts|tsx|html|css|json|svg|txt|sql|ya?ml|md)$/i;
 
 /** Chemin d'entrée d'asar normalisé : séparateurs « / », sans « / » initial. */
 function normalizeEntry(entry) {
@@ -140,6 +161,13 @@ export function checkAsarEntries(rawEntries) {
   if (maps.length) errors.push(`app.asar : sourcemap livrée (« ${maps[0]} »)`);
   const envFiles = entries.filter(e => /(^|\/)\.env(\.|$)/.test(e));
   if (envFiles.length) errors.push(`app.asar : fichier d'environnement livré (« ${envFiles[0]} »)`);
+  const backend = entries.filter(e => /^(?:server|api|dist-server)(?:\/|$)/i.test(e)
+    || /(?:^|\/)usage(?:Routes|Store|Dashboard)(?:[-.][^/]*)?\.(?:[cm]?[jt]s|tsx)$/i.test(e)
+    || /(?:^|\/)usage-(?:schema\.sql|dashboard\.[cm]?[jt]s|maintenance\.[cm]?[jt]s)$/i.test(e));
+  if (backend.length) {
+    const example = backend.find(e => /\.[^/]+$/.test(e)) ?? backend[0];
+    errors.push(`app.asar : module backend livré (« ${example} »)`);
+  }
   return errors;
 }
 
@@ -151,6 +179,8 @@ export function checkNoSecrets(files) {
       if (pattern.test(text)) errors.push(`app.asar : ${label} trouvée dans « ${name} »`);
     }
     if (hasServiceRoleJwt(text)) errors.push(`app.asar : clé « service_role » de Supabase (jeton JWT encodé) trouvée dans « ${name} »`);
+    if (hasPostgresQueryCredentials(text)) errors.push(`app.asar : URI PostgreSQL avec identifiants trouvée dans « ${name} »`);
+    if (STATISTICS_BACKEND.test(text)) errors.push(`app.asar : code serveur de statistiques trouvé dans « ${name} »`);
   }
   return errors;
 }

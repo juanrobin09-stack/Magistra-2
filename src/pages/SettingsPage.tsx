@@ -36,6 +36,7 @@ import AuthorCredit from '@/components/AuthorCredit';
 import ContactLink from '@/components/ContactLink';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import UpdateCheck from '@/components/UpdateCheck';
+import UsageParticipation from '@/components/UsageParticipation';
 import { useAIStatus, useCapabilities, type AIController, type CapabilitiesState } from '@/hooks/useAIStatus';
 import LegalLinks from '@/components/LegalLinks';
 import { exportAccountData, ExportCancelled, EXPORT_ERROR_MESSAGE, type ExportProgress } from '@/lib/exportAccountData';
@@ -239,6 +240,7 @@ export default function SettingsPage() {
 
       <Section id="settings-privacy" icon={Shield} title="Confidentialité">
         <PrivacySettings mode={mode} caps={caps} />
+        {mode === 'local' && <UsageParticipation variant="settings" />}
       </Section>
 
       <Section id="settings-about" icon={Info} title="À propos">
@@ -875,8 +877,8 @@ function PrivacySettings({ mode, caps }: { mode: RuntimeMode; caps: Capabilities
       <>
         <p className="text-sm text-mg-50 font-semibold">IA locale — Vos documents et générations restent sur cet ordinateur.</p>
         <p className="text-sm text-mg-100">
-          Aucun compte n'est nécessaire. Seule la recherche en ligne, si vous la choisissez, envoie le sujet et les
-          mots-clés de votre demande.
+          Aucun compte n’est nécessaire. La recherche en ligne, si vous la choisissez, envoie le sujet et les mots-clés
+          de votre demande. Les mises à jour et les statistiques facultatives décrites ci-dessous ont des connexions distinctes.
         </p>
         <LegalNav />
       </>

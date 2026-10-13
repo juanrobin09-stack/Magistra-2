@@ -56,6 +56,7 @@ describe('déploiement', () => {
     expect(vercel.buildCommand).toBe('npm run build:site');
     expect(vercel.outputDirectory).toBe('dist-site');
     expect(vercel.rewrites).toEqual([
+      { source: '/tableau-prive', destination: '/api/usage-dashboard' },
       { source: '/telecharger', destination: '/api/download' },
     ]);
     expect(vercel.cleanUrls).toBe(true);
@@ -91,7 +92,8 @@ describe('déploiement', () => {
   it('nouveau domaine du site : vercel.json ne change pas (aucune redirection de l’ancienne adresse, aucune règle d’hôte, CSP sans aucun domaine)', () => {
     // Le domaine se rattache au projet dans Vercel (Settings → Domains) : une redirection permanente écrite ici casserait
     // l'ancienne adresse tant que le nouveau domaine n'est pas attaché et validé.
-    expect(Object.keys(vercel).sort()).toEqual(['$schema', 'buildCommand', 'cleanUrls', 'framework', 'functions', 'headers', 'outputDirectory', 'redirects', 'regions', 'rewrites', 'trailingSlash']);
+    expect(Object.keys(vercel).sort()).toEqual(['$schema', 'buildCommand', 'cleanUrls', 'crons', 'framework', 'functions', 'headers', 'outputDirectory', 'redirects', 'regions', 'rewrites', 'trailingSlash']);
+    expect((vercel as VercelConfig & { crons: unknown }).crons).toEqual([{ path: '/api/usage-maintenance', schedule: '17 3 * * *' }]);
     expect(vercel.redirects.every(r => r.destination === '/' && r.permanent)).toBe(true);
     expect(JSON.stringify(vercel)).not.toMatch(/mag-istra|vercel\.app|"has"|"missing"|"host"|"statusCode"/);
     expect(vercel.rewrites.every(r => r.destination.startsWith('/'))).toBe(true);
@@ -143,14 +145,14 @@ describe('déploiement', () => {
     // La seule réécriture publique conduit à la fonction de téléchargement.
     const first = vercel.rewrites.findIndex(r => new RegExp(`^${r.source}$`).test('/telecharger'));
     expect(vercel.rewrites[first]).toEqual({ source: '/telecharger', destination: '/api/download' });
-    expect(first).toBe(0);
+    expect(first).toBe(1);
     expect(vercel.functions['api/download.ts'].maxDuration).toBeLessThanOrEqual(30);
   });
 
-  it('deux fonctions Vercel seulement (versions Windows et téléchargement), aucune route de comptes ni d’IA', () => {
+  it('fonctions Vercel limitées aux téléchargements et statistiques privées, aucune route de comptes ni d’IA', () => {
     const files = readdirSync(path.join(root, 'api')).sort();
-    expect(files).toEqual(['download.ts', 'windows-release.ts']);
-    expect(Object.keys(vercel.functions).sort()).toEqual(['api/download.ts', 'api/windows-release.ts']);
+    expect(files).toEqual(['download.ts', 'usage-dashboard.ts', 'usage-maintenance.ts', 'usage.ts', 'windows-release.ts']);
+    expect(Object.keys(vercel.functions).sort()).toEqual(['api/download.ts', 'api/usage-dashboard.ts', 'api/usage-maintenance.ts', 'api/usage.ts', 'api/windows-release.ts']);
     // Les autres routes du contrat restent celles du serveur autonome : le site déployé n'en sert aucune, et la
     // réécriture vers l'interface ne les avale pas (404 franc, jamais index.html en 200).
     for (const route of Object.keys(ROUTE_METHODS)) {

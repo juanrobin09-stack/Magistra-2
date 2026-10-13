@@ -167,10 +167,11 @@ describe('enregistrement des canaux IPC', () => {
 
   it('enregistre tous les canaux invoqués du contrat', () => {
     // Évènements du processus principal vers la fenêtre (aucun gestionnaire) et signal app:ready (écouteur).
-    const events: string[] = [IPC.appUpdateProgress, IPC.aiProgress, IPC.genEvent, IPC.connectorChanged, IPC.appUpdateProgress, IPC.appReady];
+    const events: string[] = [IPC.appUpdateProgress, IPC.aiProgress, IPC.genEvent, IPC.connectorChanged, IPC.appUpdateProgress, IPC.appReady, IPC.appActivity];
     const invoked = Object.values(IPC).filter(c => !events.includes(c));
     for (const channel of invoked) expect(handlers.has(channel), channel).toBe(true);
     expect(listeners.has(IPC.appReady)).toBe(true);
+    expect(listeners.has(IPC.appActivity)).toBe(true);
   });
 
   it('refuse un appel venant d’une origine étrangère (FORBIDDEN)', async () => {
@@ -185,6 +186,60 @@ describe('enregistrement des canaux IPC', () => {
     expect(onAppReady).not.toHaveBeenCalled();
     listeners.get(IPC.appReady)!(event('app://magistra/'));
     expect(onAppReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('activité : cadre autorisé uniquement, sans données ni appels répétés', () => {
+    const onActivity = vi.fn();
+    const unregister = registerIpcHandlers({
+      getWindow: () => win, trustedOrigins: trustedOrigins(null), store: store as unknown as IpcContext['store'],
+      ai: {} as IpcContext['ai'], generation: {} as IpcContext['generation'],
+      appInfo: () => ({ version: '2.0.0', platform: 'win32', userDataPath: 'C:/x', isPackaged: true }),
+      openExternal, onAppReady, onAppActivity: onActivity, connector,
+    });
+    const activity = listeners.get(IPC.appActivity)!;
+    activity(event('https://evil.example/'));
+    activity(event('app://magistra/'), { key: 'private typing' });
+    expect(onActivity).not.toHaveBeenCalled();
+    activity(event('app://magistra/'));
+    activity(event('app://magistra/'));
+    expect(onActivity).toHaveBeenCalledTimes(1);
+    unregister(); expect(listeners.has(IPC.appActivity)).toBe(false);
+  });
+
+  it('arrête un retrait validé avant le disque, même si l’écriture échoue', async () => {
+    const calls: string[] = [];
+    const disabled = vi.fn(async () => { calls.push('disabled'); });
+    const updated = vi.fn(async () => undefined);
+    const setPreferences = vi.fn(async () => { calls.push('write'); throw Object.assign(new Error('fixture unavailable'), { code: 'EACCES' }); });
+    const unregister = registerIpcHandlers({ getWindow: () => win, trustedOrigins: trustedOrigins(null),
+      store: { ...store, setPreferences } as unknown as IpcContext['store'], ai: {} as IpcContext['ai'], generation: {} as IpcContext['generation'],
+      appInfo: () => ({ version: '2.0.11', platform: 'win32', userDataPath: 'C:/fixture', isPackaged: true }),
+      openExternal, onAppReady, connector, onDisableUsage: disabled, onPreferencesUpdated: updated });
+    const set = handlers.get(IPC.prefsSet)!;
+    await expect(set(event('https://evil.example/'), { usageStatsEnabled: false })).rejects.toThrow(/^FORBIDDEN\|/);
+    await expect(set(event('app://magistra/'), { usageStatsEnabled: 'false' })).rejects.toThrow(/^INVALID_REQUEST\|/);
+    expect(disabled).not.toHaveBeenCalled(); expect(setPreferences).not.toHaveBeenCalled();
+    await expect(set(event('app://magistra/'), { usageStatsEnabled: false, usageStatsChoiceMade: true })).rejects.toThrow();
+    expect(calls).toEqual(['disabled', 'write']); expect(updated).not.toHaveBeenCalled();
+    unregister();
+  });
+
+  it('un accord tardif ne réactive pas un retrait dont l’écriture a échoué', async () => {
+    let completeAgreement!: (value: { usageStatsEnabled: boolean; usageStatsChoiceMade: boolean }) => void;
+    const setPreferences = vi.fn().mockImplementationOnce(() => new Promise(resolve => { completeAgreement = resolve; }))
+      .mockRejectedValueOnce(Object.assign(new Error('fixture unavailable'), { code: 'EACCES' }));
+    const disabled = vi.fn(async () => undefined); const updated = vi.fn(async () => undefined);
+    const unregister = registerIpcHandlers({ getWindow: () => win, trustedOrigins: trustedOrigins(null),
+      store: { ...store, setPreferences } as unknown as IpcContext['store'], ai: {} as IpcContext['ai'], generation: {} as IpcContext['generation'],
+      appInfo: () => ({ version: '2.0.11', platform: 'win32', userDataPath: 'C:/fixture', isPackaged: true }),
+      openExternal, onAppReady, connector, onDisableUsage: disabled, onPreferencesUpdated: updated });
+    const set = handlers.get(IPC.prefsSet)!;
+    const pending = set(event('app://magistra/'), { usageStatsEnabled: true, usageStatsChoiceMade: true });
+    await expect(set(event('app://magistra/'), { usageStatsEnabled: false })).rejects.toThrow();
+    completeAgreement({ usageStatsEnabled: true, usageStatsChoiceMade: true });
+    await pending;
+    expect(disabled).toHaveBeenCalledTimes(1); expect(updated).not.toHaveBeenCalled();
+    unregister();
   });
 
   it('valide les arguments et renvoie « CODE|message » sans détail technique', async () => {
