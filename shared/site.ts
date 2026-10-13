@@ -1,4 +1,4 @@
-import { SITE_GUIDES } from './siteGuides';
+import { SITE_GUIDES } from './siteGuides.js';
 
 // Adresses du site public (vitrine, hébergée sur Vercel) : SOURCE UNIQUE de son nom de domaine.
 //
